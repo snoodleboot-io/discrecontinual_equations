@@ -1,0 +1,250 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  release:
+    types: [published]
+
+jobs:
+  # Individual lint jobs - must all pass before unit tests run
+  lint-black:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v4
+        with:
+          python-version: "3.13"
+      - name: Install Black
+        run: pip install black
+      - name: Run Black
+        run: black --check --diff .
+
+  lint-ruff:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v4
+        with:
+          python-version: "3.13"
+      - name: Install Ruff
+        run: pip install ruff
+      - name: Run Ruff
+        run: ruff check . --fix
+
+  lint-bandit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v4
+        with:
+          python-version: "3.13"
+      - name: Install Bandit
+        run: pip install bandit[toml]
+      - name: Run Bandit
+        run: bandit -r discrecontinual_equations
+
+  lint-mypy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v4
+        with:
+          python-version: "3.13"
+      - name: Install MyPy and dependencies
+        run: |
+          pip install mypy
+          pip install pydantic numpy plotly kaleido
+      - name: Run MyPy
+        run: mypy discrecontinual_equations
+
+  lint-mkdocs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v4
+        with:
+          python-version: "3.13"
+      - name: Install MkDocs and discrecontinual_equations package
+        run: |
+          pip install mkdocs mkdocs-material mkdocstrings[python] pymdown-extensions
+          pip install -e .
+      - name: Build MkDocs
+        run: mkdocs build --strict
+
+  # Unit tests - only run after all lint jobs pass
+  test:
+    runs-on: ubuntu-latest
+    needs: [lint-black, lint-ruff, lint-bandit, lint-mypy, lint-mkdocs]
+    strategy:
+      matrix:
+        python-version: ["3.13", "3.14"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: "pyproject.toml"
+
+      - name: Set up Python ${{ matrix.python-version }}
+        run: uv python install ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: uv sync --dev
+
+      - name: Run unit tests with coverage
+        run: uv run pytest tests/ --cov=discrecontinual_equations --cov-report=xml --cov-report=term-missing
+
+      - name: Upload coverage to Codecov
+        if: matrix.python-version == '3.13'
+        uses: codecov/codecov-action@v4
+        with:
+          file: ./coverage.xml
+          flags: unittests
+          name: codecov-umbrella
+          fail_ci_if_error: false
+
+  build-and-test-package:
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: "pyproject.toml"
+
+      - name: Set up Python 3.13
+        run: uv python install 3.13
+
+      - name: Install build dependencies
+        run: uv sync --dev
+
+      - name: Build package
+        run: uv build
+
+      - name: Test package installation
+        run: |
+          # Create a temporary directory for isolated testing
+          mkdir -p /tmp/package_test
+          cd /tmp/package_test
+
+          # Create isolated virtual environment with uv
+          uv venv test_env
+
+          # Install the built package in the isolated environment
+          uv pip install --python test_env $GITHUB_WORKSPACE/dist/*.whl
+
+          # Test import and functionality in the isolated environment
+          uv run --python test_env python -c "import discrecontinual_equations; print('Package installed successfully!')"
+
+          uv run --python test_env python -c "
+          from discrecontinual_equations.solver.deterministic.euler.euler_config import EulerConfig
+          from discrecontinual_equations.solver.deterministic.euler.euler_solver import EulerSolver
+          from discrecontinual_equations.variable import Variable
+          from discrecontinual_equations.differential_equation import DifferentialEquation
+          from discrecontinual_equations.function.function import Function
+          from discrecontinual_equations.parameter import Parameter
+
+          # Test basic functionality
+          x = Variable(name='x', abbreviation='x')
+          t = Variable(name='t', abbreviation='t')
+          param = Parameter(name='test', value=1.0)
+
+          print('Core functionality works: Variables, Parameters, and Solvers instantiated successfully')
+          "
+
+  publish-to-testpypi:
+    runs-on: ubuntu-latest
+    needs: [test, build-and-test-package]
+    if: github.ref == 'refs/heads/main'
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+
+    env:
+      MAJOR_VERSION: 0
+      MINOR_VERSION: 1
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: "pyproject.toml"
+
+      - name: Set up Python 3.13
+        run: uv python install 3.13
+
+      - name: Install build dependencies
+        run: uv sync --dev
+
+      - name: Set semantic version for TestPyPI
+        id: version
+        run: |
+          # Use configured major.minor and run number as patch
+          SEMANTIC_VERSION="${MAJOR_VERSION}.${MINOR_VERSION}.${GITHUB_RUN_NUMBER}"
+          ORIGINAL_VERSION=$(grep '^version = ' pyproject.toml | sed 's/version = "\(.*\)"/\1/')
+          sed -i "s/version = \"$ORIGINAL_VERSION\"/version = \"$SEMANTIC_VERSION\"/" pyproject.toml
+          echo "Building TestPyPI version: $SEMANTIC_VERSION (major: $MAJOR_VERSION, minor: $MINOR_VERSION, patch: $GITHUB_RUN_NUMBER)"
+          echo "version=$SEMANTIC_VERSION" >> $GITHUB_OUTPUT
+
+      - name: Build package
+        run: uv build
+
+      - name: Publish to TestPyPI
+        if: env.TEST_PYPI_API_TOKEN != ''
+        env:
+          TEST_PYPI_API_TOKEN: ${{ secrets.TEST_PYPI_API_TOKEN }}
+        run: |
+          echo "Publishing to TestPyPI for testing..."
+          uv publish --token $TEST_PYPI_API_TOKEN dist/*.whl dist/*.tar.gz --publish-url https://test.pypi.org/legacy/
+
+  publish:
+    runs-on: ubuntu-latest
+    needs: [test, build-and-test-package, publish-to-testpypi]
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: "pyproject.toml"
+
+      - name: Set up Python 3.13
+        run: uv python install 3.13
+
+      - name: Install build dependencies
+        run: uv sync --dev
+
+      - name: Use same version as TestPyPI
+        run: |
+          # Get the version that was used for TestPyPI
+          TESTPYPI_VERSION="${{ needs.publish-to-testpypi.outputs.version }}"
+          ORIGINAL_VERSION=$(grep '^version = ' pyproject.toml | sed 's/version = "\(.*\)"/\1/')
+          sed -i "s/version = \"$ORIGINAL_VERSION\"/version = \"$TESTPYPI_VERSION\"/" pyproject.toml
+          echo "Building PyPI version: $TESTPYPI_VERSION (same as TestPyPI)"
+
+      - name: Build package
+        run: uv build
+
+      - name: Publish to PyPI
+        if: env.PYPI_API_KEY != ''
+        env:
+          PYPI_API_KEY: ${{ secrets.PYPI_API_KEY }}
+        run: |
+          echo "Publishing to PyPI..."
+          uv publish --token $PYPI_API_KEY
