@@ -17,6 +17,7 @@ Parameters used:
 """
 
 import os
+
 import numpy as np
 
 from discrecontinual_equations.differential_equation import DifferentialEquation
@@ -45,21 +46,29 @@ class ComplexODESystem(Function):
     def __init__(self, variables, parameters, time=None, k=5, n=2, m=3):
         # Create result variables for the ODE system
         results = [
-            Variable(name=f"d{variable.name}/dt", abbreviation=f"d{variable.abbreviation}/dt")
+            Variable(
+                name=f"d{variable.name}/dt",
+                abbreviation=f"d{variable.abbreviation}/dt",
+            )
             for variable in variables
         ]
-        super().__init__(variables=variables, parameters=parameters, results=results, time=time)
+        super().__init__(
+            variables=variables,
+            parameters=parameters,
+            results=results,
+            time=time,
+        )
 
         self.k = k  # System size (must be odd, >= 3)
         self.n = n  # Power parameter for denominator
         self.m = m  # Power parameter for absolute value term
 
         # Extract parameters
-        self.c = parameters[0].value      # c parameter
-        self.lam = parameters[1].value    # λ parameter
-        self.eps = parameters[2].value    # ε parameter
+        self.c = parameters[0].value  # c parameter
+        self.lam = parameters[1].value  # λ parameter
+        self.eps = parameters[2].value  # ε parameter
 
-        print(f"Complex ODE System initialized:")
+        print("Complex ODE System initialized:")
         print(f"  System size k = {k}")
         print(f"  Parameters: c = {self.c}, λ = {self.lam}, ε = {self.eps}")
         print(f"  Powers: n = {n}, m = {m}")
@@ -82,7 +91,7 @@ class ComplexODESystem(Function):
         # print(x)
         for i in range(self.k):
             # 0-based indexing in code, but corresponds to i+1 in mathematical notation
-            x_i = x[i]          # x_{i+1} in 1-based notation
+            x_i = x[i]  # x_{i+1} in 1-based notation
             x_ip1 = x[(i + 1) % self.k]  # x_{i+2} in 1-based notation, wraps around
 
             # print(x_i, x_ip1)
@@ -135,7 +144,9 @@ def run_complex_ode_example():
         variables=variables,
         parameters=[c_param, lambda_param, epsilon_param],
         time=time,
-        k=k, n=n, m=m
+        k=k,
+        n=n,
+        m=m,
     )
 
     # Create differential equation
@@ -147,11 +158,11 @@ def run_complex_ode_example():
     )
 
     # Simulation parameters
-    end_time = 2000.0   # Simulation time
-    n_steps = 10000   # Number of steps
+    end_time = 2000.0  # Simulation time
+    n_steps = 10000  # Number of steps
     step_size = end_time / n_steps
 
-    print(f"Simulation parameters:")
+    print("Simulation parameters:")
     print(f"  End time: {end_time}")
     print(f"  Steps: {n_steps}")
     print(f"  Step size: {step_size:.4f}")
@@ -205,7 +216,10 @@ def run_complex_ode_example():
     print(f"Final values: {final_values}")
 
     # Create plots
-    plot = LinePlot(output_dir=os.path.join(os.path.dirname(__file__), "images"), output_format="png")
+    plot = LinePlot(
+        output_dir=os.path.join(os.path.dirname(__file__), "images"),
+        output_format="png",
+    )
 
     # Plot all variables
     plot.figure.update_layout(
@@ -216,14 +230,24 @@ def run_complex_ode_example():
         showlegend=True,
     )
 
-    colors = ["blue", "red", "green", "orange", "purple", "brown", "pink", "gray", "olive"]
+    colors = [
+        "blue",
+        "red",
+        "green",
+        "orange",
+        "purple",
+        "brown",
+        "pink",
+        "gray",
+        "olive",
+    ]
     for i in range(k):
         plot.figure.add_trace(
             dict(
                 x=time_points_plot,
                 y=solutions_plot[i],
                 mode="lines",
-                name=f"x{i+1}",
+                name=f"x{i + 1}",
                 line=dict(color=colors[i % len(colors)], width=2),
                 showlegend=True,
             ),
@@ -240,8 +264,10 @@ def run_complex_ode_example():
     """
 
     plot.figure.add_annotation(
-        x=0.02, y=0.98,
-        xref="paper", yref="paper",
+        x=0.02,
+        y=0.98,
+        xref="paper",
+        yref="paper",
         text=param_info,
         showarrow=False,
         bgcolor="white",
@@ -263,10 +289,13 @@ def run_complex_ode_example():
 
     # Create phase plot for first two variables
     if k >= 2:
-        phase_plot = LinePlot(output_dir=os.path.join(os.path.dirname(__file__), "images"), output_format="png")
+        phase_plot = LinePlot(
+            output_dir=os.path.join(os.path.dirname(__file__), "images"),
+            output_format="png",
+        )
 
         phase_plot.figure.update_layout(
-            title=f"Phase Plot: x₁ vs x₂",
+            title="Phase Plot: x₁ vs x₂",
             xaxis_title="x₁",
             yaxis_title="x₂",
             hovermode="closest",
@@ -320,7 +349,7 @@ def run_complex_ode_example():
 
     # Create delay plots for all variables
     for i in range(k):
-        var_name = f"x{i+1}"
+        var_name = f"x{i + 1}"
         var_data = solutions_plot[i]
 
         # Create variable object
@@ -329,7 +358,11 @@ def run_complex_ode_example():
 
         # Create delay plot
         delay_plot = DelayPlot(output_dir=delay_plot_dir, output_format="png")
-        delay_plot.plot(var_obj, delay=1, title=f"Delay Plot: {var_name}(t) vs {var_name}(t+1) [Steps {start_step}-{end_step}]")
+        delay_plot.plot(
+            var_obj,
+            delay=1,
+            title=f"Delay Plot: {var_name}(t) vs {var_name}(t+1) [Steps {start_step}-{end_step}]",
+        )
         delay_plot.show()
 
     # Show the plots
@@ -368,7 +401,7 @@ def analyze_system_properties(solutions, time_points, k):
 
     print("Approximate derivatives at end:")
     for i, deriv in enumerate(derivatives_at_end):
-        print(f"dx{i+1}/dt = {deriv:.6f}")
+        print(f"dx{i + 1}/dt = {deriv:.6f}")
 
     # Check for steady state
     steady_state_threshold = 1e-4

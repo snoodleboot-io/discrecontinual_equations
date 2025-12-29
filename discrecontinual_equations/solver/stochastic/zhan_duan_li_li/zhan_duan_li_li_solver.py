@@ -90,10 +90,10 @@ class ZhanDuanLiLiSolver(Solver):
 
         # Evaluate functions at current point
         drift_current = np.array(
-            equation.derivative.eval(point=y.tolist(), time=t_current)
+            equation.derivative.eval(point=y.tolist(), time=t_current),
         )
         diffusion_current = np.array(
-            equation.derivative.diffusion(point=y.tolist(), time=t_current)
+            equation.derivative.diffusion(point=y.tolist(), time=t_current),
         )
 
         # Predictor step (explicit Euler)
@@ -101,10 +101,10 @@ class ZhanDuanLiLiSolver(Solver):
 
         # Evaluate functions at predicted point
         drift_predictor = np.array(
-            equation.derivative.eval(point=y_predictor.tolist(), time=t_next)
+            equation.derivative.eval(point=y_predictor.tolist(), time=t_next),
         )
         diffusion_predictor = np.array(
-            equation.derivative.diffusion(point=y_predictor.tolist(), time=t_next)
+            equation.derivative.diffusion(point=y_predictor.tolist(), time=t_next),
         )
 
         # Corrector step (theta method combining current and predicted values)

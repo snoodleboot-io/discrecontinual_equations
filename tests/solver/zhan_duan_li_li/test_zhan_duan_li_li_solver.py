@@ -1,4 +1,3 @@
-import pytest
 import numpy as np
 
 from discrecontinual_equations.differential_equation import DifferentialEquation
@@ -21,7 +20,12 @@ class TestStochasticFunction(StochasticFunction):
             Variable(name=f"d{variable.name}/dt", discretization=[])
             for variable in variables
         ]
-        super().__init__(variables=variables, parameters=parameters, results=results, time=time)
+        super().__init__(
+            variables=variables,
+            parameters=parameters,
+            results=results,
+            time=time,
+        )
         self.mu = parameters[0].value  # drift coefficient
         self.sigma = parameters[1].value  # diffusion coefficient
 
@@ -78,13 +82,16 @@ class TestZhanDuanLiLiSolver:
         time = Variable(name="t", discretization=[])
         variables = [Variable(name="Z", discretization=[])]
         parameters = [
-            Parameter(name="mu", value=0.1),    # drift
-            Parameter(name="sigma", value=0.2), # diffusion
+            Parameter(name="mu", value=0.1),  # drift
+            Parameter(name="sigma", value=0.2),  # diffusion
         ]
 
         func = TestStochasticFunction(variables, parameters, time)
         equation = DifferentialEquation(
-            variables=variables, time=time, parameters=parameters, derivative=func
+            variables=variables,
+            time=time,
+            parameters=parameters,
+            derivative=func,
         )
 
         config = ZhanDuanLiLiConfig(
@@ -126,7 +133,10 @@ class TestZhanDuanLiLiSolver:
 
         func = TestStochasticFunction(variables, parameters, time)
         equation = DifferentialEquation(
-            variables=variables, time=time, parameters=parameters, derivative=func
+            variables=variables,
+            time=time,
+            parameters=parameters,
+            derivative=func,
         )
 
         # Solve twice with same seed
@@ -167,7 +177,10 @@ class TestZhanDuanLiLiSolver:
 
         func = TestStochasticFunction(variables, parameters, time)
         equation = DifferentialEquation(
-            variables=variables, time=time, parameters=parameters, derivative=func
+            variables=variables,
+            time=time,
+            parameters=parameters,
+            derivative=func,
         )
 
         config = ZhanDuanLiLiConfig(
@@ -182,14 +195,17 @@ class TestZhanDuanLiLiSolver:
 
         # Check solution structure
         assert solver.solution is not None
-        assert len(solver.solution.time.discretization) == 6  # 0, 0.2, 0.4, 0.6, 0.8, 1.0
+        assert (
+            len(solver.solution.time.discretization) == 6
+        )  # 0, 0.2, 0.4, 0.6, 0.8, 1.0
         assert len(solver.solution.results) == 1  # One variable
         assert len(solver.solution.results[0].discretization) == 6
 
         # Check that time values are correct
         expected_times = [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]
         np.testing.assert_array_almost_equal(
-            solver.solution.time.discretization, expected_times
+            solver.solution.time.discretization,
+            expected_times,
         )
 
     def test_method_parameter_usage(self):
@@ -201,4 +217,4 @@ class TestZhanDuanLiLiSolver:
         assert solver.solver_config.method_parameter == 3.14
 
         # Currently just a placeholder - actual usage would depend on paper implementation
-        assert hasattr(solver.solver_config, 'method_parameter')
+        assert hasattr(solver.solver_config, "method_parameter")

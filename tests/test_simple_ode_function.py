@@ -1,4 +1,3 @@
-
 from discrecontinual_equations.parameter import Parameter
 from discrecontinual_equations.simple_ode_function import SimpleODEFunction
 from discrecontinual_equations.variable import Variable

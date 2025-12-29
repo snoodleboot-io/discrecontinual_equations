@@ -30,13 +30,26 @@ class GeometricBrownianMotion(StochasticFunction):
     Geometric Brownian motion: dX_t = μ X_t dt + σ X_t dW_t
     """
 
-    def __init__(self, variables: list[Variable], parameters: list[Parameter], time: Variable | None = None):
+    def __init__(
+        self,
+        variables: list[Variable],
+        parameters: list[Parameter],
+        time: Variable | None = None,
+    ):
         # Create result variables for the SDE
         results = [
-            Variable(name=f"d{variable.name}/dt", abbreviation=f"d{variable.abbreviation}/dt")
+            Variable(
+                name=f"d{variable.name}/dt",
+                abbreviation=f"d{variable.abbreviation}/dt",
+            )
             for variable in variables
         ]
-        super().__init__(variables=variables, parameters=parameters, results=results, time=time)
+        super().__init__(
+            variables=variables,
+            parameters=parameters,
+            results=results,
+            time=time,
+        )
 
     def eval(self, point: list[float], time: float | None = None) -> list[float]:
         """Drift term: μ X_t"""
@@ -59,12 +72,27 @@ def main():
     # Parameters
     x = Variable(name="Asset Price", abbreviation="S")
     t = Variable(name="Time", abbreviation="t")
-    drift_rate = Parameter(name="Drift Rate", value=0.1)      # Corresponds to μ in geometric Brownian motion
-    volatility = Parameter(name="Volatility", value=0.2)   # Corresponds to σ in geometric Brownian motion
+    drift_rate = Parameter(
+        name="Drift Rate",
+        value=0.1,
+    )  # Corresponds to μ in geometric Brownian motion
+    volatility = Parameter(
+        name="Volatility",
+        value=0.2,
+    )  # Corresponds to σ in geometric Brownian motion
 
     # Create equation
-    gbm_process = GeometricBrownianMotion(variables=[x], parameters=[drift_rate, volatility], time=t)
-    equation = DifferentialEquation(variables=[x], time=t, parameters=[drift_rate, volatility], derivative=gbm_process)
+    gbm_process = GeometricBrownianMotion(
+        variables=[x],
+        parameters=[drift_rate, volatility],
+        time=t,
+    )
+    equation = DifferentialEquation(
+        variables=[x],
+        time=t,
+        parameters=[drift_rate, volatility],
+        derivative=gbm_process,
+    )
 
     # Simulate using SRK2 method
     config = SRK2Config(
@@ -126,10 +154,14 @@ def main():
     # Theoretical expectation for GBM: S_0 * exp(μ T)
     theoretical_expectation = 100.0 * np.exp(drift_rate.value * 1.0)
     print(f"Theoretical expectation: ${theoretical_expectation:.2f}")
-    print(f"Actual vs Theoretical: {final_price/theoretical_expectation:.2f}")
+    print(f"Actual vs Theoretical: {final_price / theoretical_expectation:.2f}")
 
     # Theoretical variance: S_0^2 * exp(2μ T) * (exp(σ^2 T) - 1)
-    theoretical_variance = 100.0**2 * np.exp(2 * drift_rate.value * 1.0) * (np.exp(volatility.value**2 * 1.0) - 1)
+    theoretical_variance = (
+        100.0**2
+        * np.exp(2 * drift_rate.value * 1.0)
+        * (np.exp(volatility.value**2 * 1.0) - 1)
+    )
     actual_variance = np.var(prices)
     print(f"Theoretical variance: {theoretical_variance:.2f}")
     print(f"Actual variance: {actual_variance:.2f}")

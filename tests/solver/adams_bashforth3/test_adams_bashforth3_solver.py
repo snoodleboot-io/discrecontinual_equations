@@ -21,7 +21,12 @@ class TestAdamsBashforth3Solver:
         results = [Variable(name="integral_y", discretization=[])]
 
         func = SimpleODEFunction(variables, parameters, results, time)
-        equation = DifferentialEquation(variables=variables, time=time, parameters=parameters, derivative=func)
+        equation = DifferentialEquation(
+            variables=variables,
+            time=time,
+            parameters=parameters,
+            derivative=func,
+        )
 
         config = AdamsBashforth3Config(start_time=0.0, end_time=1.0, step_size=0.1)
         solver = AdamsBashforth3Solver(config)

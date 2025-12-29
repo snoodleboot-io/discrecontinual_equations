@@ -21,7 +21,12 @@ class TestAdamsBashforth2Solver:
         results = [Variable(name="integral_y", discretization=[])]
 
         func = SimpleODEFunction(variables, parameters, results, time)
-        equation = DifferentialEquation(variables=variables, time=time, parameters=parameters, derivative=func)
+        equation = DifferentialEquation(
+            variables=variables,
+            time=time,
+            parameters=parameters,
+            derivative=func,
+        )
 
         config = AdamsBashforth2Config(start_time=0.0, end_time=1.0, step_size=0.1)
         solver = AdamsBashforth2Solver(config)
@@ -33,8 +38,12 @@ class TestAdamsBashforth2Solver:
 
         # Assert
         assert solver.solution is not None
-        assert len(solver.solution.time.discretization) == 11  # 0 to 1 with step 0.1, including initial point
+        assert (
+            len(solver.solution.time.discretization) == 11
+        )  # 0 to 1 with step 0.1, including initial point
         # For dy/dt = -y, y(t) = e^{-t}, so y(0.9) ≈ 0.4066
         final_value = solver.solution.results[0].discretization[-1]
         expected = np.exp(-0.9)
-        assert abs(final_value - expected) < 0.1  # AB2 has moderate accuracy for this problem
+        assert (
+            abs(final_value - expected) < 0.1
+        )  # AB2 has moderate accuracy for this problem

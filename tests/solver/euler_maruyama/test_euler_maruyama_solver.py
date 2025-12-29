@@ -40,7 +40,12 @@ class TestEulerMaruyamaSolver:
         ]
 
         func = StochasticTestFunction(variables, parameters, time)
-        equation = DifferentialEquation(variables=variables, time=time, parameters=parameters, derivative=func)
+        equation = DifferentialEquation(
+            variables=variables,
+            time=time,
+            parameters=parameters,
+            derivative=func,
+        )
 
         config = EulerMaruyamaConfig(
             start_time=0.0,

@@ -1,4 +1,5 @@
 import math
+
 import numpy as np
 
 from discrecontinual_equations.curve import Curve
@@ -80,12 +81,11 @@ class GottwaldMelbourneSolver(Solver):
         gamma = self._gamma
         if x <= 0:
             return 0.0
-        elif x >= 1:
+        if x >= 1:
             return 1.0
-        else:
-            term1 = x ** (1 - gamma)
-            term2 = (1 + x) ** (1 - gamma)
-            return (term1 + term2 - 1) ** (1 / (1 - gamma)) % 1
+        term1 = x ** (1 - gamma)
+        term2 = (1 + x) ** (1 - gamma)
+        return (term1 + term2 - 1) ** (1 / (1 - gamma)) % 1
 
     def _compute_observable(self, x: float, chi: int) -> float:
         """Compute the observable v(x) for the fast dynamics."""
@@ -146,10 +146,10 @@ class GottwaldMelbourneSolver(Solver):
 
                 # Evaluate drift and diffusion at current z
                 drift = np.array(
-                    equation.derivative.eval(point=z.tolist(), time=t_current)
+                    equation.derivative.eval(point=z.tolist(), time=t_current),
                 )
                 diffusion = np.array(
-                    equation.derivative.diffusion(point=z.tolist(), time=t_current)
+                    equation.derivative.diffusion(point=z.tolist(), time=t_current),
                 )
 
                 # Update slow variable (z)

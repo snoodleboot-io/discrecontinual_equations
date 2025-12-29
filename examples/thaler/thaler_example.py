@@ -14,8 +14,6 @@ Two examples are provided:
 
 import os
 
-import numpy as np
-
 from discrecontinual_equations.differential_equation import DifferentialEquation
 from discrecontinual_equations.function.stochastic import StochasticFunction
 from discrecontinual_equations.parameter import Parameter
@@ -37,13 +35,26 @@ class AlphaStableDiffusion(StochasticFunction):
     The solution exhibits heavy tails and discontinuous sample paths.
     """
 
-    def __init__(self, variables: list[Variable], parameters: list[Parameter], time: Variable | None = None):
+    def __init__(
+        self,
+        variables: list[Variable],
+        parameters: list[Parameter],
+        time: Variable | None = None,
+    ):
         # Create result variables for the SDE
         results = [
-            Variable(name=f"d{variable.name}/dt", abbreviation=f"d{variable.abbreviation}/dt")
+            Variable(
+                name=f"d{variable.name}/dt",
+                abbreviation=f"d{variable.abbreviation}/dt",
+            )
             for variable in variables
         ]
-        super().__init__(variables=variables, parameters=parameters, results=results, time=time)
+        super().__init__(
+            variables=variables,
+            parameters=parameters,
+            results=results,
+            time=time,
+        )
 
     def eval(self, point: list[float], time: float | None = None) -> list[float]:
         """
@@ -68,20 +79,33 @@ class BoundarySDE(StochasticFunction):
     better than traditional Euler-Maruyama discretizations.
     """
 
-    def __init__(self, variables: list[Variable], parameters: list[Parameter], time: Variable | None = None):
+    def __init__(
+        self,
+        variables: list[Variable],
+        parameters: list[Parameter],
+        time: Variable | None = None,
+    ):
         # Create result variables for the SDE
         results = [
-            Variable(name=f"d{variable.name}/dt", abbreviation=f"d{variable.abbreviation}/dt")
+            Variable(
+                name=f"d{variable.name}/dt",
+                abbreviation=f"d{variable.abbreviation}/dt",
+            )
             for variable in variables
         ]
-        super().__init__(variables=variables, parameters=parameters, results=results, time=time)
+        super().__init__(
+            variables=variables,
+            parameters=parameters,
+            results=results,
+            time=time,
+        )
 
     def eval(self, point: list[float], time: float | None = None) -> list[float]:
         """
         Drift term: μ(z,t) = -z^3 (attractive force toward origin)
         """
         z = point[0]
-        return [-z**3]
+        return [-(z**3)]
 
     def diffusion(self, point: list[float], time: float | None = None) -> list[float]:
         """
@@ -104,7 +128,11 @@ def run_alpha_stable_diffusion_example():
     diffusion_coeff = Parameter(name="Diffusion Coefficient", value=1.0)
 
     # Create the stochastic function
-    alpha_stable_process = AlphaStableDiffusion(variables=[z], parameters=[diffusion_coeff], time=t)
+    alpha_stable_process = AlphaStableDiffusion(
+        variables=[z],
+        parameters=[diffusion_coeff],
+        time=t,
+    )
 
     # Create differential equation
     equation = DifferentialEquation(
@@ -116,14 +144,14 @@ def run_alpha_stable_diffusion_example():
 
     # Simulation parameters
     n_simulations = 3  # Fewer simulations due to computational cost
-    end_time = 1.0     # Shorter time due to heavy-tailed behavior
-    n_steps = 100      # Fewer steps for faster computation
+    end_time = 1.0  # Shorter time due to heavy-tailed behavior
+    n_steps = 100  # Fewer steps for faster computation
     step_size = end_time / n_steps
 
     # α-stable parameters
     alpha = 1.5  # Stability index (1 < α < 2 for finite variance but infinite mean)
-    eta = 1.0    # Scale parameter
-    beta = 0.0   # Skewness (symmetric)
+    eta = 1.0  # Scale parameter
+    beta = 0.0  # Skewness (symmetric)
 
     # Solver configuration
     config = GottwaldMelbourneConfig(
@@ -146,7 +174,10 @@ def run_alpha_stable_diffusion_example():
     print()
 
     # Create plotter
-    plot = LinePlot(output_dir=os.path.join(os.path.dirname(__file__), "images"), output_format="png")
+    plot = LinePlot(
+        output_dir=os.path.join(os.path.dirname(__file__), "images"),
+        output_format="png",
+    )
 
     # Simulate multiple paths
     all_paths = []
@@ -161,10 +192,10 @@ def run_alpha_stable_diffusion_example():
 
         # Extract the solution path
         path = [point[2][0] for point in solver.solution]  # Extract position values
-        times = [point[0] for point in solver.solution]    # Extract time values
+        times = [point[0] for point in solver.solution]  # Extract time values
 
         all_paths.append((times, path))
-        print(f"Path {i+1} final position: {path[-1]:.4f}")
+        print(f"Path {i + 1} final position: {path[-1]:.4f}")
 
     print("\nPlotting results...")
 
@@ -185,25 +216,31 @@ def run_alpha_stable_diffusion_example():
                 x=times,
                 y=path,
                 mode="lines",
-                name=f"Path {i+1}",
+                name=f"Path {i + 1}",
                 line=dict(color=colors[i], width=2),
                 showlegend=True,
             ),
         )
 
     # Add theoretical information
-    theoretical_info = ".2f"".2f"f"""
+    theoretical_info = (
+        ".2f"
+        ".2f"
+        f"""
 α-Stable Process Properties:
 • Stability index: α = {alpha}
 • Scale parameter: η = {eta}
 • Skewness: β = {beta}
 • Heavy tails: P(|Z| > x) ~ x^(-α) as x → ∞
-• Variance: {'finite' if alpha > 2 else 'infinite'}
-• Mean: {'finite' if alpha > 1 else 'infinite'}"""
+• Variance: {"finite" if alpha > 2 else "infinite"}
+• Mean: {"finite" if alpha > 1 else "infinite"}"""
+    )
 
     plot.figure.add_annotation(
-        x=0.02, y=0.98,
-        xref="paper", yref="paper",
+        x=0.02,
+        y=0.98,
+        xref="paper",
+        yref="paper",
         text=theoretical_info,
         showarrow=False,
         bgcolor="white",
@@ -273,8 +310,8 @@ def run_boundary_preservation_example():
         random_seed=123,
     )
 
-    print(f"Solving SDE: dZ = -Z³ dt + Z²  dW^α,η,β")
-    print(f"Natural boundary at Z = 0 (solutions remain positive)")
+    print("Solving SDE: dZ = -Z³ dt + Z²  dW^α,η,β")
+    print("Natural boundary at Z = 0 (solutions remain positive)")
     print(".2f")
     print(f"Time steps: {n_steps}")
     print(f"Homogenisation ε: {config.epsilon}")
@@ -297,7 +334,10 @@ def run_boundary_preservation_example():
     print(f"  Final value: {path[-1]:.6f}")
 
     # Create plot
-    plot = LinePlot(output_dir=os.path.join(os.path.dirname(__file__), "images"), output_format="png")
+    plot = LinePlot(
+        output_dir=os.path.join(os.path.dirname(__file__), "images"),
+        output_format="png",
+    )
 
     plot.figure.update_layout(
         title="SDE with Natural Boundary - Boundary Preservation",
@@ -335,8 +375,10 @@ Boundary Preservation:
 • Gottwald-Melbourne method preserves boundaries"""
 
     plot.figure.add_annotation(
-        x=0.02, y=0.98,
-        xref="paper", yref="paper",
+        x=0.02,
+        y=0.98,
+        xref="paper",
+        yref="paper",
         text=boundary_info,
         showarrow=False,
         bgcolor="white",

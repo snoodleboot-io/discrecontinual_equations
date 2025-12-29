@@ -1,5 +1,5 @@
-import pytest
 import numpy as np
+import pytest
 
 from discrecontinual_equations.differential_equation import DifferentialEquation
 from discrecontinual_equations.function.stochastic import StochasticFunction
@@ -40,7 +40,7 @@ class TestBoundaryFunction(StochasticFunction):
     def eval(self, point, time=None):
         """Drift term: μ(z,t) = -z^3"""
         z = point[0]
-        return [-z**3]
+        return [-(z**3)]
 
     def diffusion(self, point, time=None):
         """Diffusion term: σ(z,t) = z^2"""
@@ -123,7 +123,10 @@ class TestGottwaldMelbourneSolver:
 
         func = TestAlphaStableFunction(variables, parameters, time)
         equation = DifferentialEquation(
-            variables=variables, time=time, parameters=parameters, derivative=func
+            variables=variables,
+            time=time,
+            parameters=parameters,
+            derivative=func,
         )
 
         config = GottwaldMelbourneConfig(
@@ -165,7 +168,10 @@ class TestGottwaldMelbourneSolver:
 
         func = TestBoundaryFunction(variables, parameters, time)
         equation = DifferentialEquation(
-            variables=variables, time=time, parameters=parameters, derivative=func
+            variables=variables,
+            time=time,
+            parameters=parameters,
+            derivative=func,
         )
 
         config = GottwaldMelbourneConfig(
@@ -193,7 +199,9 @@ class TestGottwaldMelbourneSolver:
         # Note: Due to the homogenisation, there might be small violations,
         # but they should be minimal compared to Euler-Maruyama
         positive_values = [v for v in solution_values if v > 0]
-        assert len(positive_values) >= len(solution_values) * 0.9  # At least 90% positive
+        assert (
+            len(positive_values) >= len(solution_values) * 0.9
+        )  # At least 90% positive
 
     def test_reproducibility(self):
         """Test that results are reproducible with same random seed."""
@@ -204,7 +212,10 @@ class TestGottwaldMelbourneSolver:
 
         func = TestAlphaStableFunction(variables, parameters, time)
         equation = DifferentialEquation(
-            variables=variables, time=time, parameters=parameters, derivative=func
+            variables=variables,
+            time=time,
+            parameters=parameters,
+            derivative=func,
         )
 
         # Solve twice with same seed
@@ -248,7 +259,10 @@ class TestGottwaldMelbourneSolver:
 
         func = TestAlphaStableFunction(variables, parameters, time)
         equation = DifferentialEquation(
-            variables=variables, time=time, parameters=parameters, derivative=func
+            variables=variables,
+            time=time,
+            parameters=parameters,
+            derivative=func,
         )
 
         # Test with symmetric (β=0) and skewed (β=0.5) noise

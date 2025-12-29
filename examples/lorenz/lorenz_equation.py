@@ -118,7 +118,9 @@ class LorenzFunction(DeterministicFunction):
         self.beta = parameters[2].value
 
     def eval(
-        self, point: list[float], time: float | None = None,
+        self,
+        point: list[float],
+        time: float | None = None,
     ) -> list[float]:
         x, y, z = point
         # Lorenz equations
@@ -136,7 +138,9 @@ def main():
     aspect_ratio = 8.0 / 3.0  # β = 8/3
 
     print("Solving the Lorenz Equations with Multiple Solvers")
-    print(f"Parameters: Prandtl={prandtl_number}, Rayleigh={rayleigh_number}, Aspect={aspect_ratio:.3f}")
+    print(
+        f"Parameters: Prandtl={prandtl_number}, Rayleigh={rayleigh_number}, Aspect={aspect_ratio:.3f}",
+    )
     print("Initial conditions: x=1, y=1, z=1")
     print(f"Total simulation time: {150.0} units")  # end_time is 150.0
     print()
@@ -175,7 +179,11 @@ def main():
         variables = [x_var, y_var, z_var]
 
         # Create the Lorenz function
-        lorenz = LorenzFunction(variables=variables, parameters=parameters, time=time_var)
+        lorenz = LorenzFunction(
+            variables=variables,
+            parameters=parameters,
+            time=time_var,
+        )
 
         # Create the differential equation
         equation = DifferentialEquation(
@@ -185,7 +193,12 @@ def main():
             derivative=lorenz,
         )
 
-        if solver_name in ["Cash-Karp", "Fehlberg", "Dormand-Prince 5(4)", "Dormand-Prince 8(9)"]:
+        if solver_name in [
+            "Cash-Karp",
+            "Fehlberg",
+            "Dormand-Prince 5(4)",
+            "Dormand-Prince 8(9)",
+        ]:
             # Adaptive solvers
             config = config_class(
                 start_time=0.0,
@@ -194,7 +207,9 @@ def main():
                 absolute_tolerance=1e-6,
                 relative_tolerance=1e-6,
             )
-            print(f"    Adaptive solver with tolerances atol={config.absolute_tolerance}, rtol={config.relative_tolerance}")
+            print(
+                f"    Adaptive solver with tolerances atol={config.absolute_tolerance}, rtol={config.relative_tolerance}",
+            )
         else:
             # Fixed-step solvers
             config = config_class(
@@ -208,7 +223,9 @@ def main():
 
         solver.solve(equation, initial_values)
 
-        print(f"  Solution computed with {len(solver.solution.time.discretization)} time steps")
+        print(
+            f"  Solution computed with {len(solver.solution.time.discretization)} time steps",
+        )
 
         # Extract the results
         x_values = solver.solution.results[0].discretization
@@ -269,8 +286,12 @@ def main():
     phase_plot.plot(x_var, z_var, title="Lorenz Phase Space (X vs Z)")
     phase_plot.show()
 
-    print("All solvers completed. The Lorenz system shows chaotic behavior with sensitive dependence on initial conditions.")
-    print("Note: Different numerical methods will produce different trajectories due to the chaotic nature of the system.")
+    print(
+        "All solvers completed. The Lorenz system shows chaotic behavior with sensitive dependence on initial conditions.",
+    )
+    print(
+        "Note: Different numerical methods will produce different trajectories due to the chaotic nature of the system.",
+    )
 
 
 if __name__ == "__main__":

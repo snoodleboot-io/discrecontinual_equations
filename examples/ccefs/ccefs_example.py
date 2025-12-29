@@ -37,21 +37,34 @@ class CCEFSFunction(StochasticFunction):
     For a 3-cell system with periodic coupling.
     """
 
-    def __init__(self, variables: list[Variable], parameters: list[Parameter], time: Variable | None = None):
+    def __init__(
+        self,
+        variables: list[Variable],
+        parameters: list[Parameter],
+        time: Variable | None = None,
+    ):
         # Results are dX1/dt, dX2/dt, dX3/dt
         results = [
-            Variable(name=f"d{variable.name}/dt", abbreviation=f"d{variable.abbreviation}/dt")
+            Variable(
+                name=f"d{variable.name}/dt",
+                abbreviation=f"d{variable.abbreviation}/dt",
+            )
             for variable in variables
         ]
-        super().__init__(variables=variables, parameters=parameters, results=results, time=time)
+        super().__init__(
+            variables=variables,
+            parameters=parameters,
+            results=results,
+            time=time,
+        )
 
     def eval(self, point: list[float], time: float | None = None) -> list[float]:
         """
         Drift terms for the CCEFS system with periodic coupling.
         """
         x1, x2, x3 = point
-        a = self.parameters[0].value    # a parameter
-        b = self.parameters[1].value    # b parameter
+        a = self.parameters[0].value  # a parameter
+        b = self.parameters[1].value  # b parameter
         epsilon0 = self.parameters[2].value  # ε_0
         lambda_param = self.parameters[3].value  # λ
 
@@ -84,13 +97,34 @@ def main():
     t = Variable(name="Time", abbreviation="t")
 
     # Parameters
-    nonlinearity_coeff_a = Parameter(name="Nonlinearity Coefficient A", value=1.0)  # Corresponds to 'a' in the CCEFS equation
-    nonlinearity_coeff_b = Parameter(name="Nonlinearity Coefficient B", value=0.1)  # Corresponds to 'b' in the CCEFS equation
-    bias_voltage = Parameter(name="Bias Voltage", value=0.0)  # Corresponds to ε₀ in the CCEFS equation
-    coupling_strength = Parameter(name="Coupling Strength", value=0.5)  # Corresponds to λ in the CCEFS equation
-    noise_intensity = Parameter(name="Noise Intensity", value=0.01)  # Corresponds to D in the CCEFS equation
+    nonlinearity_coeff_a = Parameter(
+        name="Nonlinearity Coefficient A",
+        value=1.0,
+    )  # Corresponds to 'a' in the CCEFS equation
+    nonlinearity_coeff_b = Parameter(
+        name="Nonlinearity Coefficient B",
+        value=0.1,
+    )  # Corresponds to 'b' in the CCEFS equation
+    bias_voltage = Parameter(
+        name="Bias Voltage",
+        value=0.0,
+    )  # Corresponds to ε₀ in the CCEFS equation
+    coupling_strength = Parameter(
+        name="Coupling Strength",
+        value=0.5,
+    )  # Corresponds to λ in the CCEFS equation
+    noise_intensity = Parameter(
+        name="Noise Intensity",
+        value=0.01,
+    )  # Corresponds to D in the CCEFS equation
 
-    parameters = [nonlinearity_coeff_a, nonlinearity_coeff_b, bias_voltage, coupling_strength, noise_intensity]
+    parameters = [
+        nonlinearity_coeff_a,
+        nonlinearity_coeff_b,
+        bias_voltage,
+        coupling_strength,
+        noise_intensity,
+    ]
 
     # Create the stochastic function
     ccefs = CCEFSFunction(variables=[x1, x2, x3], parameters=parameters, time=t)
@@ -104,8 +138,8 @@ def main():
     )
 
     # Simulation parameters
-    end_time = 500.0    # Total simulation time
-    n_steps = 5000     # Number of time steps
+    end_time = 500.0  # Total simulation time
+    n_steps = 5000  # Number of time steps
     step_size = end_time / n_steps
 
     # Solver configuration - Using Milstein method for higher accuracy
@@ -120,7 +154,9 @@ def main():
     print(f"Total time: {end_time:.2f}")
     print(f"Time steps: {n_steps}")
     print(f"Step size: {step_size:.4f}")
-    print(f"Parameters: A={nonlinearity_coeff_a.value}, B={nonlinearity_coeff_b.value}, Bias={bias_voltage.value}, Coupling={coupling_strength.value}, Noise={noise_intensity.value}")
+    print(
+        f"Parameters: A={nonlinearity_coeff_a.value}, B={nonlinearity_coeff_b.value}, Bias={bias_voltage.value}, Coupling={coupling_strength.value}, Noise={noise_intensity.value}",
+    )
     print()
 
     # Create solver

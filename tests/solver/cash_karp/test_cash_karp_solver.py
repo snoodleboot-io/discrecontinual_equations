@@ -21,7 +21,12 @@ class TestCashKarpSolver:
         results = [Variable(name="integral_y", discretization=[])]
 
         func = SimpleODEFunction(variables, parameters, results, time)
-        equation = DifferentialEquation(variables=variables, time=time, parameters=parameters, derivative=func)
+        equation = DifferentialEquation(
+            variables=variables,
+            time=time,
+            parameters=parameters,
+            derivative=func,
+        )
 
         config = CashKarpConfig(
             start_time=0.0,
@@ -39,8 +44,12 @@ class TestCashKarpSolver:
 
         # Assert
         assert solver.solution is not None
-        assert len(solver.solution.time.discretization) > 2  # Should have adaptive steps
+        assert (
+            len(solver.solution.time.discretization) > 2
+        )  # Should have adaptive steps
         # For dy/dt = -y, y(t) = e^{-t}, so y(1) ≈ 0.3679
         final_value = solver.solution.results[0].discretization[-1]
         expected = np.exp(-1.0)
-        assert abs(final_value - expected) < 1e-6  # Should be very accurate due to adaptive stepping
+        assert (
+            abs(final_value - expected) < 1e-6
+        )  # Should be very accurate due to adaptive stepping

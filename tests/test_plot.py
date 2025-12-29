@@ -23,7 +23,6 @@ class TestPlot(TestCase):
             pass
 
         class Oscillator(Function):
-
             __slots__ = ["a", "b"]
 
             class Energy(Variable, name="Energy", abbreviation="E"):
@@ -40,7 +39,9 @@ class TestPlot(TestCase):
                 self.b = parameters[1].value
 
             def eval(
-                self, point: list[float], time: float | None = None,
+                self,
+                point: list[float],
+                time: float | None = None,
             ) -> list[float]:
                 x = point[0]
                 result = -self.a * x**3 + self.b * x

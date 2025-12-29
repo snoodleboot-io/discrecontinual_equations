@@ -41,13 +41,26 @@ class BrownianMotion(StochasticFunction):
     This represents pure random motion with no drift term.
     """
 
-    def __init__(self, variables: list[Variable], parameters: list[Parameter], time: Variable | None = None):
+    def __init__(
+        self,
+        variables: list[Variable],
+        parameters: list[Parameter],
+        time: Variable | None = None,
+    ):
         # Create result variables for the SDE
         results = [
-            Variable(name=f"d{variable.name}/dt", abbreviation=f"d{variable.abbreviation}/dt")
+            Variable(
+                name=f"d{variable.name}/dt",
+                abbreviation=f"d{variable.abbreviation}/dt",
+            )
             for variable in variables
         ]
-        super().__init__(variables=variables, parameters=parameters, results=results, time=time)
+        super().__init__(
+            variables=variables,
+            parameters=parameters,
+            results=results,
+            time=time,
+        )
 
     def eval(self, point: list[float], time: float | None = None) -> list[float]:
         """
@@ -73,10 +86,17 @@ def run_brownian_motion_example():
     # Define variables and parameters
     x = Variable(name="Position", abbreviation="X")
     t = Variable(name="Time", abbreviation="t")
-    diffusion_coefficient = Parameter(name="Diffusion Coefficient", value=1.0)  # Corresponds to σ in standard Brownian motion
+    diffusion_coefficient = Parameter(
+        name="Diffusion Coefficient",
+        value=1.0,
+    )  # Corresponds to σ in standard Brownian motion
 
     # Create the stochastic function
-    brownian_process = BrownianMotion(variables=[x], parameters=[diffusion_coefficient], time=t)
+    brownian_process = BrownianMotion(
+        variables=[x],
+        parameters=[diffusion_coefficient],
+        time=t,
+    )
 
     # Create differential equation
     equation = DifferentialEquation(
@@ -88,8 +108,8 @@ def run_brownian_motion_example():
 
     # Simulation parameters
     n_simulations = 5  # Number of Brownian motion paths to simulate
-    end_time = 2.0     # Total simulation time
-    n_steps = 1000     # Number of time steps
+    end_time = 2.0  # Total simulation time
+    n_steps = 1000  # Number of time steps
     step_size = end_time / n_steps
 
     # Solver configuration
@@ -107,7 +127,10 @@ def run_brownian_motion_example():
     print()
 
     # Create plotter
-    plot = LinePlot(output_dir=os.path.join(os.path.dirname(__file__), "images"), output_format="png")
+    plot = LinePlot(
+        output_dir=os.path.join(os.path.dirname(__file__), "images"),
+        output_format="png",
+    )
 
     # Simulate multiple paths
     all_paths = []
@@ -122,7 +145,7 @@ def run_brownian_motion_example():
 
         # Extract the solution path
         path = [point[2][0] for point in solver.solution]  # Extract position values
-        times = [point[0] for point in solver.solution]    # Extract time values
+        times = [point[0] for point in solver.solution]  # Extract time values
 
         all_paths.append((times, path))
         print(f"Final position: {path[-1]:.4f}")
@@ -130,7 +153,7 @@ def run_brownian_motion_example():
         # For the first path, also show some intermediate values
         if i == 0:
             print("\nFirst path intermediate values:")
-            for j in [0, n_steps//4, n_steps//2, 3*n_steps//4, n_steps]:
+            for j in [0, n_steps // 4, n_steps // 2, 3 * n_steps // 4, n_steps]:
                 print(f"  t={times[j]:.3f}: X={path[j]:.4f}")
 
     print("\nPlotting results...")
@@ -152,7 +175,7 @@ def run_brownian_motion_example():
                 x=times,
                 y=path,
                 mode="lines",
-                name=f"Path {i+1}",
+                name=f"Path {i + 1}",
                 line=dict(color=colors[i], width=2),
                 showlegend=True,
             ),
@@ -160,8 +183,10 @@ def run_brownian_motion_example():
 
     # Add analytical properties
     plot.figure.add_annotation(
-        x=0.02, y=0.98,
-        xref="paper", yref="paper",
+        x=0.02,
+        y=0.98,
+        xref="paper",
+        yref="paper",
         text="Expected value: E[X_t] = 0<br>Variance: Var(X_t) = t",
         showarrow=False,
         bgcolor="white",
@@ -197,7 +222,7 @@ def run_brownian_motion_example():
     # Theoretical variance: Var(X_T) = T = 2.0
     theoretical_variance = end_time
     print(f"Theoretical variance: {theoretical_variance:.4f}")
-    print(f"Ratio: {var_final/theoretical_variance:.1f}")
+    print(f"Ratio: {var_final / theoretical_variance:.1f}")
 
     return all_paths
 

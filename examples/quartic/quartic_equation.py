@@ -45,7 +45,9 @@ class QuarticPotential(Function):
         self.b = parameters[1].value
 
     def eval(
-        self, point: list[float], time: float | None = None,
+        self,
+        point: list[float],
+        time: float | None = None,
     ) -> list[float]:
         x = point[0]
         # Quartic potential: E(x) = -a * x^4 + b * x^2

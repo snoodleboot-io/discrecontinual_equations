@@ -5,24 +5,17 @@ repos:
     hooks:
       - id: black
         language_version: python3
-        files: ^discrecontinual_equations/
 
   # Fast linter
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.14.10
     hooks:
       - id: ruff
-        files: ^discrecontinual_equations/
+        args: [--fix]
       - id: ruff-format
-        files: ^discrecontinual_equations/
 
-  # Security scanning
-  - repo: https://github.com/pycqa/bandit
-    rev: 1.9.2
-    hooks:
-      - id: bandit
-        args: ["-c", "pyproject.toml"]
-        files: ^discrecontinual_equations/
+  # Security scanning disabled due to Windows compatibility issues
+  # Bandit runs in CI pipeline instead
 
   # Type checking
   - repo: https://github.com/pre-commit/mirrors-mypy
@@ -31,13 +24,14 @@ repos:
       - id: mypy
         args: [--ignore-missing-imports]
         files: ^discrecontinual_equations/
+        additional_dependencies: [pydantic, numpy, plotly, kaleido, sweet-tea]
 
   # Build documentation
   - repo: local
     hooks:
       - id: mkdocs
         name: mkdocs
-        entry: uv run mkdocs build
+        entry: uv run mkdocs build --strict
         language: system
         pass_filenames: false
 
@@ -49,4 +43,4 @@ repos:
         entry: uv run pytest
         language: system
         pass_filenames: false
-        args: [tests/, --cov=discrecontinual_equations, --cov-report=term-missing, --cov-report=html]
+        args: [tests/, --cov=discrecontinual_equations, --cov-report=xml, --cov-report=term-missing]

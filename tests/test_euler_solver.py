@@ -34,7 +34,6 @@ class TestEulerSolver(TestCase):
             pass
 
         class Oscillator(Function):
-
             __slots__ = ["a", "amplitude", "b", "frequency"]
 
             class Energy(Variable, name="Energy", abbreviation="E"):
@@ -53,7 +52,9 @@ class TestEulerSolver(TestCase):
                 self.amplitude = parameters[3].value
 
             def eval(
-                self, point: list[float], time: float | None = None,
+                self,
+                point: list[float],
+                time: float | None = None,
             ) -> list[float]:
                 x = point[0]
                 result = (
@@ -74,12 +75,16 @@ class TestEulerSolver(TestCase):
         ]
 
         oscillator = Oscillator(variables=[x_axis], parameters=params, time=t)
-        ode = DifferentialEquation(derivative=oscillator, time=t, parameters=params, variables=[x_axis])
+        ode = DifferentialEquation(
+            derivative=oscillator,
+            time=t,
+            parameters=params,
+            variables=[x_axis],
+        )
 
         dt = 0.01
 
-        config = EulerConfig(step_size=dt, start_time = 0.0, end_time = 1000.0 * dt)
-
+        config = EulerConfig(step_size=dt, start_time=0.0, end_time=1000.0 * dt)
 
         solver = EulerSolver(solver_config=config)
 

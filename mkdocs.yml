@@ -2,8 +2,8 @@ site_name: Discrecontinual Equations
 site_description: A Python library for solving differential equations
 site_author: John Aven
 
-repo_url: https://github.com/john-aven/discrecontinual_equations
-repo_name: john-aven/discrecontinual_equations
+repo_url: https://github.com/snoodleboot-io/discrecontinual_equations
+repo_name: snoodleboot-io/discrecontinual_equations
 
 theme:
   name: material
@@ -53,11 +53,11 @@ nav:
 extra:
   social:
     - icon: fontawesome/brands/github
-      link: https://github.com/john-aven/discrecontinual_equations
+      link: https://github.com/snoodleboot-io/discrecontinual_equations
 
   generator: false
 
-copyright: Copyright &copy; 2025 John Aven
+copyright: Copyright &copy; 2025 snoodleboot, LLC
 
 markdown_extensions:
   - pymdownx.highlight:

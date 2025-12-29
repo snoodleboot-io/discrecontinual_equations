@@ -12,8 +12,6 @@ by Zhan, Duan, Li, and Li (https://arxiv.org/pdf/2010.07691)
 
 import os
 
-import numpy as np
-
 from discrecontinual_equations.differential_equation import DifferentialEquation
 from discrecontinual_equations.function.stochastic import StochasticFunction
 from discrecontinual_equations.parameter import Parameter
@@ -37,10 +35,18 @@ class SimpleStochasticProcess(StochasticFunction):
 
     def __init__(self, variables, parameters, time=None):
         results = [
-            Variable(name=f"d{variable.name}/dt", abbreviation=f"d{variable.abbreviation}/dt")
+            Variable(
+                name=f"d{variable.name}/dt",
+                abbreviation=f"d{variable.abbreviation}/dt",
+            )
             for variable in variables
         ]
-        super().__init__(variables=variables, parameters=parameters, results=results, time=time)
+        super().__init__(
+            variables=variables,
+            parameters=parameters,
+            results=results,
+            time=time,
+        )
 
     def eval(self, point, time=None):
         """
@@ -69,14 +75,14 @@ def run_zhan_duan_li_li_example():
     # Define variables and parameters
     x = Variable(name="Price", abbreviation="X")
     t = Variable(name="Time", abbreviation="t")
-    drift_param = Parameter(name="Drift Rate", value=0.1)      # μ = 10% growth
+    drift_param = Parameter(name="Drift Rate", value=0.1)  # μ = 10% growth
     diffusion_param = Parameter(name="Volatility", value=0.2)  # σ = 20% volatility
 
     # Create the stochastic function
     gbm_process = SimpleStochasticProcess(
         variables=[x],
         parameters=[drift_param, diffusion_param],
-        time=t
+        time=t,
     )
 
     # Create differential equation
@@ -89,8 +95,8 @@ def run_zhan_duan_li_li_example():
 
     # Simulation parameters
     n_simulations = 3  # Number of sample paths
-    end_time = 1.0     # One year simulation
-    n_steps = 100      # Time steps
+    end_time = 1.0  # One year simulation
+    n_steps = 100  # Time steps
     step_size = end_time / n_steps
 
     # Zhan-Duan-Li-Li solver configuration
@@ -112,7 +118,10 @@ def run_zhan_duan_li_li_example():
     print()
 
     # Create plotter
-    plot = LinePlot(output_dir=os.path.join(os.path.dirname(__file__), "images"), output_format="png")
+    plot = LinePlot(
+        output_dir=os.path.join(os.path.dirname(__file__), "images"),
+        output_format="png",
+    )
 
     # Simulate multiple paths
     all_paths = []
@@ -127,7 +136,7 @@ def run_zhan_duan_li_li_example():
 
         # Extract the solution path
         path = [point[2][0] for point in solver.solution]  # Extract price values
-        times = [point[0] for point in solver.solution]    # Extract time values
+        times = [point[0] for point in solver.solution]  # Extract time values
 
         all_paths.append((times, path))
         final_price = path[-1]
@@ -152,7 +161,7 @@ def run_zhan_duan_li_li_example():
                 x=times,
                 y=path,
                 mode="lines",
-                name=f"Path {i+1}",
+                name=f"Path {i + 1}",
                 line=dict(color=colors[i], width=2),
                 showlegend=True,
             ),
@@ -160,8 +169,10 @@ def run_zhan_duan_li_li_example():
 
     # Add theoretical information
     plot.figure.add_annotation(
-        x=0.02, y=0.98,
-        xref="paper", yref="paper",
+        x=0.02,
+        y=0.98,
+        xref="paper",
+        yref="paper",
         text="""
         Geometric Brownian Motion:<br>
         • Drift: μ = 10% per year<br>
@@ -212,7 +223,7 @@ def run_method_comparison():
     process = SimpleStochasticProcess(
         variables=[x],
         parameters=[drift_param, diffusion_param],
-        time=t
+        time=t,
     )
 
     equation = DifferentialEquation(
@@ -267,8 +278,12 @@ def main():
     """
     print("Zhan-Duan-Li-Li Method Examples")
     print("=" * 50)
-    print("This example demonstrates the Zhan-Duan-Li-Li stochastic theta method for SDEs.")
-    print("The method uses a predictor-corrector approach with adjustable theta parameter.")
+    print(
+        "This example demonstrates the Zhan-Duan-Li-Li stochastic theta method for SDEs.",
+    )
+    print(
+        "The method uses a predictor-corrector approach with adjustable theta parameter.",
+    )
     print()
 
     # Run main example
