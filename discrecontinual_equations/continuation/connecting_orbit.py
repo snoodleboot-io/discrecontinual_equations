@@ -19,6 +19,9 @@ from abc import ABC, abstractmethod
 
 import numpy as np
 
+from discrecontinual_equations.continuation.derivative_provider import (
+    AutomaticDifferentiation,
+)
 from discrecontinual_equations.function.function import Function
 
 _IMAGINARY = 1.0e-9
@@ -33,6 +36,8 @@ _RCOND = 1.0e-8
 # least-squares minimum is nonzero and ``_DEFAULT_TOLERANCE`` is unreachable.
 # Stop once repeated iterations stop improving on the best residual seen.
 _STAGNATION_LIMIT = 3
+_HALF = 0.5
+_AUTODIFF = AutomaticDifferentiation()
 
 
 class MeshSpec:
@@ -102,6 +107,7 @@ class ConnectingOrbit(ABC):
         best = unknowns.copy()
         best_residual = float("inf")
         stagnant = 0
+        analytic = True
         for _ in range(_DEFAULT_ITERATIONS):
             residual = self._residual(unknowns, times, shape)
             norm = float(np.linalg.norm(residual))
@@ -114,7 +120,10 @@ class ConnectingOrbit(ABC):
                     break
             if norm < _DEFAULT_TOLERANCE:
                 break
-            jacobian = self._numerical_jacobian(unknowns, times, shape, residual)
+            jacobian = self._jacobian(unknowns, times, shape, residual, analytic)
+            if jacobian is None:
+                analytic = False
+                jacobian = self._numerical_jacobian(unknowns, times, shape, residual)
             step, *_ = np.linalg.lstsq(jacobian, -residual, rcond=_RCOND)
             unknowns = unknowns + step
         return OrbitSolution(times, best.reshape(shape))
@@ -146,6 +155,91 @@ class ConnectingOrbit(ABC):
     def _phase(self, states: np.ndarray) -> float:
         centre = states.shape[0] // 2
         return states[centre, self._mesh.phase_index] - self._mesh.phase_value
+
+    def _jacobian(
+        self,
+        unknowns: np.ndarray,
+        times: np.ndarray,
+        shape: tuple[int, int],
+        residual: np.ndarray,
+        analytic: bool,  # noqa: FBT001
+    ) -> np.ndarray | None:
+        """The exact Jacobian, or ``None`` when the field cannot be differentiated.
+
+        Automatic differentiation evaluates the field on Taylor jets, which a
+        transcendental or otherwise non-analytic field may reject. That is not an
+        error: the caller falls back to finite differences for the rest of the solve.
+        """
+        if not analytic:
+            return None
+        try:
+            return self._analytic_jacobian(unknowns, times, shape, residual.size)
+        except (TypeError, ValueError, AttributeError):
+            return None
+
+    def _analytic_jacobian(
+        self,
+        unknowns: np.ndarray,
+        times: np.ndarray,
+        shape: tuple[int, int],
+        rows: int,
+    ) -> np.ndarray:
+        """Assemble the exact Jacobian block by block, in O(N) field Jacobians.
+
+        Trapezoidal collocation couples only neighbouring nodes, so the collocation
+        rows are banded: block ``i`` holds ``-I - (h/2) Df(x_i)`` against node ``i``
+        and ``I - (h/2) Df(x_{i+1})`` against node ``i+1``. Each node's field
+        Jacobian is needed by the two intervals that meet there, so it is evaluated
+        once per node rather than once per interval. The boundary and phase rows are
+        affine in the states they touch, so their exact rows come from unit
+        displacements.
+
+        This replaces a dense finite-difference construction costing one full
+        residual per unknown, and removes the finite-difference noise that made the
+        smallest singular directions meaningless.
+        """
+        nodes, dimension = shape
+        states = unknowns.reshape(shape)
+        jacobian = np.zeros((rows, unknowns.size))
+        identity = np.eye(dimension)
+        derivatives = [
+            _AUTODIFF.jacobian(self._function, states[i], 0.0) for i in range(nodes)
+        ]
+        for i in range(nodes - 1):
+            weight = _HALF * float(times[i + 1] - times[i])
+            row = i * dimension
+            here = slice(i * dimension, (i + 1) * dimension)
+            ahead = slice((i + 1) * dimension, (i + 2) * dimension)
+            jacobian[row : row + dimension, here] = -identity - weight * derivatives[i]
+            jacobian[row : row + dimension, ahead] = (
+                identity - weight * derivatives[i + 1]
+            )
+        self._affine_rows(unknowns, shape, jacobian, (nodes - 1) * dimension)
+        return jacobian
+
+    def _affine_rows(
+        self,
+        unknowns: np.ndarray,
+        shape: tuple[int, int],
+        jacobian: np.ndarray,
+        offset: int,
+    ) -> None:
+        """Fill the boundary and phase rows, which are affine in the states."""
+        nodes, dimension = shape
+        states = unknowns.reshape(shape)
+        base = self._boundary(states)
+        touched = (0, nodes - 1)
+        for node in touched:
+            for component in range(dimension):
+                shifted = states.copy()
+                shifted[node, component] += 1.0
+                column = node * dimension + component
+                jacobian[offset : offset + base.size, column] = (
+                    self._boundary(shifted) - base
+                )
+        centre = nodes // 2
+        phase_column = centre * dimension + self._mesh.phase_index
+        jacobian[offset + base.size, phase_column] = 1.0
 
     def _numerical_jacobian(
         self,

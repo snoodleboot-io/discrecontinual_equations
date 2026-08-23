@@ -11,7 +11,7 @@ both thresholds.
 
 import itertools
 import math
-from unittest import TestCase, expectedFailure
+from unittest import TestCase
 
 import numpy as np
 from scipy.integrate import solve_ivp
@@ -965,17 +965,16 @@ class TestAdaptivePeriodicOrbit(TestCase):
         assert adaptive is not None
         assert abs(adaptive.period - 2.0 * math.pi) / (2.0 * math.pi) < 1.0e-2
 
-    @expectedFailure
     def test_continuation_reaches_extreme_stiffness(self):
-        """Known failure: the continuation stalls at mu ~ 11.7, short of mu = 16.
+        """Continuation reaches mu = 16, which needs 400 intervals, not 200.
 
-        ``continue_to`` reports this honestly by returning ``None``, so this test
-        now fails at the ``is not None`` assertion rather than by silently
-        comparing the mu ~ 11.7 cycle against the mu = 16 oracle. Refining the step
-        floor does not rescue it: a 100x smaller ``_CONTINUATION_MIN_STEP``
-        advanced the stall point only to mu ~ 11.82. See FUTURE_WORK.md section 1b.
+        The jump layers of a van der Pol relaxation oscillation narrow as mu grows,
+        and at mu = 16 a 200-interval mesh cannot resolve them however the nodes are
+        redistributed: the continuation stalls at mu ~ 11.7 and reports it by
+        returning None. At 400 intervals it reaches the target. See FUTURE_WORK.md
+        section 1b.
         """
-        intervals, target = 200, 16.0
+        intervals, target = 400, 16.0
         period, seed = self._van_der_pol_oracle(target, intervals)
         cold = AdaptivePeriodicOrbit(
             self._field(VanDerPolField, target),

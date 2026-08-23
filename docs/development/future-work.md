@@ -37,19 +37,24 @@ solver returns the same near-optimal result as the uniform mesh (no regression).
 
 ## 1b. Remaining adaptive-mesh headroom
 
-- **Extreme stiffness (REOPENED - does not reproduce).** The claim below was
-  recorded as resolved, but does not hold on the current toolchain (Python 3.14,
-  NumPy 2.4, SciPy 1.18): `continue_to` stalls at `mu ~ 11.7` and never reaches
-  `mu = 16`. It previously *appeared* to succeed only because it returned the cycle
-  from wherever it stalled, with no signal that it had not arrived; it now returns
-  `None` instead. Lowering `_CONTINUATION_MIN_STEP` by 100x moved the stall point
-  only to `mu ~ 11.82`, so this is a genuine barrier rather than step-size control.
-  The covering test is marked `expectedFailure`. No environment was recorded with
-  the original measurement, so it is unknown whether it ever held here.
+- **Extreme stiffness (RESOLVED - needs 400 intervals, not 200).** The claim holds,
+  but it is resolution-bound and the node count is part of the result. At `N = 200`
+  the continuation stalls at `mu ~ 11.7` and cannot reach `mu = 16` however the
+  step size is controlled: lowering `_CONTINUATION_MIN_STEP` by 100x moved the stall
+  only to `mu ~ 11.82`. The jump layers of the relaxation oscillation narrow as `mu`
+  grows, and past `mu ~ 12` a 200-node mesh cannot resolve them however the nodes are
+  redistributed. At `N = 400` the continuation reaches `mu = 16` with relative period
+  error 1.8e-3, consistent with the 3e-3 recorded below.
 
-  Original note follows.
+  Measured on Python 3.14.4, NumPy 2.4.0, SciPy 1.18.1. The original note recorded no
+  environment and no node count, which is why this took a bisection to re-establish;
+  record both with any future measurement.
 
-- **Extreme stiffness (RESOLVED).** Reaching very large `mu` from a cold uniform seed
+  A related defect was fixed while establishing this: `continue_to` used to return the
+  cycle from wherever it stalled, reported as though it had reached the target. It now
+  returns `None`, so a stall is visible instead of being read as an accuracy problem.
+
+- **Extreme stiffness (original note).** Reaching very large `mu` from a cold uniform seed
   fails because the damped Newton diverges. `AdaptivePeriodicOrbit.continue_to`
   solves this with adaptive-step-size continuation in the stiffness parameter: the
   step shrinks on a failed solve and grows on success, warm-starting each step from
