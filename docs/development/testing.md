@@ -21,6 +21,9 @@ Coverage reports are generated in `htmlcov/index.html` after running tests with 
 
 - `tests/` - Main test directory
 - `tests/solver/` - Solver-specific tests
+- `tests/continuation/` - Continuation, codim-2/3, manifold, and stochastic tests
+- `tests/webplot/` - D3 scene and renderer tests
+- `tests/systems/` - Coupled-array sensor system tests
 - Unit tests for core functionality
 - Integration tests for complete workflows
 
