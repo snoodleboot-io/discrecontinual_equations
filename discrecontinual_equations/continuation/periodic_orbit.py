@@ -15,6 +15,8 @@ circle a Neimark-Sacker torus bifurcation).
 """
 
 import numpy as np
+from scipy.sparse import coo_matrix
+from scipy.sparse.linalg import spsolve
 
 from discrecontinual_equations.continuation.derivative_provider import (
     AutomaticDifferentiation,
@@ -317,6 +319,94 @@ class AnalyticPeriodicOrbit(PeriodicOrbit):
 
     __slots__ = ()
 
+    def _sparse_jacobian(
+        self,
+        unknowns: np.ndarray,
+        nodes: int,
+        dimension: int,
+    ) -> coo_matrix:
+        """The same Jacobian as :meth:`_analytic_jacobian`, assembled sparsely.
+
+        Trapezoidal collocation makes this matrix bordered almost-block-diagonal:
+        a band from the interval blocks, one dense column for the period, the
+        periodicity rows coupling the first and last nodes, and the phase row. It
+        is well under 1% nonzero, so materialising it densely costs O(N^2) memory
+        and solving it densely costs O(N^3). Assembling the triplets directly
+        avoids ever forming the dense array.
+        """
+        states = unknowns[: nodes * dimension].reshape(nodes, dimension)
+        period = float(unknowns[-1])
+        size = unknowns.size
+        identity = np.eye(dimension)
+        derivatives = [
+            _AUTODIFF.jacobian(self._function, states[i], 0.0) for i in range(nodes)
+        ]
+        fields = [self._field(states[i]) for i in range(nodes)]
+        rows: list[np.ndarray] = []
+        columns: list[np.ndarray] = []
+        values: list[np.ndarray] = []
+
+        def emit(row: np.ndarray, column: np.ndarray, value: np.ndarray) -> None:
+            rows.append(row.ravel())
+            columns.append(column.ravel())
+            values.append(value.ravel())
+
+        span = np.arange(dimension)
+        for i in range(self._intervals):
+            step = float(self._mesh[i + 1] - self._mesh[i])
+            weight = _HALF * period * step
+            row = i * dimension + span
+            grid_row = np.repeat(row, dimension)
+            emit(
+                grid_row,
+                np.tile(i * dimension + span, dimension),
+                -identity - weight * derivatives[i],
+            )
+            emit(
+                grid_row,
+                np.tile((i + 1) * dimension + span, dimension),
+                identity - weight * derivatives[i + 1],
+            )
+            emit(
+                row,
+                np.full(dimension, size - 1),
+                -_HALF * step * (fields[i] + fields[i + 1]),
+            )
+        periodic = self._intervals * dimension + span
+        emit(periodic, self._intervals * dimension + span, np.ones(dimension))
+        emit(periodic, span, -np.ones(dimension))
+        emit(
+            np.array([self._intervals * dimension + dimension]),
+            np.array([self._phase_index]),
+            np.array([1.0]),
+        )
+        shape = (self._intervals * dimension + dimension + 1, size)
+        return coo_matrix(
+            (np.concatenate(values), (np.concatenate(rows), np.concatenate(columns))),
+            shape=shape,
+        )
+
+    def _newton_step(
+        self,
+        unknowns: np.ndarray,
+        nodes: int,
+        dimension: int,
+        residual: np.ndarray,
+    ) -> np.ndarray:
+        """Solve one Newton system, falling back to a dense least squares.
+
+        A sparse LU is the fast path. Where the Jacobian is singular it yields a
+        non-finite update rather than raising, so the result is checked before it
+        is trusted and the dense least-squares solve takes over when it is not.
+        """
+        sparse = self._sparse_jacobian(unknowns, nodes, dimension).tocsc()
+        update = spsolve(sparse, -residual)
+        if np.all(np.isfinite(update)):
+            return update
+        dense = self._analytic_jacobian(unknowns, nodes, dimension)
+        fallback, *_ = np.linalg.lstsq(dense, -residual, rcond=None)
+        return fallback
+
     def _analytic_jacobian(
         self,
         unknowns: np.ndarray,
@@ -367,11 +457,7 @@ class AnalyticPeriodicOrbit(PeriodicOrbit):
             residual = self._residual(unknowns, nodes, dimension)
             if np.linalg.norm(residual) < _TOLERANCE:
                 break
-            jacobian = self._analytic_jacobian(unknowns, nodes, dimension)
-            try:
-                update = np.linalg.solve(jacobian, -residual)
-            except np.linalg.LinAlgError:
-                update, *_ = np.linalg.lstsq(jacobian, -residual, rcond=None)
+            update = self._newton_step(unknowns, nodes, dimension, residual)
             unknowns = unknowns + update
         if np.linalg.norm(self._residual(unknowns, nodes, dimension)) >= _TOLERANCE:
             return None
@@ -434,23 +520,27 @@ class AdaptivePeriodicOrbit(AnalyticPeriodicOrbit):
             norm = float(np.linalg.norm(residual))
             if norm < _ADAPTIVE_TOLERANCE:
                 break
-            jacobian = self._analytic_jacobian(unknowns, nodes, dimension)
-            try:
-                update = np.linalg.solve(jacobian, -residual)
-            except np.linalg.LinAlgError:
-                update, *_ = np.linalg.lstsq(jacobian, -residual, rcond=None)
+            update = self._newton_step(unknowns, nodes, dimension, residual)
             scale = 1.0
             period, change = unknowns[-1], update[-1]
             if change < 0.0 and period + change < floor:
                 scale = max(0.0, (period - floor) / (-change))
+            accepted = False
             for _ in range(_BACKTRACK_STEPS):
                 candidate = unknowns + scale * update
                 accept = candidate[-1] > floor and (
                     np.linalg.norm(self._residual(candidate, nodes, dimension)) < norm
                 )
                 if accept:
+                    accepted = True
                     break
                 scale *= _BACKTRACK_FACTOR
+            if not accepted:
+                # No descent direction here: every backtrack was rejected, so the
+                # step left is ~2^-20 of the Newton step and committing it would
+                # leave the iterate in place. Stop and let the residual gate below
+                # decide - the iterate may already be good enough to accept.
+                break
             unknowns = unknowns + scale * update
         if (
             np.linalg.norm(self._residual(unknowns, nodes, dimension))
