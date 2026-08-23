@@ -49,6 +49,7 @@ nav:
   - Development:
       - Contributing: development/contributing.md
       - Testing: development/testing.md
+      - Future Work: development/future-work.md
 
 extra:
   social:
