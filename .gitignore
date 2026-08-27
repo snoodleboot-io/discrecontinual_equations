@@ -138,3 +138,9 @@ dmypy.json
 # OS
 .DS_Store
 Thumbs.db
+
+# Generated example plots
+/bifurcation_plots/
+
+# Prompticorn local state
+/.prompticorn/
