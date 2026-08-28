@@ -18,6 +18,8 @@ complex-eigenvector projection and are deferred.
 from abc import ABC, abstractmethod
 
 import numpy as np
+from scipy.sparse import csr_matrix
+from scipy.sparse.linalg import lsmr
 
 from discrecontinual_equations.continuation.derivative_provider import (
     AutomaticDifferentiation,
@@ -36,6 +38,12 @@ _RCOND = 1.0e-8
 # least-squares minimum is nonzero and ``_DEFAULT_TOLERANCE`` is unreachable.
 # Stop once repeated iterations stop improving on the best residual seen.
 _STAGNATION_LIMIT = 3
+# Convergence tolerance for the iterative least squares. Tight enough that the
+# step matches a dense factorisation to well below the accuracy of the orbit.
+_LSMR_TOLERANCE = 1.0e-13
+_LSMR_ITERATIONS = 10000
+# lsmr's istop value meaning it hit maxiter without converging.
+_LSMR_ITERATION_LIMIT = 7
 _HALF = 0.5
 _AUTODIFF = AutomaticDifferentiation()
 
@@ -124,8 +132,7 @@ class ConnectingOrbit(ABC):
             if jacobian is None:
                 analytic = False
                 jacobian = self._numerical_jacobian(unknowns, times, shape, residual)
-            step, *_ = np.linalg.lstsq(jacobian, -residual, rcond=_RCOND)
-            unknowns = unknowns + step
+            unknowns = unknowns + self._least_squares(jacobian, residual)
         return OrbitSolution(times, best.reshape(shape))
 
     def _residual(
@@ -155,6 +162,33 @@ class ConnectingOrbit(ABC):
     def _phase(self, states: np.ndarray) -> float:
         centre = states.shape[0] // 2
         return states[centre, self._mesh.phase_index] - self._mesh.phase_value
+
+    def _least_squares(self, jacobian: np.ndarray, residual: np.ndarray) -> np.ndarray:
+        """Solve the overdetermined Newton system for a step.
+
+        The collocation system is under 1% nonzero, and a dense singular-value
+        factorisation of it is by far the most expensive part of an iteration.
+        ``lsmr`` works on the sparse matrix directly and reaches the same step.
+
+        Forming the normal equations instead would be faster still, but squares
+        the condition number, and the conditioning here varies by several orders
+        of magnitude along the iteration - not a trade worth making inside a
+        solver whose callers supply their own fields. The dense factorisation
+        remains as a fallback for the case where the iterative solve does not
+        return a usable step.
+        """
+        sparse = csr_matrix(jacobian)
+        step, stop, *_ = lsmr(
+            sparse,
+            -residual,
+            atol=_LSMR_TOLERANCE,
+            btol=_LSMR_TOLERANCE,
+            maxiter=_LSMR_ITERATIONS,
+        )
+        if stop != _LSMR_ITERATION_LIMIT and np.all(np.isfinite(step)):
+            return step
+        fallback, *_ = np.linalg.lstsq(jacobian, -residual, rcond=_RCOND)
+        return fallback
 
     def _jacobian(
         self,

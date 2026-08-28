@@ -99,15 +99,17 @@ class PeriodicOrbit:
     ) -> np.ndarray:
         states = unknowns[: nodes * dimension].reshape(nodes, dimension)
         period = float(unknowns[-1])
-        blocks = []
-        for i in range(self._intervals):
-            step = float(self._mesh[i + 1] - self._mesh[i])
-            here = self._field(states[i])
-            ahead = self._field(states[i + 1])
-            blocks.append(
-                states[i + 1] - states[i] - 0.5 * period * step * (here + ahead),
-            )
-        blocks.append(states[-1] - states[0])
+        # Each interior node is the right end of one interval and the left end of
+        # the next, so evaluating per node rather than per interval halves the
+        # field evaluations - and the line search repeats this up to twenty times
+        # per Newton iteration.
+        fields = np.array([self._field(states[i]) for i in range(nodes)])
+        steps = np.diff(self._mesh[: self._intervals + 1]).astype(float)
+        weights = _HALF * period * steps
+        collocation = (
+            states[1:] - states[:-1] - weights[:, None] * (fields[:-1] + fields[1:])
+        )
+        blocks = [collocation.ravel(), states[-1] - states[0]]
         phase = states[0, self._phase_index] - self._phase_value
         blocks.append(np.array([phase]))
         return np.concatenate(blocks)
@@ -338,53 +340,66 @@ class AnalyticPeriodicOrbit(PeriodicOrbit):
         period = float(unknowns[-1])
         size = unknowns.size
         identity = np.eye(dimension)
-        derivatives = [
-            _AUTODIFF.jacobian(self._function, states[i], 0.0) for i in range(nodes)
-        ]
-        fields = [self._field(states[i]) for i in range(nodes)]
-        rows: list[np.ndarray] = []
-        columns: list[np.ndarray] = []
-        values: list[np.ndarray] = []
+        intervals = self._intervals
+        derivatives = np.array(
+            [_AUTODIFF.jacobian(self._function, states[i], 0.0) for i in range(nodes)],
+        )
+        fields = np.array([self._field(states[i]) for i in range(nodes)])
+        steps = np.diff(self._mesh[: intervals + 1]).astype(float)
+        weights = _HALF * period * steps
 
-        def emit(row: np.ndarray, column: np.ndarray, value: np.ndarray) -> None:
-            rows.append(row.ravel())
-            columns.append(column.ravel())
-            values.append(value.ravel())
-
+        # Collocation blocks, built by broadcasting rather than per interval: the
+        # block against node i is -I - w Df(x_i) and against node i+1 is
+        # I - w Df(x_i+1), with one dense entry per row for the period.
+        left = -identity[None] - weights[:, None, None] * derivatives[:-1]
+        right = identity[None] - weights[:, None, None] * derivatives[1:]
         span = np.arange(dimension)
-        for i in range(self._intervals):
-            step = float(self._mesh[i + 1] - self._mesh[i])
-            weight = _HALF * period * step
-            row = i * dimension + span
-            grid_row = np.repeat(row, dimension)
-            emit(
-                grid_row,
-                np.tile(i * dimension + span, dimension),
-                -identity - weight * derivatives[i],
-            )
-            emit(
-                grid_row,
-                np.tile((i + 1) * dimension + span, dimension),
-                identity - weight * derivatives[i + 1],
-            )
-            emit(
-                row,
-                np.full(dimension, size - 1),
-                -_HALF * step * (fields[i] + fields[i + 1]),
-            )
-        periodic = self._intervals * dimension + span
-        emit(periodic, self._intervals * dimension + span, np.ones(dimension))
-        emit(periodic, span, -np.ones(dimension))
-        emit(
-            np.array([self._intervals * dimension + dimension]),
-            np.array([self._phase_index]),
-            np.array([1.0]),
+        starts = np.arange(intervals) * dimension
+        block_rows = np.broadcast_to(
+            (starts[:, None] + span)[:, :, None],
+            (intervals, dimension, dimension),
         )
-        shape = (self._intervals * dimension + dimension + 1, size)
-        return coo_matrix(
-            (np.concatenate(values), (np.concatenate(rows), np.concatenate(columns))),
-            shape=shape,
+        left_columns = np.broadcast_to(
+            (starts[:, None] + span)[:, None, :],
+            (intervals, dimension, dimension),
         )
+        right_columns = left_columns + dimension
+        period_rows = starts[:, None] + span
+        period_values = -_HALF * steps[:, None] * (fields[:-1] + fields[1:])
+
+        periodic = intervals * dimension + span
+        rows = np.concatenate(
+            [
+                block_rows.ravel(),
+                block_rows.ravel(),
+                period_rows.ravel(),
+                periodic,
+                periodic,
+                [intervals * dimension + dimension],
+            ],
+        )
+        columns = np.concatenate(
+            [
+                left_columns.ravel(),
+                right_columns.ravel(),
+                np.full(intervals * dimension, size - 1),
+                intervals * dimension + span,
+                span,
+                [self._phase_index],
+            ],
+        )
+        values = np.concatenate(
+            [
+                left.ravel(),
+                right.ravel(),
+                period_values.ravel(),
+                np.ones(dimension),
+                -np.ones(dimension),
+                [1.0],
+            ],
+        )
+        shape = (intervals * dimension + dimension + 1, size)
+        return coo_matrix((values, (rows, columns)), shape=shape)
 
     def _newton_step(
         self,

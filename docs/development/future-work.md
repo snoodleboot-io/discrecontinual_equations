@@ -54,6 +54,32 @@ solver returns the same near-optimal result as the uniform mesh (no regression).
   cycle from wherever it stalled, reported as though it had reached the target. It now
   returns `None`, so a stall is visible instead of being read as an accuracy problem.
 
+- **Node count against stiffness (measured).** Continuing to `mu = 40` from `mu = 6`,
+  against the integrated oracle, on Python 3.14.4 / NumPy 2.4.0 / SciPy 1.18.1:
+
+  | N | reached `mu` | relative period error |
+  |---|---|---|
+  | 200 | 13.7 (stalls) | 5.8e-2 |
+  | 400 | 40.0 | **1.7e-1** |
+  | 800 | 40.0 | 3.4e-4 |
+  | 1600 | 40.0 | 1.5e-3 |
+
+  Roughly `N ~ 20 to 25 x mu` for ~1e-3 accuracy. Two things in that table matter
+  more than the rule of thumb.
+
+  **Reaching the target is not the same as being right.** At `N = 400` the
+  continuation arrives at `mu = 40` and reports success with a 17% period error. The
+  residual gate proves the *discrete* system was solved; nothing checks that the mesh
+  resolves the orbit, and an under-resolved mesh converges confidently to the wrong
+  cycle. Treat a returned solution as trustworthy only where the node count is known
+  to be adequate for the stiffness.
+
+  **Convergence in N is not monotone.** `N = 1600` (1.5e-3) is worse than `N = 800`
+  (3.4e-4). Unexplained; it may be the curvature monitor behaving differently once
+  nodes are plentiful, or the oracle's own accuracy. Worth resolving before the
+  adaptation constants are tuned any further - they were chosen when only `N = 200`
+  was affordable.
+
 - **Extreme stiffness (original note).** Reaching very large `mu` from a cold uniform seed
   fails because the damped Newton diverges. `AdaptivePeriodicOrbit.continue_to`
   solves this with adaptive-step-size continuation in the stiffness parameter: the
