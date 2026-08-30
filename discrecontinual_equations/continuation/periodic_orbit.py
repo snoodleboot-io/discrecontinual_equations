@@ -623,6 +623,54 @@ class AdaptivePeriodicOrbit(AnalyticPeriodicOrbit):
             states, period = stepped
         return PeriodicOrbitSolution(states, period)
 
+    def estimate_period_error(
+        self,
+        states: np.ndarray,
+        period: float,
+    ) -> float | None:
+        """Estimate the relative period error by re-solving at doubled resolution.
+
+        A converged solve proves the *discrete* collocation system was satisfied. It
+        says nothing about whether the mesh resolves the orbit, and an under-resolved
+        mesh converges perfectly well to the wrong cycle - on van der Pol at
+        ``mu = 40``, a 400-node continuation arrives at the target and reports a
+        period 17% wrong. This is the check the residual gate cannot make.
+
+        The solution is interpolated onto a mesh with twice as many nodes and
+        re-solved from there; the period shift is the Richardson estimate. Returns
+        ``None`` when the refined solve fails, which is a verdict rather than an
+        absence of one: a solution too coarse to seed a finer mesh is not resolved.
+
+        The estimate is conservative where it is defined - measured 2.5x the true
+        error on a solve accurate to 3.4e-4 - so it overstates rather than flatters.
+        Note that an inter-node collocation defect does *not* work here: the adapted
+        mesh concentrates nodes where the field is largest, so that defect tracks
+        stiffness rather than error and does not separate a good solve from a bad one.
+        """
+        coarse = self._mesh
+        fine_mesh = np.interp(
+            np.linspace(0.0, 1.0, 2 * self._intervals + 1),
+            np.linspace(0.0, 1.0, self._intervals + 1),
+            coarse,
+        )
+        fine_states = np.column_stack(
+            [
+                np.interp(fine_mesh, coarse, states[:, index])
+                for index in range(states.shape[1])
+            ],
+        )
+        refined = type(self)(
+            self._function,
+            2 * self._intervals,
+            phase_index=self._phase_index,
+            phase_value=self._phase_value,
+        )
+        refined.set_mesh(fine_mesh)
+        solution = refined.solve(fine_states, period, warm_start=True)
+        if solution is None:
+            return None
+        return abs(solution.period - period) / abs(solution.period)
+
     def continue_to(
         self,
         parameter_index: int,

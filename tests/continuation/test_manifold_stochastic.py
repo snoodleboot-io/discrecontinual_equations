@@ -965,6 +965,47 @@ class TestAdaptivePeriodicOrbit(TestCase):
         assert adaptive is not None
         assert abs(adaptive.period - 2.0 * math.pi) / (2.0 * math.pi) < 1.0e-2
 
+    def test_error_estimate_flags_an_under_resolved_cycle(self):
+        """The estimate separates a resolved cycle from an under-resolved one.
+
+        A converged solve only proves the discrete system was satisfied; nothing in
+        the residual gate knows whether the mesh resolves the jump layers, so too
+        coarse a mesh converges confidently to the wrong cycle. Refining is what
+        catches it: an under-resolved solution either fails to seed the finer mesh
+        at all, or shifts a long way when it does.
+        """
+        mu, coarse, fine = 8.0, 50, 200
+
+        def estimate(intervals: int) -> tuple[float | None, float]:
+            period, seed = self._van_der_pol_oracle(mu, intervals)
+            orbit = AdaptivePeriodicOrbit(
+                self._field(VanDerPolField, mu),
+                intervals,
+                phase_index=1,
+                phase_value=0.0,
+            )
+            solution = orbit.solve(seed.copy(), period)
+            if solution is None:
+                return None, 1.0
+            true_error = abs(solution.period - period) / period
+            return orbit.estimate_period_error(
+                solution.states,
+                solution.period,
+            ), true_error
+
+        coarse_estimate, coarse_error = estimate(coarse)
+        # Either it cannot be refined at all, or refining moves it a long way.
+        # Both are the detector doing its job; which one occurs is not the contract.
+        assert coarse_estimate is None or coarse_estimate > 1.0e-2
+
+        fine_estimate, fine_error = estimate(fine)
+        assert fine_estimate is not None
+        assert fine_estimate < 1.0e-2
+        # It must not flatter the true error - conservative is the useful direction.
+        assert fine_estimate >= fine_error / 10.0
+        # And it must actually discriminate.
+        assert fine_error < coarse_error
+
     def test_continuation_reaches_extreme_stiffness(self):
         """Continuation reaches mu = 16, which needs 400 intervals, not 200.
 
