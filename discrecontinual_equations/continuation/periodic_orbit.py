@@ -30,6 +30,18 @@ _VARIATIONAL_SUBSTEPS = 8
 _PERIOD_FLOOR_FRACTION = 0.1
 _BACKTRACK_STEPS = 20
 _BACKTRACK_FACTOR = 0.5
+# How closely two successive mesh resolutions must agree on the period before the
+# coarser of them is called resolved.
+_RESOLUTION_TOLERANCE = 1.0e-3
+# How many times the mesh may be doubled while searching for that agreement. Each
+# doubling is a whole continuation, so this bounds an expensive search rather than
+# expressing a numerical limit.
+_RESOLUTION_DOUBLINGS = 3
+# Consecutive agreements required before a level is certified. One is not enough:
+# before convergence is asymptotic, successive meshes can agree while both are still
+# wrong - on van der Pol at mu = 12 the 200/400 agreement was 1.13e-3 while the
+# 400-node error was 1.21e-3, so a single agreement flattered the level it certified.
+_RESOLUTION_CONFIRMATIONS = 2
 
 
 class PeriodicOrbitSolution:
@@ -59,6 +71,109 @@ class PeriodicOrbitSolution:
         """Peak-to-mean amplitude of one component around the cycle."""
         column = self._states[:, index]
         return float(np.max(column) - np.mean(column))
+
+
+class ResolutionSettings:
+    """Controls for the mesh-resolution search: how close, and how far to look."""
+
+    __slots__ = ["doublings", "tolerance"]
+
+    def __init__(
+        self,
+        tolerance: float = _RESOLUTION_TOLERANCE,
+        doublings: int = _RESOLUTION_DOUBLINGS,
+    ) -> None:
+        self.tolerance = tolerance
+        self.doublings = doublings
+
+
+class ResolvedCycle:
+    """A cycle together with the mesh resolution that was measured to resolve it.
+
+    ``estimate`` is the relative period shift between ``intervals`` and the next
+    coarser mesh tried, so it is a measured accuracy claim rather than an assumption.
+    """
+
+    __slots__ = ["estimate", "intervals", "period", "states"]
+
+    def __init__(
+        self,
+        states: np.ndarray,
+        period: float,
+        intervals: int,
+        estimate: float,
+    ) -> None:
+        self.states = states
+        self.period = period
+        self.intervals = intervals
+        self.estimate = estimate
+
+
+class ResolutionLevel:
+    """One mesh resolution tried during a study, exactly as it was measured.
+
+    ``period`` is ``None`` when the continuation stalled at this resolution.
+    ``agreement`` is the relative period shift from the previous level that reached
+    the target, or ``None`` when there is no such level to compare against.
+    """
+
+    __slots__ = ["agreement", "intervals", "period"]
+
+    def __init__(
+        self,
+        intervals: int,
+        period: float | None,
+        agreement: float | None,
+    ) -> None:
+        self.intervals = intervals
+        self.period = period
+        self.agreement = agreement
+
+
+class ResolutionStudy:
+    """Every resolution a search tried, and the one it could certify, if any.
+
+    The levels are the measurement; ``resolved`` is a judgement drawn from them. A
+    study is returned even when nothing is certified, because the table of periods
+    against node count is exactly what is needed to decide what to try next.
+    """
+
+    __slots__ = ["levels", "resolved"]
+
+    def __init__(
+        self,
+        levels: list[ResolutionLevel],
+        resolved: ResolvedCycle | None,
+    ) -> None:
+        self.levels = levels
+        self.resolved = resolved
+
+    @property
+    def best(self) -> ResolutionLevel | None:
+        """The finest resolution that reached the target, certified or not."""
+        reached = [level for level in self.levels if level.period is not None]
+        return reached[-1] if reached else None
+
+
+def _certified(levels: list[ResolutionLevel], tolerance: float) -> float | None:
+    """The estimate that certifies the finest level so far, or ``None``.
+
+    The last ``_RESOLUTION_CONFIRMATIONS`` levels must each have reached the target
+    and agreed with the level before them to ``tolerance``. A stall, or the first
+    level, carries no agreement, so a chain broken by either cannot certify.
+
+    The estimate is the largest of those agreements. Extrapolating from the observed
+    convergence rate instead - three-level Richardson - was measured and rejected:
+    adaptive-mesh convergence at these stiffnesses is not geometric, and the
+    extrapolated error came out 4x to 33x smaller than the true one.
+    """
+    recent = levels[-_RESOLUTION_CONFIRMATIONS:]
+    if len(recent) < _RESOLUTION_CONFIRMATIONS:
+        return None
+    agreements = [level.agreement for level in recent]
+    if any(agreement is None or agreement >= tolerance for agreement in agreements):
+        return None
+    return max(agreement for agreement in agreements if agreement is not None)
 
 
 class PeriodicOrbit:
@@ -113,6 +228,87 @@ class PeriodicOrbit:
         phase = states[0, self._phase_index] - self._phase_value
         blocks.append(np.array([phase]))
         return np.concatenate(blocks)
+
+    def estimate_period_error(
+        self,
+        states: np.ndarray,
+        period: float,
+    ) -> float | None:
+        """Estimate the relative period error by re-solving at doubled resolution.
+
+        A converged solve proves the *discrete* collocation system was satisfied. It
+        says nothing about whether the mesh resolves the orbit, and an under-resolved
+        mesh converges perfectly well to the wrong cycle - on van der Pol at
+        ``mu = 40``, a 400-node continuation reaches the target and reports a period
+        17% wrong. Nothing in the residual gate can catch that, so this is the only
+        way to know whether a returned cycle is worth trusting.
+
+        The solution is interpolated onto a mesh with twice as many nodes and
+        re-solved from there; the period shift is the estimate. ``None`` means the
+        refined solve failed, which is a verdict rather than the absence of one: a
+        solution too coarse to seed a finer mesh is not resolved.
+
+        The estimate is a single comparison between two meshes, so it is not a bound.
+        It was conservative at ``mu = 40`` (2.5x the true error on a cycle accurate to
+        3.4e-4) but optimistic at ``mu = 12``, where the 200/400 shift was 1.13e-3
+        against a true 400-node error of 1.21e-3: before convergence is asymptotic,
+        two meshes can agree while both are still wrong. Treat it as a screen for
+        cycles that are badly off, and use :meth:`continue_to_resolved`, which
+        requires two consecutive agreements, where the number matters.
+
+        Costs one extra solve at double the nodes: about a fifth of a continuation
+        where the cycle is resolved, and far less where it is not, since an
+        under-resolved solution fails to refine almost immediately.
+
+        An inter-node collocation defect is the obvious cheaper alternative and does
+        *not* work: an adapted mesh concentrates nodes where the field is largest, so
+        that defect tracks stiffness rather than error and does not separate a good
+        cycle from a bad one.
+        """
+        nodes = self._intervals + 1
+        if states.shape[0] != nodes:
+            message = (
+                f"states has {states.shape[0]} nodes, but this solver has "
+                f"{nodes}; pass the solution this solver returned"
+            )
+            raise ValueError(message)
+        if not np.isfinite(period) or period <= 0.0:
+            message = f"period must be finite and positive, got {period}"
+            raise ValueError(message)
+        coarse = self._mesh
+        fine_mesh = np.interp(
+            np.linspace(0.0, 1.0, 2 * self._intervals + 1),
+            np.linspace(0.0, 1.0, nodes),
+            coarse,
+        )
+        fine_states = np.column_stack(
+            [
+                np.interp(fine_mesh, coarse, states[:, index])
+                for index in range(states.shape[1])
+            ],
+        )
+        refined = type(self)(
+            self._function,
+            2 * self._intervals,
+            phase_index=self._phase_index,
+            phase_value=self._phase_value,
+        )
+        refined.set_mesh(fine_mesh)
+        solution = self._refined_solve(refined, fine_states, period)
+        if solution is None or not np.isfinite(solution.period):
+            return None
+        if solution.period == 0.0:
+            return None
+        return abs(solution.period - period) / abs(solution.period)
+
+    def _refined_solve(
+        self,
+        refined: "PeriodicOrbit",
+        states: np.ndarray,
+        period: float,
+    ) -> PeriodicOrbitSolution | None:
+        """Solve on the refined mesh. Overridden where ``solve`` resets the mesh."""
+        return refined.solve(states, period)
 
     def solve(
         self,
@@ -623,53 +819,109 @@ class AdaptivePeriodicOrbit(AnalyticPeriodicOrbit):
             states, period = stepped
         return PeriodicOrbitSolution(states, period)
 
-    def estimate_period_error(
+    def _refined_solve(
         self,
+        refined: "PeriodicOrbit",
         states: np.ndarray,
         period: float,
-    ) -> float | None:
-        """Estimate the relative period error by re-solving at doubled resolution.
+    ) -> PeriodicOrbitSolution | None:
+        """Warm-start, so the refined mesh survives instead of being reset."""
+        return refined.solve(states, period, warm_start=True)
 
-        A converged solve proves the *discrete* collocation system was satisfied. It
-        says nothing about whether the mesh resolves the orbit, and an under-resolved
-        mesh converges perfectly well to the wrong cycle - on van der Pol at
-        ``mu = 40``, a 400-node continuation arrives at the target and reports a
-        period 17% wrong. This is the check the residual gate cannot make.
+    def continue_to_resolved(
+        self,
+        parameter_index: int,
+        target: float,
+        seed_states: np.ndarray,
+        seed_period: float,
+        settings: ResolutionSettings | None = None,
+    ) -> ResolutionStudy:
+        """Continue to ``target``, raising the mesh until the period stops moving.
 
-        The solution is interpolated onto a mesh with twice as many nodes and
-        re-solved from there; the period shift is the Richardson estimate. Returns
-        ``None`` when the refined solve fails, which is a verdict rather than an
-        absence of one: a solution too coarse to seed a finer mesh is not resolved.
+        :meth:`continue_to` answers "did it arrive"; this answers "at what resolution
+        is the answer trustworthy", which is the question a caller who does not
+        already know the required node count actually has. The continuation is rerun
+        at successively doubled meshes until two of them agree on the period to
+        ``settings.tolerance``, and the resolution that achieved it is reported
+        alongside the cycle.
 
-        The estimate is conservative where it is defined - measured 2.5x the true
-        error on a solve accurate to 3.4e-4 - so it overstates rather than flatters.
-        Note that an inter-node collocation defect does *not* work here: the adapted
-        mesh concentrates nodes where the field is largest, so that defect tracks
-        stiffness rather than error and does not separate a good solve from a bad one.
+        Doubling the *mesh* rather than refining the *solution* is deliberate and
+        measured. An under-resolved cycle cannot be rescued by refining it - at
+        ``mu = 40`` a 400-node solution fails outright when interpolated onto 800
+        nodes - and solving cold at a higher resolution is no better, landing on a
+        different cycle entirely (period 91.6 against a true 66.5). Only continuation
+        reliably reaches a stiff cycle, so each resolution is continued from the
+        start rather than lifted from the answer below it.
+
+        Always returns the full study: every resolution tried, whether it reached the
+        target, its period, and its agreement with the level before. ``resolved`` is
+        set only once two consecutive levels agree to ``settings.tolerance``; one
+        agreement is not enough, because before convergence is asymptotic two meshes
+        can agree while both are still wrong. ``resolved.estimate`` is the larger of
+        those two agreements. When nothing is certified the levels still show how far
+        the period was from settling, which is what decides the next attempt.
+
+        This costs one full continuation per resolution tried. Use
+        :meth:`estimate_period_error` where a cycle is already in hand and only needs
+        checking.
         """
-        coarse = self._mesh
-        fine_mesh = np.interp(
-            np.linspace(0.0, 1.0, 2 * self._intervals + 1),
-            np.linspace(0.0, 1.0, self._intervals + 1),
-            coarse,
-        )
-        fine_states = np.column_stack(
-            [
-                np.interp(fine_mesh, coarse, states[:, index])
-                for index in range(states.shape[1])
-            ],
-        )
-        refined = type(self)(
-            self._function,
-            2 * self._intervals,
-            phase_index=self._phase_index,
-            phase_value=self._phase_value,
-        )
-        refined.set_mesh(fine_mesh)
-        solution = refined.solve(fine_states, period, warm_start=True)
-        if solution is None:
-            return None
-        return abs(solution.period - period) / abs(solution.period)
+        controls = settings if settings is not None else ResolutionSettings()
+        parameter = self._function.parameters[parameter_index]
+        original = float(parameter.value)
+        nodes = seed_states.shape[0]
+        coarse = np.linspace(0.0, 1.0, nodes)
+        intervals = self._intervals
+        levels: list[ResolutionLevel] = []
+        previous: float | None = None
+        try:
+            for _ in range(controls.doublings + 1):
+                parameter.value = original
+                fine = np.linspace(0.0, 1.0, intervals + 1)
+                seed = np.column_stack(
+                    [
+                        np.interp(fine, coarse, seed_states[:, index])
+                        for index in range(seed_states.shape[1])
+                    ],
+                )
+                orbit = type(self)(
+                    self._function,
+                    intervals,
+                    phase_index=self._phase_index,
+                    phase_value=self._phase_value,
+                )
+                solution = orbit.continue_to(
+                    parameter_index,
+                    target,
+                    seed,
+                    seed_period,
+                )
+                if solution is None:
+                    # A stall says nothing about the period, so the chain of
+                    # agreements restarts at the next level that does arrive.
+                    levels.append(ResolutionLevel(intervals, None, None))
+                    previous = None
+                    intervals *= 2
+                    continue
+                agreement = (
+                    None
+                    if previous is None
+                    else abs(solution.period - previous) / abs(solution.period)
+                )
+                levels.append(ResolutionLevel(intervals, solution.period, agreement))
+                estimate = _certified(levels, controls.tolerance)
+                if estimate is not None:
+                    cycle = ResolvedCycle(
+                        solution.states,
+                        solution.period,
+                        intervals,
+                        estimate,
+                    )
+                    return ResolutionStudy(levels, cycle)
+                previous = solution.period
+                intervals *= 2
+        finally:
+            parameter.value = original
+        return ResolutionStudy(levels, None)
 
     def continue_to(
         self,

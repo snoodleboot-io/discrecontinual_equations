@@ -14,6 +14,7 @@ import math
 from unittest import TestCase
 
 import numpy as np
+import pytest
 from scipy.integrate import solve_ivp
 
 from discrecontinual_equations.continuation.connecting_orbit import (
@@ -52,7 +53,10 @@ from discrecontinual_equations.continuation.periodic_orbit import (
     AnalyticPeriodicOrbit,
     HermiteSimpsonOrbit,
     PeriodicOrbit,
+    ResolutionLevel,
+    ResolutionSettings,
     RobustPeriodicOrbit,
+    _certified,
 )
 from discrecontinual_equations.continuation.region_analysis import (
     _jacobian,
@@ -1006,6 +1010,100 @@ class TestAdaptivePeriodicOrbit(TestCase):
         # And it must actually discriminate.
         assert fine_error < coarse_error
 
+    def test_error_estimate_is_small_on_a_well_resolved_cycle(self):
+        """A control: the check must not cry wolf on a cycle that is fine.
+
+        A detector that flags everything is worthless, so the smooth, amply-resolved
+        case has to come back with a small estimate - not merely a non-None one.
+        """
+        mu, intervals = 2.0, 200
+        period, seed = self._van_der_pol_oracle(mu, intervals)
+        orbit = AdaptivePeriodicOrbit(
+            self._field(VanDerPolField, mu),
+            intervals,
+            phase_index=1,
+            phase_value=0.0,
+        )
+        solution = orbit.solve(seed.copy(), period)
+        assert solution is not None
+        estimate = orbit.estimate_period_error(solution.states, solution.period)
+        assert estimate is not None
+        assert estimate < 1.0e-3
+
+    def test_error_estimate_is_available_without_mesh_adaptation(self):
+        """The check belongs to every cycle solver, not only the adaptive one.
+
+        AnalyticPeriodicOrbit has the same blind spot - it reports a converged
+        discrete solve and cannot tell whether the mesh resolves the orbit.
+        """
+        mu, intervals = 2.0, 200
+        period, seed = self._van_der_pol_oracle(mu, intervals)
+        orbit = AnalyticPeriodicOrbit(
+            self._field(VanDerPolField, mu),
+            intervals,
+            phase_index=1,
+            phase_value=0.0,
+        )
+        solution = orbit.solve(seed.copy(), period)
+        assert solution is not None
+        estimate = orbit.estimate_period_error(solution.states, solution.period)
+        assert estimate is not None
+        assert estimate < 1.0e-2
+
+    def test_error_estimate_rejects_a_mismatched_solution(self):
+        """Passing a solution from a different solver is a caller error, not a nan."""
+        mu, intervals = 2.0, 100
+        period, seed = self._van_der_pol_oracle(mu, intervals)
+        orbit = AdaptivePeriodicOrbit(
+            self._field(VanDerPolField, mu),
+            intervals * 2,
+            phase_index=1,
+            phase_value=0.0,
+        )
+        with pytest.raises(ValueError, match="nodes"):
+            orbit.estimate_period_error(seed, period)
+        with pytest.raises(ValueError, match="positive"):
+            orbit.estimate_period_error(
+                np.zeros((intervals * 2 + 1, 2)),
+                -1.0,
+            )
+
+    def test_resolution_search_reports_the_mesh_that_worked(self):
+        """The search returns every level it measured, and certifies from them.
+
+        One continuation call, for the wiring: the table comes back whether or not
+        anything is certified, and a certified cycle meets its own estimate. The
+        certification rule itself is covered against measured tables in
+        TestResolutionCertification, without paying for continuation.
+        """
+        mu, start = 12.0, 200
+        period, seed = self._van_der_pol_oracle(6.0, start)
+        orbit = AdaptivePeriodicOrbit(
+            self._field(VanDerPolField, 6.0),
+            start,
+            phase_index=1,
+            phase_value=0.0,
+        )
+        study = orbit.continue_to_resolved(
+            0,
+            mu,
+            seed.copy(),
+            period,
+            ResolutionSettings(tolerance=1.0e-2, doublings=2),
+        )
+        assert [level.intervals for level in study.levels] == [200, 400, 800]
+        assert all(level.period is not None for level in study.levels)
+        assert study.levels[0].agreement is None
+        assert all(level.agreement is not None for level in study.levels[1:])
+        assert study.best is study.levels[-1]
+
+        resolved = study.resolved
+        assert resolved is not None
+        assert resolved.intervals == study.levels[-1].intervals
+        oracle_period, _ = self._van_der_pol_oracle(mu, resolved.intervals)
+        true_error = abs(resolved.period - oracle_period) / oracle_period
+        assert true_error <= resolved.estimate
+
     def test_continuation_reaches_extreme_stiffness(self):
         """Continuation reaches mu = 16, which needs 400 intervals, not 200.
 
@@ -1034,6 +1132,73 @@ class TestAdaptivePeriodicOrbit(TestCase):
         ).continue_to(0, target, start_seed.copy(), start_period)
         assert continued is not None
         assert abs(continued.period - period) / period < 1.0e-2
+
+
+class TestResolutionCertification(TestCase):
+    """The certification rule, against resolution tables measured on van der Pol.
+
+    Each table below was produced by continuing to mu = 12 and comparing against the
+    integrated oracle; the true errors are recorded beside the agreements so the
+    reason each case must or must not certify is visible.
+    """
+
+    @staticmethod
+    def _levels(rows):
+        return [ResolutionLevel(n, period, agreement) for n, period, agreement in rows]
+
+    def test_a_single_agreement_does_not_certify(self):
+        # 400 nodes agree with 200 to 1.128e-3, but the true 400-node error is
+        # 1.209e-3. Certifying on that one agreement would report an estimate the
+        # answer does not meet.
+        levels = self._levels(
+            [
+                (100, 21.409699, None),  # true error 3.378e-2
+                (200, 22.210033, 3.603e-2),  # true error 2.338e-3
+                (400, 22.185012, 1.128e-3),  # true error 1.209e-3
+            ],
+        )
+        assert _certified(levels, 2.0e-3) is None
+
+    def test_two_agreements_certify_with_the_larger(self):
+        levels = self._levels(
+            [
+                (100, 21.409699, None),
+                (200, 22.210033, 3.603e-2),
+                (400, 22.185012, 1.128e-3),
+                (800, 22.160267, 1.117e-3),  # true error 9.231e-5
+            ],
+        )
+        estimate = _certified(levels, 2.0e-3)
+        assert estimate == 1.128e-3
+        assert estimate >= 9.231e-5
+
+    def test_one_agreement_outside_tolerance_breaks_the_chain(self):
+        # Measured from a 200-node seed: the 200/400 shift is large, so 800 has
+        # only one agreement behind it even though it is accurate to 1.08e-4.
+        levels = self._levels(
+            [
+                (200, 21.955683, None),  # true error 9.141e-3
+                (400, 22.145518, 8.572e-3),  # true error 5.733e-4
+                (800, 22.155835, 4.656e-4),  # true error 1.077e-4
+            ],
+        )
+        assert _certified(levels, 2.0e-3) is None
+        assert _certified(levels, 1.0e-2) == 8.572e-3
+
+    def test_a_stall_breaks_the_chain(self):
+        levels = self._levels(
+            [
+                (200, 22.210033, None),
+                (400, None, None),
+                (800, 22.160267, None),
+                (1600, 22.158500, 8.0e-5),
+            ],
+        )
+        assert _certified(levels, 2.0e-3) is None
+
+    def test_too_few_levels_cannot_certify(self):
+        assert _certified(self._levels([(200, 22.2, None)]), 1.0) is None
+        assert _certified([], 1.0) is None
 
 
 class TestHermiteSimpsonOrbit(TestCase):

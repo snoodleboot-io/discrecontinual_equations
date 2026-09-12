@@ -107,6 +107,10 @@ from discrecontinual_equations.continuation.periodic_orbit import (
     HermiteSimpsonOrbit,
     PeriodicOrbit,
     PeriodicOrbitSolution,
+    ResolutionLevel,
+    ResolutionSettings,
+    ResolutionStudy,
+    ResolvedCycle,
     RobustPeriodicOrbit,
 )
 from discrecontinual_equations.continuation.shilnikov import (
@@ -189,6 +193,10 @@ __all__ = [
     "ParameterFamily",
     "PeriodicOrbit",
     "PeriodicOrbitSolution",
+    "ResolutionLevel",
+    "ResolutionSettings",
+    "ResolutionStudy",
+    "ResolvedCycle",
     "ReturnSettings",
     "RobustPeriodicOrbit",
     "SaddleFocus",

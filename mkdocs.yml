@@ -46,6 +46,7 @@ nav:
       - Deterministic Solvers: api/deterministic-solvers.md
       - Stochastic Solvers: api/stochastic-solvers.md
       - Plotting: api/plotting.md
+      - Continuation: api/continuation.md
   - Development:
       - Contributing: development/contributing.md
       - Testing: development/testing.md
