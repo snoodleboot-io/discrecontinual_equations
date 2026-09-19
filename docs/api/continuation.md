@@ -8,8 +8,8 @@ and stochastic analysis.
 A solver returning a `PeriodicOrbitSolution` means the *discrete* collocation system
 was satisfied to tolerance. It does **not** mean the mesh resolves the orbit. Those
 are different claims, and on a stiff cycle they come apart: continuing van der Pol
-to `mu = 40` on 400 nodes reaches the target, returns a solution, and reports a
-period 17% wrong — with no error, no warning, and a residual well inside tolerance.
+to `mu = 40` on 200 nodes reaches the target, returns a solution, and reports a
+period 12% wrong — with no error, no warning, and a residual well inside tolerance.
 
 `estimate_period_error` is the check the residual gate cannot make:
 
@@ -27,13 +27,25 @@ It re-solves on a mesh with twice the nodes and reports the relative period shif
 `None` means the refined solve failed, which is a verdict rather than the absence of
 one: a solution too coarse to seed a finer mesh is not resolved.
 
-The estimate is one comparison between two meshes, so it is a screen, not a bound:
-2.5x conservative at `mu = 40`, but 7% optimistic at `mu = 12`. It costs one extra solve at double the nodes: roughly a fifth of a
-continuation on a resolved cycle, and far less on an unresolved one, which fails to
-refine almost immediately.
+The estimate is one comparison between two meshes, so it is a screen, not a bound.
+On van der Pol at `mu = 12` it measured 2.6x to 4.6x the true error, but before
+convergence is asymptotic two meshes can agree while both are still wrong. It costs
+one extra solve at double the nodes.
 
-As a rough guide, a relaxation oscillation needs `N ~ 20 to 25 x mu` for ~1e-3
-accuracy. Use the estimate rather than the guide where it matters.
+## How many nodes
+
+Continuing van der Pol from `mu = 6`, relative period error against an integrated
+oracle:
+
+| `mu` | N = 100 | N = 200 | N = 400 | N = 800 | N = 1600 |
+|---|---|---|---|---|---|
+| 12 | 8.0e-3 | 1.4e-3 | 3.2e-4 | 9.0e-5 | |
+| 16 | 1.4e-2 | 2.5e-3 | 5.0e-4 | | |
+| 40 | stalls | 1.2e-1 | 3.0e-3 | 7.4e-4 | 2.2e-4 |
+
+Error falls roughly 4-5x per doubling. As a rough guide, `N ~ 20 to 25 x mu` gives
+~1e-3, and `N ~ 5 x mu` can arrive at the target badly wrong. Use the estimate
+rather than the guide where it matters.
 
 ## Finding the resolution a problem needs
 
@@ -57,27 +69,27 @@ else:
 ```
 
 It reruns the continuation at successively doubled meshes. A level is certified only
-once **two consecutive** levels agree to the tolerance. One agreement is not enough:
-before convergence is asymptotic, two meshes can agree while both are still wrong.
-Measured on van der Pol at `mu = 12`:
+once **two consecutive** levels agree to the tolerance, and the larger agreement is
+reported. Measured at `mu = 12`:
 
 | N | period | agreement | true error |
 |---|---|---|---|
-| 200 | 22.210033 | — | 2.34e-3 |
-| 400 | 22.185012 | 1.13e-3 | 1.21e-3 |
-| 800 | 22.160267 | 1.12e-3 | 9.23e-5 |
+| 100 | 22.336266 | — | 8.04e-3 |
+| 200 | 22.189801 | 6.60e-3 | 1.43e-3 |
+| 400 | 22.165394 | 1.10e-3 | 3.24e-4 |
+| 800 | 22.160221 | 2.33e-4 | 9.02e-5 |
 
-The 200/400 agreement (1.13e-3) is *smaller* than the 400-node error (1.21e-3), so
-certifying 400 on that alone would have reported an estimate the answer did not meet.
-Note also that agreement stays flat while the true error falls 25x: in this regime
-agreement bounds the coarser mesh, not the finer one.
+Here every agreement bounds the finer level's error, so one would have been enough.
+It is not always: under an earlier mesh monitor the same problem gave a 200/400
+agreement of 1.13e-3 against a 400-node error of 1.21e-3. The second confirmation
+is what keeps a certified estimate honest when convergence is not yet asymptotic.
 
 Tune the search with `ResolutionSettings(tolerance=..., doublings=...)`.
 
 It doubles the *mesh* and re-continues rather than refining the answer in hand,
 because neither shortcut works on a stiff cycle: an under-resolved solution fails
 outright when interpolated onto a finer mesh, and solving cold at higher resolution
-lands on a different cycle (period 91.6 against a true 66.5).
+lands on a different cycle. Only continuation reliably reaches a stiff cycle.
 
 That makes it expensive — one full continuation per resolution. Use
 `estimate_period_error` to screen a cycle already in hand for gross error, and

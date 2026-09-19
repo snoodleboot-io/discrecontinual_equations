@@ -1105,13 +1105,12 @@ class TestAdaptivePeriodicOrbit(TestCase):
         assert true_error <= resolved.estimate
 
     def test_continuation_reaches_extreme_stiffness(self):
-        """Continuation reaches mu = 16, which needs 400 intervals, not 200.
+        """Continuation reaches mu = 16, a stiffness a cold solve cannot.
 
-        The jump layers of a van der Pol relaxation oscillation narrow as mu grows,
-        and at mu = 16 a 200-interval mesh cannot resolve them however the nodes are
-        redistributed: the continuation stalls at mu ~ 11.7 and reports it by
-        returning None. At 400 intervals it reaches the target. See FUTURE_WORK.md
-        section 1b.
+        At 400 intervals the period error is about 5e-4. Under the earlier mesh
+        monitor 200 intervals stalled at mu ~ 11.7; that was the monitor failing to
+        adapt, not a resolution limit, and 200 now arrives at about 2.5e-3. See
+        FUTURE_WORK.md section 1b.
         """
         intervals, target = 400, 16.0
         period, seed = self._van_der_pol_oracle(target, intervals)
@@ -1139,7 +1138,9 @@ class TestResolutionCertification(TestCase):
 
     Each table below was produced by continuing to mu = 12 and comparing against the
     integrated oracle; the true errors are recorded beside the agreements so the
-    reason each case must or must not certify is visible.
+    reason each case must or must not certify is visible. They were measured under
+    the earlier mesh monitor, whose erratic convergence is exactly the behaviour the
+    rule has to withstand, so they stay as the rule's regression data.
     """
 
     @staticmethod
