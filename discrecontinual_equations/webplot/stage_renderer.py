@@ -234,6 +234,31 @@ function blendNearest(A, B, f){
   });
 }
 function cycleOf(frame){ return frame.cycle === null ? null : D.cycles[frame.cycle]; }
+// A manifold branch that winds onto a cycle samples many turns into its points,
+// so two such branches from neighbouring frames sit at different phases at the
+// same index and a point-wise morph invents loops that cross the cycle. Morph only
+// branches that stay close; cross-fade the real curves otherwise.
+const CLOSE = 0.06 * Math.hypot(x1 - x0, y1 - y0);
+function farApart(a, b){
+  const n = Math.min(a.length, b.length); let far = 0;
+  for (let q = 0; q < n; q += 6){
+    const d = Math.hypot(a[q][0]-b[q][0], a[q][1]-b[q][1]); if (d > far) far = d;
+  }
+  return far > CLOSE;
+}
+function blendManifolds(A, B, f){
+  const out = [];
+  const fade = (list, alpha) => list.forEach(m => out.push({...m, alpha}));
+  if (A.manifolds.length !== B.manifolds.length){
+    fade(A.manifolds, 1 - f); fade(B.manifolds, f); return out;
+  }
+  A.manifolds.forEach((a, k) => {
+    const b = B.manifolds[k];
+    if (farApart(a.points, b.points)){ fade([a], 1 - f); fade([b], f); }
+    else out.push({kind: a.kind, points: blendPairs(a.points, b.points, f), alpha: 1});
+  });
+  return out;
+}
 function blendEquilibria(A, B, f, near){
   const out = [];
   for (const e of A.equilibria){
@@ -265,12 +290,8 @@ function viewAt(tt){
       cycle: c ? {...c, alpha: 1} : null, label: A.label};
   }
   const near = f < 0.5 ? A : B;
-  const paired = A.manifolds.length === B.manifolds.length;
-  const manifolds = paired
-    ? A.manifolds.map((m, k) =>
-        ({kind: m.kind, points: blendPairs(m.points, B.manifolds[k].points, f)}))
-    : near.manifolds;
-  return {p: paramAt(tt), equilibria: blendEquilibria(A, B, f, near), manifolds,
+  return {p: paramAt(tt), equilibria: blendEquilibria(A, B, f, near),
+    manifolds: blendManifolds(A, B, f),
     cycle: blendCycle(cycleOf(A), cycleOf(B), f), label: near.label};
 }
 
@@ -360,7 +381,7 @@ function drawSkeleton(){
     for (const mf of fr.manifolds){
       skel.append("path").attr("d", line(mf.points)).attr("fill","none")
         .attr("stroke", css(mf.kind==="stable" ? "--stable" : "--unstable"))
-        .attr("stroke-width",1.6).attr("opacity",.85);
+        .attr("stroke-width",1.6).attr("opacity", .85 * (mf.alpha ?? 1));
     }
   }
   if (document.getElementById("l-cycle").checked && fr.cycle !== null){
