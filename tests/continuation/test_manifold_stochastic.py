@@ -21,12 +21,14 @@ from discrecontinual_equations.continuation.connecting_orbit import (
     HeteroclinicOrbit,
     HomoclinicOrbit,
     MeshSpec,
+    OrbitResolution,
     Terminus,
     _projection_conditions,
     _split_eigenspaces,
 )
 from discrecontinual_equations.continuation.cycle_continuation import (
     CycleContinuation,
+    CyclePoint,
     CycleSeed,
 )
 from discrecontinual_equations.continuation.deflation import DeflatedSolver
@@ -53,6 +55,7 @@ from discrecontinual_equations.continuation.periodic_orbit import (
     AnalyticPeriodicOrbit,
     HermiteSimpsonOrbit,
     PeriodicOrbit,
+    PeriodicOrbitSolution,
     ResolutionLevel,
     ResolutionSettings,
     RobustPeriodicOrbit,
@@ -484,6 +487,140 @@ class TestHomoclinicOrbit(TestCase):
         exact = 1.5 / np.cosh(times / 2.0) ** 2
         assert np.max(np.abs(solution.component(0) - exact)) < 5.0e-2
         assert abs(solution.component(0)[intervals // 2] - 1.5) < 5.0e-2
+
+
+class TestOrbitResolution(TestCase):
+    """``estimate_orbit_error`` against the exact homoclinic ``1.5 sech^2(t/2)``.
+
+    The orbit has two independent resolutions - mesh spacing and half-length - and
+    the point of the estimate is that either can be the limiting one. Each table
+    below records the true error beside both components, so the reason the estimate
+    must come from the larger of them is visible rather than asserted.
+    """
+
+    @staticmethod
+    def _solve(half: float, intervals: int):
+        times = np.linspace(-half, half, intervals + 1)
+        seed = np.zeros((intervals + 1, 2))
+        seed[:, 0] = 1.2 / np.cosh(0.45 * times) ** 2
+        seed[:, 1] = -0.9 * np.tanh(0.45 * times) / np.cosh(0.45 * times) ** 2
+        orbit = HomoclinicOrbit(
+            _saddle(),
+            np.zeros(2),
+            _SADDLE_JACOBIAN,
+            MeshSpec(half, intervals, phase_index=1, phase_value=0.0),
+        )
+        solution = orbit.solve(seed)
+        sech = 1.0 / np.cosh(solution.times / 2.0) ** 2
+        exact = np.column_stack(
+            [1.5 * sech, -1.5 * sech * np.tanh(solution.times / 2.0)],
+        )
+        true_error = float(np.max(np.abs(solution.states - exact)))
+        return orbit, solution, true_error
+
+    def test_estimate_tracks_true_error_where_truncation_is_ample(self):
+        """At T = 15 the estimate runs 0.75x the true error at every resolution.
+
+        That factor is not a coincidence to be tuned away: trapezoidal collocation
+        is second order, so doubling the mesh moves the answer by E - E/4 = 0.75 E.
+        The estimate therefore bounds the *refined* orbit's error by 3x while
+        running slightly under the returned orbit's own error.
+
+            N     true       discr      est/true
+            40    6.06e-2    4.50e-2    0.74
+            80    1.72e-2    1.28e-2    0.75
+            160   4.37e-3    3.27e-3    0.75
+        """
+        for intervals in (40, 80, 160):
+            orbit, solution, true_error = self._solve(15.0, intervals)
+            resolution = orbit.estimate_orbit_error(solution)
+            ratio = resolution.estimate / true_error
+            assert 0.6 < ratio < 0.9
+            assert resolution.limited_by == "spacing"
+
+    def test_truncation_component_catches_a_boundary_limited_orbit(self):
+        """At T = 5 refining the mesh stops helping, and only truncation sees it.
+
+        Past N = 160 the error is pinned at ~2.7e-4 by the truncated interval, so
+        the discretisation component collapses while the orbit does not improve.
+        Reporting it alone would be 12x optimistic at N = 640.
+
+            N     true       discr      trunc      limited_by
+            320   2.73e-4    9.18e-5    2.72e-4    length
+            640   2.78e-4    2.29e-5    2.72e-4    length
+        """
+        for intervals in (320, 640):
+            orbit, solution, true_error = self._solve(5.0, intervals)
+            resolution = orbit.estimate_orbit_error(solution)
+            assert resolution.discretisation < 0.5 * true_error
+            assert resolution.limited_by == "length"
+            assert 0.8 < resolution.estimate / true_error < 1.3
+
+    def test_discretisation_component_catches_a_coarse_mesh(self):
+        """At h = 0.25 truncation is finished and says so; the mesh is the problem.
+
+        Extending T from 15 to 20 shifts the orbit by ~5e-11 while its true error is
+        7.7e-3. The truncation component is right about its own term and useless as
+        an error estimate, which is why ``estimate`` takes the larger.
+        """
+        orbit, solution, true_error = self._solve(15.0, 120)
+        resolution = orbit.estimate_orbit_error(solution)
+        assert resolution.truncation < 1.0e-8
+        assert resolution.truncation < 1.0e-5 * true_error
+        assert resolution.limited_by == "spacing"
+        assert 0.6 < resolution.estimate / true_error < 0.9
+
+    def test_reports_large_where_either_resolution_is_badly_wrong(self):
+        """A grossly under-resolved orbit is reported as such, in either parameter."""
+        orbit, solution, _ = self._solve(20.0, 40)
+        coarse = orbit.estimate_orbit_error(solution)
+        assert coarse.estimate > 1.0e-2
+        assert coarse.limited_by == "spacing"
+        orbit, solution, _ = self._solve(2.0, 200)
+        short = orbit.estimate_orbit_error(solution)
+        assert short.estimate > 1.0e-2
+        assert short.limited_by == "length"
+
+    def test_estimate_leaves_the_solver_mesh_unchanged(self):
+        """The estimate re-solves on other meshes without disturbing this solver.
+
+        Asserted through behaviour rather than by reading the mesh: the second call
+        passes the same solution back, and the node-count guard would reject it if
+        the first call had left the solver on one of its refined meshes.
+        """
+        orbit, solution, _ = self._solve(10.0, 80)
+        first = orbit.estimate_orbit_error(solution)
+        second = orbit.estimate_orbit_error(solution)
+        assert first.discretisation > 0.0
+        assert second.discretisation == pytest.approx(first.discretisation)
+        assert second.truncation == pytest.approx(first.truncation)
+
+    def test_rejects_an_odd_mesh(self):
+        """Odd intervals have no matching centre node when doubled.
+
+        The phase condition pins the centre node, so on an odd mesh the doubled
+        mesh's centre sits half a step away and the two orbits come out translated
+        relative to each other. The shift would then measure that translation - an
+        O(h) quantity - rather than the O(h^2) error.
+        """
+        orbit, solution, _ = self._solve(10.0, 81)
+        with pytest.raises(ValueError, match="even"):
+            orbit.estimate_orbit_error(solution)
+
+    def test_rejects_a_solution_from_another_mesh(self):
+        """A solution with the wrong node count is a caller error, not a resolution."""
+        orbit, _, _ = self._solve(10.0, 80)
+        _, other, _ = self._solve(10.0, 40)
+        with pytest.raises(ValueError, match="nodes"):
+            orbit.estimate_orbit_error(other)
+
+    def test_resolution_prefers_the_larger_component(self):
+        """``estimate`` is the max and ``limited_by`` names it, with ties to spacing."""
+        assert OrbitResolution(3.0, 1.0).estimate == 3.0
+        assert OrbitResolution(3.0, 1.0).limited_by == "spacing"
+        assert OrbitResolution(1.0, 3.0).estimate == 3.0
+        assert OrbitResolution(1.0, 3.0).limited_by == "length"
+        assert OrbitResolution(2.0, 2.0).limited_by == "spacing"
 
 
 class TestHomoclinicCurve(TestCase):
@@ -1105,13 +1242,12 @@ class TestAdaptivePeriodicOrbit(TestCase):
         assert true_error <= resolved.estimate
 
     def test_continuation_reaches_extreme_stiffness(self):
-        """Continuation reaches mu = 16, which needs 400 intervals, not 200.
+        """Continuation reaches mu = 16, a stiffness a cold solve cannot.
 
-        The jump layers of a van der Pol relaxation oscillation narrow as mu grows,
-        and at mu = 16 a 200-interval mesh cannot resolve them however the nodes are
-        redistributed: the continuation stalls at mu ~ 11.7 and reports it by
-        returning None. At 400 intervals it reaches the target. See FUTURE_WORK.md
-        section 1b.
+        At 400 intervals the period error is about 5e-4. Under the earlier mesh
+        monitor 200 intervals stalled at mu ~ 11.7; that was the monitor failing to
+        adapt, not a resolution limit, and 200 now arrives at about 2.5e-3. See
+        FUTURE_WORK.md section 1b.
         """
         intervals, target = 400, 16.0
         period, seed = self._van_der_pol_oracle(target, intervals)
@@ -1139,7 +1275,9 @@ class TestResolutionCertification(TestCase):
 
     Each table below was produced by continuing to mu = 12 and comparing against the
     integrated oracle; the true errors are recorded beside the agreements so the
-    reason each case must or must not certify is visible.
+    reason each case must or must not certify is visible. They were measured under
+    the earlier mesh monitor, whose erratic convergence is exactly the behaviour the
+    rule has to withstand, so they stay as the rule's regression data.
     """
 
     @staticmethod
@@ -1711,6 +1849,43 @@ class TestHeteroclinicOrbit(TestCase):
         error = np.max(np.linalg.norm(solution.states - exact, axis=1))
         assert error < 1.0e-3
 
+    def test_resolution_estimate_serves_a_heteroclinic_too(self):
+        """The estimate lives on the base class and needs no equilibrium knowledge.
+
+        The truncation comparison seeds the longer interval by holding the end
+        states, which sit on the two saddles here and on one saddle for a
+        homoclinic, so the same code serves both. Calibration is identical - 0.75x
+        the true error - and a too-short interval is still caught by truncation:
+
+            T    N      true       discr      trunc      limited_by
+            8.0  200    3.77e-4    2.83e-4    3.4e-11    spacing
+            3.0  200    2.68e-4    3.98e-5    2.59e-4    length
+        """
+        source = Terminus(np.array([-1.0, 0.0]), self._jacobian(-1.0))
+        target = Terminus(np.array([1.0, 0.0]), self._jacobian(1.0))
+        root = np.sqrt(2.0)
+        for half_length, limited_by in ((8.0, "spacing"), (3.0, "length")):
+            times = np.linspace(-half_length, half_length, 201)
+            exact = np.column_stack(
+                [
+                    np.tanh(times / root),
+                    (1.0 / root) / np.cosh(times / root) ** 2,
+                ],
+            )
+            orbit = HeteroclinicOrbit(
+                self._field(),
+                source,
+                target,
+                MeshSpec(half_length=half_length, intervals=200),
+            )
+            solution = orbit.solve(
+                np.column_stack([np.tanh(times / 2.0), np.zeros_like(times)]),
+            )
+            true_error = float(np.max(np.abs(solution.states - exact)))
+            resolution = orbit.estimate_orbit_error(solution)
+            assert resolution.limited_by == limited_by
+            assert 0.6 < resolution.estimate / true_error < 1.2
+
     def test_lands_on_both_saddles(self):
         half_length, intervals = 8.0, 200
         times = np.linspace(-half_length, half_length, intervals + 1)
@@ -2033,3 +2208,59 @@ def _integrate(
         k4 = np.array(function.eval(point=list(current + step * k3), time=None))
         current = current + step / 6.0 * (k1 + 2.0 * k2 + 2.0 * k3 + k4)
     return current
+
+
+class TestManifoldChartOffTheOrigin(TestCase):
+    """The chart's constant term is the equilibrium; ``point`` must not add it twice.
+
+    Every other chart test sits its saddle at the origin, where adding the
+    equilibrium a second time changes nothing. At (1, 0) it moved every chart
+    point by (1, 0), so a manifold started from the chart began off the manifold.
+    """
+
+    def test_chart_starts_at_the_equilibrium(self):
+        class Shifted(DeterministicFunction):
+            def eval(self, point, time=None):  # noqa: ARG002 (base signature)
+                return [point[0] - 1.0, -point[1]]
+
+        function = Shifted(
+            variables=[State(), State()],
+            parameters=[Alpha(value=0.0)],
+            results=[State(), State()],
+            time=None,
+        )
+        equilibrium = np.array([1.0, 0.0])
+        jacobian = np.array([[1.0, 0.0], [0.0, -1.0]])
+        for selection, direction in (
+            (UnstableManifold(), np.array([1.0, 0.0])),
+            (StableManifold(), np.array([0.0, 1.0])),
+        ):
+            chart = TaylorManifold(order=4).compute(
+                function,
+                equilibrium,
+                jacobian,
+                selection,
+            )
+            assert np.allclose(chart.point([0.0]), equilibrium)
+            step = chart.point([1.0e-3]) - equilibrium
+            assert np.allclose(np.abs(step), 1.0e-3 * direction, atol=1.0e-9)
+
+
+class TestFloquetError(TestCase):
+    """The trivial multiplier's drift from one is the accuracy of the whole set."""
+
+    def test_reports_the_multiplier_nearest_one(self):
+        point = CyclePoint(
+            0.0,
+            PeriodicOrbitSolution(np.zeros((3, 2)), 6.0),
+            np.array([0.911, 6.596]),
+        )
+        assert abs(point.floquet_error - 0.089) < 1.0e-12
+
+    def test_is_zero_for_an_exact_trivial_multiplier(self):
+        point = CyclePoint(
+            0.0,
+            PeriodicOrbitSolution(np.zeros((3, 2)), 6.0),
+            np.array([1.0, 0.5 + 0.5j]),
+        )
+        assert point.floquet_error == 0.0

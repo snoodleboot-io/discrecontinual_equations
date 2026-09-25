@@ -144,3 +144,6 @@ Thumbs.db
 
 # Prompticorn local state
 /.prompticorn/
+
+# Claude Code worktrees
+/.claude/worktrees/

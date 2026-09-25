@@ -11,6 +11,11 @@ import sys
 from pathlib import Path
 
 import numpy as np
+from stage_bogdanov_takens import (
+    STAGE_ENTRY,
+    STAGE_FILENAME,
+    bogdanov_takens_stage,
+)
 from sweet_tea.registry import Registry
 
 import discrecontinual_equations
@@ -102,6 +107,7 @@ from discrecontinual_equations.webplot.scene_builder import (
     with_equation,
     with_regions,
 )
+from discrecontinual_equations.webplot.stage_renderer import StageRenderer
 
 MU = "\u03bc"
 ALPHA = "\u03b1"
@@ -2393,7 +2399,15 @@ def main(output_dir: str = "plots") -> None:
     for filename, scene in _catalogue():
         report.write(scene, filename)
         entries.append(AtlasEntry(filename, scene.title, scene.subtitle))
+    entries.extend(_stage_entries(output_dir))
     report.write_atlas(entries)
+
+
+def _stage_entries(output_dir: str) -> list[AtlasEntry]:
+    """Write the playable pages with their own renderer; they share the atlas."""
+    stage = PlotReport(StageRenderer(), output_dir)
+    stage.write(bogdanov_takens_stage(), STAGE_FILENAME)
+    return [STAGE_ENTRY]
 
 
 if __name__ == "__main__":

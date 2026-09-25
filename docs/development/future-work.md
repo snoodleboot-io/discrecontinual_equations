@@ -22,8 +22,10 @@ two separate reasons, both now understood:
    uniform solution is a poor Newton seed, so the re-solve diverged - which looked
    like "adaptation does not help" but was really a solver-robustness failure.
 
-The working recipe combines three ingredients: a curvature (second-difference)
-monitor equidistributed by the de Boor construction; *gradual* mesh movement (each
+The working recipe combines three ingredients: a curvature monitor (the cube root of
+the true second derivative on the non-uniform mesh - see 1b for why the raw second
+difference fails) equidistributed by the de Boor construction; *gradual* mesh
+movement (each
 sweep a partial step toward the equidistributed target, so the interpolated seed
 stays valid); and a *damped, analytically-differentiated* Newton iteration
 (backtracking line search plus a period floor) that converges from the mediocre
@@ -37,14 +39,44 @@ solver returns the same near-optimal result as the uniform mesh (no regression).
 
 ## 1b. Remaining adaptive-mesh headroom
 
-- **Extreme stiffness (RESOLVED - needs 400 intervals, not 200).** The claim holds,
-  but it is resolution-bound and the node count is part of the result. At `N = 200`
-  the continuation stalls at `mu ~ 11.7` and cannot reach `mu = 16` however the
-  step size is controlled: lowering `_CONTINUATION_MIN_STEP` by 100x moved the stall
-  only to `mu ~ 11.82`. The jump layers of the relaxation oscillation narrow as `mu`
-  grows, and past `mu ~ 12` a 200-node mesh cannot resolve them however the nodes are
-  redistributed. At `N = 400` the continuation reaches `mu = 16` with relative period
-  error 1.8e-3, consistent with the 3e-3 recorded below.
+- **Mesh monitor fixed (RESOLVED).** The two entries below were measured under a
+  broken monitor, and both of their surprises came from it. The monitor was the raw
+  second difference of neighbouring states - curvature times spacing squared - so it
+  shrank wherever nodes were already dense, and its target was sharp enough that the
+  re-solve on the moved mesh failed on most sweeps. A failed sweep left the mesh
+  untouched while `solve` still reported success: continuing to `mu = 40`, 75% of
+  solves failed at `N = 400` and 60% at `N = 800`, so the mesh stayed adapted to a
+  smaller `mu` than the one being solved. Splitting every interval of the `N = 800`
+  mesh without re-adapting gave 4.3e-5 at `N = 1600`; adapting gave 1.5e-3.
+
+  The monitor is now the cube root of true curvature on the non-uniform mesh. No
+  solves fail, results no longer depend on the seed's resolution, and error falls
+  4-5x per doubling (Python 3.14.4 / NumPy 2.4.0 / SciPy 1.18.1):
+
+  | `mu` | N = 100 | N = 200 | N = 400 | N = 800 | N = 1600 |
+  |---|---|---|---|---|---|
+  | 12 | 8.0e-3 | 1.4e-3 | 3.2e-4 | 9.0e-5 | |
+  | 16 | 1.4e-2 | 2.5e-3 | 5.0e-4 | | |
+  | 40 | stalls | 1.2e-1 | 3.0e-3 | 7.4e-4 | 2.2e-4 |
+
+  So "needs 400 intervals, not 200" below was the monitor failing, not a resolution
+  limit - 200 now reaches `mu = 16`. And the non-monotone convergence is gone. What
+  remains true is the danger: `N = 200` at `mu = 40` still arrives 12% wrong, which
+  is what `estimate_period_error` and `continue_to_resolved` exist to catch.
+
+  Headroom left: a nested refinement of the `N = 800` mesh still beats the adapted
+  `N = 1600` mesh (4.3e-5 against 2.2e-4), so the cube-root monitor is better, not
+  optimal. Curvature itself and its square root were tried and fail to adapt at all.
+
+- **Extreme stiffness (SUPERSEDED - the 200-node stall was the monitor).** Kept as
+  measured at the time, because the diagnosis was wrong and the way it was wrong is
+  the point. At `N = 200` the continuation stalled at `mu ~ 11.7` and could not reach
+  `mu = 16` however the step size was controlled: lowering `_CONTINUATION_MIN_STEP`
+  by 100x moved the stall only to `mu ~ 11.82`. That was read as a resolution limit -
+  the jump layers narrow as `mu` grows, so a 200-node mesh was assumed unable to
+  resolve them. It was not a resolution limit. The mesh was not adapting at all (see
+  above), and with the monitor fixed `N = 200` reaches `mu = 16`. A stall whose cause
+  is unproven should not be written down as a property of the discretisation.
 
   Measured on Python 3.14.4, NumPy 2.4.0, SciPy 1.18.1. The original note recorded no
   environment and no node count, which is why this took a bisection to re-establish;
@@ -54,8 +86,10 @@ solver returns the same near-optimal result as the uniform mesh (no regression).
   cycle from wherever it stalled, reported as though it had reached the target. It now
   returns `None`, so a stall is visible instead of being read as an accuracy problem.
 
-- **Node count against stiffness (measured).** Continuing to `mu = 40` from `mu = 6`,
-  against the integrated oracle, on Python 3.14.4 / NumPy 2.4.0 / SciPy 1.18.1:
+- **Node count against stiffness (SUPERSEDED - measured under the broken monitor).**
+  Continuing to `mu = 40` from `mu = 6`, against the integrated oracle, on
+  Python 3.14.4 / NumPy 2.4.0 / SciPy 1.18.1. This is the table DEQ-10 was opened on;
+  the corrected one is above:
 
   | N | reached `mu` | relative period error |
   |---|---|---|
@@ -72,13 +106,15 @@ solver returns the same near-optimal result as the uniform mesh (no regression).
   residual gate proves the *discrete* system was solved; nothing checks that the mesh
   resolves the orbit, and an under-resolved mesh converges confidently to the wrong
   cycle. Treat a returned solution as trustworthy only where the node count is known
-  to be adequate for the stiffness.
+  to be adequate for the stiffness. This one survives the monitor fix: the node count
+  moved (it is `N = 200` and 12% now) but the failure mode did not.
 
-  **Convergence in N is not monotone.** `N = 1600` (1.5e-3) is worse than `N = 800`
-  (3.4e-4). Unexplained; it may be the curvature monitor behaving differently once
-  nodes are plentiful, or the oracle's own accuracy. Worth resolving before the
-  adaptation constants are tuned any further - they were chosen when only `N = 200`
-  was affordable.
+  **Convergence in N was not monotone - now explained (DEQ-10).** `N = 1600`
+  (1.5e-3) was worse than `N = 800` (3.4e-4). The cause was the monitor, not the
+  oracle: sweeps failed silently and left the mesh adapted to a smaller `mu` than the
+  one being solved, so which mesh a run ended on depended on where its sweeps
+  happened to fail rather than on how many nodes it had. With the monitor fixed the
+  sequence is monotone - 3.0e-3 / 7.4e-4 / 2.2e-4 at `N` = 400 / 800 / 1600.
 
 - **Extreme stiffness (original note).** Reaching very large `mu` from a cold uniform seed
   fails because the damped Newton diverges. `AdaptivePeriodicOrbit.continue_to`
@@ -89,8 +125,43 @@ solver returns the same near-optimal result as the uniform mesh (no regression).
   ~3e-3, where a cold adaptive solve at `mu = 16` fails outright. (The earlier
   erratic, non-monotone cross-`mu` convergence is handled by the step-size control.)
 - A monitor tuned to the trapezoidal truncation order (density proportional to
-  `|x'''|^{1/3}`) rather than raw curvature could sharpen node placement further and
-  is the last obvious refinement; not yet needed for the accuracies reached above.
+  `|x'''|^{1/3}`) is still the obvious next refinement. The cube-root exponent is now
+  in place but applied to `|x''|`, not `|x'''|`; the headroom noted above - nested
+  refinement still beating the adapted mesh at `N = 1600` - is where it would show up.
+
+## 1c. Connecting-orbit resolution
+
+- **Both resolution parameters are now measured (RESOLVED).**
+  `ConnectingOrbit.estimate_orbit_error` reports discretisation and truncation
+  separately. They fail independently and each alone certifies orbits that are badly
+  wrong, measured against the exact homoclinic `x = 1.5 sech^2(t/2)`: at `h = 0.25`
+  the truncation component reads 5.4e-11 against a true error of 7.7e-3, and at
+  `T = 5, N = 640` the discretisation component reads 2.3e-5 against a true 2.8e-4.
+  So `estimate` is the larger of the two and `limited_by` names which.
+
+  Both components obey clean laws, which is what makes the estimate usable rather
+  than a screen: discretisation is `O(h^2)` (exactly 4x per halving) and truncation
+  is `O(exp(-2 lambda T))` (measured 7.7x per unit `T` at `lambda = 1`, against
+  `e^2 = 7.39`). The estimate runs 0.75x the returned orbit's error at every
+  resolution measured from 40 to 640 intervals, on homoclinic and heteroclinic
+  alike - that factor is `E - E/4` for a second-order method, not a tuning constant.
+
+  Headroom left:
+
+  - **No iterative search.** There is no `solve_to_resolved` analogue of
+    `continue_to_resolved`. The convergence laws are known, so a search could jump
+    straight to the `h` and `T` that meet a tolerance rather than doubling blindly
+    (`h -> h/2` per factor of four, `T -> T + ln(4) / (2 lambda)` for the same). It
+    needs the leading eigenvalue, which the subclasses hold but the base class does
+    not - that is the only reason it was not done here.
+  - **Even meshes only.** The phase condition pins the centre node, so an odd mesh
+    has no matching centre when doubled and the comparison would measure an `O(h)`
+    translation instead of the error. Rejected with a message rather than worked
+    around; pinning by time rather than by node index would remove the restriction.
+  - **Truncation extension is a fixed fraction** (25% of the half-length). A
+    problem whose leading eigenvalue is small would get a proportionally weaker
+    reduction; scaling the extension by `1 / lambda` is the principled version and
+    again needs the eigenvalue in the base class.
 
 ## 2. Smaller open frontier items
 

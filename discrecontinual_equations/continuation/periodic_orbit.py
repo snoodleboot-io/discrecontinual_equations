@@ -37,10 +37,13 @@ _RESOLUTION_TOLERANCE = 1.0e-3
 # doubling is a whole continuation, so this bounds an expensive search rather than
 # expressing a numerical limit.
 _RESOLUTION_DOUBLINGS = 3
-# Consecutive agreements required before a level is certified. One is not enough:
-# before convergence is asymptotic, successive meshes can agree while both are still
-# wrong - on van der Pol at mu = 12 the 200/400 agreement was 1.13e-3 while the
-# 400-node error was 1.21e-3, so a single agreement flattered the level it certified.
+# Consecutive agreements required before a level is certified. Before convergence is
+# asymptotic, successive meshes can agree while both are still wrong. Under the
+# earlier mesh monitor that happened on van der Pol at mu = 12 (a 200/400 agreement
+# of 1.13e-3 against a 400-node error of 1.21e-3). The current monitor converges
+# cleanly there and every single agreement measured was conservative, 2.6x to 4.6x,
+# but a field the monitor handles less well can still show it, so the second
+# confirmation stays.
 _RESOLUTION_CONFIRMATIONS = 2
 
 
@@ -164,8 +167,9 @@ def _certified(levels: list[ResolutionLevel], tolerance: float) -> float | None:
 
     The estimate is the largest of those agreements. Extrapolating from the observed
     convergence rate instead - three-level Richardson - was measured and rejected:
-    adaptive-mesh convergence at these stiffnesses is not geometric, and the
-    extrapolated error came out 4x to 33x smaller than the true one.
+    under the earlier mesh monitor convergence was not geometric, and the
+    extrapolated error came out 4x to 33x smaller than the true one. Taking the
+    largest agreement needs no assumption about the rate.
     """
     recent = levels[-_RESOLUTION_CONFIRMATIONS:]
     if len(recent) < _RESOLUTION_CONFIRMATIONS:
@@ -239,8 +243,8 @@ class PeriodicOrbit:
         A converged solve proves the *discrete* collocation system was satisfied. It
         says nothing about whether the mesh resolves the orbit, and an under-resolved
         mesh converges perfectly well to the wrong cycle - on van der Pol at
-        ``mu = 40``, a 400-node continuation reaches the target and reports a period
-        17% wrong. Nothing in the residual gate can catch that, so this is the only
+        ``mu = 40``, a 200-node continuation reaches the target and reports a period
+        12% wrong. Nothing in the residual gate can catch that, so this is the only
         way to know whether a returned cycle is worth trusting.
 
         The solution is interpolated onto a mesh with twice as many nodes and
@@ -249,12 +253,11 @@ class PeriodicOrbit:
         solution too coarse to seed a finer mesh is not resolved.
 
         The estimate is a single comparison between two meshes, so it is not a bound.
-        It was conservative at ``mu = 40`` (2.5x the true error on a cycle accurate to
-        3.4e-4) but optimistic at ``mu = 12``, where the 200/400 shift was 1.13e-3
-        against a true 400-node error of 1.21e-3: before convergence is asymptotic,
-        two meshes can agree while both are still wrong. Treat it as a screen for
-        cycles that are badly off, and use :meth:`continue_to_resolved`, which
-        requires two consecutive agreements, where the number matters.
+        On van der Pol it measured 2.6x to 4.6x the true error at ``mu = 12``, but
+        before convergence is asymptotic two meshes can agree while both are still
+        wrong - under an earlier mesh monitor it was 7% optimistic. Treat it as a
+        screen for cycles that are badly off, and use :meth:`continue_to_resolved`,
+        which requires two consecutive agreements, where the number matters.
 
         Costs one extra solve at double the nodes: about a fifth of a continuation
         where the cycle is resolved, and far less where it is not, since an
@@ -683,6 +686,11 @@ _MESH_SWEEPS = 15
 _MESH_BLEND = 0.6
 _MONITOR_FLOOR_FRACTION = 0.15
 _MONITOR_SMOOTHING = 3
+# Node density follows the cube root of curvature. A gentler target than
+# curvature itself: the mesh moves in steps a warm-started Newton solve survives,
+# so adaptation actually happens instead of silently failing and leaving the mesh
+# where it was.
+_MONITOR_EXPONENT = 1.0 / 3.0
 _QUARTER = 0.25
 _CONTINUATION_INITIAL_STEP = 1.5
 # The smallest parameter step worth attempting before declaring the continuation
@@ -762,15 +770,31 @@ class AdaptivePeriodicOrbit(AnalyticPeriodicOrbit):
         return states, float(unknowns[-1])
 
     def _equidistribute(self, states: np.ndarray) -> np.ndarray:
+        """Move the mesh part of the way toward equidistributing the monitor.
+
+        The monitor is the cube root of the curvature, taken as a true second
+        derivative on the current non-uniform mesh. It used to be the raw second
+        difference of neighbouring states, which is curvature times the local
+        spacing squared - a quantity that shrinks wherever nodes are already dense,
+        so the mesh read its own refinement as a reason to move nodes away. Its
+        target was also sharp enough that the Newton re-solve failed on most
+        sweeps, and a failed sweep leaves the mesh untouched while ``solve`` still
+        reports success. Continuing van der Pol to ``mu = 40`` on 400 nodes, 75% of
+        solves failed and the answer was 17% wrong; with this monitor none fail and
+        the error falls at second order as nodes are added.
+        """
         mesh = self._mesh
         count = mesh.size
-        monitor = np.zeros(count)
-        monitor[1:-1] = np.linalg.norm(
-            states[2:] - 2.0 * states[1:-1] + states[:-2],
+        spacing = np.diff(mesh)
+        slopes = (states[1:] - states[:-1]) / spacing[:, None]
+        curvature = np.zeros(count)
+        curvature[1:-1] = np.linalg.norm(
+            2.0 * (slopes[1:] - slopes[:-1]) / (spacing[1:] + spacing[:-1])[:, None],
             axis=1,
         )
-        monitor[0] = monitor[1]
-        monitor[-1] = monitor[-2]
+        curvature[0] = curvature[1]
+        curvature[-1] = curvature[-2]
+        monitor = curvature**_MONITOR_EXPONENT
         for _ in range(_MONITOR_SMOOTHING):
             monitor[1:-1] = (
                 _QUARTER * monitor[:-2] + _HALF * monitor[1:-1] + _QUARTER * monitor[2:]
@@ -814,8 +838,10 @@ class AdaptivePeriodicOrbit(AnalyticPeriodicOrbit):
             self.set_mesh(target)
             stepped = self._damped_solve(reseeded, period)
             if stepped is None:
+                # The next sweep would compute the same target from the same
+                # states and fail the same way, so there is nothing to retry.
                 self.set_mesh(previous)
-                continue
+                break
             states, period = stepped
         return PeriodicOrbitSolution(states, period)
 
