@@ -192,7 +192,7 @@ def describe(frame: Frame) -> str | None:
         return "Fold — focus and saddle annihilate"
     if focus is not None and focus.stability != "stable":
         return "Unstable focus + saddle — no attractor"
-    if frame.cycle is not None:
+    if frame.cycles:
         return "Unstable cycle fences the stable focus"
     return "Stable focus, basin bounded by the saddle's stable manifold"
 

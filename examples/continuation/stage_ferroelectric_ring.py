@@ -227,9 +227,9 @@ def describe(frame: Frame) -> str | None:
         if abs(e.x - e.y) < _SYMMETRIC_TOLERANCE and e.x != 0
     ]
     stable_symmetric = any(e.stability == "stable" for e in symmetric)
-    if frame.cycle is not None and stable_symmetric:
+    if frame.cycles and stable_symmetric:
         return "Rotating wave coexists with the symmetric states"
-    if frame.cycle is not None:
+    if frame.cycles:
         return "Rotating wave: cells hand their state around the ring"
     if frame.parameter > ONSET and stable_symmetric:
         return "Rotating wave (period beyond the mesh) with the symmetric states"
