@@ -444,7 +444,49 @@ function drawSkeleton(){
 
 // ---------- spectral clock ----------
 const clock = d3.select("#clock");
-const eigHistory = [];
+// Eigenvalue tracks: each equilibrium chained across frames by class and
+// position, each of its eigenvalues chained by nearest neighbour in the plane
+// (their order from the solver is arbitrary). Built once, so a trail is a
+// fixed curve through the parameter and scrubbing only moves along it.
+const TRAIL = 40;
+const NEAR_EQ = 0.1 * Math.hypot(x1 - x0, y1 - y0);
+function newTrack(){ return {pts: new Array(F.length).fill(null), cls: []}; }
+function buildTracks(){
+  const tracks = []; let prevEq = [], prevMap = [];
+  F.forEach((fr, k) => {
+    const map = [], used = new Set();
+    fr.equilibria.forEach(e => {
+      let best = -1, dist = Infinity;
+      prevEq.forEach((q, m) => {
+        const other = (q.stability==="saddle") !== (e.stability==="saddle");
+        if (used.has(m) || other) return;
+        const d = Math.hypot(q.x - e.x, q.y - e.y);
+        if (d < dist){ dist = d; best = m; }
+      });
+      let own;
+      if (best >= 0 && dist < NEAR_EQ){
+        used.add(best); const prev = prevMap[best], taken = new Set();
+        own = e.eig.map(ev => {
+          let bt = -1, bd = Infinity;
+          prev.forEach((tr, i) => {
+            const last = tr.pts[k-1]; if (taken.has(i) || !last) return;
+            const d = Math.hypot(last[0]-ev[0], last[1]-ev[1]);
+            if (d < bd){ bd = d; bt = i; }
+          });
+          if (bt >= 0){ taken.add(bt); return prev[bt]; }
+          const tr = newTrack(); tracks.push(tr); return tr;
+        });
+      } else {
+        own = e.eig.map(() => { const tr = newTrack(); tracks.push(tr); return tr; });
+      }
+      own.forEach((tr, i) => { tr.pts[k] = e.eig[i]; tr.cls[k] = e.stability; });
+      map.push(own);
+    });
+    prevEq = fr.equilibria; prevMap = map;
+  });
+  return tracks;
+}
+const TRACKS = buildTracks();
 function drawClock(){
   const fr = viewAt(t); const r = clock.node().getBoundingClientRect();
   const cw = r.width, ch = r.height;
@@ -466,15 +508,15 @@ function drawClock(){
   label(clock, X(0)+7, Y(1.38), `Re ${LAMBDA} = 0 ${DOT} Hopf`, css("--hopf"));
   label(clock, X(0.72), Y(-0.78), `|${MU}| = 1`, css("--faint"));
   if (document.getElementById("l-trails").checked){
-    for (let k=1;k<eigHistory.length;k++){
-      const a = eigHistory[k-1], b = eigHistory[k];
-      const op = 0.08 + 0.5*k/eigHistory.length;
-      for (let n=0;n<Math.min(a.length,b.length);n++) for (let q=0;q<2;q++){
-        const A = a[n].eig[q], B = b[n].eig[q]; if (!A||!B) continue;
+    const here = Math.round(t), from = Math.max(1, here - TRAIL);
+    for (const tr of TRACKS){
+      for (let k = from; k <= here; k++){
+        const A = tr.pts[k-1], B = tr.pts[k]; if (!A || !B) continue;
         clock.append("line").attr("x1",X(A[0])).attr("y1",Y(A[1]))
           .attr("x2",X(B[0])).attr("y2",Y(B[1]))
-          .attr("stroke", css(a[n].stability==="saddle"?"--saddle":"--curve"))
-          .attr("stroke-width",1.4).attr("opacity",op);
+          .attr("stroke", css(tr.cls[k]==="saddle" ? "--saddle" : "--curve"))
+          .attr("stroke-width",1.4)
+          .attr("opacity", 0.08 + 0.5*(k - from + 1)/(here - from + 1));
       }
     }
   }
@@ -503,15 +545,6 @@ function drawClock(){
       if (off) label(clock, X(re)+(re>=0?-8:8), Y(im)-9,
         `|${MU}| = ${mod.toFixed(0)} →`, css("--unstable"), re>=0?"end":"start");
     }
-  }
-}
-function pushHistory(){
-  const fr = nearestFrame();
-  const ordered = [...fr.equilibria]
-    .sort((a,b) => (a.stability==="saddle") - (b.stability==="saddle"));
-  if (!eigHistory.length || eigHistory[eigHistory.length-1].p !== fr.p){
-    ordered.p = fr.p; eigHistory.push(ordered);
-    if (eigHistory.length > 40) eigHistory.shift();
   }
 }
 
@@ -671,7 +704,7 @@ let lastFrame = -1;
 function setT(v){ t = clamp(v, 0, LAST); onFrame(); }
 function onFrame(){
   const k = Math.round(t);
-  if (k !== lastFrame){ lastFrame = k; pushHistory(); }
+  lastFrame = k;
   drawSkeleton(); drawClock(); readouts();
   if (drawTimeline.updatePlayhead) drawTimeline.updatePlayhead();
 }
@@ -714,7 +747,7 @@ new MutationObserver(resize).observe(document.documentElement,
   {attributes:true, attributeFilter:["data-theme"]});
 
 setDensity(+document.getElementById("density").value);
-resize(); pushHistory(); readouts(); onFrame();
+resize(); readouts(); onFrame();
 if (reduced){ for (let k=0;k<40;k++) stepParticles(); }
 requestAnimationFrame(loop);
 })();
