@@ -8,6 +8,7 @@ known in closed form, so every number the builder produces can be checked.
 import json
 from unittest import TestCase
 
+import numpy as np
 import pytest
 
 from discrecontinual_equations.continuation.branch import Branch
@@ -34,8 +35,9 @@ from discrecontinual_equations.webplot.stage import (
 from discrecontinual_equations.webplot.stage_builder import (
     Continued,
     Film,
+    cycles_at,
     frame_equilibria,
-    nearest_cycle,
+    saddle_manifolds,
     sample_field,
     stage_scene,
 )
@@ -137,12 +139,58 @@ class TestFrameEquilibria(TestCase):
         assert frame_equilibria(_saddle_branch(), 2.0) == []
 
 
-class TestNearestCycle(TestCase):
-    def test_picks_the_cycle_within_half_a_frame(self):
-        cycles = [Cycle(p, 6.0, 0.1, [(1.0, 0.0)], [(0.0, 0.0)]) for p in (0.0, 0.1)]
-        assert nearest_cycle(cycles, 0.04, 0.1) == 0
-        assert nearest_cycle(cycles, 0.16, 0.1) is None
-        assert nearest_cycle([], 0.0, 0.1) is None
+class TestCyclesAt(TestCase):
+    """A frame takes every cycle at its parameter, not just the nearest."""
+
+    @staticmethod
+    def _cycle(parameter: float, amplitude: float) -> Cycle:
+        return Cycle(parameter, 6.0, amplitude, [(1.0, 0.0)], [(0.0, 0.0)])
+
+    def test_takes_the_cycle_within_half_a_frame(self):
+        cycles = [self._cycle(p, 0.5) for p in (0.0, 0.1)]
+        assert cycles_at(cycles, 0.04, 0.1) == [0]
+        assert cycles_at(cycles, 0.16, 0.1) == []
+        assert cycles_at([], 0.0, 0.1) == []
+
+    def test_takes_both_cycles_of_a_folded_branch(self):
+        """Two cycles at one parameter differ in amplitude, so both are kept."""
+        cycles = [self._cycle(0.0, 0.9), self._cycle(0.0, 0.3)]
+        assert sorted(cycles_at(cycles, 0.0, 0.1)) == [0, 1]
+
+    def test_leaves_out_the_same_orbit_sampled_twice(self):
+        """Traced points crowd in the parameter where the branch turns.
+
+        The two orbits in range differ by 0.002 against a branch that spans
+        0.9, so they are one cycle sampled twice. The far-off points are what
+        give the branch its range - the tolerance is a fraction of that, not of
+        the pair being compared.
+        """
+        cycles = [
+            self._cycle(0.0, 0.9),
+            self._cycle(0.001, 0.902),
+            self._cycle(5.0, 0.3),
+            self._cycle(5.0, 1.2),
+        ]
+        assert cycles_at(cycles, 0.0, 0.1) == [0]
+
+    def test_the_tolerance_does_not_tighten_as_the_orbits_shrink(self):
+        """Near a Hopf the vanishing cycle is sampled many times over.
+
+        The three small orbits are one cycle; a tolerance relative to the
+        amplitudes being compared would have called them three.
+        """
+        cycles = [
+            self._cycle(0.0, 0.093),
+            self._cycle(0.001, 0.087),
+            self._cycle(-0.001, 0.1),
+            self._cycle(0.0, 1.009),
+        ]
+        assert cycles_at(cycles, 0.0, 0.05) == [0, 3]
+
+    def test_reports_the_smallest_orbit_first(self):
+        """So the order does not flip with which point sat nearest."""
+        cycles = [self._cycle(0.001, 0.9), self._cycle(0.0, 0.3)]
+        assert cycles_at(cycles, 0.0, 0.1) == [1, 0]
 
 
 class TestStageScene(TestCase):
@@ -165,7 +213,7 @@ class TestStageScene(TestCase):
         for frame in scene.frames:
             assert len(frame.field) == 2 * 5 * 5
             assert len(frame.equilibria) == 1
-            assert frame.cycle is None
+            assert frame.cycles == []
             kinds = sorted(item.kind for item in frame.manifolds)
             assert kinds == ["stable", "stable", "unstable", "unstable"]
         # The unstable manifold of x' = x - p, y' = -y is the line y = 0 and the
@@ -257,6 +305,35 @@ def _ring_point(parameter: float, s: float, stability: str) -> ContinuationPoint
     )
 
 
+class TestTranscendentalField(TestCase):
+    """A field the jets reject can still be staged, via finite differences."""
+
+    def test_saddle_manifolds_of_a_field_with_a_radius(self):
+        class Radial(DeterministicFunction):
+            """A saddle written with a square root, which Jets refuse."""
+
+            def eval(self, point, time=None):  # noqa: ARG002 (base signature)
+                x, y = point[0], point[1]
+                radius = (x * x + y * y + 1.0) ** 0.5
+                return [x / radius, -y / radius]
+
+        function = Radial(
+            variables=[State(), State()],
+            parameters=[Shift(value=0.0)],
+            results=[State(), State()],
+            time=None,
+        )
+        manifolds = saddle_manifolds(function, np.zeros(2), ((-2.0, 2.0), (-2.0, 2.0)))
+        assert sorted(m.kind for m in manifolds) == [
+            "stable",
+            "stable",
+            "unstable",
+            "unstable",
+        ]
+        for manifold in manifolds:
+            assert len(manifold.points) > 100
+
+
 class TestSpecialPoints(TestCase):
     def test_a_fold_at_a_pitchfork_is_the_pitchfork(self):
         branch = Branch()
@@ -310,6 +387,7 @@ class TestView(TestCase):
         assert first.field == []
         assert second.field == []
         assert first.manifolds == []  # a 3-D saddle's manifolds are not curves
+        assert first.cycles == []
         assert [(e.x, e.y) for e in first.equilibria] == [(1.0, 1.0)]  # deduplicated
         assert abs(second.equilibria[0].x - 0.85) < 1.0e-12
         assert len(scene.timeline.arcs) == 2
@@ -328,7 +406,7 @@ class TestPayloadAndRenderer(TestCase):
             [0.0] * 8,
             [Equilibrium(0.0, 0.0, "stable", [(-1.0, 2.0), (-1.0, -2.0)])],
             [],
-            0,
+            [0],
         )
         frame.label = "one stable focus"
         cycle = Cycle(
@@ -360,7 +438,7 @@ class TestPayloadAndRenderer(TestCase):
         assert payload["grid"] == {"nx": 2, "ny": 2}
         assert payload["system"]["x_label"] == "u"
         assert payload["system"]["cycle_terminus"] == "homoclinic"
-        assert payload["frames"][0]["cycle"] == 0
+        assert payload["frames"][0]["cycles"] == [0]
         assert payload["frames"][0]["label"] == "one stable focus"
         eig = payload["frames"][0]["equilibria"][0]["eig"]
         assert eig == [[-1.0, 2.0], [-1.0, -2.0]]

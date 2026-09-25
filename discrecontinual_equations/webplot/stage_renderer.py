@@ -119,6 +119,9 @@ _STYLE = """
   .ro{padding:12px 16px 13px;border-right:1px solid var(--line);min-width:0}
   .ro:last-child{border-right:0}
   .ro .kicker{display:block;margin-bottom:5px}
+  /* mu and lambda are not abbreviations: the label is uppercased, they
+     are not */
+  .kicker .sym{text-transform:none;letter-spacing:.02em;font-size:12.5px}
   .ro .val{font:500 20px/1.15 "IBM Plex Mono",monospace;
     font-variant-numeric:tabular-nums;letter-spacing:-.01em}
   .ro .sub{font:400 12.5px/1.45 "IBM Plex Mono",monospace;color:var(--muted);
@@ -175,6 +178,14 @@ const [x0, x1] = D.box.x, [y0, y1] = D.box.y;
 const PARAM = D.system.parameter;
 const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
 const mono = "IBM Plex Mono", sans = "IBM Plex Sans";
+function setKicker(node, words, symbol){
+  node.replaceChildren();
+  if (words) node.append(`${words} ${DOT} `);
+  const span = document.createElement("span");
+  span.className = "sym";
+  span.textContent = symbol;
+  node.append(span);
+}
 const colourOf = s =>
   css(s==="stable" ? "--stable" : s==="saddle" ? "--saddle" : "--unstable");
 const NAMES = {hopf:"Hopf", fold:"fold", branch_point:"branch point",
@@ -182,6 +193,7 @@ const NAMES = {hopf:"Hopf", fold:"fold", branch_point:"branch point",
 const pretty = k => NAMES[k] || k.replace(/_/g," ");
 const isUnstable = c => c.multipliers.some(([a,b]) => Math.hypot(a,b) > 1.02);
 const MINUS = "\u2212", LAMBDA = "\u03bb", MU = "\u03bc", DOT = "\u00b7";
+const PLUSMINUS = "\u00b1", DASH = "\u2014";
 
 // ---------- theme (shared key with the atlas pages) ----------
 function applyTheme(name){
@@ -233,7 +245,25 @@ function blendNearest(A, B, f){
     return [lerp(a[0],B[best][0],f), lerp(a[1],B[best][1],f)];
   });
 }
-function cycleOf(frame){ return frame.cycle === null ? null : D.cycles[frame.cycle]; }
+const cyclesOf = frame => (frame.cycles || []).map(i => D.cycles[i]);
+// Cycles are matched between frames by amplitude, which is what separates a
+// stable outer cycle from an unstable inner one; a cycle with no partner in
+// the other frame is appearing or disappearing and fades rather than pops.
+function blendCycles(A, B, f){
+  const before = cyclesOf(A), after = cyclesOf(B), out = [], used = new Set();
+  for (const a of before){
+    let best = -1, gap = Infinity;
+    after.forEach((b, k) => {
+      const d = Math.abs(b.amplitude - a.amplitude);
+      if (!used.has(k) && d < gap){ gap = d; best = k; }
+    });
+    if (best < 0){ out.push({...a, alpha: 1 - f}); continue; }
+    used.add(best);
+    out.push(blendCycle(a, after[best], f));
+  }
+  after.forEach((b, k) => { if (!used.has(k)) out.push({...b, alpha: f}); });
+  return out;
+}
 // A manifold branch that winds onto a cycle samples many turns into its points,
 // so two such branches from neighbouring frames sit at different phases at the
 // same index and a point-wise morph invents loops that cross the cycle. Morph only
@@ -273,26 +303,22 @@ function blendEquilibria(A, B, f, near){
   return out.length ? out : near.equilibria;
 }
 function blendCycle(cA, cB, f){
-  if (cA && cB) return {p: lerp(cA.p, cB.p, f), period: lerp(cA.period, cB.period, f),
+  return {p: lerp(cA.p, cB.p, f), period: lerp(cA.period, cB.period, f),
     amplitude: lerp(cA.amplitude, cB.amplitude, f), alpha: 1,
     error: lerp(cA.error || 0, cB.error || 0, f),
     multipliers: blendNearest(cA.multipliers, cB.multipliers, f),
     states: blendPairs(cA.states, cB.states, f)};
-  if (cA) return {...cA, alpha: 1 - f};
-  if (cB) return {...cB, alpha: f};
-  return null;
 }
 function viewAt(tt){
   const {i, j, f} = frameAt(tt); const A = F[i], B = F[j];
   if (i === j || f < 1e-6){
-    const c = cycleOf(A);
     return {p: A.p, equilibria: A.equilibria, manifolds: A.manifolds,
-      cycle: c ? {...c, alpha: 1} : null, label: A.label};
+      cycles: cyclesOf(A).map(c => ({...c, alpha: 1})), label: A.label};
   }
   const near = f < 0.5 ? A : B;
   return {p: paramAt(tt), equilibria: blendEquilibria(A, B, f, near),
     manifolds: blendManifolds(A, B, f),
-    cycle: blendCycle(cycleOf(A), cycleOf(B), f), label: near.label};
+    cycles: blendCycles(A, B, f), label: near.label};
 }
 
 // ---------- field: bilinear in space, linear between frames ----------
@@ -421,12 +447,14 @@ function drawSkeleton(){
         .attr("stroke-width",1.6).attr("opacity", .85 * (mf.alpha ?? 1));
     }
   }
-  if (document.getElementById("l-cycle").checked && fr.cycle !== null){
-    const c = fr.cycle, unstable = isUnstable(c);
-    skel.append("path").attr("d", line(c.states)+"Z").attr("fill","none")
-      .attr("stroke",css(unstable ? "--unstable" : "--stable"))
-      .attr("stroke-width",2.2).attr("stroke-dasharray", unstable ? "7 5" : "none")
-      .attr("opacity", c.alpha).attr("filter","url(#g)");
+  if (document.getElementById("l-cycle").checked){
+    for (const c of fr.cycles){
+      const unstable = isUnstable(c);
+      skel.append("path").attr("d", line(c.states)+"Z").attr("fill","none")
+        .attr("stroke",css(unstable ? "--unstable" : "--stable"))
+        .attr("stroke-width",2.2).attr("stroke-dasharray", unstable ? "7 5" : "none")
+        .attr("opacity", c.alpha).attr("filter","url(#g)");
+    }
   }
   for (const e of fr.equilibria){
     const col = colourOf(e.stability);
@@ -529,16 +557,16 @@ function drawClock(){
         .attr("fill",col).attr("stroke",css("--panel")).attr("stroke-width",1.2);
     }
   }
-  if (fr.cycle !== null){
-    const trivial = fr.cycle.multipliers.reduce((best, m) =>
+  for (const cycle of fr.cycles){
+    const trivial = cycle.multipliers.reduce((best, m) =>
       Math.hypot(m[0]-1, m[1]) < Math.hypot(best[0]-1, best[1]) ? m : best);
-    for (const [re0,im0] of fr.cycle.multipliers){
+    for (const [re0,im0] of cycle.multipliers){
       const mod = Math.hypot(re0, im0), off = mod > 2.2, s = off ? 2.2/mod : 1;
       const re = re0*s, im = im0*s;
       const isTrivial = re0 === trivial[0] && im0 === trivial[1];
       clock.append("rect").attr("x",X(re)-4.5).attr("y",Y(im)-4.5)
         .attr("width",9).attr("height",9)
-        .attr("opacity", (off ? .55 : 1) * fr.cycle.alpha)
+        .attr("opacity", (off ? .55 : 1) * cycle.alpha)
         .attr("fill",css("--panel"))
         .attr("stroke",css(isTrivial ? "--faint" : "--unstable"))
         .attr("stroke-width",1.8).attr("transform",`rotate(45 ${X(re)} ${Y(im)})`);
@@ -597,16 +625,39 @@ function drawTimeline(){
     flush();
   }
   if (D.cycles.length){
-    const unstable = D.cycles.some(isUnstable);
-    const col = css(unstable ? "--unstable" : "--stable");
-    const dash = unstable ? "5 4" : "none";
     const amp = d3.line().x(c=>px(c.p)).curve(d3.curveCatmullRom.alpha(0.5));
-    for (const f of [xhi, xlo]){
-      g.append("path").attr("d", amp.y(c=>py(f(c)))(D.cycles)).attr("fill","none")
-        .attr("stroke",col).attr("stroke-width",1.6).attr("stroke-dasharray",dash)
-        .attr("opacity",.9);
+    // One path only where the branch is continuous and keeps its stability. A
+    // folded branch comes back as the other kind of cycle, and joining the two
+    // would draw a line across the diagram that no cycle follows.
+    const JUMP = 0.08 * Math.hypot(iw, ih);
+    let run = [];
+    const flushCycles = () => {
+      if (run.length > 1){
+        const unstable = isUnstable(run[0]);
+        for (const edge of [xhi, xlo]){
+          g.append("path").attr("d", amp.y(c=>py(edge(c)))(run)).attr("fill","none")
+            .attr("stroke", css(unstable ? "--unstable" : "--stable"))
+            .attr("stroke-width",1.6)
+            .attr("stroke-dasharray", unstable ? "5 4" : "none").attr("opacity",.9);
+        }
+      }
+      run = [];
+    };
+    for (const c of D.cycles){
+      const prev = run[run.length-1];
+      const gap = prev
+        ? Math.hypot(px(c.p)-px(prev.p), py(xhi(c))-py(xhi(prev))) : 0;
+      if (prev && gap > JUMP){ flushCycles(); }
+      else if (prev && isUnstable(c) !== isUnstable(prev)){
+        run.push(c); flushCycles();
+      }
+      run.push(c);
     }
-    const c = D.cycles[0];
+    flushCycles();
+    // The branch ends where the parameter stops: a homoclinic, a fold, an
+    // onset. That is the extreme the terminus names, whichever arc reaches it.
+    const c = D.cycles.reduce((a,b) => b.p < a.p ? b : a);
+    const col = css(isUnstable(c) ? "--unstable" : "--stable");
     for (const yy of [xhi(c), xlo(c)]){
       g.append("circle").attr("cx",px(c.p)).attr("cy",py(yy)).attr("r",3.5)
         .attr("fill",css("--panel")).attr("stroke",col).attr("stroke-width",1.6);
@@ -655,8 +706,9 @@ function genericRegime(fr){
   const parts = ["stable","unstable","saddle"].filter(k => count[k])
     .map(k => `${count[k]} ${k}`);
   let s = `${n} equilibri${n===1?"um":"a"}: ${parts.join(", ")}`;
-  if (fr.cycle !== null){
-    s += ` ${DOT} ${isUnstable(fr.cycle) ? "unstable" : "stable"} cycle`;
+  if (fr.cycles.length){
+    const kinds = fr.cycles.map(c => isUnstable(c) ? "unstable" : "stable");
+    s += ` ${DOT} ${kinds.join(" and ")} cycle${fr.cycles.length > 1 ? "s" : ""}`;
   }
   return s;
 }
@@ -671,29 +723,35 @@ function readouts(){
     const k = document.getElementById(id+"-kicker"), v = document.getElementById(id);
     const s = document.getElementById(id+"-sub");
     if (!e){
-      k.textContent = fallback; v.textContent = "\u2014"; s.textContent = "absent";
+      setKicker(k, fallback, LAMBDA);
+      v.textContent = "\u2014"; s.textContent = "absent";
       return;
     }
-    k.textContent = `${e.stability} ${DOT} ${LAMBDA}`;
+    setKicker(k, e.stability, LAMBDA);
     v.innerHTML = `<span class="dot" style="background:${colourOf(e.stability)}">`
       + `</span>${fmtC(e.eig[0])}`;
     s.textContent =
       `${fmtC(e.eig[1])} ${DOT} at ${D.system.x_label} = ${e.x.toFixed(3)}`;
   };
-  setEq("ro-focus", focus, `equilibrium ${DOT} ${LAMBDA}`);
-  setEq("ro-saddle", saddle, `saddle ${DOT} ${LAMBDA}`);
+  setEq("ro-focus", focus, "equilibrium");
+  setEq("ro-saddle", saddle, "saddle");
   const cv = document.getElementById("ro-cycle");
   const cs = document.getElementById("ro-cycle-sub");
-  if (fr.cycle !== null){
-    const c = fr.cycle, mods = c.multipliers.map(([a,b])=>Math.hypot(a,b));
-    const err = c.error || 0, pct = (100*err).toFixed(err < 0.01 ? 2 : 1);
-    cv.textContent = `T = ${c.period.toFixed(2)}`;
-    cv.style.color = err > 0.02 ? css("--hopf") : "";
-    cs.textContent = `|${MU}| = ${mods.map(m=>m.toFixed(3)).join(", ")} ${DOT} `
-      + `amplitude ${c.amplitude.toFixed(3)} ${DOT} Floquet ±${pct}% `
-      + `(trivial ${MU} off 1)`;
+  if (fr.cycles.length){
+    const worst = Math.max(...fr.cycles.map(c => c.error || 0));
+    const digits = worst < 0.01 ? 2 : 1;
+    cv.textContent = `T = ${fr.cycles.map(c => c.period.toFixed(2)).join(", ")}`;
+    cv.style.color = worst > 0.02 ? css("--hopf") : "";
+    const each = fr.cycles.map(c => {
+      const mods = c.multipliers.map(([a,b]) => Math.hypot(a,b));
+      const kind = isUnstable(c) ? "unstable" : "stable";
+      return `${kind} a=${c.amplitude.toFixed(3)} `
+        + `|${MU}|=${mods.map(m => m.toFixed(3)).join(",")}`;
+    });
+    cs.textContent = `${each.join(` ${DOT} `)} ${DOT} Floquet `
+      + `${PLUSMINUS}${(100*worst).toFixed(digits)}%`;
   } else {
-    cv.textContent = "\u2014"; cv.style.color = "";
+    cv.textContent = DASH; cv.style.color = "";
     cs.textContent = `no cycle at this ${PARAM}`;
   }
   document.getElementById("ro-regime").textContent = fr.label || genericRegime(fr);
@@ -738,7 +796,7 @@ for (const id of ["l-manifolds","l-cycle","l-trails"]){
   document.getElementById(id).addEventListener("change",
     () => { drawSkeleton(); drawClock(); });
 }
-document.getElementById("ro-p-kicker").textContent = PARAM;
+setKicker(document.getElementById("ro-p-kicker"), "", PARAM);
 document.getElementById("tl-hint").textContent =
   `drag the playhead ${DOT} ${D.system.x_label} against ${PARAM}`;
 window.addEventListener("resize", resize);

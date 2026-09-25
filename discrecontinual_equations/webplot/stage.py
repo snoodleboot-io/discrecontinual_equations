@@ -202,12 +202,13 @@ class Frame:
 
     ``field`` is the sampled vector field, ``2 * grid * grid`` floats in
     row-major order (``u, v`` per node, rows of constant ``y``), or empty when
-    the lattice has a view. ``cycle`` indexes the scene's cycle branch, or is
-    ``None`` where no cycle exists. ``label`` is an optional sentence naming the
-    regime; the page composes one otherwise.
+    the lattice has a view. ``cycles`` indexes every cycle of the scene's
+    branch that exists at this parameter - a folded branch has two, a stable
+    and an unstable one - and is empty where none does. ``label`` is an
+    optional sentence naming the regime; the page composes one otherwise.
     """
 
-    __slots__ = ["cycle", "equilibria", "field", "label", "manifolds", "parameter"]
+    __slots__ = ["cycles", "equilibria", "field", "label", "manifolds", "parameter"]
 
     def __init__(
         self,
@@ -215,13 +216,13 @@ class Frame:
         field: list[float],
         equilibria: list[Equilibrium],
         manifolds: list[Manifold],
-        cycle: int | None,
+        cycles: list[int],
     ) -> None:
         self.parameter = parameter
         self.field = field
         self.equilibria = equilibria
         self.manifolds = manifolds
-        self.cycle = cycle
+        self.cycles = cycles
         self.label: str | None = None
 
 
@@ -407,7 +408,7 @@ def stage_payload(scene: StageScene) -> dict:
                     {"kind": item.kind, "points": _pairs(item.points)}
                     for item in frame.manifolds
                 ],
-                "cycle": frame.cycle,
+                "cycles": list(frame.cycles),
                 "label": frame.label,
             }
             for frame in scene.frames

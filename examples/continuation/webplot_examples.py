@@ -107,9 +107,15 @@ from discrecontinual_equations.webplot.stage_renderer import StageRenderer
 try:  # python -m examples.continuation.webplot_examples
     from examples.continuation import stage_bogdanov_takens as bt
     from examples.continuation import stage_ferroelectric_ring as ring
+    from examples.continuation import stage_fold_of_cycles as fold
+    from examples.continuation import stage_snic as snic
+    from examples.continuation import stage_van_der_pol as vdp
 except ImportError:  # run as a script path: only this directory is on sys.path
     import stage_bogdanov_takens as bt
     import stage_ferroelectric_ring as ring
+    import stage_fold_of_cycles as fold
+    import stage_snic as snic
+    import stage_van_der_pol as vdp
 
 MU = "\u03bc"
 ALPHA = "\u03b1"
@@ -2405,12 +2411,25 @@ def main(output_dir: str = "plots") -> None:
     report.write_atlas(entries)
 
 
+def _stages() -> tuple[tuple, ...]:
+    """Every stage example: what builds it, what it is called, and its card."""
+    return (
+        (bt.bogdanov_takens_stage, bt.STAGE_FILENAME, bt.STAGE_ENTRY),
+        (ring.ferroelectric_ring_stage, ring.STAGE_FILENAME, ring.STAGE_ENTRY),
+        (vdp.van_der_pol_stage, vdp.STAGE_FILENAME, vdp.STAGE_ENTRY),
+        (snic.snic_stage, snic.STAGE_FILENAME, snic.STAGE_ENTRY),
+        (fold.fold_of_cycles_stage, fold.STAGE_FILENAME, fold.STAGE_ENTRY),
+    )
+
+
 def _stage_entries(output_dir: str) -> list[AtlasEntry]:
     """Write the playable pages with their own renderer; they share the atlas."""
-    stage = PlotReport(StageRenderer(), output_dir)
-    stage.write(bt.bogdanov_takens_stage(), bt.STAGE_FILENAME)
-    stage.write(ring.ferroelectric_ring_stage(), ring.STAGE_FILENAME)
-    return [bt.STAGE_ENTRY, ring.STAGE_ENTRY]
+    report = PlotReport(StageRenderer(), output_dir)
+    entries = []
+    for build, filename, entry in _stages():
+        report.write(build(), filename)
+        entries.append(entry)
+    return entries
 
 
 if __name__ == "__main__":

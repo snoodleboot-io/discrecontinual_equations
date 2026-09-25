@@ -63,6 +63,9 @@ _TOLERANCE = 1.0e-12
 # Two crossings closer than this are the same equilibrium seen from both sides
 # of a branch point that sits exactly on the frame's parameter.
 _COINCIDENT = 1.0e-9
+# Two traced cycles whose amplitudes agree this closely, relative to the larger
+# of them, are the same orbit sampled twice rather than two coexisting cycles.
+_DISTINCT_ORBIT = 0.05
 # Two branches detecting one bifurcation land on it to detector accuracy, not to
 # machine precision.
 _SAME_EVENT = 1.0e-3
@@ -72,6 +75,8 @@ _BRANCH_POINTS = ("branch_point", "pitchfork", "transcritical")
 _FIELD_CHECKS = 8
 _FIELD_AGREEMENT = 1.0e-9
 _AUTODIFF = AutomaticDifferentiation()
+# Step for the finite-difference Jacobian a non-analytic field falls back to.
+_STEP = 1.0e-7
 
 
 class Continued:
@@ -179,7 +184,7 @@ def stage_scene(
             [] if view is not None else sample_field(function, film.lattice),
             equilibria,
             manifolds,
-            nearest_cycle(cycles.cycles, float(value), spacing),
+            cycles_at(cycles.cycles, float(value), spacing),
         )
         if film.describe is not None:
             frame.label = film.describe(frame)
@@ -313,7 +318,7 @@ def saddle_manifolds(
     unstable manifold, backward for the stable - until it leaves the box.
     """
     settings = settings or StageSettings()
-    jacobian = _AUTODIFF.jacobian(function, equilibrium, 0.0)
+    jacobian = _jacobian(function, equilibrium)
     manifolds: list[Manifold] = []
     for kind, selection, forward in (
         ("unstable", UnstableManifold(), True),
@@ -326,14 +331,67 @@ def saddle_manifolds(
     return manifolds
 
 
-def nearest_cycle(cycles: list[Cycle], value: float, spacing: float) -> int | None:
-    """Index of the cycle at ``value``, or ``None`` if none lies within a frame."""
+def _jacobian(function, point: np.ndarray) -> np.ndarray:
+    """The field's Jacobian at ``point``, analytically where that is possible.
+
+    Automatic differentiation evaluates the field on Taylor jets, and a field
+    written with ``math`` or a fractional power - a radius, say - rejects them.
+    That is not an error: the cycle and connecting-orbit solvers fall back to
+    finite differences in the same situation, and so does this, so a
+    transcendental field can still be staged.
+    """
+    try:
+        return _AUTODIFF.jacobian(function, point, 0.0)
+    except (TypeError, ValueError, AttributeError):
+        base = np.array(function.eval(point=list(point), time=None), dtype=float)
+        columns = []
+        for index in range(point.size):
+            shifted = np.asarray(point, dtype=float).copy()
+            shifted[index] += _STEP
+            moved = np.array(
+                function.eval(point=list(shifted), time=None),
+                dtype=float,
+            )
+            columns.append((moved - base) / _STEP)
+        return np.column_stack(columns)
+
+
+def cycles_at(cycles: list[Cycle], value: float, spacing: float) -> list[int]:
+    """Every distinct cycle at ``value``, smallest orbit first.
+
+    A folded cycle branch carries two cycles at the same parameter - a stable
+    and an unstable one - and taking only the nearest of them would hide half
+    the picture and flicker between the two as the parameter moves.
+
+    Traced points crowd together in the parameter wherever the branch turns, so
+    a point whose amplitude matches one already taken is that same orbit
+    sampled twice and is left out. The tolerance is a fraction of the whole
+    branch's amplitude range rather than of the amplitudes being compared, so
+    it does not tighten as the orbits shrink: near a Hopf, where the inner
+    cycle is vanishing and many traced points share a parameter, a relative
+    test kept all of them. At a fold the two cycles genuinely coincide, and one
+    is then what this returns.
+    """
     if not cycles:
-        return None
-    index = min(range(len(cycles)), key=lambda i: abs(cycles[i].parameter - value))
-    if abs(cycles[index].parameter - value) <= _HALF * spacing:
-        return index
-    return None
+        return []
+    amplitudes = [cycle.amplitude for cycle in cycles]
+    tolerance = _DISTINCT_ORBIT * (max(amplitudes) - min(amplitudes))
+    near = sorted(
+        (
+            index
+            for index, cycle in enumerate(cycles)
+            if abs(cycle.parameter - value) <= _HALF * spacing
+        ),
+        key=lambda index: abs(cycles[index].parameter - value),
+    )
+    taken: list[int] = []
+    for index in near:
+        amplitude = cycles[index].amplitude
+        if all(abs(cycles[other].amplitude - amplitude) > tolerance for other in taken):
+            taken.append(index)
+    # Smallest first, so the order a frame reports its cycles in does not flip
+    # with which traced point happened to sit nearest the frame's parameter.
+    return sorted(taken, key=lambda index: cycles[index].amplitude)
 
 
 class _Chart:
