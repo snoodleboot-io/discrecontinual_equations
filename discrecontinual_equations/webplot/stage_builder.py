@@ -294,7 +294,13 @@ def frame_equilibria(
             for p, q in zip(a.state, b.state, strict=True)
         ]
         x, y = _plane(state, view)
-        item = Equilibrium(x, y, nearer.stability, list(nearer.eigenvalues))
+        item = Equilibrium(
+            x,
+            y,
+            nearer.stability,
+            list(nearer.eigenvalues),
+            state if view else (),
+        )
         if not any(_coincide(item, seen) for seen in found):
             found.append(item)
     return found
@@ -528,6 +534,8 @@ def _cycle(point: CyclePoint, view: View | None) -> Cycle:
         [(float(m.real), float(m.imag)) for m in point.multipliers],
         [_plane(state, view) for state in point.solution.states],
     )
+    if view is not None:
+        cycle.orbit = [[float(v) for v in state] for state in point.solution.states]
     cycle.error = float(point.floquet_error)
     return cycle
 

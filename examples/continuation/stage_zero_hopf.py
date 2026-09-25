@@ -29,6 +29,7 @@ from discrecontinual_equations.webplot.report import AtlasEntry
 from discrecontinual_equations.webplot.stage import (
     Frame,
     Lattice,
+    Projection,
     StageScene,
     StageSystem,
     Term,
@@ -59,6 +60,26 @@ FREQUENCY = 1.0
 SECOND = 0.5
 P_LO, P_HI, FRAMES = -0.25, 0.6, 79
 BOX = ((-1.0, 1.0), (-1.1, 1.1))
+# The fold lives in x and the circle in (y, z), so the two halves of the
+# codimension-two point are in different planes: (x, y) cuts across both and
+# shows the circles edge-on, while (y, z) is the plane they are actually round
+# in, with the two of them superimposed.
+CIRCLE_BOX = ((-1.1, 1.1), (-1.1, 1.1))
+PLANES = (
+    Projection("x - y", [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], ("x", "y"), BOX),
+    Projection(
+        "y - z (the circles)",
+        [[0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+        ("y", "z"),
+        CIRCLE_BOX,
+    ),
+    Projection(
+        "x - z",
+        [[1.0, 0.0, 0.0], [0.0, 0.0, 1.0]],
+        ("x", "z"),
+        ((-1.0, 1.0), (-1.1, 1.1)),
+    ),
+)
 INTERVALS = 80
 FOLD = 0.0
 SEED_MU1 = 0.4
@@ -197,7 +218,7 @@ def zero_hopf_stage() -> StageScene:
                 "x",
                 "y",
                 view=View(
-                    [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+                    PLANES,
                     [(-1.0, 1.0), (-1.1, 1.1), (-1.1, 1.1)],
                     terms(),
                 ),

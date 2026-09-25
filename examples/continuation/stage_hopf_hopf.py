@@ -32,6 +32,7 @@ from discrecontinual_equations.webplot.report import AtlasEntry
 from discrecontinual_equations.webplot.stage import (
     Frame,
     Lattice,
+    Projection,
     StageScene,
     StageSystem,
     Term,
@@ -62,6 +63,31 @@ FIRST_FREQUENCY, SECOND_FREQUENCY = 1.0, 2.0
 SECOND = -0.4
 P_LO, P_HI, FRAMES = -0.5, 1.2, 81
 BOX = ((-1.3, 1.3), (-1.3, 1.3))
+DAMPED_BOX = ((-0.8, 0.8), (-0.8, 0.8))
+# Each block has its own plane, and the point of the film is the contrast: the
+# first block opens a cycle while the second spirals into the origin whatever
+# mu1 does. The mixed plane shows why a trail can appear to cross the drawn
+# cycle - it is elsewhere in the block that is not on screen.
+PLANES = (
+    Projection(
+        "x - y (turning block)",
+        [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0]],
+        ("x", "y"),
+        BOX,
+    ),
+    Projection(
+        "z - w (damped block)",
+        [[0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]],
+        ("z", "w"),
+        DAMPED_BOX,
+    ),
+    Projection(
+        "x - z (across the blocks)",
+        [[1.0, 0.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]],
+        ("x", "z"),
+        ((-1.3, 1.3), (-0.8, 0.8)),
+    ),
+)
 INTERVALS = 80
 HOPF = 0.0
 SEED_MU1 = 0.6
@@ -191,7 +217,7 @@ def hopf_hopf_stage() -> StageScene:
                 "x",
                 "y",
                 view=View(
-                    [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0]],
+                    PLANES,
                     [(-1.3, 1.3)] * 2 + [(-0.8, 0.8)] * 2,
                     terms(),
                 ),
