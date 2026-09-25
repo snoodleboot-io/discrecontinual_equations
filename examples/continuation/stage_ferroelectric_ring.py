@@ -41,6 +41,7 @@ from discrecontinual_equations.webplot.report import AtlasEntry, PlotReport
 from discrecontinual_equations.webplot.stage import (
     Frame,
     Lattice,
+    Projection,
     StageScene,
     StageSystem,
     Term,
@@ -53,6 +54,33 @@ CELLS = 3
 GAIN = 1.0
 P_LO, P_HI, FRAMES = -0.6, 1.3, 77
 BOX = ((-1.7, 1.7), (-1.7, 1.7))
+# The ring is unidirectionally coupled, so a rotating wave passes through the
+# cells in order and which pair is on screen decides what the phase lag looks
+# like. The ring's cyclic symmetry makes the three planes congruent - same
+# extent, same enclosed area - but not identical: the wave runs x1 -> x2 -> x3,
+# so x1 against x2 and x2 against x3 are traversed one way and x1 against x3
+# the other. Turning the loop the other way round is the coupling's direction,
+# visible. The same box serves all three, since the cells share their range.
+PLANES = (
+    Projection(
+        "x\u2081 - x\u2082",
+        [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+        ("x\u2081", "x\u2082"),
+        BOX,
+    ),
+    Projection(
+        "x\u2082 - x\u2083",
+        [[0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+        ("x\u2082", "x\u2083"),
+        BOX,
+    ),
+    Projection(
+        "x\u2081 - x\u2083",
+        [[1.0, 0.0, 0.0], [0.0, 0.0, 1.0]],
+        ("x\u2081", "x\u2083"),
+        BOX,
+    ),
+)
 # CycleContinuation still builds a dense finite-difference Jacobian (DEQ-15), so
 # the trace costs ~1 s/step at 80 nodes and ~8 s/step at 160; 80 keeps the
 # Floquet error near 3%, which the page reports beside the multipliers.
@@ -269,7 +297,10 @@ def ferroelectric_ring_stage() -> StageScene:
             "(x₁, x₂); the saddle manifolds are surfaces there and are not "
             "drawn. Every equilibrium of the ring lies on the branches shown "
             "except the six mixed states near λ = 0, which the flow reveals "
-            "as slow corners."
+            "as slow corners. The plane picker swaps which pair of cells is on "
+            "screen: the three are congruent by the ring's symmetry, but a "
+            "rotating wave turns one way in x₁-x₂ and x₂-x₃ and the other way "
+            "in x₁-x₃, which is the coupling's direction made visible."
         ),
     )
     lattice = Lattice(
@@ -278,7 +309,7 @@ def ferroelectric_ring_stage() -> StageScene:
         "x₁",
         "x₂",
         view=View(
-            [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+            PLANES,
             [(-1.7, 1.7)] * CELLS,
             ring_terms(),
         ),
