@@ -11,11 +11,6 @@ import sys
 from pathlib import Path
 
 import numpy as np
-from stage_bogdanov_takens import (
-    STAGE_ENTRY,
-    STAGE_FILENAME,
-    bogdanov_takens_stage,
-)
 from sweet_tea.registry import Registry
 
 import discrecontinual_equations
@@ -108,6 +103,13 @@ from discrecontinual_equations.webplot.scene_builder import (
     with_regions,
 )
 from discrecontinual_equations.webplot.stage_renderer import StageRenderer
+
+try:  # python -m examples.continuation.webplot_examples
+    from examples.continuation import stage_bogdanov_takens as bt
+    from examples.continuation import stage_ferroelectric_ring as ring
+except ImportError:  # run as a script path: only this directory is on sys.path
+    import stage_bogdanov_takens as bt
+    import stage_ferroelectric_ring as ring
 
 MU = "\u03bc"
 ALPHA = "\u03b1"
@@ -2406,8 +2408,9 @@ def main(output_dir: str = "plots") -> None:
 def _stage_entries(output_dir: str) -> list[AtlasEntry]:
     """Write the playable pages with their own renderer; they share the atlas."""
     stage = PlotReport(StageRenderer(), output_dir)
-    stage.write(bogdanov_takens_stage(), STAGE_FILENAME)
-    return [STAGE_ENTRY]
+    stage.write(bt.bogdanov_takens_stage(), bt.STAGE_FILENAME)
+    stage.write(ring.ferroelectric_ring_stage(), ring.STAGE_FILENAME)
+    return [bt.STAGE_ENTRY, ring.STAGE_ENTRY]
 
 
 if __name__ == "__main__":

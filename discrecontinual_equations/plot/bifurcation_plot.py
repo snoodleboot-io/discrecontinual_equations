@@ -27,6 +27,9 @@ class BifurcationPlot:
 
     def __init__(self, output_dir: str = ".", output_format: str = "png") -> None:
         self.output_dir = output_dir
+        # A plotter is told where to write; make sure that place exists,
+        # so an example whose output directory is not in the tree still runs.
+        Path(output_dir).mkdir(parents=True, exist_ok=True)
         self.output_format = output_format
         self.figure: go.Figure = go.Figure()
 

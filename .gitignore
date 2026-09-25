@@ -147,3 +147,6 @@ Thumbs.db
 
 # Claude Code worktrees
 /.claude/worktrees/
+
+# Built example sites
+/examples_site/
