@@ -307,7 +307,8 @@ function drawTimeline(){
   const m = {l:56, r:22, t:18, b:34}; const iw = tw-m.l-m.r, ih = th-m.t-m.b;
   const pts = D.branch.points;
   const px = d3.scaleLinear().domain([F[0].p, F[F.length-1].p]).range([m.l, m.l+iw]);
-  const env = D.cycles.flatMap(c => [-Math.sqrt(-c.p)+c.amplitude, -Math.sqrt(-c.p)-c.amplitude]);
+  const xlo = c => d3.min(c.states, s=>s[0]), xhi = c => d3.max(c.states, s=>s[0]);
+  const env = D.cycles.flatMap(c => [xhi(c), xlo(c)]);
   const xs = pts.map(d=>d.x).concat(env); const lo = d3.min(xs), hi = d3.max(xs), pad = (hi-lo)*0.08;
   const py = d3.scaleLinear().domain([lo-pad, hi+pad]).range([m.t+ih, m.t]);
   const g = tl.append("g");
@@ -328,9 +329,8 @@ function drawTimeline(){
   // cycle amplitude envelope: x_focus ± amplitude, unstable
   if (D.cycles.length){
     const amp = d3.line().x(c=>px(c.p)).curve(d3.curveCatmullRom.alpha(0.5));
-    const xf = c => -Math.sqrt(-c.p);
-    g.append("path").attr("d", amp.y(c=>py(xf(c)+c.amplitude))(D.cycles)).attr("fill","none").attr("stroke",css("--unstable")).attr("stroke-width",1.6).attr("stroke-dasharray","5 4").attr("opacity",.9);
-    g.append("path").attr("d", amp.y(c=>py(xf(c)-c.amplitude))(D.cycles)).attr("fill","none").attr("stroke",css("--unstable")).attr("stroke-width",1.6).attr("stroke-dasharray","5 4").attr("opacity",.9);
+    g.append("path").attr("d", amp.y(c=>py(xhi(c)))(D.cycles)).attr("fill","none").attr("stroke",css("--unstable")).attr("stroke-width",1.6).attr("stroke-dasharray","5 4").attr("opacity",.9);
+    g.append("path").attr("d", amp.y(c=>py(xlo(c)))(D.cycles)).attr("fill","none").attr("stroke",css("--unstable")).attr("stroke-width",1.6).attr("stroke-dasharray","5 4").attr("opacity",.9);
   }
   // special points
   for (const s of D.branch.special){
@@ -340,9 +340,9 @@ function drawTimeline(){
     g.append("text").attr("x",px(s.p)+(s.kind==="hopf"?-9:9)).attr("y",py(s.x)+(s.kind==="hopf"?18:-10)).attr("text-anchor",s.kind==="hopf"?"end":"start")
       .attr("fill",col).attr("font-size",12).attr("font-family","IBM Plex Sans").attr("font-weight",500).text(s.kind==="hopf"?"Hopf (subcritical)":"fold");
   }
-  if (D.cycles.length){ const c = D.cycles[0], xt = -Math.sqrt(-c.p);
-    for (const yy of [xt+c.amplitude, xt-c.amplitude]) g.append("circle").attr("cx",px(c.p)).attr("cy",py(yy)).attr("r",3.5).attr("fill",css("--panel")).attr("stroke",css("--unstable")).attr("stroke-width",1.6);
-    g.append("text").attr("x",px(c.p)-9).attr("y",py(xt+c.amplitude)+4).attr("text-anchor","end").attr("fill",css("--unstable")).attr("font-size",12).attr("font-family","IBM Plex Sans").attr("font-weight",500).text("homoclinic"); }
+  if (D.cycles.length){ const c = D.cycles[0];
+    for (const yy of [xhi(c), xlo(c)]) g.append("circle").attr("cx",px(c.p)).attr("cy",py(yy)).attr("r",3.5).attr("fill",css("--panel")).attr("stroke",css("--unstable")).attr("stroke-width",1.6);
+    g.append("text").attr("x",px(c.p)-9).attr("y",py(xhi(c))+4).attr("text-anchor","end").attr("fill",css("--unstable")).attr("font-size",12).attr("font-family","IBM Plex Sans").attr("font-weight",500).text("homoclinic"); }
   // playhead
   const ph = g.append("g").attr("class","ph");
   ph.append("line").attr("y1",m.t-6).attr("y2",m.t+ih).attr("stroke",css("--ink")).attr("stroke-width",1.4);
