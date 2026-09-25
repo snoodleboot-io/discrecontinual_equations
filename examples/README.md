@@ -44,7 +44,7 @@ python examples/build_sites.py --list            # names and rough timings
 ```
 
 Three kinds of example are handled. Those that write self-contained HTML (the
-continuation atlas and its two playable stages) are handed the output
+continuation atlas and its ten stage films) are handed the output
 directory; those that write PNG and HTML beside their own source have the
 figures they just wrote harvested into a gallery page; and those that only
 print have their console output made into a page.
@@ -61,6 +61,42 @@ keeps in its cache) and points Plotly at it; if there is none, run
 
 Everything is written locally and nothing is uploaded. The output directory is
 build output and is not tracked.
+
+## Stage films
+
+A stage film is one self-contained page per bifurcation: the flow drawn as
+advected particles, the equilibria and cycles standing on top of it, a spectral
+clock, and a bifurcation diagram you scrub to move the parameter. Each one
+builds on its own, writing its page and a one-card atlas into the directory you
+name:
+
+```bash
+uv run python -m examples.continuation.stage_hopf plots
+```
+
+Swap the module for any of the ten. Roughly how long each takes, and what it is
+for:
+
+| Module | Minutes | What it shows |
+| --- | --- | --- |
+| `stage_hopf` | ~1 | The canonical Hopf: a pair crosses, a cycle of radius √μ opens |
+| `stage_fold_of_cycles` | ~4 | Two cycles meeting and annihilating at a fold |
+| `stage_van_der_pol` | ~3 | A relaxation oscillator stiffening as μ grows |
+| `stage_snic` | ~6 | A cycle whose period runs to infinity as two equilibria land on it |
+| `stage_extended_bautin` | ~2 | Three nested cycles at once, between two folds of cycles |
+| `stage_zero_hopf` | ~2 | A fold that produces not two points but two circles |
+| `stage_hopf_hopf` | ~2 | Four eigenvalues on the clock, one pair crossing |
+| `stage_shilnikov` | ~1 | A saddle-focus whose saddle index crosses one |
+| `stage_bogdanov_takens` | ~5 | Fold, Hopf and homoclinic meeting at one point |
+| `stage_ferroelectric_ring` | ~5 | A unidirectionally coupled ring of three cells |
+
+The cycle branches dominate those timings: `CycleContinuation` builds a dense
+finite-difference Jacobian at every step, so a film with cycles costs about a
+second per continuation step at 80 mesh intervals. The two films without one
+(`stage_shilnikov`, and the equilibrium half of the rest) are the quick ones.
+
+`build_sites.py` builds all ten as part of the `continuation` example, along
+with the rest of the atlas.
 
 ## Running Examples
 

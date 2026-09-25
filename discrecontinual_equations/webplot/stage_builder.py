@@ -356,36 +356,69 @@ def _jacobian(function, point: np.ndarray) -> np.ndarray:
         return np.column_stack(columns)
 
 
+def sheets(cycles: list[Cycle]) -> list[list[int]]:
+    """The cycle branch split into runs that are monotone in the parameter.
+
+    A branch that folds visits the same parameter on each of its sheets, and a
+    fold is exactly where the traced parameter turns around. Splitting there is
+    what separates two genuinely distinct orbits from one orbit sampled twice,
+    which no test on the parameter alone can tell apart: both look like two
+    points at one value. The turning point belongs to the sheets on either
+    side of it, since at a fold the two orbits really do coincide.
+    """
+    if not cycles:
+        return []
+    runs: list[list[int]] = [[0]]
+    sense = 0.0
+    for index in range(1, len(cycles)):
+        step = cycles[index].parameter - cycles[index - 1].parameter
+        if sense and step * sense < 0.0:
+            runs.append([index - 1])
+            sense = 0.0
+        runs[-1].append(index)
+        if step:
+            sense = step
+    return runs
+
+
 def cycles_at(cycles: list[Cycle], value: float, spacing: float) -> list[int]:
     """Every distinct cycle at ``value``, smallest orbit first.
 
     A folded cycle branch carries two cycles at the same parameter - a stable
     and an unstable one - and taking only the nearest of them would hide half
-    the picture and flicker between the two as the parameter moves.
+    the picture and flicker between the two as the parameter moves. So each
+    sheet of the branch contributes the one point of its own that sits nearest
+    ``value``, and a sheet contributes nothing where it does not reach.
 
-    Traced points crowd together in the parameter wherever the branch turns, so
-    a point whose amplitude matches one already taken is that same orbit
-    sampled twice and is left out. The tolerance is a fraction of the whole
-    branch's amplitude range rather than of the amplitudes being compared, so
-    it does not tighten as the orbits shrink: near a Hopf, where the inner
-    cycle is vanishing and many traced points share a parameter, a relative
-    test kept all of them. At a fold the two cycles genuinely coincide, and one
-    is then what this returns.
+    Asking each sheet for its nearest point, rather than taking every point
+    inside a window, is what makes this independent of how densely the branch
+    happened to be traced. A window wide enough to catch a coarsely stepped
+    sheet took two neighbours from a finely stepped one and drew a second
+    circle that was not there; a window narrow enough to avoid that lost whole
+    sheets. The sheet's own range is the honest question, and the half-frame
+    of slack past its ends only lets a sheet still draw on the frame just
+    beyond its last traced point.
+
+    At a fold the two sheets share their turning point and report the same
+    orbit twice, so an amplitude test still has the last word. Its tolerance
+    is a fraction of the whole branch's amplitude range rather than of the
+    amplitudes being compared, so it does not tighten as the orbits shrink.
     """
     if not cycles:
         return []
     amplitudes = [cycle.amplitude for cycle in cycles]
     tolerance = _DISTINCT_ORBIT * (max(amplitudes) - min(amplitudes))
-    near = sorted(
-        (
-            index
-            for index, cycle in enumerate(cycles)
-            if abs(cycle.parameter - value) <= _HALF * spacing
-        ),
-        key=lambda index: abs(cycles[index].parameter - value),
-    )
+    slack = _HALF * spacing
+    nearest: list[int] = []
+    for run in sheets(cycles):
+        low = min(cycles[index].parameter for index in run)
+        high = max(cycles[index].parameter for index in run)
+        if low - slack <= value <= high + slack:
+            nearest.append(
+                min(run, key=lambda index: abs(cycles[index].parameter - value)),
+            )
     taken: list[int] = []
-    for index in near:
+    for index in sorted(nearest, key=lambda i: abs(cycles[i].parameter - value)):
         amplitude = cycles[index].amplitude
         if all(abs(cycles[other].amplitude - amplitude) > tolerance for other in taken):
             taken.append(index)

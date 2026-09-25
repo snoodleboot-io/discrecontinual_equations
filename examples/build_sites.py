@@ -72,8 +72,8 @@ EXAMPLES: tuple[Example, ...] = (
         "Continuation and bifurcation atlas",
         "Self-contained pages for equilibrium branches, codimension-1, -2 and "
         "-3 bifurcations, parameter-family surfaces, exploration trees and "
-        "connecting orbits, plus two playable stages.",
-        25.0,
+        "connecting orbits, plus ten scrubbable stage films.",
+        33.0,
     ),
     Example(
         "lorenz",

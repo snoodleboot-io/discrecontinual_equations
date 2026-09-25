@@ -95,18 +95,22 @@ def continue_branch(
 ) -> Branch:
     """Continue an equilibrium of ``eq`` across ``span`` from ``seed``.
 
-    The parameter starts at the low end of the span and travels up, with a
-    little room beyond each end so a bifurcation sitting on the boundary is
-    still crossed and detected rather than clipped.
+    ``span`` is travelled in the order it is given: ``(low, high)`` starts at
+    the low end and climbs, ``(high, low)`` starts at the high end and
+    descends. A branch whose equilibria exist only on one side of a fold has
+    to be entered from that side. Either way there is a little room beyond
+    each end, so a bifurcation sitting on the boundary is crossed and detected
+    rather than clipped.
     """
-    low, high = span
+    start, finish = span
+    low, high = min(span), max(span)
     ensure_registry()
-    eq.derivative.parameters[0].value = low
+    eq.derivative.parameters[0].value = start
     config = ContinuationConfig(
         continuation_parameter_index=0,
         detectors=list(detectors),
-        initial_parameter=low,
-        direction=1,
+        initial_parameter=start,
+        direction=1 if finish > start else -1,
         measure="component",
         parameter_lower_bound=low - 0.05,
         parameter_upper_bound=high + 0.05,
