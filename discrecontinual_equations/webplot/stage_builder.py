@@ -132,7 +132,8 @@ def stage_scene(
     parameter = function.parameters[continued.parameter_index]
     spacing = _spacing(film.frames)
     cycles = CycleBranch(
-        [_cycle(point) for point in continued.cycles], continued.terminus,
+        [_cycle(point) for point in continued.cycles],
+        continued.terminus,
     )
     frames: list[Frame] = []
     for value in film.frames:
@@ -327,13 +328,15 @@ def _spacing(frames: Sequence[float]) -> float:
 
 
 def _cycle(point: CyclePoint) -> Cycle:
-    return Cycle(
+    cycle = Cycle(
         float(point.parameter),
         float(point.solution.period),
         float(point.amplitude),
         [(float(m.real), float(m.imag)) for m in point.multipliers],
         [(float(x), float(y)) for x, y in point.solution.states],
     )
+    cycle.error = float(point.floquet_error)
+    return cycle
 
 
 def _branch_point(point: ContinuationPoint) -> BranchPoint:

@@ -250,6 +250,7 @@ function blendEquilibria(A, B, f, near){
 function blendCycle(cA, cB, f){
   if (cA && cB) return {p: lerp(cA.p, cB.p, f), period: lerp(cA.period, cB.period, f),
     amplitude: lerp(cA.amplitude, cB.amplitude, f), alpha: 1,
+    error: lerp(cA.error || 0, cB.error || 0, f),
     multipliers: blendNearest(cA.multipliers, cB.multipliers, f),
     states: blendPairs(cA.states, cB.states, f)};
   if (cA) return {...cA, alpha: 1 - f};
@@ -429,13 +430,17 @@ function drawClock(){
     }
   }
   if (fr.cycle !== null){
+    const trivial = fr.cycle.multipliers.reduce((best, m) =>
+      Math.hypot(m[0]-1, m[1]) < Math.hypot(best[0]-1, best[1]) ? m : best);
     for (const [re0,im0] of fr.cycle.multipliers){
       const mod = Math.hypot(re0, im0), off = mod > 2.2, s = off ? 2.2/mod : 1;
       const re = re0*s, im = im0*s;
+      const isTrivial = re0 === trivial[0] && im0 === trivial[1];
       clock.append("rect").attr("x",X(re)-4.5).attr("y",Y(im)-4.5)
         .attr("width",9).attr("height",9)
         .attr("opacity", (off ? .55 : 1) * fr.cycle.alpha)
-        .attr("fill",css("--panel")).attr("stroke",css("--unstable"))
+        .attr("fill",css("--panel"))
+        .attr("stroke",css(isTrivial ? "--faint" : "--unstable"))
         .attr("stroke-width",1.8).attr("transform",`rotate(45 ${X(re)} ${Y(im)})`);
       if (off) label(clock, X(re)+(re>=0?-8:8), Y(im)-9,
         `|${MU}| = ${mod.toFixed(0)} →`, css("--unstable"), re>=0?"end":"start");
@@ -588,10 +593,16 @@ function readouts(){
   const cs = document.getElementById("ro-cycle-sub");
   if (fr.cycle !== null){
     const c = fr.cycle, mods = c.multipliers.map(([a,b])=>Math.hypot(a,b));
+    const err = c.error || 0, pct = (100*err).toFixed(err < 0.01 ? 2 : 1);
     cv.textContent = `T = ${c.period.toFixed(2)}`;
+    cv.style.color = err > 0.02 ? css("--hopf") : "";
     cs.textContent = `|${MU}| = ${mods.map(m=>m.toFixed(3)).join(", ")} ${DOT} `
-      + `amplitude ${c.amplitude.toFixed(3)}`;
-  } else { cv.textContent = "—"; cs.textContent = `no cycle at this ${PARAM}`; }
+      + `amplitude ${c.amplitude.toFixed(3)} ${DOT} Floquet ±${pct}% `
+      + `(trivial ${MU} off 1)`;
+  } else {
+    cv.textContent = "\u2014"; cv.style.color = "";
+    cs.textContent = `no cycle at this ${PARAM}`;
+  }
   document.getElementById("ro-regime").textContent = fr.label || genericRegime(fr);
 }
 
@@ -702,6 +713,9 @@ _BODY = """
         <span><span class="dot" style="background:transparent;
           border:1.5px solid var(--unstable);border-radius:1px"></span>Floquet
           &mu;</span>
+        <span><span class="dot" style="background:transparent;
+          border:1.5px solid var(--faint);border-radius:1px"></span>trivial &mu;
+          (should be 1; its drift is the error)</span>
       </div>
     </section>
   </div>

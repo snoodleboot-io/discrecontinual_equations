@@ -76,9 +76,13 @@ class Manifold:
 
 
 class Cycle:
-    """A cycle on the branch: its orbit, period, and Floquet multipliers."""
+    """A cycle on the branch: its orbit, period, and Floquet multipliers.
 
-    __slots__ = ["amplitude", "multipliers", "parameter", "period", "states"]
+    ``error`` is the trivial multiplier's distance from one, which bounds how
+    far every multiplier is from its true value; it is drawn with them.
+    """
+
+    __slots__ = ["amplitude", "error", "multipliers", "parameter", "period", "states"]
 
     def __init__(
         self,
@@ -93,6 +97,7 @@ class Cycle:
         self.amplitude = amplitude
         self.multipliers = multipliers
         self.states = states
+        self.error: float = 0.0
 
 
 class CycleBranch:
@@ -261,6 +266,7 @@ def stage_payload(scene: StageScene) -> dict:
                 "period": _num(cycle.period),
                 "amplitude": _num(cycle.amplitude),
                 "multipliers": _pairs(cycle.multipliers),
+                "error": _num(cycle.error),
                 "states": _pairs(cycle.states),
             }
             for cycle in scene.cycles.cycles

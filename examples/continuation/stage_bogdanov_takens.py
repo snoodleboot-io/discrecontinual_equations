@@ -45,7 +45,9 @@ from discrecontinual_equations.webplot.stage_renderer import StageRenderer
 B2 = 0.5
 P_LO, P_HI, FRAMES = -0.6, 0.1, 57
 BOX = ((-1.25, 0.9), (-0.85, 0.85))
-INTERVALS = 80
+# 320 nodes hold the Floquet error near 0.6% up to the homoclinic approach; 80
+# gave 9%, and the multipliers are forty times more sensitive than the period.
+INTERVALS = 320
 GRID = 36
 # The cycle continuation is seeded this far below the Hopf, where the cycle is
 # large enough to be found by integration but still far from the homoclinic.
@@ -232,9 +234,11 @@ def bogdanov_takens_stage() -> StageScene:
             "reversed-time integration because the cycle is unstable; saddle "
             "manifolds started on their Taylor charts and carried by the flow; "
             "field sampled on a 36\u00d736 grid per frame. The cycle continuation "
-            "stops where the fixed 80-node mesh can no longer resolve the orbit "
+            "stops where the fixed 320-node mesh can no longer resolve the orbit "
             "hugging the saddle; the manifolds carry the homoclinic the rest of "
-            "the way."
+            "the way. The Floquet readout carries its own error: one multiplier "
+            "is exactly 1 along the orbit, and how far the computed one sits from "
+            "1 is how far all of them are off."
         ),
     )
     scene = stage_scene(

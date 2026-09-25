@@ -210,6 +210,7 @@ class TestPayloadAndRenderer(TestCase):
             [(1.0, 0.0), (0.5, 0.0)],
             [(0.5, 0.0), (0.0, 0.5)],
         )
+        cycle.error = 0.03
         system = StageSystem(
             "Focus & cycle",
             "A <test> subtitle",
@@ -236,6 +237,7 @@ class TestPayloadAndRenderer(TestCase):
         eig = payload["frames"][0]["equilibria"][0]["eig"]
         assert eig == [[-1.0, 2.0], [-1.0, -2.0]]
         assert payload["cycles"][0]["multipliers"] == [[1.0, 0.0], [0.5, 0.0]]
+        assert payload["cycles"][0]["error"] == 0.03
 
     def test_renderer_embeds_everything_and_leaves_no_placeholder(self):
         html = StageRenderer(library="/*d3*/").render(self._scene())

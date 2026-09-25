@@ -57,15 +57,15 @@ measurements whether or not it can certify an answer.
 study = orbit.continue_to_resolved(0, target_mu, seed, seed_period)
 
 for level in study.levels:
-    level.intervals   # node count tried
-    level.period      # None if the continuation stalled here
-    level.agreement   # relative shift from the previous level that arrived
+    level.intervals  # node count tried
+    level.period  # None if the continuation stalled here
+    level.agreement  # relative shift from the previous level that arrived
 
 if study.resolved is not None:
-    study.resolved.intervals   # certified node count
-    study.resolved.estimate    # the agreement that certified it
+    study.resolved.intervals  # certified node count
+    study.resolved.estimate  # the agreement that certified it
 else:
-    study.best                 # finest level that arrived, uncertified
+    study.best  # finest level that arrived, uncertified
 ```
 
 It reruns the continuation at successively doubled meshes. A level is certified only
@@ -95,6 +95,27 @@ That makes it expensive — one full continuation per resolution. Use
 `estimate_period_error` to screen a cycle already in hand for gross error, and
 `continue_to_resolved` when the node count is not known or the number matters.
 
+## Trusting a cycle's Floquet multipliers
+
+One multiplier of every cycle is exactly `1` — the direction along the orbit. The
+computed one is not, and its distance from `1` is the error of the whole set:
+`CyclePoint.floquet_error`. The monodromy is integrated along the *discrete* orbit,
+so an under-resolved mesh shifts every multiplier, and by far more than it shifts
+the period. Measured on a Bogdanov–Takens cycle hugging a saddle, true nontrivial
+multiplier 6.163:
+
+| nodes | period error | trivial multiplier | nontrivial |
+|---|---|---|---|
+| 80 | 0.22% | 0.911 (**8.9% off**) | 6.596 |
+| 160 | 0.06% | 0.975 (2.5%) | 6.278 |
+| 320 | 0.01% | 0.994 (0.6%) | 6.192 |
+| 640 | 0.004% | 0.998 (0.2%) | 6.170 |
+
+Second order in the mesh, forty times more sensitive than the period. The
+quadrature is not the limit — on the exact orbit sampled at 80 nodes it returns
+the multipliers to four figures — so more substeps do nothing; only nodes help.
+Stage pages print the error beside the multipliers and draw the trivial one grey.
+
 ## Trusting a computed connecting orbit
 
 A homoclinic or heteroclinic orbit has **two** independent resolutions, and either
@@ -113,11 +134,11 @@ neither a failure signal nor the residual size carries the information.
 ```python
 resolution = orbit.estimate_orbit_error(solution)
 if resolution.estimate < 1.0e-4:
-    ...                             # trustworthy to about that much
+    ...  # trustworthy to about that much
 elif resolution.limited_by == "spacing":
-    ...                             # halve h: divides discretisation error by 4
+    ...  # halve h: divides discretisation error by 4
 else:
-    ...                             # extend T by ln(4) / (2 * lambda) for the same
+    ...  # extend T by ln(4) / (2 * lambda) for the same
 ```
 
 It re-solves twice — once at doubled intervals, once on a slightly longer interval
