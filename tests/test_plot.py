@@ -1,9 +1,15 @@
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest import TestCase
 from unittest.mock import patch
 
 from discrecontinual_equations.function.function import Function
 from discrecontinual_equations.parameter import Parameter
+from discrecontinual_equations.plot.bifurcation_plot import BifurcationPlot
+from discrecontinual_equations.plot.delay_plot import DelayPlot
 from discrecontinual_equations.plot.line_plot import LinePlot
+from discrecontinual_equations.plot.phase_plot import PhasePlot
+from discrecontinual_equations.plot.spectrum_plot import SpectrumPlot
 from discrecontinual_equations.variable import Variable
 
 
@@ -61,3 +67,15 @@ class TestPlot(TestCase):
             title="Oscillator",
         )
         print(oscillator.curve)
+
+
+class TestOutputDirectory(TestCase):
+    """A plotter creates where it was told to write, rather than failing there."""
+
+    def test_every_plotter_creates_a_missing_directory(self):
+        plotters = (LinePlot, PhasePlot, DelayPlot, SpectrumPlot, BifurcationPlot)
+        for plotter in plotters:
+            with TemporaryDirectory() as parent:
+                target = Path(parent) / "images" / "nested"
+                plotter(output_dir=str(target))
+                assert target.is_dir(), plotter.__name__

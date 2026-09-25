@@ -32,6 +32,36 @@ This directory contains example scripts demonstrating the usage of the discrecon
 - Implements nonlinear equations with absolute values and fractional powers
 - Analyzes system behavior and stability properties
 
+## Building a site of every example
+
+`build_sites.py` runs every example in its own process and gathers what each
+one writes into a single directory with an index page linking them all:
+
+```bash
+python examples/build_sites.py                   # everything, into examples_site/
+python examples/build_sites.py out --only lorenz thaler
+python examples/build_sites.py --list            # names and rough timings
+```
+
+Three kinds of example are handled. Those that write self-contained HTML (the
+continuation atlas and its two playable stages) are handed the output
+directory; those that write PNG and HTML beside their own source have the
+figures they just wrote harvested into a gallery page; and those that only
+print have their console output made into a page.
+
+Each example runs with a timeout and its own process, so one failure does not
+stop the rest - the report at the end names what failed and the exit status is
+non-zero. `--jobs` runs several at once, which is worth it because the atlas
+takes far longer than everything else put together.
+
+Still images come from Plotly, which drives a real browser to export them. The
+script finds an installed Chrome or Chromium (including the copy Playwright
+keeps in its cache) and points Plotly at it; if there is none, run
+`plotly_get_chrome` once and the figures will export.
+
+Everything is written locally and nothing is uploaded. The output directory is
+build output and is not tracked.
+
 ## Running Examples
 
 Each example can be run directly:
