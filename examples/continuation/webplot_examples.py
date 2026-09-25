@@ -106,16 +106,26 @@ from discrecontinual_equations.webplot.stage_renderer import StageRenderer
 
 try:  # python -m examples.continuation.webplot_examples
     from examples.continuation import stage_bogdanov_takens as bt
+    from examples.continuation import stage_extended_bautin as bautin
     from examples.continuation import stage_ferroelectric_ring as ring
     from examples.continuation import stage_fold_of_cycles as fold
+    from examples.continuation import stage_hopf as hopf
+    from examples.continuation import stage_hopf_hopf as hopfhopf
+    from examples.continuation import stage_shilnikov as shilnikov
     from examples.continuation import stage_snic as snic
     from examples.continuation import stage_van_der_pol as vdp
+    from examples.continuation import stage_zero_hopf as zerohopf
 except ImportError:  # run as a script path: only this directory is on sys.path
     import stage_bogdanov_takens as bt
+    import stage_extended_bautin as bautin
     import stage_ferroelectric_ring as ring
     import stage_fold_of_cycles as fold
+    import stage_hopf as hopf
+    import stage_hopf_hopf as hopfhopf
+    import stage_shilnikov as shilnikov
     import stage_snic as snic
     import stage_van_der_pol as vdp
+    import stage_zero_hopf as zerohopf
 
 MU = "\u03bc"
 ALPHA = "\u03b1"
@@ -2419,6 +2429,19 @@ def _stages() -> tuple[tuple, ...]:
         (vdp.van_der_pol_stage, vdp.STAGE_FILENAME, vdp.STAGE_ENTRY),
         (snic.snic_stage, snic.STAGE_FILENAME, snic.STAGE_ENTRY),
         (fold.fold_of_cycles_stage, fold.STAGE_FILENAME, fold.STAGE_ENTRY),
+        (hopf.hopf_stage, hopf.STAGE_FILENAME, hopf.STAGE_ENTRY),
+        (
+            bautin.extended_bautin_stage,
+            bautin.STAGE_FILENAME,
+            bautin.STAGE_ENTRY,
+        ),
+        (zerohopf.zero_hopf_stage, zerohopf.STAGE_FILENAME, zerohopf.STAGE_ENTRY),
+        (hopfhopf.hopf_hopf_stage, hopfhopf.STAGE_FILENAME, hopfhopf.STAGE_ENTRY),
+        (
+            shilnikov.shilnikov_stage,
+            shilnikov.STAGE_FILENAME,
+            shilnikov.STAGE_ENTRY,
+        ),
     )
 
 

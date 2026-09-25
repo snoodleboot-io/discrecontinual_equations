@@ -39,6 +39,7 @@ from discrecontinual_equations.webplot.stage_builder import (
     frame_equilibria,
     saddle_manifolds,
     sample_field,
+    sheets,
     stage_scene,
 )
 from discrecontinual_equations.webplot.stage_renderer import StageRenderer
@@ -139,6 +140,38 @@ class TestFrameEquilibria(TestCase):
         assert frame_equilibria(_saddle_branch(), 2.0) == []
 
 
+class TestSheets(TestCase):
+    """A branch is split where its parameter turns, which is where it folds."""
+
+    @staticmethod
+    def _cycles(*parameters: float) -> list[Cycle]:
+        return [Cycle(p, 6.0, 0.5, [(1.0, 0.0)], [(0.0, 0.0)]) for p in parameters]
+
+    def test_a_branch_that_never_turns_is_one_sheet(self):
+        assert sheets(self._cycles(0.0, 0.1, 0.2, 0.3)) == [[0, 1, 2, 3]]
+        assert sheets(self._cycles(0.3, 0.2, 0.1)) == [[0, 1, 2]]
+        assert sheets([]) == []
+
+    def test_the_turning_point_belongs_to_both_sheets(self):
+        """At a fold the two orbits coincide, so the point is on each side."""
+        assert sheets(self._cycles(0.3, 0.1, 0.0, 0.1, 0.3)) == [
+            [0, 1, 2],
+            [2, 3, 4],
+        ]
+
+    def test_a_branch_that_folds_twice_is_three_sheets(self):
+        """The extended Bautin branch: down, back up, and down again."""
+        assert sheets(self._cycles(0.9, 0.3, 0.5, 0.8, 0.4, 0.0)) == [
+            [0, 1],
+            [1, 2, 3],
+            [3, 4, 5],
+        ]
+
+    def test_a_repeated_parameter_does_not_split_the_sheet(self):
+        """A stalled step is not a fold; the sense carries across it."""
+        assert sheets(self._cycles(0.3, 0.2, 0.2, 0.1)) == [[0, 1, 2, 3]]
+
+
 class TestCyclesAt(TestCase):
     """A frame takes every cycle at its parameter, not just the nearest."""
 
@@ -153,9 +186,37 @@ class TestCyclesAt(TestCase):
         assert cycles_at([], 0.0, 0.1) == []
 
     def test_takes_both_cycles_of_a_folded_branch(self):
-        """Two cycles at one parameter differ in amplitude, so both are kept."""
-        cycles = [self._cycle(0.0, 0.9), self._cycle(0.0, 0.3)]
-        assert sorted(cycles_at(cycles, 0.0, 0.1)) == [0, 1]
+        """A branch that turns around visits 0.2 on each of its two sheets.
+
+        The points are in branch order, which is what says the two orbits at
+        0.2 are on opposite sides of the fold rather than one orbit traced
+        twice over.
+        """
+        cycles = [
+            self._cycle(0.4, 0.9),
+            self._cycle(0.2, 0.8),
+            self._cycle(0.0, 0.7),
+            self._cycle(0.2, 0.45),
+            self._cycle(0.4, 0.3),
+        ]
+        assert sorted(cycles_at(cycles, 0.2, 0.1)) == [1, 3]
+
+    def test_asks_each_sheet_for_its_own_nearest_point(self):
+        """A coarsely traced sheet still draws; a finely traced one draws once.
+
+        The outer sheet steps by 0.2 and the inner by 0.02. One window cannot
+        serve both: wide enough for the outer takes two neighbours from the
+        inner, narrow enough for the inner loses the outer entirely.
+        """
+        cycles = [
+            self._cycle(0.4, 0.9),
+            self._cycle(0.2, 0.8),
+            self._cycle(0.0, 0.7),
+            self._cycle(0.02, 0.45),
+            self._cycle(0.04, 0.44),
+            self._cycle(0.06, 0.43),
+        ]
+        assert sorted(cycles_at(cycles, 0.03, 0.02)) == [2, 3]
 
     def test_leaves_out_the_same_orbit_sampled_twice(self):
         """Traced points crowd in the parameter where the branch turns.
@@ -189,8 +250,14 @@ class TestCyclesAt(TestCase):
 
     def test_reports_the_smallest_orbit_first(self):
         """So the order does not flip with which point sat nearest."""
-        cycles = [self._cycle(0.001, 0.9), self._cycle(0.0, 0.3)]
-        assert cycles_at(cycles, 0.0, 0.1) == [1, 0]
+        cycles = [
+            self._cycle(0.3, 0.95),
+            self._cycle(0.1, 0.9),
+            self._cycle(0.0, 0.7),
+            self._cycle(0.1, 0.3),
+            self._cycle(0.3, 0.25),
+        ]
+        assert cycles_at(cycles, 0.1, 0.1) == [3, 1]
 
 
 class TestStageScene(TestCase):
