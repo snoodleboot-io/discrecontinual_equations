@@ -213,6 +213,66 @@ function frameAt(tt){
 function paramAt(tt){ const {i,j,f} = frameAt(tt); return F[i].p*(1-f) + F[j].p*f; }
 function nearestFrame(){ return F[Math.round(t)]; }
 
+// ---------- a view between frames: the skeleton blended, not snapped ----------
+const lerp = (a, b, f) => a + (b - a) * f;
+function blendPairs(A, B, f){
+  const n = Math.min(A.length, B.length), out = new Array(n);
+  for (let k=0;k<n;k++) out[k] = [lerp(A[k][0],B[k][0],f), lerp(A[k][1],B[k][1],f)];
+  return out;
+}
+function blendNearest(A, B, f){
+  const used = new Set();
+  return A.map(a => {
+    let best = -1, dist = Infinity;
+    B.forEach((b, k) => {
+      const d = Math.hypot(a[0]-b[0], a[1]-b[1]);
+      if (!used.has(k) && d < dist){ dist = d; best = k; }
+    });
+    if (best < 0) return a;
+    used.add(best);
+    return [lerp(a[0],B[best][0],f), lerp(a[1],B[best][1],f)];
+  });
+}
+function cycleOf(frame){ return frame.cycle === null ? null : D.cycles[frame.cycle]; }
+function blendEquilibria(A, B, f, near){
+  const out = [];
+  for (const e of A.equilibria){
+    const saddle = e.stability === "saddle";
+    const twins = B.equilibria.filter(x => (x.stability === "saddle") === saddle);
+    if (!twins.length) continue;
+    const gap = x => Math.hypot(x.x - e.x, x.y - e.y);
+    const m = twins.reduce((best, x) => gap(x) < gap(best) ? x : best);
+    out.push({x: lerp(e.x, m.x, f), y: lerp(e.y, m.y, f),
+      stability: (near === A ? e : m).stability, eig: blendNearest(e.eig, m.eig, f)});
+  }
+  return out.length ? out : near.equilibria;
+}
+function blendCycle(cA, cB, f){
+  if (cA && cB) return {p: lerp(cA.p, cB.p, f), period: lerp(cA.period, cB.period, f),
+    amplitude: lerp(cA.amplitude, cB.amplitude, f), alpha: 1,
+    multipliers: blendNearest(cA.multipliers, cB.multipliers, f),
+    states: blendPairs(cA.states, cB.states, f)};
+  if (cA) return {...cA, alpha: 1 - f};
+  if (cB) return {...cB, alpha: f};
+  return null;
+}
+function viewAt(tt){
+  const {i, j, f} = frameAt(tt); const A = F[i], B = F[j];
+  if (i === j || f < 1e-6){
+    const c = cycleOf(A);
+    return {p: A.p, equilibria: A.equilibria, manifolds: A.manifolds,
+      cycle: c ? {...c, alpha: 1} : null, label: A.label};
+  }
+  const near = f < 0.5 ? A : B;
+  const paired = A.manifolds.length === B.manifolds.length;
+  const manifolds = paired
+    ? A.manifolds.map((m, k) =>
+        ({kind: m.kind, points: blendPairs(m.points, B.manifolds[k].points, f)}))
+    : near.manifolds;
+  return {p: paramAt(tt), equilibria: blendEquilibria(A, B, f, near), manifolds,
+    cycle: blendCycle(cycleOf(A), cycleOf(B), f), label: near.label};
+}
+
 // ---------- field: bilinear in space, linear between frames ----------
 function fieldAt(x, y, out){
   const {i, j, f} = frameAt(t);
@@ -283,7 +343,7 @@ function label(sel, x, y, text, fill, anchor){
     .attr("text-anchor", anchor || "start").text(text);
 }
 function drawSkeleton(){
-  const fr = nearestFrame(); skel.selectAll("*").remove();
+  const fr = viewAt(t); skel.selectAll("*").remove();
   const line = d3.line().x(d=>sx(d[0])).y(d=>sy(d[1]));
   const glow = skel.append("defs").append("filter").attr("id","g")
     .attr("x","-50%").attr("y","-50%").attr("width","200%").attr("height","200%");
@@ -303,11 +363,11 @@ function drawSkeleton(){
     }
   }
   if (document.getElementById("l-cycle").checked && fr.cycle !== null){
-    const c = D.cycles[fr.cycle], unstable = isUnstable(c);
+    const c = fr.cycle, unstable = isUnstable(c);
     skel.append("path").attr("d", line(c.states)+"Z").attr("fill","none")
       .attr("stroke",css(unstable ? "--unstable" : "--stable"))
       .attr("stroke-width",2.2).attr("stroke-dasharray", unstable ? "7 5" : "none")
-      .attr("filter","url(#g)");
+      .attr("opacity", c.alpha).attr("filter","url(#g)");
   }
   for (const e of fr.equilibria){
     const col = colourOf(e.stability);
@@ -327,7 +387,7 @@ function drawSkeleton(){
 const clock = d3.select("#clock");
 const eigHistory = [];
 function drawClock(){
-  const fr = nearestFrame(); const r = clock.node().getBoundingClientRect();
+  const fr = viewAt(t); const r = clock.node().getBoundingClientRect();
   const cw = r.width, ch = r.height;
   clock.attr("viewBox",`0 0 ${cw} ${ch}`).selectAll("*").remove();
   const cx = cw/2, cy = ch/2 + 4;
@@ -369,11 +429,12 @@ function drawClock(){
     }
   }
   if (fr.cycle !== null){
-    for (const [re0,im0] of D.cycles[fr.cycle].multipliers){
+    for (const [re0,im0] of fr.cycle.multipliers){
       const mod = Math.hypot(re0, im0), off = mod > 2.2, s = off ? 2.2/mod : 1;
       const re = re0*s, im = im0*s;
       clock.append("rect").attr("x",X(re)-4.5).attr("y",Y(im)-4.5)
-        .attr("width",9).attr("height",9).attr("opacity", off ? .55 : 1)
+        .attr("width",9).attr("height",9)
+        .attr("opacity", (off ? .55 : 1) * fr.cycle.alpha)
         .attr("fill",css("--panel")).attr("stroke",css("--unstable"))
         .attr("stroke-width",1.8).attr("transform",`rotate(45 ${X(re)} ${Y(im)})`);
       if (off) label(clock, X(re)+(re>=0?-8:8), Y(im)-9,
@@ -497,12 +558,12 @@ function genericRegime(fr){
     .map(k => `${count[k]} ${k}`);
   let s = `${n} equilibri${n===1?"um":"a"}: ${parts.join(", ")}`;
   if (fr.cycle !== null){
-    s += ` ${DOT} ${isUnstable(D.cycles[fr.cycle]) ? "unstable" : "stable"} cycle`;
+    s += ` ${DOT} ${isUnstable(fr.cycle) ? "unstable" : "stable"} cycle`;
   }
   return s;
 }
 function readouts(){
-  const fr = nearestFrame();
+  const fr = viewAt(t);
   const focus = fr.equilibria.find(e=>e.stability!=="saddle");
   const saddle = fr.equilibria.find(e=>e.stability==="saddle");
   document.getElementById("ro-p").textContent = paramAt(t).toFixed(4);
@@ -526,7 +587,7 @@ function readouts(){
   const cv = document.getElementById("ro-cycle");
   const cs = document.getElementById("ro-cycle-sub");
   if (fr.cycle !== null){
-    const c = D.cycles[fr.cycle], mods = c.multipliers.map(([a,b])=>Math.hypot(a,b));
+    const c = fr.cycle, mods = c.multipliers.map(([a,b])=>Math.hypot(a,b));
     cv.textContent = `T = ${c.period.toFixed(2)}`;
     cs.textContent = `|${MU}| = ${mods.map(m=>m.toFixed(3)).join(", ")} ${DOT} `
       + `amplitude ${c.amplitude.toFixed(3)}`;
@@ -539,14 +600,8 @@ let lastFrame = -1;
 function setT(v){ t = clamp(v, 0, LAST); onFrame(); }
 function onFrame(){
   const k = Math.round(t);
-  if (k !== lastFrame){
-    lastFrame = k; pushHistory(); drawSkeleton(); drawClock(); readouts();
-  }
-  else {
-    document.getElementById("stage-p").textContent =
-      `${PARAM} = ${paramAt(t).toFixed(4)}`;
-    document.getElementById("ro-p").textContent = paramAt(t).toFixed(4);
-  }
+  if (k !== lastFrame){ lastFrame = k; pushHistory(); }
+  drawSkeleton(); drawClock(); readouts();
   if (drawTimeline.updatePlayhead) drawTimeline.updatePlayhead();
 }
 let last = performance.now();
