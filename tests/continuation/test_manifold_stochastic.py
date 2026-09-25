@@ -2206,3 +2206,39 @@ def _integrate(
         k4 = np.array(function.eval(point=list(current + step * k3), time=None))
         current = current + step / 6.0 * (k1 + 2.0 * k2 + 2.0 * k3 + k4)
     return current
+
+
+class TestManifoldChartOffTheOrigin(TestCase):
+    """The chart's constant term is the equilibrium; ``point`` must not add it twice.
+
+    Every other chart test sits its saddle at the origin, where adding the
+    equilibrium a second time changes nothing. At (1, 0) it moved every chart
+    point by (1, 0), so a manifold started from the chart began off the manifold.
+    """
+
+    def test_chart_starts_at_the_equilibrium(self):
+        class Shifted(DeterministicFunction):
+            def eval(self, point, time=None):  # noqa: ARG002 (base signature)
+                return [point[0] - 1.0, -point[1]]
+
+        function = Shifted(
+            variables=[State(), State()],
+            parameters=[Alpha(value=0.0)],
+            results=[State(), State()],
+            time=None,
+        )
+        equilibrium = np.array([1.0, 0.0])
+        jacobian = np.array([[1.0, 0.0], [0.0, -1.0]])
+        for selection, direction in (
+            (UnstableManifold(), np.array([1.0, 0.0])),
+            (StableManifold(), np.array([0.0, 1.0])),
+        ):
+            chart = TaylorManifold(order=4).compute(
+                function,
+                equilibrium,
+                jacobian,
+                selection,
+            )
+            assert np.allclose(chart.point([0.0]), equilibrium)
+            step = chart.point([1.0e-3]) - equilibrium
+            assert np.allclose(np.abs(step), 1.0e-3 * direction, atol=1.0e-9)

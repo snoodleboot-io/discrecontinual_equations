@@ -82,8 +82,13 @@ class ManifoldChart:
         return self._order
 
     def point(self, coordinates: list[float]) -> np.ndarray:
-        """Evaluate ``P(theta)`` - the state on the manifold at ``theta``."""
-        result = np.array(self._equilibrium, dtype=float)
+        """Evaluate ``P(theta)`` - the state on the manifold at ``theta``.
+
+        The series already carries the equilibrium as its constant term, so the
+        evaluation starts from zero. Starting from the equilibrium as well used to
+        add it twice, which every chart of an equilibrium at the origin hid.
+        """
+        result = np.zeros(len(self._coefficients))
         for i, series in enumerate(self._coefficients):
             for key, value in series.coefficients.items():
                 monomial = 1.0
