@@ -1,15 +1,19 @@
 """Render-agnostic description of a stage: a continuation as a film.
 
 A :class:`StageScene` is everything a browser needs to play a one-parameter
-continuation of a planar system as motion: the bifurcation diagram (the
-:class:`Timeline`), the cycle branch (a :class:`CycleBranch`), and for each
-:class:`Frame` along the parameter the vector field sampled on a
-:class:`Lattice` for particles to flow through, the equilibria with their
-eigenvalues, the saddle manifolds, and the cycle at that frame, if any. Like
-:class:`~.scene.Scene` it holds no drawing code, so a stage can be built and
-unit-tested without a browser, and :func:`stage_payload` turns it into the plain
-JSON the renderer embeds.
+continuation as motion: the bifurcation diagram (the :class:`Timeline`), the
+cycle branch (a :class:`CycleBranch`), and for each :class:`Frame` along the
+parameter the equilibria with their eigenvalues, the saddle manifolds, and the
+cycle at that frame, if any. A planar system's vector field is sampled on the
+:class:`Lattice` for particles to flow through; a higher-dimensional system is
+given a :class:`View` instead - a projection onto the plane and its field as
+polynomial :class:`Term` lists - and the particles are integrated in full
+dimension and drawn projected. Like :class:`~.scene.Scene` it holds no drawing
+code, so a stage can be built and unit-tested without a browser, and
+:func:`stage_payload` turns it into the plain JSON the renderer embeds.
 """
+
+from collections.abc import Sequence
 
 Pairs = list[tuple[float, float]]
 Box = tuple[tuple[float, float], tuple[float, float]]
@@ -35,10 +39,87 @@ class StageSystem:
         self.note = note
 
 
-class Lattice:
-    """The plane the film is shot on: its box, sampling grid, and axis names."""
+class Term:
+    """One monomial of a polynomial field: ``coefficient * p^q * prod x_j^e_j``.
 
-    __slots__ = ["box", "grid", "x_label", "y_label"]
+    ``exponents`` has one entry per state variable and ``parameter_power`` is the
+    power of the continuation parameter, so a field's dependence on the parameter
+    is exact in the browser rather than interpolated between frames.
+    """
+
+    __slots__ = ["coefficient", "exponents", "parameter_power"]
+
+    def __init__(
+        self,
+        coefficient: float,
+        exponents: Sequence[int],
+        parameter_power: int = 0,
+    ) -> None:
+        self.coefficient = coefficient
+        self.exponents = list(exponents)
+        self.parameter_power = parameter_power
+
+
+class View:
+    """How a higher-dimensional system is seen on the plane.
+
+    ``matrix`` is the ``2 x N`` linear projection from state to plane; ``bounds``
+    the ``N`` ranges particles are spawned in and culled outside of; ``field``
+    the system's polynomial right-hand side as one :class:`Term` list per
+    component, which the page integrates in full dimension.
+    """
+
+    __slots__ = ["bounds", "field", "matrix"]
+
+    def __init__(
+        self,
+        matrix: Sequence[Sequence[float]],
+        bounds: Sequence[tuple[float, float]],
+        field: Sequence[Sequence[Term]],
+    ) -> None:
+        self.matrix = [list(row) for row in matrix]
+        self.bounds = list(bounds)
+        self.field = [list(component) for component in field]
+
+    @property
+    def dimension(self) -> int:
+        return len(self.matrix[0])
+
+    def project(self, state: Sequence[float]) -> tuple[float, float]:
+        """The plane coordinates of ``state``."""
+        u = sum(m * float(s) for m, s in zip(self.matrix[0], state, strict=True))
+        v = sum(m * float(s) for m, s in zip(self.matrix[1], state, strict=True))
+        return u, v
+
+
+def evaluate_terms(
+    field: Sequence[Sequence[Term]],
+    state: Sequence[float],
+    parameter: float,
+) -> list[float]:
+    """Evaluate a polynomial field the way the page does, for checking it."""
+    values = []
+    for component in field:
+        total = 0.0
+        for term in component:
+            product = term.coefficient * parameter**term.parameter_power
+            for value, power in zip(state, term.exponents, strict=True):
+                if power:
+                    product *= float(value) ** power
+            total += product
+        values.append(total)
+    return values
+
+
+class Lattice:
+    """The plane the film is shot on: its box, sampling grid, and axis names.
+
+    A ``view`` makes the plane a projection of a higher-dimensional system; then
+    no field is sampled on the grid, and the particles are integrated in full
+    dimension from the view's polynomial field.
+    """
+
+    __slots__ = ["box", "grid", "view", "x_label", "y_label"]
 
     def __init__(
         self,
@@ -46,11 +127,13 @@ class Lattice:
         grid: int,
         x_label: str = "x",
         y_label: str = "y",
+        view: View | None = None,
     ) -> None:
         self.box = box
         self.grid = grid
         self.x_label = x_label
         self.y_label = y_label
+        self.view = view
 
 
 class Equilibrium:
@@ -118,10 +201,10 @@ class Frame:
     """One parameter value: the field, and the skeleton the flow reveals.
 
     ``field`` is the sampled vector field, ``2 * grid * grid`` floats in
-    row-major order (``u, v`` per node, rows of constant ``y``). ``cycle``
-    indexes the scene's cycle branch, or is ``None`` where no cycle exists.
-    ``label`` is an optional sentence naming the regime; the page composes one
-    otherwise.
+    row-major order (``u, v`` per node, rows of constant ``y``), or empty when
+    the lattice has a view. ``cycle`` indexes the scene's cycle branch, or is
+    ``None`` where no cycle exists. ``label`` is an optional sentence naming the
+    regime; the page composes one otherwise.
     """
 
     __slots__ = ["cycle", "equilibria", "field", "label", "manifolds", "parameter"]
@@ -143,7 +226,7 @@ class Frame:
 
 
 class BranchPoint:
-    """A point of the equilibrium branch, as the timeline draws it."""
+    """A point of an equilibrium branch, as the timeline draws it."""
 
     __slots__ = ["eigenvalues", "kind", "parameter", "stability", "x"]
 
@@ -163,7 +246,7 @@ class BranchPoint:
 
 
 class SpecialPoint:
-    """A detected bifurcation on the branch, with an optional display label."""
+    """A detected bifurcation on a branch, with an optional display label."""
 
     __slots__ = ["kind", "label", "parameter", "x"]
 
@@ -181,12 +264,20 @@ class SpecialPoint:
 
 
 class Timeline:
-    """The equilibrium branch as the timeline draws it, with its bifurcations."""
+    """The equilibrium branches as the timeline draws them, with bifurcations.
 
-    __slots__ = ["points", "special"]
+    Each arc is one continued branch; the timeline draws them separately so a
+    second branch does not get joined to the first by a spurious segment.
+    """
 
-    def __init__(self, points: list[BranchPoint], special: list[SpecialPoint]) -> None:
-        self.points = points
+    __slots__ = ["arcs", "special"]
+
+    def __init__(
+        self,
+        arcs: list[list[BranchPoint]],
+        special: list[SpecialPoint],
+    ) -> None:
+        self.arcs = arcs
         self.special = special
 
 
@@ -225,6 +316,30 @@ def _num(value: float) -> float:
     return round(float(value), _DECIMALS)
 
 
+def _field(values: list[float]) -> list[float]:
+    return [round(float(value), _FIELD_DECIMALS) for value in values]
+
+
+def _view_payload(view: View | None) -> dict | None:
+    if view is None:
+        return None
+    return {
+        "matrix": [[float(m) for m in row] for row in view.matrix],
+        "bounds": [[float(lo), float(hi)] for lo, hi in view.bounds],
+        "field": [
+            [
+                {
+                    "c": float(term.coefficient),
+                    "e": list(term.exponents),
+                    "q": int(term.parameter_power),
+                }
+                for term in component
+            ]
+            for component in view.field
+        ],
+    }
+
+
 def stage_payload(scene: StageScene) -> dict:
     """The scene as plain JSON-ready data, in the shape the page script reads."""
     system, lattice = scene.system, scene.lattice
@@ -239,16 +354,20 @@ def stage_payload(scene: StageScene) -> dict:
         },
         "box": {"x": list(lattice.box[0]), "y": list(lattice.box[1])},
         "grid": {"nx": lattice.grid, "ny": lattice.grid},
+        "view": _view_payload(lattice.view),
         "branch": {
-            "points": [
-                {
-                    "p": _num(point.parameter),
-                    "x": _num(point.x),
-                    "stability": point.stability,
-                    "kind": point.kind,
-                    "eig": _pairs(point.eigenvalues),
-                }
-                for point in scene.timeline.points
+            "arcs": [
+                [
+                    {
+                        "p": _num(point.parameter),
+                        "x": _num(point.x),
+                        "stability": point.stability,
+                        "kind": point.kind,
+                        "eig": _pairs(point.eigenvalues),
+                    }
+                    for point in arc
+                ]
+                for arc in scene.timeline.arcs
             ],
             "special": [
                 {
@@ -274,9 +393,7 @@ def stage_payload(scene: StageScene) -> dict:
         "frames": [
             {
                 "p": _num(frame.parameter),
-                "field": [
-                    round(float(value), _FIELD_DECIMALS) for value in frame.field
-                ],
+                "field": _field(frame.field),
                 "equilibria": [
                     {
                         "x": _num(item.x),

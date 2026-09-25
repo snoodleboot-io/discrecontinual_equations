@@ -170,7 +170,7 @@ _SCRIPT = r"""
 const D = window.__STAGE__;
 const css = k =>
   getComputedStyle(document.documentElement).getPropertyValue(k).trim();
-const F = D.frames, NX = D.grid.nx, NY = D.grid.ny;
+const F = D.frames, NX = D.grid.nx, NY = D.grid.ny, V = D.view;
 const [x0, x1] = D.box.x, [y0, y1] = D.box.y;
 const PARAM = D.system.parameter;
 const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -312,19 +312,34 @@ function fieldAt(x, y, out){
 }
 
 // ---------- stage: particles on canvas ----------
+// A planar system's particles ride the sampled grid. A system seen through a
+// view is integrated in its own dimension from the polynomial terms - exact in
+// the parameter - and only drawn projected, so what flows is the real flow.
 const canvas = document.getElementById("flow"), ctx = canvas.getContext("2d");
 const skel = d3.select("#skeleton");
 let W = 0, H = 0, dpr = 1;
 const sx = v => (v - x0) / (x1 - x0) * W, sy = v => H - (v - y0) / (y1 - y0) * H;
+const N = V ? V.matrix[0].length : 2;
 let P = [];
+function project(x){
+  const M = V.matrix; let u = 0, v = 0;
+  for (let j=0;j<N;j++){ u += M[0][j]*x[j]; v += M[1][j]*x[j]; }
+  return [u, v];
+}
 function spawn(p){
-  p[0] = x0 + Math.random()*(x1-x0); p[1] = y0 + Math.random()*(y1-y0);
-  p[2] = p[0]; p[3] = p[1]; p[4] = 40 + Math.random()*140;
+  if (V){
+    for (let j=0;j<N;j++){
+      const [lo,hi] = V.bounds[j]; p.x[j] = lo + Math.random()*(hi-lo);
+    }
+  } else { p.x[0] = x0 + Math.random()*(x1-x0); p.x[1] = y0 + Math.random()*(y1-y0); }
+  const q = V ? project(p.x) : p.x; p.u = q[0]; p.v = q[1];
+  p.age = 40 + Math.random()*140;
 }
 function setDensity(n){
   P = [];
   for (let k=0;k<n;k++){
-    const p=[0,0,0,0,0]; spawn(p); p[4] = Math.random()*180; P.push(p);
+    const p = {x: new Array(N).fill(0), u: 0, v: 0, age: 0};
+    spawn(p); p.age = Math.random()*180; P.push(p);
   }
 }
 function resize(){
@@ -337,7 +352,23 @@ function resize(){
   skel.attr("viewBox", `0 0 ${W} ${H}`);
   drawSkeleton(); drawClock(); drawTimeline();
 }
-const tmp = [0,0];
+const tmp = new Array(N).fill(0), mid = new Array(N).fill(0);
+function polyField(x, param, out){
+  for (let i=0;i<N;i++){
+    let total = 0;
+    for (const term of V.field[i]){
+      let m = term.c; if (term.q) m *= Math.pow(param, term.q);
+      for (let j=0;j<N;j++){
+        const e = term.e[j]; if (e === 1) m *= x[j]; else if (e) m *= Math.pow(x[j], e);
+      }
+      total += m;
+    }
+    out[i] = total;
+  }
+}
+function velocity(x, out){
+  if (V) polyField(x, paramAt(t), out); else fieldAt(x[0], x[1], out);
+}
 function stepParticles(){
   ctx.fillStyle = css("--panel"); ctx.globalAlpha = parseFloat(css("--fade"));
   ctx.fillRect(0,0,W,H); ctx.globalAlpha = 1;
@@ -346,14 +377,20 @@ function stepParticles(){
   const h = 0.022;
   ctx.beginPath();
   for (const p of P){
-    p[2] = p[0]; p[3] = p[1];
-    fieldAt(p[0], p[1], tmp); const u1 = tmp[0], v1 = tmp[1];
-    fieldAt(p[0] + 0.5*h*u1, p[1] + 0.5*h*v1, tmp);
-    p[0] += h*tmp[0]; p[1] += h*tmp[1]; p[4] -= 1;
-    const moved = Math.hypot(p[0]-p[2], p[1]-p[3]);
-    const gone = p[0] < x0 || p[0] > x1 || p[1] < y0 || p[1] > y1;
-    if (gone || p[4] <= 0 || moved < 1e-5 || moved > 0.25){ spawn(p); continue; }
-    ctx.moveTo(sx(p[2]), sy(p[3])); ctx.lineTo(sx(p[0]), sy(p[1]));
+    const pu = p.u, pv = p.v;
+    velocity(p.x, tmp);
+    for (let j=0;j<N;j++) mid[j] = p.x[j] + 0.5*h*tmp[j];
+    velocity(mid, tmp);
+    let out = false;
+    for (let j=0;j<N;j++){
+      p.x[j] += h*tmp[j];
+      if (V){ const [lo,hi] = V.bounds[j]; if (p.x[j] < lo || p.x[j] > hi) out = true; }
+    }
+    const q = V ? project(p.x) : p.x; p.u = q[0]; p.v = q[1]; p.age -= 1;
+    const moved = Math.hypot(p.u-pu, p.v-pv);
+    const gone = out || p.u < x0 || p.u > x1 || p.v < y0 || p.v > y1;
+    if (gone || p.age <= 0 || moved < 1e-5 || moved > 0.25){ spawn(p); continue; }
+    ctx.moveTo(sx(pu), sy(pv)); ctx.lineTo(sx(p.u), sy(p.v));
   }
   ctx.stroke();
 }
@@ -484,10 +521,10 @@ function drawTimeline(){
   const r = tl.node().getBoundingClientRect(); const tw = r.width, th = r.height;
   tl.attr("viewBox",`0 0 ${tw} ${th}`).selectAll("*").remove();
   const m = {l:56, r:22, t:18, b:34}; const iw = tw-m.l-m.r, ih = th-m.t-m.b;
-  const pts = D.branch.points;
+  const arcs = D.branch.arcs;
   const px = d3.scaleLinear().domain([F[0].p, F[LAST].p]).range([m.l, m.l+iw]);
   const xlo = c => d3.min(c.states, s=>s[0]), xhi = c => d3.max(c.states, s=>s[0]);
-  const xs = pts.map(d=>d.x).concat(D.cycles.flatMap(c => [xhi(c), xlo(c)]));
+  const xs = arcs.flat().map(d=>d.x).concat(D.cycles.flatMap(c => [xhi(c), xlo(c)]));
   const lo = d3.min(xs), hi = d3.max(xs), pad = Math.max(1e-6, (hi-lo)*0.08);
   const py = d3.scaleLinear().domain([lo-pad, hi+pad]).range([m.t+ih, m.t]);
   const g = tl.append("g");
@@ -510,20 +547,22 @@ function drawTimeline(){
   const line = d3.line().x(d=>px(d.p)).y(d=>py(d.x))
     .curve(d3.curveCatmullRom.alpha(0.5));
   const dashes = {stable:"none", saddle:"2 5", unstable:"8 5"};
-  let run = [];
-  const flush = () => {
-    if (run.length < 2) return;
-    const s = run[0].stability;
-    g.append("path").attr("d", line(run)).attr("fill","none")
-      .attr("stroke", colourOf(s)).attr("stroke-width",2.4)
-      .attr("stroke-dasharray", dashes[s] || "none");
-  };
-  for (const pt of pts){
-    if (run.length && run[run.length-1].stability !== pt.stability){
-      run.push(pt); flush(); run = [pt];
-    } else run.push(pt);
+  for (const pts of arcs){
+    let run = [];
+    const flush = () => {
+      if (run.length < 2) return;
+      const s = run[0].stability;
+      g.append("path").attr("d", line(run)).attr("fill","none")
+        .attr("stroke", colourOf(s)).attr("stroke-width",2.4)
+        .attr("stroke-dasharray", dashes[s] || "none");
+    };
+    for (const pt of pts){
+      if (run.length && run[run.length-1].stability !== pt.stability){
+        run.push(pt); flush(); run = [pt];
+      } else run.push(pt);
+    }
+    flush();
   }
-  flush();
   if (D.cycles.length){
     const unstable = D.cycles.some(isUnstable);
     const col = css(unstable ? "--unstable" : "--stable");

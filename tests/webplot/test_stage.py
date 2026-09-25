@@ -8,6 +8,8 @@ known in closed form, so every number the builder produces can be checked.
 import json
 from unittest import TestCase
 
+import pytest
+
 from discrecontinual_equations.continuation.branch import Branch
 from discrecontinual_equations.continuation.continuation_point import ContinuationPoint
 from discrecontinual_equations.differential_equation import DifferentialEquation
@@ -23,7 +25,10 @@ from discrecontinual_equations.webplot.stage import (
     Lattice,
     StageScene,
     StageSystem,
+    Term,
     Timeline,
+    View,
+    evaluate_terms,
     stage_payload,
 )
 from discrecontinual_equations.webplot.stage_builder import (
@@ -94,8 +99,11 @@ def _saddle_branch() -> Branch:
     return branch
 
 
+_SYSTEM = StageSystem("Saddle", "", "p")
+
+
 def _film(frames, box=_UNIT, grid=3, describe=None) -> Film:
-    return Film(frames, Lattice(box, grid), StageSystem("Saddle", "", "p"), describe)
+    return Film(frames, Lattice(box, grid), _SYSTEM, describe)
 
 
 class TestFrameEquilibria(TestCase):
@@ -187,9 +195,129 @@ class TestStageScene(TestCase):
             Continued(_equation(), 0, _saddle_branch(), terminus="the edge"),
             _film([0.0]),
         )
-        assert [point.parameter for point in scene.timeline.points] == [0.0, 0.5, 1.0]
+        assert [point.parameter for point in scene.timeline.arcs[0]] == [0.0, 0.5, 1.0]
         assert scene.cycles.terminus == "the edge"
         assert scene.cycles.cycles == []
+
+
+class Ring3(DeterministicFunction):
+    """x_i' = a x_i - x_i^3 - p x_{i+1}: a three-cell ring with a = 1."""
+
+    def eval(self, point, time=None):  # noqa: ARG002 (base signature)
+        p = self.parameters[0].value
+        return [point[i] - point[i] ** 3 - p * point[(i + 1) % 3] for i in range(3)]
+
+
+def _ring() -> DifferentialEquation:
+    parameters = [Shift(value=0.0)]
+    return DifferentialEquation(
+        variables=[State(), State(), State()],
+        time=Time(),
+        parameters=parameters,
+        derivative=Ring3(
+            variables=[State(), State(), State()],
+            parameters=parameters,
+            results=[State(), State(), State()],
+            time=None,
+        ),
+    )
+
+
+def _ring_terms() -> list[list[Term]]:
+    terms = []
+    for i in range(3):
+        own = [0, 0, 0]
+        own[i] = 1
+        cube = [0, 0, 0]
+        cube[i] = 3
+        neighbour = [0, 0, 0]
+        neighbour[(i + 1) % 3] = 1
+        terms.append([Term(1.0, own), Term(-1.0, cube), Term(-1.0, neighbour, 1)])
+    return terms
+
+
+def _ring_view(terms=None) -> View:
+    return View(
+        [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+        [(-1.6, 1.6)] * 3,
+        _ring_terms() if terms is None else terms,
+    )
+
+
+def _ring_point(parameter: float, s: float, stability: str) -> ContinuationPoint:
+    return ContinuationPoint(
+        arclength=0.0,
+        state=[s, s, s],
+        parameter=parameter,
+        tangent=[0.0, 0.0, 0.0, 1.0],
+        eigenvalues=[(-2.0, 0.0), (-0.5, 1.0), (-0.5, -1.0)],
+        unstable_dimension=0,
+        stability=stability,
+        measure=s,
+    )
+
+
+class TestSpecialPoints(TestCase):
+    def test_a_fold_at_a_pitchfork_is_the_pitchfork(self):
+        branch = Branch()
+        branch.append_point(_point(0.0, -1.0, "stable"))
+        branch.append_point(_point(1.0, 0.0, "stable"))
+        branch.append_point(_point(0.0, 1.0, "saddle"))
+        fold = _point(1.0, 0.0)
+        fold.kind = "fold"
+        pitchfork = _point(1.0, 0.0)
+        pitchfork.kind = "pitchfork"
+        for special in (fold, pitchfork, pitchfork):
+            branch.append_special_point(special)
+        hopf = _point(0.5, -0.5)
+        hopf.kind = "hopf"
+        branch.append_special_point(hopf)
+        scene = stage_scene(Continued(_equation(), 0, [branch, branch]), _film([0.0]))
+        assert sorted(s.kind for s in scene.timeline.special) == ["hopf", "pitchfork"]
+
+
+class TestView(TestCase):
+    def test_terms_reproduce_the_ring(self):
+        equation = _ring()
+        equation.derivative.parameters[0].value = 0.3
+        for state in ([0.2, -0.7, 1.1], [1.0, 1.0, 1.0], [0.0, 0.5, -0.5]):
+            expected = equation.derivative.eval(point=state, time=None)
+            claimed = evaluate_terms(_ring_terms(), state, 0.3)
+            assert all(
+                abs(a - b) < 1.0e-12 for a, b in zip(claimed, expected, strict=True)
+            )
+
+    def test_a_wrong_field_is_refused(self):
+        terms = _ring_terms()
+        terms[1][0] = Term(2.0, [0, 1, 0])  # a mistyped gain on cell 2
+        branch = Branch()
+        branch.append_point(_ring_point(0.0, 1.0, "stable"))
+        with pytest.raises(ValueError, match="disagrees"):
+            stage_scene(
+                Continued(_ring(), 0, branch),
+                Film([0.0], Lattice(_UNIT, 3, view=_ring_view(terms)), _SYSTEM),
+            )
+
+    def test_projects_equilibria_and_cycles_and_skips_field_and_manifolds(self):
+        branch = Branch()
+        for p, s in ((-0.5, 1.2), (0.0, 1.0), (0.5, 0.7)):
+            branch.append_point(_ring_point(p, s, "saddle"))
+        scene = stage_scene(
+            Continued(_ring(), 0, [branch, branch]),
+            Film([0.0, 0.25], Lattice(_UNIT, 3, view=_ring_view()), _SYSTEM),
+        )
+        first, second = scene.frames
+        assert first.field == []
+        assert second.field == []
+        assert first.manifolds == []  # a 3-D saddle's manifolds are not curves
+        assert [(e.x, e.y) for e in first.equilibria] == [(1.0, 1.0)]  # deduplicated
+        assert abs(second.equilibria[0].x - 0.85) < 1.0e-12
+        assert len(scene.timeline.arcs) == 2
+        assert stage_payload(scene)["view"]["field"][0][2] == {
+            "c": -1.0,
+            "e": [0, 1, 0],
+            "q": 1,
+        }
 
 
 class TestPayloadAndRenderer(TestCase):
