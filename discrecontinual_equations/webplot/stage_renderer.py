@@ -1,0 +1,708 @@
+"""Render a :class:`~.stage.StageScene` to a self-contained playable page.
+
+The page has three synchronised panels driven by one parameter: a *stage*,
+where particles are advected through the sampled field on a canvas with the
+equilibria, saddle manifolds and cycle drawn over them; a *spectral clock*,
+the complex plane with the Hopf line and the unit circle, showing the
+eigenvalues of every equilibrium and the Floquet multipliers of the cycle; and
+the bifurcation diagram as a *timeline* with a playhead. D3 is inlined as in
+:class:`~.renderer.D3Renderer`, so the page renders offline; the typefaces are
+fetched from Google Fonts when a network is available and fall back to the
+system stacks when it is not.
+"""
+
+import json
+from pathlib import Path
+
+from discrecontinual_equations.webplot.latex import latex_to_svg
+from discrecontinual_equations.webplot.renderer import HtmlRenderer
+from discrecontinual_equations.webplot.stage import StageScene, stage_payload
+
+_ASSET = Path(__file__).parent / "assets" / "d3.min.js"
+
+
+class StageRenderer(HtmlRenderer):
+    """Draw a stage as a self-contained HTML page with an inlined D3."""
+
+    __slots__ = ["_library"]
+
+    def __init__(self, library: str | None = None) -> None:
+        self._library = library if library is not None else _ASSET.read_text()
+
+    def render(self, scene: StageScene) -> str:
+        system = scene.system
+        equation = latex_to_svg(system.equation) if system.equation else ""
+        return (
+            _TEMPLATE.replace("__TITLE__", _escape(system.title))
+            .replace("__SUBTITLE__", _escape(system.subtitle))
+            .replace("__NOTE__", _escape(system.note or ""))
+            .replace("__EQUATION__", equation)
+            .replace("__D3_SOURCE__", self._library)
+            .replace("__STAGE_JSON__", json.dumps(stage_payload(scene)))
+        )
+
+
+def _escape(text: str) -> str:
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+_STYLE = """
+  :root{
+    --ground:#f3f5fa; --panel:#ffffff; --panel2:#eef1f7; --line:#d9dfea;
+    --grid:#e4e8f0; --ink:#0f1626; --muted:#5b6579; --faint:#8b94a8;
+    --stable:#0f9f6e; --unstable:#e0405f; --saddle:#7c5cd6; --hopf:#c98a00;
+    --fold:#d6339a; --curve:#0e8fc7;
+    --particle:30,58,138; --particle-alpha:.55; --fade:.14;
+    --shadow:0 24px 60px -34px rgba(15,22,38,.35);
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --ground:#0b0e17; --panel:#10131d; --panel2:#141826; --line:#232a3c;
+      --grid:#1a2030; --ink:#eef1f7; --muted:#9aa3b8; --faint:#5f6a82;
+      --stable:#34d399; --unstable:#fb7185; --saddle:#c4b5fd; --hopf:#fbbf24;
+      --fold:#f472b6; --curve:#38bdf8;
+      --particle:188,211,255; --particle-alpha:.62; --fade:.11;
+      --shadow:0 30px 80px -40px rgba(0,0,0,.9);
+    }
+  }
+  :root[data-theme="dark"]{
+    --ground:#0b0e17; --panel:#10131d; --panel2:#141826; --line:#232a3c;
+    --grid:#1a2030; --ink:#eef1f7; --muted:#9aa3b8; --faint:#5f6a82;
+    --stable:#34d399; --unstable:#fb7185; --saddle:#c4b5fd; --hopf:#fbbf24;
+    --fold:#f472b6; --curve:#38bdf8;
+    --particle:188,211,255; --particle-alpha:.62; --fade:.11;
+    --shadow:0 30px 80px -40px rgba(0,0,0,.9);
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--ground);color:var(--ink);
+    font:15px/1.55 "IBM Plex Sans",ui-sans-serif,system-ui,sans-serif;
+    -webkit-font-smoothing:antialiased}
+  .wrap{max-width:1180px;margin:0 auto;padding-block:26px 60px;padding-inline:20px}
+  .topbar{display:flex;justify-content:space-between;align-items:center;gap:14px;
+    flex-wrap:wrap;margin-bottom:22px}
+  a.back{color:var(--muted);text-decoration:none;font-size:14px}
+  a.back:hover{color:var(--ink)}
+  .themes{display:inline-flex;gap:4px;background:var(--panel2);
+    border:1px solid var(--line);border-radius:11px;padding:4px}
+  .theme-btn{appearance:none;border:0;background:transparent;color:var(--muted);
+    font:600 13px/1 "IBM Plex Sans",sans-serif;padding:7px 13px;border-radius:8px;
+    cursor:pointer}
+  .theme-btn[aria-pressed="true"]{background:var(--curve);color:#fff}
+  .mast{display:flex;flex-wrap:wrap;align-items:flex-end;
+    justify-content:space-between;gap:14px 28px;margin-bottom:18px}
+  h1{font:300 46px/1.02 "Fraunces","Iowan Old Style",Georgia,serif;
+    font-variation-settings:"opsz" 96,"SOFT" 40;letter-spacing:-.015em;
+    margin:0 0 8px;text-wrap:balance}
+  .eqn{color:var(--ink);overflow-x:auto}
+  .eqn svg{height:1.35em;width:auto;max-width:100%;vertical-align:middle}
+  .lede{max-width:62ch;color:var(--muted);margin:0;font-size:14.5px}
+  .kicker{font:500 11.5px "IBM Plex Sans",sans-serif;letter-spacing:.14em;
+    text-transform:uppercase;color:var(--faint)}
+  .instrument{display:grid;grid-template-columns:minmax(0,1fr) minmax(280px,340px);
+    gap:16px;align-items:stretch}
+  .stage,.clock,.timeline{background:var(--panel);border:1px solid var(--line);
+    border-radius:14px;position:relative;overflow:hidden}
+  .stage{box-shadow:var(--shadow)}
+  .stage .frame{position:relative;width:100%;aspect-ratio:1.36/1;max-width:100%}
+  .stage canvas,.stage svg{position:absolute;inset:0;width:100%;height:100%}
+  .stage svg{pointer-events:none}
+  .panel-head{display:flex;justify-content:space-between;align-items:baseline;
+    padding:12px 16px 0;gap:10px}
+  .panel-head .mono{font:400 12.5px "IBM Plex Mono",monospace;color:var(--muted);
+    font-variant-numeric:tabular-nums}
+  .clock{display:flex;flex-direction:column}
+  .clock .frame{position:relative;width:100%;flex:1;min-height:280px}
+  .clock svg{position:absolute;inset:0;width:100%;height:100%}
+  .readouts{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));
+    gap:0;margin-top:16px;border:1px solid var(--line);border-radius:14px;
+    background:var(--panel2);overflow:hidden}
+  .ro{padding:12px 16px 13px;border-right:1px solid var(--line);min-width:0}
+  .ro:last-child{border-right:0}
+  .ro .kicker{display:block;margin-bottom:5px}
+  .ro .val{font:500 20px/1.15 "IBM Plex Mono",monospace;
+    font-variant-numeric:tabular-nums;letter-spacing:-.01em}
+  .ro .sub{font:400 12.5px/1.45 "IBM Plex Mono",monospace;color:var(--muted);
+    font-variant-numeric:tabular-nums}
+  .ro.regime .val{font-family:"IBM Plex Sans",sans-serif;font-weight:600;
+    font-size:17px;line-height:1.25}
+  .dot{display:inline-block;width:9px;height:9px;border-radius:50%;
+    vertical-align:1px;margin-right:6px}
+  .timeline{margin-top:16px}
+  .timeline .frame{position:relative;width:100%;height:230px}
+  .timeline svg{position:absolute;inset:0;width:100%;height:100%;
+    cursor:ew-resize;touch-action:none}
+  .controls{display:flex;flex-wrap:wrap;align-items:center;gap:10px 18px;
+    margin-top:14px;color:var(--muted);font-size:13.5px}
+  .btn{appearance:none;border:1px solid var(--line);background:var(--panel);
+    color:var(--ink);border-radius:9px;padding:8px 14px;
+    font:500 13.5px "IBM Plex Sans",sans-serif;cursor:pointer;display:inline-flex;
+    align-items:center;gap:8px;min-width:96px;justify-content:center}
+  .btn:hover{border-color:var(--curve)}
+  .btn:focus-visible,.toggle input:focus-visible+span,.range:focus-visible,
+  .theme-btn:focus-visible{outline:2px solid var(--curve);outline-offset:2px}
+  .btn kbd{font:500 11px "IBM Plex Mono",monospace;color:var(--faint);
+    border:1px solid var(--line);border-radius:4px;padding:1px 5px}
+  .group{display:inline-flex;align-items:center;gap:8px}
+  .range{width:130px;accent-color:var(--curve)}
+  .toggle{display:inline-flex;align-items:center;gap:6px;cursor:pointer;
+    user-select:none}
+  .toggle input{position:absolute;opacity:0;width:1px;height:1px}
+  .toggle span.sw{width:12px;height:12px;border-radius:3px;
+    border:1.5px solid var(--faint);display:inline-block}
+  .toggle input:checked+span.sw{background:var(--curve);border-color:var(--curve)}
+  .legend{display:flex;flex-wrap:wrap;gap:6px 16px;padding:0 16px 12px;
+    font-size:12.5px;color:var(--muted)}
+  .legend i{display:inline-block;width:18px;height:0;border-top:2px solid;
+    vertical-align:middle;margin-right:6px}
+  .legend i.dash{border-top-style:dashed}
+  .foot{margin-top:22px;color:var(--faint);font-size:12.5px;max-width:78ch}
+  .foot:empty{display:none}
+  @media (max-width:820px){
+    .instrument{grid-template-columns:1fr}
+    h1{font-size:36px}
+    .clock .frame{flex:none;height:300px;min-height:0}
+  }
+  @media (prefers-reduced-motion: reduce){ .btn.play{display:none} }
+"""
+
+_SCRIPT = r"""
+(function(){
+const D = window.__STAGE__;
+const css = k =>
+  getComputedStyle(document.documentElement).getPropertyValue(k).trim();
+const F = D.frames, NX = D.grid.nx, NY = D.grid.ny;
+const [x0, x1] = D.box.x, [y0, y1] = D.box.y;
+const PARAM = D.system.parameter;
+const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+const mono = "IBM Plex Mono", sans = "IBM Plex Sans";
+const colourOf = s =>
+  css(s==="stable" ? "--stable" : s==="saddle" ? "--saddle" : "--unstable");
+const NAMES = {hopf:"Hopf", fold:"fold", branch_point:"branch point",
+  transcritical:"transcritical", pitchfork:"pitchfork"};
+const pretty = k => NAMES[k] || k.replace(/_/g," ");
+const isUnstable = c => c.multipliers.some(([a,b]) => Math.hypot(a,b) > 1.02);
+const MINUS = "\u2212", LAMBDA = "\u03bb", MU = "\u03bc", DOT = "\u00b7";
+
+// ---------- theme (shared key with the atlas pages) ----------
+function applyTheme(name){
+  document.documentElement.setAttribute("data-theme", name);
+  document.querySelectorAll(".theme-btn").forEach(b =>
+    b.setAttribute("aria-pressed", b.dataset.theme===name ? "true" : "false"));
+}
+let stored = null;
+try { stored = localStorage.getItem("dce-theme"); } catch (e) { stored = null; }
+if (stored === "print") stored = "light";
+if (stored === "dark" || stored === "light") applyTheme(stored);
+document.querySelectorAll(".theme-btn").forEach(b =>
+  b.addEventListener("click", () => {
+    try { localStorage.setItem("dce-theme", b.dataset.theme); } catch (e) {}
+    applyTheme(b.dataset.theme);
+  }));
+
+// ---------- state ----------
+let t = 0, playing = false, speed = 1, dir = 1;
+const LAST = F.length - 1;
+const hash = parseFloat((location.hash.match(/p=(-?[\d.]+)/)||[])[1]);
+function clamp(v,a,b){ return Math.max(a, Math.min(b, v)); }
+function toFrameIndex(p){ return (p - F[0].p) / (F[LAST].p - F[0].p) * LAST; }
+if (!isNaN(hash)) t = clamp(toFrameIndex(hash), 0, LAST);
+function frameAt(tt){
+  const i = Math.floor(tt), f = tt - i;
+  return {i, j: Math.min(i+1, LAST), f};
+}
+function paramAt(tt){ const {i,j,f} = frameAt(tt); return F[i].p*(1-f) + F[j].p*f; }
+function nearestFrame(){ return F[Math.round(t)]; }
+
+// ---------- field: bilinear in space, linear between frames ----------
+function fieldAt(x, y, out){
+  const {i, j, f} = frameAt(t);
+  const gx = (x - x0) / (x1 - x0) * (NX - 1), gy = (y - y0) / (y1 - y0) * (NY - 1);
+  const ix = clamp(Math.floor(gx), 0, NX-2), iy = clamp(Math.floor(gy), 0, NY-2);
+  const fx = clamp(gx - ix, 0, 1), fy = clamp(gy - iy, 0, 1);
+  const A = F[i].field, B = F[j].field;
+  const k00 = 2*(iy*NX+ix), k10 = k00+2, k01 = 2*((iy+1)*NX+ix), k11 = k01+2;
+  const w00=(1-fx)*(1-fy), w10=fx*(1-fy), w01=(1-fx)*fy, w11=fx*fy;
+  const ua = A[k00]*w00 + A[k10]*w10 + A[k01]*w01 + A[k11]*w11;
+  const va = A[k00+1]*w00 + A[k10+1]*w10 + A[k01+1]*w01 + A[k11+1]*w11;
+  const ub = B[k00]*w00 + B[k10]*w10 + B[k01]*w01 + B[k11]*w11;
+  const vb = B[k00+1]*w00 + B[k10+1]*w10 + B[k01+1]*w01 + B[k11+1]*w11;
+  out[0] = ua*(1-f) + ub*f; out[1] = va*(1-f) + vb*f;
+}
+
+// ---------- stage: particles on canvas ----------
+const canvas = document.getElementById("flow"), ctx = canvas.getContext("2d");
+const skel = d3.select("#skeleton");
+let W = 0, H = 0, dpr = 1;
+const sx = v => (v - x0) / (x1 - x0) * W, sy = v => H - (v - y0) / (y1 - y0) * H;
+let P = [];
+function spawn(p){
+  p[0] = x0 + Math.random()*(x1-x0); p[1] = y0 + Math.random()*(y1-y0);
+  p[2] = p[0]; p[3] = p[1]; p[4] = 40 + Math.random()*140;
+}
+function setDensity(n){
+  P = [];
+  for (let k=0;k<n;k++){
+    const p=[0,0,0,0,0]; spawn(p); p[4] = Math.random()*180; P.push(p);
+  }
+}
+function resize(){
+  const r = canvas.getBoundingClientRect();
+  dpr = Math.min(2, window.devicePixelRatio||1);
+  W = r.width; H = r.height;
+  canvas.width = Math.round(W*dpr); canvas.height = Math.round(H*dpr);
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  ctx.fillStyle = css("--panel"); ctx.fillRect(0,0,W,H);
+  skel.attr("viewBox", `0 0 ${W} ${H}`);
+  drawSkeleton(); drawClock(); drawTimeline();
+}
+const tmp = [0,0];
+function stepParticles(){
+  ctx.fillStyle = css("--panel"); ctx.globalAlpha = parseFloat(css("--fade"));
+  ctx.fillRect(0,0,W,H); ctx.globalAlpha = 1;
+  ctx.strokeStyle = `rgba(${css("--particle")},${css("--particle-alpha")})`;
+  ctx.lineWidth = 1.1; ctx.lineCap = "round";
+  const h = 0.022;
+  ctx.beginPath();
+  for (const p of P){
+    p[2] = p[0]; p[3] = p[1];
+    fieldAt(p[0], p[1], tmp); const u1 = tmp[0], v1 = tmp[1];
+    fieldAt(p[0] + 0.5*h*u1, p[1] + 0.5*h*v1, tmp);
+    p[0] += h*tmp[0]; p[1] += h*tmp[1]; p[4] -= 1;
+    const moved = Math.hypot(p[0]-p[2], p[1]-p[3]);
+    const gone = p[0] < x0 || p[0] > x1 || p[1] < y0 || p[1] > y1;
+    if (gone || p[4] <= 0 || moved < 1e-5 || moved > 0.25){ spawn(p); continue; }
+    ctx.moveTo(sx(p[2]), sy(p[3])); ctx.lineTo(sx(p[0]), sy(p[1]));
+  }
+  ctx.stroke();
+}
+
+// ---------- stage: skeleton on svg ----------
+function label(sel, x, y, text, fill, anchor){
+  return sel.append("text").attr("x",x).attr("y",y).attr("fill",fill)
+    .attr("font-size",11).attr("font-family",mono)
+    .attr("text-anchor", anchor || "start").text(text);
+}
+function drawSkeleton(){
+  const fr = nearestFrame(); skel.selectAll("*").remove();
+  const line = d3.line().x(d=>sx(d[0])).y(d=>sy(d[1]));
+  const glow = skel.append("defs").append("filter").attr("id","g")
+    .attr("x","-50%").attr("y","-50%").attr("width","200%").attr("height","200%");
+  glow.append("feGaussianBlur").attr("stdDeviation",2.2).attr("result","b");
+  const merge = glow.append("feMerge");
+  merge.append("feMergeNode").attr("in","b");
+  merge.append("feMergeNode").attr("in","SourceGraphic");
+  skel.append("line").attr("x1",sx(0)).attr("x2",sx(0)).attr("y1",0).attr("y2",H)
+    .attr("stroke",css("--grid")).attr("stroke-width",1);
+  skel.append("line").attr("y1",sy(0)).attr("y2",sy(0)).attr("x1",0).attr("x2",W)
+    .attr("stroke",css("--grid")).attr("stroke-width",1);
+  if (document.getElementById("l-manifolds").checked){
+    for (const mf of fr.manifolds){
+      skel.append("path").attr("d", line(mf.points)).attr("fill","none")
+        .attr("stroke", css(mf.kind==="stable" ? "--stable" : "--unstable"))
+        .attr("stroke-width",1.6).attr("opacity",.85);
+    }
+  }
+  if (document.getElementById("l-cycle").checked && fr.cycle !== null){
+    const c = D.cycles[fr.cycle], unstable = isUnstable(c);
+    skel.append("path").attr("d", line(c.states)+"Z").attr("fill","none")
+      .attr("stroke",css(unstable ? "--unstable" : "--stable"))
+      .attr("stroke-width",2.2).attr("stroke-dasharray", unstable ? "7 5" : "none")
+      .attr("filter","url(#g)");
+  }
+  for (const e of fr.equilibria){
+    const col = colourOf(e.stability);
+    skel.append("circle").attr("cx",sx(e.x)).attr("cy",sy(e.y)).attr("r",11)
+      .attr("fill",col).attr("opacity",.18);
+    skel.append("circle").attr("cx",sx(e.x)).attr("cy",sy(e.y)).attr("r",5)
+      .attr("fill",col).attr("stroke",css("--panel")).attr("stroke-width",1.5);
+  }
+  label(skel, W-12, sy(0)-8, D.system.x_label, css("--faint"), "end")
+    .attr("font-size",12);
+  label(skel, sx(0)+8, 14, D.system.y_label, css("--faint")).attr("font-size",12);
+  document.getElementById("stage-p").textContent =
+    `${PARAM} = ${paramAt(t).toFixed(4)}`;
+}
+
+// ---------- spectral clock ----------
+const clock = d3.select("#clock");
+const eigHistory = [];
+function drawClock(){
+  const fr = nearestFrame(); const r = clock.node().getBoundingClientRect();
+  const cw = r.width, ch = r.height;
+  clock.attr("viewBox",`0 0 ${cw} ${ch}`).selectAll("*").remove();
+  const cx = cw/2, cy = ch/2 + 4;
+  const S = Math.min((cw/2 - 26)/2.3, (ch/2 - 34)/1.6);
+  const X = v => cx + v*S, Y = v => cy - v*S;
+  clock.append("line").attr("x1",X(-2.3)).attr("x2",X(2.3)).attr("y1",Y(0))
+    .attr("y2",Y(0)).attr("stroke",css("--grid"));
+  clock.append("line").attr("x1",X(0)).attr("x2",X(0)).attr("y1",Y(-1.55))
+    .attr("y2",Y(1.55)).attr("stroke",css("--hopf")).attr("stroke-width",1.2)
+    .attr("opacity",.7);
+  clock.append("circle").attr("cx",X(0)).attr("cy",Y(0)).attr("r",S)
+    .attr("fill","none").attr("stroke",css("--line")).attr("stroke-dasharray","2 4");
+  for (const v of [-2,-1,1,2]){
+    label(clock, X(v), Y(0)+15, (v<0 ? MINUS : "") + Math.abs(v), css("--faint"),
+      "middle");
+  }
+  label(clock, X(0)+7, Y(1.38), `Re ${LAMBDA} = 0 ${DOT} Hopf`, css("--hopf"));
+  label(clock, X(0.72), Y(-0.78), `|${MU}| = 1`, css("--faint"));
+  if (document.getElementById("l-trails").checked){
+    for (let k=1;k<eigHistory.length;k++){
+      const a = eigHistory[k-1], b = eigHistory[k];
+      const op = 0.08 + 0.5*k/eigHistory.length;
+      for (let n=0;n<Math.min(a.length,b.length);n++) for (let q=0;q<2;q++){
+        const A = a[n].eig[q], B = b[n].eig[q]; if (!A||!B) continue;
+        clock.append("line").attr("x1",X(A[0])).attr("y1",Y(A[1]))
+          .attr("x2",X(B[0])).attr("y2",Y(B[1]))
+          .attr("stroke", css(a[n].stability==="saddle"?"--saddle":"--curve"))
+          .attr("stroke-width",1.4).attr("opacity",op);
+      }
+    }
+  }
+  for (const e of fr.equilibria){
+    const col = colourOf(e.stability);
+    for (const [re,im] of e.eig){
+      clock.append("circle").attr("cx",X(re)).attr("cy",Y(im)).attr("r",9)
+        .attr("fill",col).attr("opacity",.2);
+      clock.append("circle").attr("cx",X(re)).attr("cy",Y(im)).attr("r",4.5)
+        .attr("fill",col).attr("stroke",css("--panel")).attr("stroke-width",1.2);
+    }
+  }
+  if (fr.cycle !== null){
+    for (const [re0,im0] of D.cycles[fr.cycle].multipliers){
+      const mod = Math.hypot(re0, im0), off = mod > 2.2, s = off ? 2.2/mod : 1;
+      const re = re0*s, im = im0*s;
+      clock.append("rect").attr("x",X(re)-4.5).attr("y",Y(im)-4.5)
+        .attr("width",9).attr("height",9).attr("opacity", off ? .55 : 1)
+        .attr("fill",css("--panel")).attr("stroke",css("--unstable"))
+        .attr("stroke-width",1.8).attr("transform",`rotate(45 ${X(re)} ${Y(im)})`);
+      if (off) label(clock, X(re)+(re>=0?-8:8), Y(im)-9,
+        `|${MU}| = ${mod.toFixed(0)} →`, css("--unstable"), re>=0?"end":"start");
+    }
+  }
+}
+function pushHistory(){
+  const fr = nearestFrame();
+  const ordered = [...fr.equilibria]
+    .sort((a,b) => (a.stability==="saddle") - (b.stability==="saddle"));
+  if (!eigHistory.length || eigHistory[eigHistory.length-1].p !== fr.p){
+    ordered.p = fr.p; eigHistory.push(ordered);
+    if (eigHistory.length > 40) eigHistory.shift();
+  }
+}
+
+// ---------- timeline ----------
+const tl = d3.select("#tl");
+function drawTimeline(){
+  const r = tl.node().getBoundingClientRect(); const tw = r.width, th = r.height;
+  tl.attr("viewBox",`0 0 ${tw} ${th}`).selectAll("*").remove();
+  const m = {l:56, r:22, t:18, b:34}; const iw = tw-m.l-m.r, ih = th-m.t-m.b;
+  const pts = D.branch.points;
+  const px = d3.scaleLinear().domain([F[0].p, F[LAST].p]).range([m.l, m.l+iw]);
+  const xlo = c => d3.min(c.states, s=>s[0]), xhi = c => d3.max(c.states, s=>s[0]);
+  const xs = pts.map(d=>d.x).concat(D.cycles.flatMap(c => [xhi(c), xlo(c)]));
+  const lo = d3.min(xs), hi = d3.max(xs), pad = Math.max(1e-6, (hi-lo)*0.08);
+  const py = d3.scaleLinear().domain([lo-pad, hi+pad]).range([m.t+ih, m.t]);
+  const g = tl.append("g");
+  const axisStyle = ax => {
+    ax.select(".domain").attr("stroke",css("--line"));
+    ax.selectAll("line").attr("stroke",css("--line"));
+    ax.selectAll("text").attr("fill",css("--muted")).attr("font-family",mono)
+      .attr("font-size",11);
+  };
+  g.append("g").selectAll("line").data(py.ticks(4)).join("line")
+    .attr("x1",m.l).attr("x2",m.l+iw).attr("y1",d=>py(d)).attr("y2",d=>py(d))
+    .attr("stroke",css("--grid"));
+  g.append("g").attr("transform",`translate(0,${m.t+ih})`)
+    .call(d3.axisBottom(px).ticks(8).tickSize(4)).call(axisStyle);
+  g.append("g").attr("transform",`translate(${m.l},0)`)
+    .call(d3.axisLeft(py).ticks(4).tickSize(4))
+    .call(ax => { axisStyle(ax); ax.select(".domain").remove(); });
+  label(g, m.l-40, m.t+10, D.system.x_label, css("--faint"));
+  label(g, m.l+iw, th-4, PARAM, css("--faint"), "end");
+  const line = d3.line().x(d=>px(d.p)).y(d=>py(d.x))
+    .curve(d3.curveCatmullRom.alpha(0.5));
+  const dashes = {stable:"none", saddle:"2 5", unstable:"8 5"};
+  let run = [];
+  const flush = () => {
+    if (run.length < 2) return;
+    const s = run[0].stability;
+    g.append("path").attr("d", line(run)).attr("fill","none")
+      .attr("stroke", colourOf(s)).attr("stroke-width",2.4)
+      .attr("stroke-dasharray", dashes[s] || "none");
+  };
+  for (const pt of pts){
+    if (run.length && run[run.length-1].stability !== pt.stability){
+      run.push(pt); flush(); run = [pt];
+    } else run.push(pt);
+  }
+  flush();
+  if (D.cycles.length){
+    const unstable = D.cycles.some(isUnstable);
+    const col = css(unstable ? "--unstable" : "--stable");
+    const dash = unstable ? "5 4" : "none";
+    const amp = d3.line().x(c=>px(c.p)).curve(d3.curveCatmullRom.alpha(0.5));
+    for (const f of [xhi, xlo]){
+      g.append("path").attr("d", amp.y(c=>py(f(c)))(D.cycles)).attr("fill","none")
+        .attr("stroke",col).attr("stroke-width",1.6).attr("stroke-dasharray",dash)
+        .attr("opacity",.9);
+    }
+    const c = D.cycles[0];
+    for (const yy of [xhi(c), xlo(c)]){
+      g.append("circle").attr("cx",px(c.p)).attr("cy",py(yy)).attr("r",3.5)
+        .attr("fill",css("--panel")).attr("stroke",col).attr("stroke-width",1.6);
+    }
+    if (D.system.cycle_terminus){
+      label(g, px(c.p)-9, py(xhi(c))+4, D.system.cycle_terminus, col, "end")
+        .attr("font-size",12).attr("font-family",sans).attr("font-weight",500);
+    }
+  }
+  for (const s of D.branch.special){
+    const col = css(s.kind==="hopf"?"--hopf":"--fold"), left = s.kind==="hopf";
+    g.append("circle").attr("cx",px(s.p)).attr("cy",py(s.x)).attr("r",8)
+      .attr("fill",col).attr("opacity",.22);
+    g.append("circle").attr("cx",px(s.p)).attr("cy",py(s.x)).attr("r",4.5)
+      .attr("fill",col).attr("stroke",css("--panel")).attr("stroke-width",1.5);
+    label(g, px(s.p)+(left?-9:9), py(s.x)+(left?18:-10), s.label || pretty(s.kind),
+      col, left?"end":"start")
+      .attr("font-size",12).attr("font-family",sans).attr("font-weight",500);
+  }
+  const ph = g.append("g");
+  ph.append("line").attr("y1",m.t-6).attr("y2",m.t+ih).attr("stroke",css("--ink"))
+    .attr("stroke-width",1.4);
+  ph.append("polygon").attr("points","-6,-6 6,-6 0,2").attr("fill",css("--ink"))
+    .attr("transform",`translate(0,${m.t-6})`);
+  const toT = ev => {
+    const [mx] = d3.pointer(ev, tl.node());
+    return toFrameIndex(px.invert(clamp(mx, m.l, m.l+iw)));
+  };
+  let down = false;
+  tl.on("pointerdown", ev => {
+      down = true; tl.node().setPointerCapture(ev.pointerId); setT(toT(ev)); })
+    .on("pointermove", ev => { if (down) setT(toT(ev)); })
+    .on("pointerup pointercancel", () => { down = false; });
+  drawTimeline.updatePlayhead = () =>
+    ph.attr("transform",`translate(${px(paramAt(t))},0)`);
+  drawTimeline.updatePlayhead();
+}
+
+// ---------- readouts ----------
+const fmtC = ([re,im]) => `${re>=0?"+":MINUS}${Math.abs(re).toFixed(3)} `
+  + `${im>=0?"+":MINUS} ${Math.abs(im).toFixed(3)}i`;
+function genericRegime(fr){
+  const n = fr.equilibria.length; if (!n) return "No equilibria";
+  const count = {};
+  for (const e of fr.equilibria) count[e.stability] = (count[e.stability]||0)+1;
+  const parts = ["stable","unstable","saddle"].filter(k => count[k])
+    .map(k => `${count[k]} ${k}`);
+  let s = `${n} equilibri${n===1?"um":"a"}: ${parts.join(", ")}`;
+  if (fr.cycle !== null){
+    s += ` ${DOT} ${isUnstable(D.cycles[fr.cycle]) ? "unstable" : "stable"} cycle`;
+  }
+  return s;
+}
+function readouts(){
+  const fr = nearestFrame();
+  const focus = fr.equilibria.find(e=>e.stability!=="saddle");
+  const saddle = fr.equilibria.find(e=>e.stability==="saddle");
+  document.getElementById("ro-p").textContent = paramAt(t).toFixed(4);
+  document.getElementById("ro-regime-sub").textContent =
+    `frame ${Math.round(t)+1} / ${F.length}`;
+  const setEq = (id, e, fallback) => {
+    const k = document.getElementById(id+"-kicker"), v = document.getElementById(id);
+    const s = document.getElementById(id+"-sub");
+    if (!e){
+      k.textContent = fallback; v.textContent = "\u2014"; s.textContent = "absent";
+      return;
+    }
+    k.textContent = `${e.stability} ${DOT} ${LAMBDA}`;
+    v.innerHTML = `<span class="dot" style="background:${colourOf(e.stability)}">`
+      + `</span>${fmtC(e.eig[0])}`;
+    s.textContent =
+      `${fmtC(e.eig[1])} ${DOT} at ${D.system.x_label} = ${e.x.toFixed(3)}`;
+  };
+  setEq("ro-focus", focus, `equilibrium ${DOT} ${LAMBDA}`);
+  setEq("ro-saddle", saddle, `saddle ${DOT} ${LAMBDA}`);
+  const cv = document.getElementById("ro-cycle");
+  const cs = document.getElementById("ro-cycle-sub");
+  if (fr.cycle !== null){
+    const c = D.cycles[fr.cycle], mods = c.multipliers.map(([a,b])=>Math.hypot(a,b));
+    cv.textContent = `T = ${c.period.toFixed(2)}`;
+    cs.textContent = `|${MU}| = ${mods.map(m=>m.toFixed(3)).join(", ")} ${DOT} `
+      + `amplitude ${c.amplitude.toFixed(3)}`;
+  } else { cv.textContent = "—"; cs.textContent = `no cycle at this ${PARAM}`; }
+  document.getElementById("ro-regime").textContent = fr.label || genericRegime(fr);
+}
+
+// ---------- orchestration ----------
+let lastFrame = -1;
+function setT(v){ t = clamp(v, 0, LAST); onFrame(); }
+function onFrame(){
+  const k = Math.round(t);
+  if (k !== lastFrame){
+    lastFrame = k; pushHistory(); drawSkeleton(); drawClock(); readouts();
+  }
+  else {
+    document.getElementById("stage-p").textContent =
+      `${PARAM} = ${paramAt(t).toFixed(4)}`;
+    document.getElementById("ro-p").textContent = paramAt(t).toFixed(4);
+  }
+  if (drawTimeline.updatePlayhead) drawTimeline.updatePlayhead();
+}
+let last = performance.now();
+function loop(now){
+  const dt = Math.min(0.05, (now-last)/1000); last = now;
+  if (playing){
+    t += dir * speed * dt * 4.2;
+    if (t >= LAST){ t = LAST; dir = -1; } if (t <= 0){ t = 0; dir = 1; }
+    onFrame();
+  }
+  if (!reduced) stepParticles();
+  requestAnimationFrame(loop);
+}
+const playBtn = document.getElementById("play");
+function setPlaying(v){
+  playing = v; playBtn.setAttribute("aria-pressed", String(v));
+  playBtn.firstChild.textContent = (v ? "Pause " : "Play ");
+}
+playBtn.addEventListener("click", () => setPlaying(!playing));
+window.addEventListener("keydown", e => {
+  const typing = e.target.tagName==="INPUT" || e.target.tagName==="BUTTON";
+  if (e.code==="Space" && !typing){ e.preventDefault(); setPlaying(!playing); }
+  if (e.key==="ArrowRight") setT(t+1); if (e.key==="ArrowLeft") setT(t-1);
+});
+document.getElementById("speed").addEventListener("input",
+  e => speed = +e.target.value);
+document.getElementById("density").addEventListener("input",
+  e => setDensity(+e.target.value));
+for (const id of ["l-manifolds","l-cycle","l-trails"]){
+  document.getElementById(id).addEventListener("change",
+    () => { drawSkeleton(); drawClock(); });
+}
+document.getElementById("ro-p-kicker").textContent = PARAM;
+document.getElementById("tl-hint").textContent =
+  `drag the playhead ${DOT} ${D.system.x_label} against ${PARAM}`;
+window.addEventListener("resize", resize);
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", resize);
+new MutationObserver(resize).observe(document.documentElement,
+  {attributes:true, attributeFilter:["data-theme"]});
+
+setDensity(+document.getElementById("density").value);
+resize(); pushHistory(); readouts(); onFrame();
+if (reduced){ for (let k=0;k<40;k++) stepParticles(); }
+requestAnimationFrame(loop);
+})();
+"""
+
+_FONTS = (
+    "https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght,SOFT@9..144,300..600,"
+    "0..100&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500"
+    "&display=swap"
+)
+
+_BODY = """
+<div class="wrap">
+  <div class="topbar">
+    <a class="back" href="index.html">&larr; atlas</a>
+    <div class="themes" role="group" aria-label="colour theme">
+      <button class="theme-btn" data-theme="dark">Dark</button>
+      <button class="theme-btn" data-theme="light">Light</button>
+    </div>
+  </div>
+  <div class="mast">
+    <div>
+      <div class="kicker">Stage &amp; timeline &middot; continuation as a film</div>
+      <h1>__TITLE__</h1>
+      <div class="eqn">__EQUATION__</div>
+    </div>
+    <p class="lede">__SUBTITLE__</p>
+  </div>
+
+  <div class="instrument">
+    <section class="stage" aria-label="phase portrait">
+      <div class="panel-head">
+        <span class="kicker">Stage &middot; phase plane</span>
+        <span class="mono" id="stage-p"></span>
+      </div>
+      <div class="frame"><canvas id="flow"></canvas><svg id="skeleton"></svg></div>
+      <div class="legend">
+        <span><i style="border-color:var(--stable)"></i>stable manifold</span>
+        <span><i style="border-color:var(--unstable)"></i>unstable manifold</span>
+        <span><i class="dash" style="border-color:var(--unstable)"></i>cycle
+          (dashed if unstable)</span>
+        <span><span class="dot" style="background:var(--stable)"></span>stable</span>
+        <span><span class="dot" style="background:var(--unstable)"></span>unstable
+          </span>
+        <span><span class="dot" style="background:var(--saddle)"></span>saddle</span>
+      </div>
+    </section>
+    <section class="clock" aria-label="spectral clock">
+      <div class="panel-head">
+        <span class="kicker">Spectral clock</span><span class="mono">&#8450;</span>
+      </div>
+      <div class="frame"><svg id="clock"></svg></div>
+      <div class="legend">
+        <span><span class="dot" style="background:var(--ink)"></span>eigenvalue
+          &lambda;</span>
+        <span><span class="dot" style="background:transparent;
+          border:1.5px solid var(--unstable);border-radius:1px"></span>Floquet
+          &mu;</span>
+      </div>
+    </section>
+  </div>
+
+  <div class="readouts" id="readouts">
+    <div class="ro"><span class="kicker" id="ro-p-kicker"></span>
+      <div class="val" id="ro-p">&mdash;</div>
+      <div class="sub" id="ro-regime-sub"></div></div>
+    <div class="ro"><span class="kicker" id="ro-focus-kicker"></span>
+      <div class="val" id="ro-focus">&mdash;</div>
+      <div class="sub" id="ro-focus-sub"></div></div>
+    <div class="ro"><span class="kicker" id="ro-saddle-kicker"></span>
+      <div class="val" id="ro-saddle">&mdash;</div>
+      <div class="sub" id="ro-saddle-sub"></div></div>
+    <div class="ro"><span class="kicker">Cycle &middot; period, Floquet</span>
+      <div class="val" id="ro-cycle">&mdash;</div>
+      <div class="sub" id="ro-cycle-sub"></div></div>
+    <div class="ro regime"><span class="kicker">Regime</span>
+      <div class="val" id="ro-regime">&mdash;</div></div>
+  </div>
+
+  <section class="timeline" aria-label="bifurcation diagram timeline">
+    <div class="panel-head">
+      <span class="kicker">Timeline &middot; bifurcation diagram</span>
+      <span class="mono" id="tl-hint"></span>
+    </div>
+    <div class="frame"><svg id="tl"></svg></div>
+  </section>
+
+  <div class="controls">
+    <button class="btn play" id="play" aria-pressed="false">Play
+      <kbd>space</kbd></button>
+    <label class="group">speed <input class="range" id="speed" type="range"
+      min="0.2" max="3" step="0.1" value="1"></label>
+    <label class="group">particles <input class="range" id="density" type="range"
+      min="400" max="6000" step="200" value="2600"></label>
+    <label class="toggle"><input id="l-manifolds" type="checkbox" checked>
+      <span class="sw"></span>manifolds</label>
+    <label class="toggle"><input id="l-cycle" type="checkbox" checked>
+      <span class="sw"></span>cycle</label>
+    <label class="toggle"><input id="l-trails" type="checkbox" checked>
+      <span class="sw"></span>eigen-trails</label>
+  </div>
+
+  <p class="foot">__NOTE__</p>
+</div>
+"""
+
+_TEMPLATE = (
+    '<!DOCTYPE html>\n<html lang="en">\n<head>\n<meta charset="utf-8">\n'
+    '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
+    "<title>__TITLE__</title>\n"
+    '<link rel="preconnect" href="https://fonts.googleapis.com">\n'
+    f'<link rel="stylesheet" href="{_FONTS}">\n'
+    f"<style>{_STYLE}</style>\n</head>\n<body>{_BODY}"
+    "<script>__D3_SOURCE__</script>\n"
+    "<script>window.__STAGE__ = __STAGE_JSON__;</script>\n"
+    f"<script>{_SCRIPT}</script>\n</body>\n</html>\n"
+)

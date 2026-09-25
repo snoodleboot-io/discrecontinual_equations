@@ -8,22 +8,38 @@ links them, so a set of analyses becomes a small browsable site.
 from pathlib import Path
 
 from discrecontinual_equations.webplot.renderer import HtmlRenderer
-from discrecontinual_equations.webplot.scene import Scene
 
 
 class AtlasEntry:
-    """One card on the atlas index page."""
+    """One card on the atlas index page.
 
-    __slots__ = ["filename", "subtitle", "title"]
+    ``kind`` is ``"plot"`` for a still and ``"stage"`` for a playable page, which
+    the atlas marks so a reader knows which cards move.
+    """
 
-    def __init__(self, filename: str, title: str, subtitle: str) -> None:
+    __slots__ = ["filename", "kind", "subtitle", "title"]
+
+    def __init__(
+        self,
+        filename: str,
+        title: str,
+        subtitle: str,
+        kind: str = "plot",
+    ) -> None:
         self.filename = filename
         self.title = title
         self.subtitle = subtitle
+        self.kind = kind
 
 
 class PlotReport:
-    """Render scenes to a directory and build an atlas index."""
+    """Render scenes to a directory and build an atlas index.
+
+    The renderer decides what a scene is: a :class:`~.renderer.D3Renderer` writes
+    :class:`~.scene.Scene` stills, a :class:`~.stage_renderer.StageRenderer`
+    writes :class:`~.stage.StageScene` pages. Two reports on one directory share
+    an atlas by passing both sets of entries to :meth:`write_atlas`.
+    """
 
     __slots__ = ["_directory", "_renderer"]
 
@@ -31,7 +47,7 @@ class PlotReport:
         self._renderer = renderer
         self._directory = Path(output_dir)
 
-    def write(self, scene: Scene, filename: str) -> Path:
+    def write(self, scene: object, filename: str) -> Path:
         """Render ``scene`` to ``filename`` in the output directory."""
         self._directory.mkdir(parents=True, exist_ok=True)
         path = self._directory / filename
@@ -52,9 +68,12 @@ def _atlas_html(entries: list[AtlasEntry]) -> str:
 
 
 def _card(entry: AtlasEntry) -> str:
+    stage = entry.kind == "stage"
+    classes = "card stage" if stage else "card"
+    tag = '<span class="tag">&#9654; play</span>' if stage else ""
     return (
-        f'<a class="card" href="{entry.filename}">'
-        f"<h2>{_escape(entry.title)}</h2>"
+        f'<a class="{classes}" href="{entry.filename}">'
+        f"{tag}<h2>{_escape(entry.title)}</h2>"
         f"<p>{_escape(entry.subtitle)}</p></a>"
     )
 
@@ -93,6 +112,10 @@ _ATLAS_TEMPLATE = """<!DOCTYPE html>
     background:linear-gradient(90deg,#38bdf8,#a78bfa,#e879f9);opacity:.0;
     transition:opacity .15s}
   a.card:hover::before{opacity:.9}
+  a.card.stage{border-color:#2c3a5a;
+    background:linear-gradient(180deg,#151c30,#10131d)}
+  a.card .tag{display:inline-block;font-size:11px;letter-spacing:.12em;
+    text-transform:uppercase;color:#8ab4ff;margin:0 0 8px}
   a.card h2{font-size:16.5px;margin:0 0 7px;font-weight:620}
   a.card p{color:#9aa3b8;font-size:13px;margin:0}
 </style>
