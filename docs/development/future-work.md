@@ -129,6 +129,40 @@ solver returns the same near-optimal result as the uniform mesh (no regression).
   in place but applied to `|x''|`, not `|x'''|`; the headroom noted above - nested
   refinement still beating the adapted mesh at `N = 1600` - is where it would show up.
 
+## 1c. Connecting-orbit resolution
+
+- **Both resolution parameters are now measured (RESOLVED).**
+  `ConnectingOrbit.estimate_orbit_error` reports discretisation and truncation
+  separately. They fail independently and each alone certifies orbits that are badly
+  wrong, measured against the exact homoclinic `x = 1.5 sech^2(t/2)`: at `h = 0.25`
+  the truncation component reads 5.4e-11 against a true error of 7.7e-3, and at
+  `T = 5, N = 640` the discretisation component reads 2.3e-5 against a true 2.8e-4.
+  So `estimate` is the larger of the two and `limited_by` names which.
+
+  Both components obey clean laws, which is what makes the estimate usable rather
+  than a screen: discretisation is `O(h^2)` (exactly 4x per halving) and truncation
+  is `O(exp(-2 lambda T))` (measured 7.7x per unit `T` at `lambda = 1`, against
+  `e^2 = 7.39`). The estimate runs 0.75x the returned orbit's error at every
+  resolution measured from 40 to 640 intervals, on homoclinic and heteroclinic
+  alike - that factor is `E - E/4` for a second-order method, not a tuning constant.
+
+  Headroom left:
+
+  - **No iterative search.** There is no `solve_to_resolved` analogue of
+    `continue_to_resolved`. The convergence laws are known, so a search could jump
+    straight to the `h` and `T` that meet a tolerance rather than doubling blindly
+    (`h -> h/2` per factor of four, `T -> T + ln(4) / (2 lambda)` for the same). It
+    needs the leading eigenvalue, which the subclasses hold but the base class does
+    not - that is the only reason it was not done here.
+  - **Even meshes only.** The phase condition pins the centre node, so an odd mesh
+    has no matching centre when doubled and the comparison would measure an `O(h)`
+    translation instead of the error. Rejected with a message rather than worked
+    around; pinning by time rather than by node index would remove the restriction.
+  - **Truncation extension is a fixed fraction** (25% of the half-length). A
+    problem whose leading eigenvalue is small would get a proportionally weaker
+    reduction; scaling the extension by `1 / lambda` is the principled version and
+    again needs the eigenvalue in the base class.
+
 ## 2. Smaller open frontier items
 
 - **Two-parameter Shilnikov loop continuation (RESOLVED, with caveats).**

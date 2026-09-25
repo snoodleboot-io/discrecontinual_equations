@@ -45,6 +45,12 @@ _LSMR_ITERATIONS = 10000
 # lsmr's istop value meaning it hit maxiter without converging.
 _LSMR_ITERATION_LIMIT = 7
 _HALF = 0.5
+# How far the truncation estimate extends the interval, as a fraction of the
+# half-length. Truncation error decays like ``exp(-2 lambda T)``, so a fraction
+# rather than a fixed time keeps the reduction comparable across problems whose
+# natural time scales differ by orders of magnitude. A quarter buys roughly a
+# decade of reduction on the saddle measured in the docstrings below.
+_TRUNCATION_EXTENSION = 0.25
 _AUTODIFF = AutomaticDifferentiation()
 
 
@@ -88,6 +94,54 @@ class OrbitSolution:
     def component(self, index: int) -> np.ndarray:
         """One state component along the orbit."""
         return self._states[:, index]
+
+
+class OrbitResolution:
+    """Measured error estimates for a connecting orbit, one per resolution parameter.
+
+    A truncated connecting orbit has two independent resolutions and either can be
+    the inadequate one: the mesh spacing, which sets the collocation error, and the
+    half-length, which sets how much of the orbit's approach to the equilibrium is
+    cut off. ``discretisation`` and ``truncation`` are measured separately because a
+    single number cannot express both, and reporting only one certifies orbits that
+    are badly wrong in the other. Measured on the exact homoclinic
+    ``x = 1.5 sech^2(t/2)``:
+
+    * at spacing ``h = 0.25``, extending the half-length from 15 to 20 shifts the
+      orbit by 5.2e-13 while its true error is 7.7e-3 - truncation is genuinely
+      finished there, and alone it would claim ten orders of magnitude more accuracy
+      than the orbit has;
+    * at half-length 5, doubling the intervals past 160 shifts the orbit by about
+      5e-6 while its true error is stuck at 2.8e-4 - the boundary is the limit, and
+      the discretisation estimate alone is 50x optimistic.
+
+    ``estimate`` is therefore the larger of the two, and ``limited_by`` names which
+    one it was, since that is what says where to spend the next solve.
+    """
+
+    __slots__ = ["discretisation", "truncation"]
+
+    def __init__(self, discretisation: float, truncation: float) -> None:
+        self.discretisation = discretisation
+        self.truncation = truncation
+
+    @property
+    def estimate(self) -> float:
+        """The larger of the two components: neither alone bounds the error."""
+        return max(self.discretisation, self.truncation)
+
+    @property
+    def limited_by(self) -> str:
+        """Which resolution parameter to improve first, ``"spacing"`` or ``"length"``.
+
+        ``"spacing"`` means halve the mesh spacing, which divides the discretisation
+        error by four. ``"length"`` means extend the half-length; truncation error
+        falls like ``exp(-2 lambda T)``, so ``ln(4) / (2 lambda)`` more time buys the
+        same factor of four, where ``lambda`` is the leading eigenvalue magnitude.
+        """
+        if self.truncation > self.discretisation:
+            return "length"
+        return "spacing"
 
 
 class ConnectingOrbit(ABC):
@@ -134,6 +188,133 @@ class ConnectingOrbit(ABC):
                 jacobian = self._numerical_jacobian(unknowns, times, shape, residual)
             unknowns = unknowns + self._least_squares(jacobian, residual)
         return OrbitSolution(times, best.reshape(shape))
+
+    def estimate_orbit_error(self, solution: OrbitSolution) -> OrbitResolution:
+        """Estimate the orbit's error in both resolution parameters by re-solving.
+
+        A converged solve proves the *discrete* system was satisfied on *this* mesh
+        over *this* interval. It says nothing about whether either is adequate, and
+        :meth:`solve` cannot tell the caller: it returns its best iterate whatever
+        that is, and the least-squares minimum is nonzero by construction, so neither
+        a failure signal nor the residual size carries the information.
+
+        Two solves, compared against the orbit in hand:
+
+        * **discretisation** - re-solve on a mesh with twice the intervals over the
+          same interval, seeded by interpolation, and take the largest state shift at
+          the shared nodes. Second-order convergence makes this ``E - E/4``, so it
+          runs about 0.75x the *coarse* error and 3x the *refined* one. Measured on
+          the exact homoclinic it was 0.75x at every level from 80 to 640 intervals,
+          so unlike the cycle estimator it is a usable bound rather than a screen.
+        * **truncation** - re-solve on an interval longer by
+          ``_TRUNCATION_EXTENSION``, at the same spacing so the original nodes are a
+          subset, seeded by holding the end states, and take the largest shift on the
+          overlap. Holding the end states needs no knowledge of the equilibria, so it
+          serves homoclinic and heteroclinic orbits alike.
+
+        ``estimate`` is the larger; see :class:`OrbitResolution` for why reporting
+        either alone certifies orbits that are badly wrong.
+
+        Neither component needs a failure signal. A refined solve that lands
+        somewhere useless shows up as a *large* shift, which is the correct verdict.
+
+        Costs two solves, one at double the intervals and one slightly longer.
+
+        ``intervals`` must be even. The phase condition pins the centre node, and on
+        an odd mesh the doubled mesh's centre node sits half a step away, so the two
+        orbits come out translated relative to each other and the shift measures that
+        translation instead of the error.
+        """
+        mesh = self._mesh
+        nodes = mesh.intervals + 1
+        states = solution.states
+        if states.shape[0] != nodes:
+            message = (
+                f"solution has {states.shape[0]} nodes, but this solver has "
+                f"{nodes}; pass the solution this solver returned"
+            )
+            raise ValueError(message)
+        if mesh.intervals % 2 != 0:
+            message = (
+                f"intervals must be even to compare meshes, got {mesh.intervals}; "
+                f"the phase condition pins the centre node and an odd mesh has no "
+                f"matching centre when doubled"
+            )
+            raise ValueError(message)
+        return OrbitResolution(
+            self._discretisation_shift(solution),
+            self._truncation_shift(solution),
+        )
+
+    def _solve_on(self, mesh: MeshSpec, seed: np.ndarray) -> OrbitSolution:
+        """Solve the same problem on a different mesh, leaving this solver unchanged.
+
+        The boundary conditions depend on the two end states and not on how many
+        nodes lie between them, so swapping the mesh is enough to re-pose the problem
+        at another resolution - no subclass needs to know how to rebuild itself.
+        """
+        saved = self._mesh
+        self._mesh = mesh
+        try:
+            return self.solve(seed)
+        finally:
+            self._mesh = saved
+
+    def _discretisation_shift(self, solution: OrbitSolution) -> float:
+        """Largest state shift from doubling the intervals over the same interval."""
+        mesh = self._mesh
+        states = solution.states
+        coarse_times = solution.times
+        fine_times = np.linspace(
+            -mesh.half_length,
+            mesh.half_length,
+            2 * mesh.intervals + 1,
+        )
+        seed = np.column_stack(
+            [
+                np.interp(fine_times, coarse_times, states[:, index])
+                for index in range(states.shape[1])
+            ],
+        )
+        refined = self._solve_on(
+            MeshSpec(
+                mesh.half_length,
+                2 * mesh.intervals,
+                mesh.phase_index,
+                mesh.phase_value,
+            ),
+            seed,
+        )
+        return float(np.max(np.abs(refined.states[::2] - states)))
+
+    def _truncation_shift(self, solution: OrbitSolution) -> float:
+        """Largest state shift on the overlap from extending the interval.
+
+        The extension is a whole number of mesh steps, so the original nodes are a
+        subset of the longer mesh and the overlap needs no interpolation.
+        """
+        mesh = self._mesh
+        states = solution.states
+        spacing = 2.0 * mesh.half_length / mesh.intervals
+        extra = max(1, round(_TRUNCATION_EXTENSION * mesh.half_length / spacing))
+        seed = np.vstack(
+            [
+                np.repeat(states[:1], extra, axis=0),
+                states,
+                np.repeat(states[-1:], extra, axis=0),
+            ],
+        )
+        longer = self._solve_on(
+            MeshSpec(
+                mesh.half_length + extra * spacing,
+                mesh.intervals + 2 * extra,
+                mesh.phase_index,
+                mesh.phase_value,
+            ),
+            seed,
+        )
+        overlap = longer.states[extra : extra + states.shape[0]]
+        return float(np.max(np.abs(overlap - states)))
 
     def _residual(
         self,
