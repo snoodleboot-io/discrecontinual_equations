@@ -45,10 +45,11 @@ from discrecontinual_equations.webplot.stage_renderer import StageRenderer
 B2 = 0.5
 P_LO, P_HI, FRAMES = -0.6, 0.1, 57
 BOX = ((-1.25, 0.9), (-0.85, 0.85))
-# 160 nodes hold the Floquet error near 2.5% up to the homoclinic approach (80
-# gave 9%, 320 would give 0.6%); CycleContinuation's dense finite-difference
-# Jacobian (DEQ-15) makes 320 an hours-long build until it is replaced.
-INTERVALS = 160
+# 80 nodes build in minutes and carry a Floquet error the page reports beside
+# the multipliers (9% where the orbit hugs the saddle; 160 would give 2.5%, 320
+# 0.6%). CycleContinuation's dense finite-difference Jacobian (DEQ-15) makes the
+# finer meshes hour-long builds until it is replaced.
+INTERVALS = 80
 GRID = 36
 # The cycle continuation is seeded this far below the Hopf, where the cycle is
 # large enough to be found by integration but still far from the homoclinic.
@@ -235,7 +236,7 @@ def bogdanov_takens_stage() -> StageScene:
             "reversed-time integration because the cycle is unstable; saddle "
             "manifolds started on their Taylor charts and carried by the flow; "
             "field sampled on a 36\u00d736 grid per frame. The cycle continuation "
-            "stops where the fixed 160-node mesh can no longer resolve the orbit "
+            "stops where the fixed 80-node mesh can no longer resolve the orbit "
             "hugging the saddle; the manifolds carry the homoclinic the rest of "
             "the way. The Floquet readout carries its own error: one multiplier "
             "is exactly 1 along the orbit, and how far the computed one sits from "
