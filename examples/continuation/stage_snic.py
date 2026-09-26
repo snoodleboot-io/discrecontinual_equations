@@ -34,6 +34,7 @@ from discrecontinual_equations.webplot.stage_builder import Continued, Film, sta
 
 try:  # python -m examples.continuation.<module>
     from examples.continuation.stage_support import (
+        BranchLimits,
         Mu,
         circle_seed,
         continue_branch,
@@ -44,6 +45,7 @@ try:  # python -m examples.continuation.<module>
     )
 except ImportError:  # run as a script path: only this directory is on sys.path
     from stage_support import (
+        BranchLimits,
         Mu,
         circle_seed,
         continue_branch,
@@ -112,7 +114,13 @@ def snic_stage() -> StageScene:
     eq = equation(SnicSystem, [Mu(value=P_LO)])
     # The branch rounds its own fold at mu = 1 and returns as the saddle, so
     # one continuation carries both equilibria.
-    pair = continue_branch(eq, [start, P_LO], (P_LO, P_HI), ["fold"], step=0.01)
+    pair = continue_branch(
+        eq,
+        [start, P_LO],
+        (P_LO, P_HI),
+        ["fold"],
+        BranchLimits(step=0.01),
+    )
     cycles = cycle_branch()
     system = StageSystem(
         "Saddle-node on an invariant circle",

@@ -7,11 +7,6 @@ prints the bifurcations detected along the branch. Run with::
     python -m examples.continuation.bifurcation_examples
 """
 
-from pathlib import Path
-
-from sweet_tea.registry import Registry
-
-import discrecontinual_equations
 from discrecontinual_equations.continuation.branch import Branch
 from discrecontinual_equations.continuation.builder import ContinuerBuilder
 from discrecontinual_equations.continuation.continuation_config import (
@@ -21,6 +16,11 @@ from discrecontinual_equations.differential_equation import DifferentialEquation
 from discrecontinual_equations.function.deterministic import DeterministicFunction
 from discrecontinual_equations.parameter import Parameter
 from discrecontinual_equations.variable import Variable
+
+try:  # python -m examples.continuation.bifurcation_examples
+    from examples.continuation.component_registry import ensure_registry
+except ImportError:  # run as a script path: only this directory is on sys.path
+    from component_registry import ensure_registry
 
 
 class Mu(Parameter, name="Continuation parameter", abbreviation="mu"):
@@ -275,11 +275,7 @@ def run_selkov() -> None:
 
 
 def main() -> None:
-    Registry.fill_registry(
-        path=str(Path(discrecontinual_equations.__file__).parent),
-        module="discrecontinual_equations",
-        exclude=["*.tests", "*.examples", "*.plot"],
-    )
+    ensure_registry()
     print("Continuation & bifurcation examples")
     print("=" * 40)
     run_saddle_node()
