@@ -13,8 +13,15 @@ of a cycle:
   circle (a torus is born).
 """
 
-import numpy as np
+from collections.abc import Callable
 
+import numpy as np
+from scipy.sparse import coo_matrix
+from scipy.sparse.linalg import spsolve
+
+from discrecontinual_equations.continuation.derivative_provider import (
+    AutomaticDifferentiation,
+)
 from discrecontinual_equations.continuation.periodic_orbit import (
     PeriodicOrbit,
     PeriodicOrbitSolution,
@@ -29,6 +36,8 @@ _CROSS_MARGIN = 1.0e-6
 _IMAGINARY_TOLERANCE = 1.0e-6
 _NOISE_FLOOR = 1.0e-9
 _ANGLE_BAND = 0.12
+_HALF = 0.5
+_AUTODIFF = AutomaticDifferentiation()
 
 
 class CycleSeed:
@@ -270,6 +279,21 @@ class CycleContinuation:
         constraint = float(arc.tangent @ (unknowns - arc.anchor) - arc.arclength)
         return np.concatenate([cycle, [constraint]])
 
+    def _dense_tangent_system(
+        self,
+        unknowns: np.ndarray,
+        nodes: int,
+        previous: np.ndarray,
+    ) -> np.ndarray:
+        """The tangent system built by finite differences, for the fallback only."""
+        residual = self._cycle_residual(unknowns, nodes)
+        jacobian = np.empty((residual.size, unknowns.size))
+        for j in range(unknowns.size):
+            shifted = unknowns.copy()
+            shifted[j] += _STEP
+            jacobian[:, j] = (self._cycle_residual(shifted, nodes) - residual) / _STEP
+        return np.vstack([jacobian, previous])
+
     def _numerical_jacobian(
         self,
         unknowns: np.ndarray,
@@ -284,6 +308,172 @@ class CycleContinuation:
             jacobian[:, j] = (self._augmented(shifted, nodes, arc) - residual) / _STEP
         return jacobian
 
+    def _state_jacobian(self, state: np.ndarray, parameter: float) -> np.ndarray:
+        """``df/dx`` at one node, analytically where the field allows it.
+
+        Automatic differentiation carries Taylor jets through the field, which a
+        field written with ``math.sqrt`` or a fractional power rejects. Those fall
+        back to finite differences - still one column per state rather than one
+        per unknown of the whole augmented system.
+        """
+        self._equation.derivative.parameters[self._parameter_index].value = parameter
+        try:
+            return _AUTODIFF.jacobian(self._equation.derivative, state, 0.0)
+        except (TypeError, ValueError, AttributeError):
+            base = self._field(state, parameter)
+            columns = []
+            for j in range(state.size):
+                shifted = np.array(state, dtype=float)
+                shifted[j] += _STEP
+                columns.append((self._field(shifted, parameter) - base) / _STEP)
+            return np.column_stack(columns)
+
+    def _blocks(
+        self,
+        unknowns: np.ndarray,
+        nodes: int,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """The cycle residual's Jacobian as sparse triplets.
+
+        Trapezoidal collocation makes this bordered almost-block-diagonal: a band
+        from the interval blocks, one dense column for the period and another for
+        the parameter, the periodicity rows coupling the first and last nodes, and
+        the phase row. Interval ``i`` contributes ``-I - w Df(x_i)`` against node
+        ``i`` and ``I - w Df(x_{i+1})`` against node ``i+1``.
+
+        This is what DEQ-4 and DEQ-6 did for the periodic orbit solver, which the
+        cycle *continuation* never got: it perturbed every unknown and re-evaluated
+        the whole augmented residual, so a Newton step cost ``nodes * dimension +
+        2`` residuals of ``O(nodes)`` field evaluations each, then a dense solve.
+        """
+        dimension = self._dimension
+        intervals = self._intervals
+        states = unknowns[: nodes * dimension].reshape(nodes, dimension)
+        period = float(unknowns[nodes * dimension])
+        parameter = float(unknowns[-1])
+        size = unknowns.size
+        identity = np.eye(dimension)
+        step = 1.0 / intervals
+        weight = _HALF * period * step
+
+        derivatives = np.array(
+            [self._state_jacobian(states[i], parameter) for i in range(nodes)],
+        )
+        fields = np.array([self._field(states[i], parameter) for i in range(nodes)])
+        # df/dp at every node: one field evaluation each, against the whole
+        # augmented residual a finite-difference column would have cost.
+        ahead = np.array(
+            [self._field(states[i], parameter + _STEP) for i in range(nodes)],
+        )
+        parameter_fields = (ahead - fields) / _STEP
+
+        left = -identity[None] - weight * derivatives[:-1]
+        right = identity[None] - weight * derivatives[1:]
+        span = np.arange(dimension)
+        starts = np.arange(intervals) * dimension
+        block_rows = np.broadcast_to(
+            (starts[:, None] + span)[:, :, None],
+            (intervals, dimension, dimension),
+        )
+        left_columns = np.broadcast_to(
+            (starts[:, None] + span)[:, None, :],
+            (intervals, dimension, dimension),
+        )
+        right_columns = left_columns + dimension
+        border_rows = starts[:, None] + span
+        period_values = -_HALF * step * (fields[:-1] + fields[1:])
+        parameter_values = -weight * (parameter_fields[:-1] + parameter_fields[1:])
+        periodic = intervals * dimension + span
+
+        rows = np.concatenate(
+            [
+                block_rows.ravel(),
+                block_rows.ravel(),
+                border_rows.ravel(),
+                border_rows.ravel(),
+                periodic,
+                periodic,
+                [intervals * dimension + dimension],
+            ],
+        )
+        columns = np.concatenate(
+            [
+                left_columns.ravel(),
+                right_columns.ravel(),
+                np.full(intervals * dimension, size - 2),
+                np.full(intervals * dimension, size - 1),
+                intervals * dimension + span,
+                span,
+                [self._phase_index],
+            ],
+        )
+        values = np.concatenate(
+            [
+                left.ravel(),
+                right.ravel(),
+                period_values.ravel(),
+                parameter_values.ravel(),
+                np.ones(dimension),
+                -np.ones(dimension),
+                [1.0],
+            ],
+        )
+        return rows, columns, values
+
+    def _bordered(
+        self,
+        unknowns: np.ndarray,
+        nodes: int,
+        border: np.ndarray,
+    ) -> coo_matrix:
+        """The cycle Jacobian with ``border`` as its last row.
+
+        Both systems the continuation solves have this shape: the corrector borders
+        it with the arclength constraint's tangent, and the tangent solve borders it
+        with the previous tangent. Either way the result is square, so a sparse LU
+        applies directly.
+        """
+        rows, columns, values = self._blocks(unknowns, nodes)
+        size = unknowns.size
+        last = nodes * self._dimension + 1
+        return coo_matrix(
+            (
+                np.concatenate([values, border]),
+                (
+                    np.concatenate([rows, np.full(size, last)]),
+                    np.concatenate([columns, np.arange(size)]),
+                ),
+            ),
+            shape=(size, size),
+        )
+
+    def _solve_bordered(
+        self,
+        unknowns: np.ndarray,
+        nodes: int,
+        border: np.ndarray,
+        rhs: np.ndarray,
+        dense: Callable[[], np.ndarray],
+    ) -> np.ndarray:
+        """One sparse solve, falling back to a dense least squares.
+
+        Where the Jacobian is singular the sparse LU returns a non-finite vector
+        rather than raising, so the result is checked before it is trusted - the
+        same guard the periodic orbit solver uses.
+
+        ``dense`` is a callable and not an array on purpose. Building the
+        finite-difference system costs a whole Newton step's worth of field
+        evaluations, which is the expense this class exists to avoid; passing it
+        eagerly would pay that cost on every step and leave the sparse path
+        saving nothing at all.
+        """
+        sparse = self._bordered(unknowns, nodes, border).tocsc()
+        update = spsolve(sparse, rhs)
+        if np.all(np.isfinite(update)):
+            return update
+        fallback, *_ = np.linalg.lstsq(dense(), rhs, rcond=None)
+        return fallback
+
     def _correct(
         self,
         prediction: np.ndarray,
@@ -295,13 +485,19 @@ class CycleContinuation:
             residual = self._augmented(unknowns, nodes, arc)
             if np.linalg.norm(residual) < _TOLERANCE:
                 return unknowns
-            jacobian = self._numerical_jacobian(
+            update = self._solve_bordered(
                 unknowns,
                 nodes,
-                arc,
-                residual,
+                arc.tangent,
+                -residual,
+                # bound now, not at call time: both are rebound each iteration
+                lambda u=unknowns, r=residual: self._numerical_jacobian(
+                    u,
+                    nodes,
+                    arc,
+                    r,
+                ),
             )
-            update, *_ = np.linalg.lstsq(jacobian, -residual, rcond=None)
             unknowns = unknowns + update
         residual = self._augmented(unknowns, nodes, arc)
         return unknowns if np.linalg.norm(residual) < _TOLERANCE else None
@@ -312,16 +508,15 @@ class CycleContinuation:
         nodes: int,
         previous: np.ndarray,
     ) -> np.ndarray:
-        residual = self._cycle_residual(unknowns, nodes)
-        jacobian = np.empty((residual.size, unknowns.size))
-        for j in range(unknowns.size):
-            shifted = unknowns.copy()
-            shifted[j] += _STEP
-            jacobian[:, j] = (self._cycle_residual(shifted, nodes) - residual) / _STEP
-        system = np.vstack([jacobian, previous])
         rhs = np.zeros(unknowns.size)
         rhs[-1] = 1.0
-        tangent, *_ = np.linalg.lstsq(system, rhs, rcond=None)
+        tangent = self._solve_bordered(
+            unknowns,
+            nodes,
+            previous,
+            rhs,
+            lambda: self._dense_tangent_system(unknowns, nodes, previous),
+        )
         tangent = tangent / np.linalg.norm(tangent)
         if tangent @ previous < 0.0:
             tangent = -tangent
