@@ -383,6 +383,13 @@ function applyProjection(k){
   for (const c of D.cycles){
     if (c.orbit && c.orbit.length) c.states = c.orbit.map(st => projectWith(M, st));
   }
+  for (const f of D.frames){
+    for (const mf of f.manifolds){
+      if (mf.curve && mf.curve.length){
+        mf.points = mf.curve.map(st => projectWith(M, st));
+      }
+    }
+  }
   for (const q of P){ const r = projectWith(M, q.x); q.u = r[0]; q.v = r[1]; }
 }
 function spawn(p){
@@ -875,6 +882,11 @@ for (const id of ["l-manifolds","l-cycle","l-trails"]){
 }
 // The plane picker only appears where there is a choice to make, so a planar
 // system's controls are unchanged.
+if (!D.frames.some(f => f.manifolds.length)){
+  // A saddle's manifold is only drawn where it is a curve; a system with no
+  // saddle, or whose manifolds are surfaces, has nothing for the toggle to do.
+  document.getElementById("l-manifolds").closest("label").hidden = true;
+}
 if (PROJS.length > 1){
   const sel = document.getElementById("plane");
   PROJS.forEach((p, k) => {

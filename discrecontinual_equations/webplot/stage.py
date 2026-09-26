@@ -206,13 +206,24 @@ class Equilibrium:
 
 
 class Manifold:
-    """One branch of a saddle's stable or unstable manifold, as a polyline."""
+    """One branch of a saddle's stable or unstable manifold, as a polyline.
 
-    __slots__ = ["kind", "points"]
+    ``points`` is the branch in the plane under the view's opening projection.
+    ``curve``, set after construction, holds the full states it came from, so
+    the page can project the branch again when the viewer switches plane; it is
+    empty for a planar system, where the two are the same.
+
+    Only a manifold whose eigenspace is one-dimensional is a curve and can be
+    drawn this way. A two-dimensional one is a surface, and the builder leaves
+    it out rather than drawing a single arbitrary trajectory across it.
+    """
+
+    __slots__ = ["curve", "kind", "points"]
 
     def __init__(self, kind: str, points: Pairs) -> None:
         self.kind = kind
         self.points = points
+        self.curve: list[list[float]] = []
 
 
 class Cycle:
@@ -493,7 +504,11 @@ def stage_payload(scene: StageScene) -> dict:
                     for item in frame.equilibria
                 ],
                 "manifolds": [
-                    {"kind": item.kind, "points": _pairs(item.points)}
+                    {
+                        "kind": item.kind,
+                        "points": _pairs(item.points),
+                        "curve": [[_num(v) for v in state] for state in item.curve],
+                    }
                     for item in frame.manifolds
                 ],
                 "cycles": list(frame.cycles),

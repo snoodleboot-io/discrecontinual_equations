@@ -204,8 +204,10 @@ def zero_hopf_stage() -> StageScene:
             "The folded equilibrium branch comes from ContinuerBuilder - one "
             "continuation, because it rounds the fold and returns as the other "
             "arm. Each circle comes from its own CycleContinuation, seeded "
-            "analytically at radius sqrt(mu2) on the arm it rides. The saddle "
-            "manifolds are surfaces in three dimensions and are not drawn."
+            "analytically at radius sqrt(mu2) on the arm it rides. The saddle's "
+            "one-dimensional stable manifold is drawn, the line along which "
+            "the flow falls onto it; its unstable manifold is a surface, and a "
+            "surface is not drawn."
         ),
     )
     return stage_scene(
