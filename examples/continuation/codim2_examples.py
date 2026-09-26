@@ -5,11 +5,6 @@ analytically known codim-2 point; the script continues the relevant curve from a
 codim-1 seed and prints the detected location.
 """
 
-from pathlib import Path
-
-from sweet_tea.registry import Registry
-
-import discrecontinual_equations
 from discrecontinual_equations.continuation.codim2_builder import (
     Codim2Driver,
     CurveSeed,
@@ -19,6 +14,11 @@ from discrecontinual_equations.differential_equation import DifferentialEquation
 from discrecontinual_equations.function.deterministic import DeterministicFunction
 from discrecontinual_equations.parameter import Parameter
 from discrecontinual_equations.variable import Variable
+
+try:  # python -m examples.continuation.codim2_examples
+    from examples.continuation.component_registry import ensure_registry
+except ImportError:  # run as a script path: only this directory is on sys.path
+    from component_registry import ensure_registry
 
 
 class First(Parameter, name="First parameter", abbreviation="p1"):
@@ -134,11 +134,7 @@ def _report(title: str, result: object, expectation: str) -> None:
 
 
 def main() -> None:
-    Registry.fill_registry(
-        path=str(Path(discrecontinual_equations.__file__).parent),
-        module="discrecontinual_equations",
-        exclude=["*.tests", "*.examples", "*.plot"],
-    )
+    ensure_registry()
     print("Codim-2 bifurcation examples\n")
 
     equation = _equation(BogdanovTakensNormalForm, 2, first=-0.25, second=-0.5)

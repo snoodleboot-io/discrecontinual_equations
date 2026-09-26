@@ -12,17 +12,10 @@ example includes it as its "play" card.
 
 import math
 import sys
-from pathlib import Path
 
 import numpy as np
 from scipy.integrate import solve_ivp
-from sweet_tea.registry import Registry
 
-import discrecontinual_equations
-from discrecontinual_equations.continuation.builder import ContinuerBuilder
-from discrecontinual_equations.continuation.continuation_config import (
-    ContinuationConfig,
-)
 from discrecontinual_equations.continuation.cycle_continuation import (
     CycleContinuation,
     CyclePoint,
@@ -31,8 +24,7 @@ from discrecontinual_equations.continuation.cycle_continuation import (
 from discrecontinual_equations.differential_equation import DifferentialEquation
 from discrecontinual_equations.function.deterministic import DeterministicFunction
 from discrecontinual_equations.parameter import Parameter
-from discrecontinual_equations.variable import Variable
-from discrecontinual_equations.webplot.report import AtlasEntry, PlotReport
+from discrecontinual_equations.webplot.report import AtlasEntry
 from discrecontinual_equations.webplot.stage import (
     Frame,
     Lattice,
@@ -40,7 +32,23 @@ from discrecontinual_equations.webplot.stage import (
     StageSystem,
 )
 from discrecontinual_equations.webplot.stage_builder import Continued, Film, stage_scene
-from discrecontinual_equations.webplot.stage_renderer import StageRenderer
+
+try:  # python -m examples.continuation.stage_bogdanov_takens
+    from examples.continuation.stage_support import (
+        BranchLimits,
+        continue_branch,
+        equation,
+        keep_cycles,
+        publish,
+    )
+except ImportError:  # run as a script path: only this directory is on sys.path
+    from stage_support import (
+        BranchLimits,
+        continue_branch,
+        equation,
+        keep_cycles,
+        publish,
+    )
 
 B2 = 0.5
 P_LO, P_HI, FRAMES = -0.6, 0.1, 57
@@ -58,7 +66,10 @@ _MIN_AMPLITUDE = 1.0e-3
 _PERIOD_RANGE = (2.0, 400.0)
 # The fold sits at b1 = 0; frames this close to it are called the fold.
 _FOLD_TOLERANCE = 1.0e-9
-_registered = False
+# The branch this film wants is tighter than the shared default: it stops close
+# to its own span and takes a finer step, which is what its own hand-rolled
+# continuation used to do.
+LIMITS = BranchLimits(step=0.015, margin=0.02, maximum_points=600)
 
 
 class First(Parameter, name="First", abbreviation="p1"):
@@ -66,14 +77,6 @@ class First(Parameter, name="First", abbreviation="p1"):
 
 
 class Second(Parameter, name="Second", abbreviation="p2"):
-    pass
-
-
-class State(Variable, name="State", abbreviation="v"):
-    pass
-
-
-class Time(Variable, name="Time", abbreviation="t"):
     pass
 
 
@@ -87,32 +90,9 @@ class BogdanovTakensFamily(DeterministicFunction):
         return [y, b1 + b2 * y + x * x + x * y]
 
 
-def ensure_registry() -> None:
-    """Fill the component registry once; the continuation builders need it."""
-    global _registered  # noqa: PLW0603 (module-level guard)
-    if _registered:
-        return
-    Registry.fill_registry(
-        path=str(Path(discrecontinual_equations.__file__).parent),
-        module="discrecontinual_equations",
-        exclude=["*.tests", "*.examples", "*.plot"],
-    )
-    _registered = True
-
-
-def equation(b1: float) -> DifferentialEquation:
-    parameters = [First(value=b1), Second(value=B2)]
-    return DifferentialEquation(
-        variables=[State(), State()],
-        time=Time(),
-        parameters=parameters,
-        derivative=BogdanovTakensFamily(
-            variables=[State(), State()],
-            parameters=parameters,
-            results=[State(), State()],
-            time=None,
-        ),
-    )
+def slice_equation(b1: float) -> DifferentialEquation:
+    """The slice at ``b1``, with b2 held fixed."""
+    return equation(BogdanovTakensFamily, [First(value=b1), Second(value=B2)])
 
 
 def _field(eq: DifferentialEquation, b1: float, x: float, y: float) -> np.ndarray:
@@ -162,17 +142,11 @@ def _integrated_cycle(eq: DifferentialEquation, b1: float) -> tuple[np.ndarray, 
 
 
 def _trace_from(b1: float, direction: float) -> list[CyclePoint]:
-    eq = equation(b1)
+    eq = slice_equation(b1)
     states, period = _integrated_cycle(eq, b1)
     continuation = CycleContinuation(eq, 0, INTERVALS, phase_index=1, phase_value=0.0)
     points, _ = continuation.trace(CycleSeed(states, period, b1), 0.02, 400, direction)
-    accepted: list[CyclePoint] = []
-    for point in points:
-        period_ok = _PERIOD_RANGE[0] < point.solution.period < _PERIOD_RANGE[1]
-        if point.amplitude < _MIN_AMPLITUDE or not period_ok:
-            break  # a trace that collapsed onto the equilibrium, not a cycle
-        accepted.append(point)
-    return accepted
+    return keep_cycles(points, _MIN_AMPLITUDE, _PERIOD_RANGE)
 
 
 def cycle_branch(hopf: float) -> list[CyclePoint]:
@@ -199,20 +173,14 @@ def describe(frame: Frame) -> str | None:
 
 def bogdanov_takens_stage() -> StageScene:
     """Build the stage: equilibrium branch, cycle branch, and 57 frames."""
-    ensure_registry()
-    eq = equation(P_LO)
-    config = ContinuationConfig(
-        continuation_parameter_index=0,
-        detectors=["fold", "hopf"],
-        initial_parameter=P_LO,
-        direction=1,
-        measure="component",
-        parameter_lower_bound=P_LO - 0.02,
-        parameter_upper_bound=P_HI + 0.02,
-        maximum_points=600,
-        maximum_step=0.015,
+    eq = slice_equation(P_LO)
+    branch = continue_branch(
+        eq,
+        [-math.sqrt(-P_LO), 0.0],
+        (P_LO, P_HI),
+        ["fold", "hopf"],
+        LIMITS,
     )
-    branch = ContinuerBuilder.build(config, eq).solve(eq, [-math.sqrt(-P_LO), 0.0])
     hopf = next(
         (p.parameter for p in branch.special_points if p.kind == "hopf"),
         -(B2 * B2),
@@ -265,10 +233,8 @@ STAGE_ENTRY = AtlasEntry(
 
 def main(output_dir: str = "plots") -> None:
     """Write the stage page (and a one-card atlas) to ``output_dir``."""
-    report = PlotReport(StageRenderer(), output_dir)
-    path = report.write(bogdanov_takens_stage(), STAGE_FILENAME)
-    report.write_atlas([STAGE_ENTRY])
-    print(f"wrote {path}")
+    scene = bogdanov_takens_stage()
+    print(f"wrote {publish(scene, STAGE_FILENAME, STAGE_ENTRY, output_dir)}")
 
 
 if __name__ == "__main__":
