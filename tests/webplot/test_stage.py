@@ -24,6 +24,7 @@ from discrecontinual_equations.webplot.stage import (
     Equilibrium,
     Frame,
     Lattice,
+    Projection,
     StageScene,
     StageSystem,
     Term,
@@ -359,6 +360,30 @@ def _ring_view(terms=None) -> View:
     )
 
 
+def _ring_branch() -> Branch:
+    branch = Branch()
+    for parameter, value in ((-0.5, 1.2), (0.0, 1.0), (0.5, 0.7)):
+        branch.append_point(_ring_point(parameter, value, "saddle"))
+    return branch
+
+
+def _scene_with_view(view: View) -> StageScene:
+    """A ring scene seen through ``view``, for checking what the payload emits."""
+    return stage_scene(
+        Continued(_ring(), 0, _ring_branch()),
+        Film([0.0], Lattice(_UNIT, 3, view=view), _SYSTEM),
+    )
+
+
+def _ring_scene() -> StageScene:
+    return _scene_with_view(_ring_view())
+
+
+def _planar_scene() -> StageScene:
+    """The saddle, with no view at all: the plane is the state space."""
+    return stage_scene(Continued(_equation(), 0, _saddle_branch()), _film([0.0]))
+
+
 def _ring_point(parameter: float, s: float, stability: str) -> ContinuationPoint:
     return ContinuationPoint(
         arclength=0.0,
@@ -418,6 +443,77 @@ class TestSpecialPoints(TestCase):
         branch.append_special_point(hopf)
         scene = stage_scene(Continued(_equation(), 0, [branch, branch]), _film([0.0]))
         assert sorted(s.kind for s in scene.timeline.special) == ["hopf", "pitchfork"]
+
+
+class TestProjections(TestCase):
+    """A view may offer several planes, and the page projects rather than reads."""
+
+    @staticmethod
+    def _matrix(*rows):
+        return [list(row) for row in rows]
+
+    def test_a_bare_matrix_is_read_as_the_only_projection(self):
+        """Every film written before projections existed still builds."""
+        view = View(self._matrix([1, 0, 0], [0, 1, 0]), [(0.0, 1.0)] * 3, [])
+        assert len(view.projections) == 1
+        assert view.projections[0].name == ""
+        assert view.matrix == [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]
+        assert view.dimension == 3
+
+    def test_the_first_projection_is_the_one_the_page_opens_on(self):
+        planes = (
+            Projection("y - z", self._matrix([0, 1, 0], [0, 0, 1])),
+            Projection("x - y", self._matrix([1, 0, 0], [0, 1, 0])),
+        )
+        view = View(planes, [(0.0, 1.0)] * 3, [])
+        assert [p.name for p in view.projections] == ["y - z", "x - y"]
+        assert view.matrix == [[0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
+        assert view.project([0.0, 0.25, 0.75]) == (0.25, 0.75)
+
+    def test_a_projection_carries_its_own_labels_and_box(self):
+        """The plane of y against z is a different picture at a different scale."""
+        box = ((-2.0, 2.0), (-0.5, 0.5))
+        plane = Projection("y - z", self._matrix([0, 1, 0], [0, 0, 1]), ("y", "z"), box)
+        payload = stage_payload(
+            _scene_with_view(View((plane,), [(0.0, 1.0)] * 3, _ring_terms())),
+        )
+        emitted = payload["view"]["projections"][0]
+        assert emitted["name"] == "y - z"
+        assert emitted["x_label"] == "y"
+        assert emitted["y_label"] == "z"
+        assert emitted["box"] == {"x": [-2.0, 2.0], "y": [-0.5, 0.5]}
+
+    def test_a_projection_without_a_box_leaves_the_lattice_to_say(self):
+        plane = Projection("x - y", self._matrix([1, 0, 0], [0, 1, 0]))
+        payload = stage_payload(
+            _scene_with_view(View((plane,), [(0.0, 1.0)] * 3, _ring_terms())),
+        )
+        emitted = payload["view"]["projections"][0]
+        assert emitted["box"] is None
+        assert emitted["x_label"] == ""
+
+
+class TestFullStatesTravel(TestCase):
+    """The page can only re-project what it was given unprojected."""
+
+    def test_an_equilibrium_of_a_view_keeps_its_full_state(self):
+        scene = _ring_scene()
+        payload = stage_payload(scene)
+        item = payload["frames"][0]["equilibria"][0]
+        # Three cells in, two plane coordinates out: the state is what survives.
+        assert len(item["state"]) == 3
+        matrix = payload["view"]["matrix"]
+        for axis, key in ((0, "x"), (1, "y")):
+            projected = sum(
+                m * v for m, v in zip(matrix[axis], item["state"], strict=True)
+            )
+            assert abs(projected - item[key]) < 1.0e-9
+
+    def test_a_planar_system_sends_no_full_state(self):
+        """Its state and its plane are the same thing, so there is nothing to add."""
+        payload = stage_payload(_planar_scene())
+        assert payload["view"] is None
+        assert payload["frames"][0]["equilibria"][0]["state"] == []
 
 
 class TestView(TestCase):

@@ -60,26 +60,69 @@ class Term:
         self.parameter_power = parameter_power
 
 
-class View:
-    """How a higher-dimensional system is seen on the plane.
+class Projection:
+    """One ``2 x N`` way of looking at a state, and what to call it.
 
-    ``matrix`` is the ``2 x N`` linear projection from state to plane; ``bounds``
-    the ``N`` ranges particles are spawned in and culled outside of; ``field``
-    the system's polynomial right-hand side as one :class:`Term` list per
-    component, which the page integrates in full dimension.
+    ``labels`` name the two plane axes and ``box`` is the window they are drawn
+    in - both belong to the projection rather than the scene, since the plane
+    of ``y`` against ``z`` is a different picture at a different scale from the
+    plane of ``x`` against ``y``. Either may be left out, and the lattice's own
+    labels and box are then used.
     """
 
-    __slots__ = ["bounds", "field", "matrix"]
+    __slots__ = ["box", "labels", "matrix", "name"]
 
     def __init__(
         self,
+        name: str,
         matrix: Sequence[Sequence[float]],
+        labels: tuple[str, str] = ("", ""),
+        box: Box | None = None,
+    ) -> None:
+        self.name = name
+        self.matrix = [list(row) for row in matrix]
+        self.labels = labels
+        self.box = box
+
+
+class View:
+    """How a higher-dimensional system is seen on the plane.
+
+    ``projections`` is one or more ``2 x N`` linear projections from state to
+    plane; the first is what the page opens on, and the page offers the rest to
+    switch between, since no single plane shows a system of three or more
+    dimensions. A bare ``2 x N`` matrix is accepted and read as the only
+    projection. ``bounds`` are the ``N`` ranges particles are spawned in and
+    culled outside of; ``field`` the system's polynomial right-hand side as one
+    :class:`Term` list per component, which the page integrates in full
+    dimension.
+
+    Switching is only possible because the page is given full states rather
+    than plane coordinates: the particles were always integrated in full
+    dimension, and the equilibria and cycles now travel unprojected too, so
+    every projection is applied in the browser.
+    """
+
+    __slots__ = ["bounds", "field", "projections"]
+
+    def __init__(
+        self,
+        matrix: Sequence[Sequence[float]] | Sequence[Projection],
         bounds: Sequence[tuple[float, float]],
         field: Sequence[Sequence[Term]],
     ) -> None:
-        self.matrix = [list(row) for row in matrix]
+        first = matrix[0] if len(matrix) else None
+        if isinstance(first, Projection):
+            self.projections = list(matrix)  # type: ignore[arg-type]
+        else:
+            self.projections = [Projection("", matrix)]  # type: ignore[arg-type]
         self.bounds = list(bounds)
         self.field = [list(component) for component in field]
+
+    @property
+    def matrix(self) -> list[list[float]]:
+        """The projection the page opens on."""
+        return self.projections[0].matrix
 
     @property
     def dimension(self) -> int:
@@ -137,25 +180,50 @@ class Lattice:
 
 
 class Equilibrium:
-    """An equilibrium at one frame, with the eigenvalues the branch recorded."""
+    """An equilibrium at one frame, with the eigenvalues the branch recorded.
 
-    __slots__ = ["eigenvalues", "stability", "x", "y"]
+    ``x`` and ``y`` are its plane coordinates under the view's opening
+    projection. ``state`` is the full state it was projected from, kept so the
+    page can project it again when the viewer switches plane; it is empty for a
+    planar system, where the state and the plane are the same thing.
+    """
 
-    def __init__(self, x: float, y: float, stability: str, eigenvalues: Pairs) -> None:
+    __slots__ = ["eigenvalues", "stability", "state", "x", "y"]
+
+    def __init__(
+        self,
+        x: float,
+        y: float,
+        stability: str,
+        eigenvalues: Pairs,
+        state: Sequence[float] = (),
+    ) -> None:
         self.x = x
         self.y = y
         self.stability = stability
         self.eigenvalues = eigenvalues
+        self.state = [float(value) for value in state]
 
 
 class Manifold:
-    """One branch of a saddle's stable or unstable manifold, as a polyline."""
+    """One branch of a saddle's stable or unstable manifold, as a polyline.
 
-    __slots__ = ["kind", "points"]
+    ``points`` is the branch in the plane under the view's opening projection.
+    ``curve``, set after construction, holds the full states it came from, so
+    the page can project the branch again when the viewer switches plane; it is
+    empty for a planar system, where the two are the same.
+
+    Only a manifold whose eigenspace is one-dimensional is a curve and can be
+    drawn this way. A two-dimensional one is a surface, and the builder leaves
+    it out rather than drawing a single arbitrary trajectory across it.
+    """
+
+    __slots__ = ["curve", "kind", "points"]
 
     def __init__(self, kind: str, points: Pairs) -> None:
         self.kind = kind
         self.points = points
+        self.curve: list[list[float]] = []
 
 
 class Cycle:
@@ -163,9 +231,23 @@ class Cycle:
 
     ``error`` is the trivial multiplier's distance from one, which bounds how
     far every multiplier is from its true value; it is drawn with them.
+
+    ``states`` is the orbit in the plane under the view's opening projection.
+    ``orbit``, set after construction the way ``error`` is, holds the full
+    states it came from, so the page can project the orbit again when the
+    viewer switches plane; it is empty for a planar system, where the two
+    are the same.
     """
 
-    __slots__ = ["amplitude", "error", "multipliers", "parameter", "period", "states"]
+    __slots__ = [
+        "amplitude",
+        "error",
+        "multipliers",
+        "orbit",
+        "parameter",
+        "period",
+        "states",
+    ]
 
     def __init__(
         self,
@@ -180,6 +262,7 @@ class Cycle:
         self.amplitude = amplitude
         self.multipliers = multipliers
         self.states = states
+        self.orbit: list[list[float]] = []
         self.error: float = 0.0
 
 
@@ -326,6 +409,20 @@ def _view_payload(view: View | None) -> dict | None:
         return None
     return {
         "matrix": [[float(m) for m in row] for row in view.matrix],
+        "projections": [
+            {
+                "name": projection.name,
+                "matrix": [[float(m) for m in row] for row in projection.matrix],
+                "x_label": projection.labels[0],
+                "y_label": projection.labels[1],
+                "box": (
+                    {"x": list(projection.box[0]), "y": list(projection.box[1])}
+                    if projection.box
+                    else None
+                ),
+            }
+            for projection in view.projections
+        ],
         "bounds": [[float(lo), float(hi)] for lo, hi in view.bounds],
         "field": [
             [
@@ -388,6 +485,7 @@ def stage_payload(scene: StageScene) -> dict:
                 "multipliers": _pairs(cycle.multipliers),
                 "error": _num(cycle.error),
                 "states": _pairs(cycle.states),
+                "orbit": [[_num(v) for v in state] for state in cycle.orbit],
             }
             for cycle in scene.cycles.cycles
         ],
@@ -401,11 +499,16 @@ def stage_payload(scene: StageScene) -> dict:
                         "y": _num(item.y),
                         "stability": item.stability,
                         "eig": _pairs(item.eigenvalues),
+                        "state": [_num(value) for value in item.state],
                     }
                     for item in frame.equilibria
                 ],
                 "manifolds": [
-                    {"kind": item.kind, "points": _pairs(item.points)}
+                    {
+                        "kind": item.kind,
+                        "points": _pairs(item.points),
+                        "curve": [[_num(v) for v in state] for state in item.curve],
+                    }
                     for item in frame.manifolds
                 ],
                 "cycles": list(frame.cycles),

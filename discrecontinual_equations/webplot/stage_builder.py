@@ -31,7 +31,6 @@ from discrecontinual_equations.continuation.manifold import (
 )
 from discrecontinual_equations.differential_equation import DifferentialEquation
 from discrecontinual_equations.webplot.stage import (
-    Box,
     BranchPoint,
     Cycle,
     CycleBranch,
@@ -39,7 +38,6 @@ from discrecontinual_equations.webplot.stage import (
     Frame,
     Lattice,
     Manifold,
-    Pairs,
     SpecialPoint,
     StageScene,
     StageSystem,
@@ -77,6 +75,9 @@ _FIELD_AGREEMENT = 1.0e-9
 _AUTODIFF = AutomaticDifferentiation()
 # Step for the finite-difference Jacobian a non-analytic field falls back to.
 _STEP = 1.0e-7
+# An eigenvalue with an imaginary part smaller than this is a real one, and
+# so spans a line rather than joining a pair that spans a plane.
+_REAL_EIGENVALUE = 1.0e-9
 
 
 class Continued:
@@ -167,18 +168,13 @@ def stage_scene(
                 # Branches meet at branch points; the shared equilibrium is one.
                 if not any(_coincide(item, seen) for seen in equilibria):
                     equilibria.append(item)
-        manifolds: list[Manifold] = []
-        if view is None:
-            for item in equilibria:
-                if item.stability == "saddle":
-                    manifolds.extend(
-                        saddle_manifolds(
-                            function,
-                            np.array([item.x, item.y]),
-                            film.lattice.box,
-                            settings,
-                        ),
-                    )
+        manifolds = _frame_manifolds(
+            function,
+            equilibria,
+            view,
+            list(view.bounds) if view else list(film.lattice.box),
+            settings,
+        )
         frame = Frame(
             float(value),
             [] if view is not None else sample_field(function, film.lattice),
@@ -294,7 +290,13 @@ def frame_equilibria(
             for p, q in zip(a.state, b.state, strict=True)
         ]
         x, y = _plane(state, view)
-        item = Equilibrium(x, y, nearer.stability, list(nearer.eigenvalues))
+        item = Equilibrium(
+            x,
+            y,
+            nearer.stability,
+            list(nearer.eigenvalues),
+            state if view else (),
+        )
         if not any(_coincide(item, seen) for seen in found):
             found.append(item)
     return found
@@ -304,18 +306,70 @@ def _coincide(a: Equilibrium, b: Equilibrium) -> bool:
     return abs(a.x - b.x) + abs(a.y - b.y) < _COINCIDENT
 
 
+def _frame_manifolds(
+    function,
+    equilibria: Sequence[Equilibrium],
+    view: View | None,
+    bounds: Sequence[tuple[float, float]],
+    settings: StageSettings,
+) -> list[Manifold]:
+    """Every drawable manifold branch of every saddle at this frame.
+
+    A saddle seen through a view is handed its full state, and the branch that
+    comes back is projected for drawing and keeps its full states so the page
+    can project it again in another plane. A planar system's branch is already
+    in the plane, so it carries nothing extra.
+    """
+    manifolds: list[Manifold] = []
+    for item in equilibria:
+        if item.stability != "saddle":
+            continue
+        state = np.array(item.state) if view else np.array([item.x, item.y])
+        for branch in saddle_manifolds(function, state, bounds, settings):
+            branch.points = [_plane(point, view) for point in branch.curve]
+            if view is None:
+                branch.curve = []
+            manifolds.append(branch)
+    return manifolds
+
+
+def _is_curve(jacobian: np.ndarray, unstable: bool) -> bool:  # noqa: FBT001
+    """Whether that manifold is a curve: exactly one real eigenvalue of its sign.
+
+    This, and not the dimension of the system, is what decides whether a
+    manifold can be drawn as a line. A planar saddle has one real eigenvalue of
+    each sign, so both of its manifolds are curves. A three-dimensional
+    saddle-focus has one real eigenvalue and a complex pair, so one manifold is
+    a curve and the other is a surface; drawing the curve is worth doing even
+    though the surface is not, and for a Shilnikov saddle-focus that curve is
+    the orbit the whole system is about.
+    """
+    values = np.linalg.eigvals(jacobian)
+    real = [v.real for v in values if abs(v.imag) < _REAL_EIGENVALUE]
+    wanted = [v for v in real if (v > 0.0 if unstable else v < 0.0)]
+    return len(wanted) == 1
+
+
 def saddle_manifolds(
     function,
     equilibrium: np.ndarray,
-    box: Box,
+    bounds: Sequence[tuple[float, float]],
     settings: StageSettings | None = None,
 ) -> list[Manifold]:
-    """Both branches of the stable and unstable manifolds of a planar saddle.
+    """Both branches of every manifold of ``equilibrium`` that is a curve.
 
     Each branch starts on the manifold's Taylor chart a small distance from the
     equilibrium, so the start is on the manifold to the chart's order rather than
     on its tangent line, and is then carried by the flow - forward for the
-    unstable manifold, backward for the stable - until it leaves the box.
+    unstable manifold, backward for the stable - until it leaves ``bounds``.
+
+    A manifold whose eigenspace is two-dimensional or more is a surface, not a
+    line, and is left out: one trajectory across a surface would be an
+    arbitrary choice presented as the object itself.
+
+    Each branch carries its full states in ``curve``, and ``points`` holds the
+    first two coordinates - which is the branch itself for a planar system,
+    and what a caller with a view replaces by projecting ``curve``.
     """
     settings = settings or StageSettings()
     jacobian = _jacobian(function, equilibrium)
@@ -324,10 +378,14 @@ def saddle_manifolds(
         ("unstable", UnstableManifold(), True),
         ("stable", StableManifold(), False),
     ):
+        if not _is_curve(jacobian, kind == "unstable"):
+            continue
         chart = _Chart(function, equilibrium, jacobian, selection, settings)
         for sign in (1.0, -1.0):
-            points = _flow(function, chart.start(sign), box, settings, forward)
-            manifolds.append(Manifold(kind, points))
+            states = _flow(function, chart.start(sign), bounds, settings, forward)
+            branch = Manifold(kind, [(state[0], state[1]) for state in states])
+            branch.curve = states
+            manifolds.append(branch)
     return manifolds
 
 
@@ -458,7 +516,13 @@ class _Chart:
 
     def start(self, sign: float) -> np.ndarray:
         if self._point is not None:
-            return np.asarray(self._point([sign * _CHART_OFFSET]), dtype=float)
+            try:
+                return np.asarray(self._point([sign * _CHART_OFFSET]), dtype=float)
+            except (IndexError, ValueError, TypeError):
+                # A chart parameterised over more than one coordinate cannot be
+                # asked for a point on a single one. The eigenvector offset is
+                # exact to first order, which is all the start needs.
+                pass
         return self._equilibrium + sign * _CHART_OFFSET * self._direction
 
 
@@ -474,23 +538,28 @@ def _eigenvector(jacobian: np.ndarray, selection: ManifoldSelection) -> np.ndarr
 def _flow(
     function,
     start: np.ndarray,
-    box: Box,
+    bounds: Sequence[tuple[float, float]],
     settings: StageSettings,
     forward: bool,  # noqa: FBT001 (a direction, not a mode switch)
-) -> Pairs:
-    (x0, x1), (y0, y1) = box
+) -> list[list[float]]:
+    """Carry ``start`` along the flow until it leaves ``bounds``, in full state.
+
+    ``bounds`` is one range per coordinate - the plane box for a planar system,
+    the view's own ranges for one seen in projection - and the branch is
+    returned unprojected so the page can draw it in whichever plane it is
+    showing.
+    """
     sense = 1.0 if forward else -1.0
 
     def rhs(_t, state):
-        u, v = function.eval(point=[float(state[0]), float(state[1])], time=None)
-        return [sense * u, sense * v]
+        values = function.eval(point=[float(v) for v in state], time=None)
+        return [sense * float(v) for v in values]
 
     def leaving(_t, state):
         return min(
-            state[0] - (x0 - _BOX_MARGIN),
-            (x1 + _BOX_MARGIN) - state[0],
-            state[1] - (y0 - _BOX_MARGIN),
-            (y1 + _BOX_MARGIN) - state[1],
+            margin
+            for value, (lo, hi) in zip(state, bounds, strict=True)
+            for margin in (value - (lo - _BOX_MARGIN), (hi + _BOX_MARGIN) - value)
         )
 
     leaving.terminal = True
@@ -505,7 +574,7 @@ def _flow(
         dense_output=True,
     )
     times = np.linspace(0.0, solution.t[-1], _MANIFOLD_SAMPLES)
-    return [(float(x), float(y)) for x, y in solution.sol(times).T]
+    return [[float(v) for v in state] for state in solution.sol(times).T]
 
 
 def _plane(state: Sequence[float], view: View | None) -> tuple[float, float]:
@@ -528,6 +597,8 @@ def _cycle(point: CyclePoint, view: View | None) -> Cycle:
         [(float(m.real), float(m.imag)) for m in point.multipliers],
         [_plane(state, view) for state in point.solution.states],
     )
+    if view is not None:
+        cycle.orbit = [[float(v) for v in state] for state in point.solution.states]
     cycle.error = float(point.floquet_error)
     return cycle
 

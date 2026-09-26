@@ -10,8 +10,11 @@ close, and the chaos near such a loop is what makes the system worth having.
 
 As ``a`` grows the damping tightens: the pair's real part moves, the saddle
 index crosses one, and the tame side of Shilnikov's condition takes over.
-Three-dimensional, so the stage sees it through a view of the ``(x, y)``
-plane with particles integrated in all three coordinates.
+Three-dimensional, so the stage sees it through a view, and the viewer picks
+which plane. The origin's one-dimensional unstable manifold is drawn - the
+orbit that leaves along the real direction, which is the half of Shilnikov's
+picture a line can carry; the two-dimensional stable surface it returns along
+is left to the particles, integrated in all three coordinates.
 """
 
 import sys
@@ -23,6 +26,7 @@ from discrecontinual_equations.webplot.report import AtlasEntry
 from discrecontinual_equations.webplot.stage import (
     Frame,
     Lattice,
+    Projection,
     StageScene,
     StageSystem,
     Term,
@@ -42,6 +46,25 @@ except ImportError:  # run as a script path: only this directory is on sys.path
 
 P_LO, P_HI, FRAMES = 0.25, 1.3, 75
 BOX = ((-0.6, 1.6), (-0.9, 0.9))
+# Three planes of the same flow. (x, y) is position against velocity, where the
+# two equilibria sit apart; (y, z) is velocity against acceleration, which is
+# the plane the saddle-focus spirals in and so the one Shilnikov's condition is
+# about; (x, z) closes the set.
+PLANES = (
+    Projection("x - y", [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], ("x", "y"), BOX),
+    Projection(
+        "y - z",
+        [[0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+        ("y", "z"),
+        ((-0.9, 0.9), (-0.9, 0.9)),
+    ),
+    Projection(
+        "x - z",
+        [[1.0, 0.0, 0.0], [0.0, 0.0, 1.0]],
+        ("x", "z"),
+        ((-0.6, 1.6), (-0.9, 0.9)),
+    ),
+)
 # An eigenvalue with an imaginary part this big is a genuine spiral.
 _COMPLEX = 1.0e-9
 
@@ -122,9 +145,12 @@ def shilnikov_stage() -> StageScene:
             "cycle branch: the orbits near a Shilnikov loop are what "
             "HomoclinicShooting traces, and the tangle around the primary loop "
             "is where that locator is unreliable - see future-work section 2. "
-            "The saddle manifolds are surfaces in three dimensions and are not "
-            "drawn; the particles, integrated in all three coordinates from the "
-            "polynomial terms, are what shows the spiral."
+            "Each saddle's one-dimensional manifold is drawn: the origin's "
+            "unstable branch is the orbit that leaves along the real direction, "
+            "which is the half of Shilnikov's picture a line can carry. The "
+            "origin's stable manifold is the two-dimensional surface it spirals "
+            "back along, and a surface is not drawn - the particles, integrated "
+            "in all three coordinates, are what shows it."
         ),
     )
     return stage_scene(
@@ -137,7 +163,7 @@ def shilnikov_stage() -> StageScene:
                 "x",
                 "y",
                 view=View(
-                    [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+                    PLANES,
                     [(-0.6, 1.6), (-0.9, 0.9), (-0.9, 0.9)],
                     terms(),
                 ),

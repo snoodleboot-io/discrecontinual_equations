@@ -147,6 +147,9 @@ _STYLE = """
     border:1px solid var(--line);border-radius:4px;padding:1px 5px}
   .group{display:inline-flex;align-items:center;gap:8px}
   .range{width:130px;accent-color:var(--curve)}
+  .sel{font:inherit;color:var(--ink);background:var(--panel);
+    border:1px solid var(--faint);border-radius:5px;padding:2px 6px;
+    cursor:pointer}
   .toggle{display:inline-flex;align-items:center;gap:6px;cursor:pointer;
     user-select:none}
   .toggle input{position:absolute;opacity:0;width:1px;height:1px}
@@ -174,7 +177,8 @@ const D = window.__STAGE__;
 const css = k =>
   getComputedStyle(document.documentElement).getPropertyValue(k).trim();
 const F = D.frames, NX = D.grid.nx, NY = D.grid.ny, V = D.view;
-const [x0, x1] = D.box.x, [y0, y1] = D.box.y;
+let [x0, x1] = D.box.x, [y0, y1] = D.box.y;
+let xName = D.system.x_label, yName = D.system.y_label;
 const PARAM = D.system.parameter;
 const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
 const mono = "IBM Plex Mono", sans = "IBM Plex Sans";
@@ -347,10 +351,46 @@ let W = 0, H = 0, dpr = 1;
 const sx = v => (v - x0) / (x1 - x0) * W, sy = v => H - (v - y0) / (y1 - y0) * H;
 const N = V ? V.matrix[0].length : 2;
 let P = [];
-function project(x){
-  const M = V.matrix; let u = 0, v = 0;
+// No single plane shows a system of three or more dimensions, so a view may
+// carry several and the viewer picks. The payload gives every equilibrium its
+// full state and every cycle its full orbit, so switching is a matter of
+// projecting them again here rather than asking for a different page.
+const PROJS = V
+  ? (V.projections || [{name:"", matrix:V.matrix, x_label:"", y_label:"", box:null}])
+  : [];
+let PROJ = 0;
+function projectWith(M, x){
+  let u = 0, v = 0;
   for (let j=0;j<N;j++){ u += M[0][j]*x[j]; v += M[1][j]*x[j]; }
   return [u, v];
+}
+function project(x){ return projectWith(PROJS[PROJ].matrix, x); }
+function applyProjection(k){
+  if (!V) return;
+  PROJ = k;
+  const p = PROJS[k], M = p.matrix;
+  const box = p.box || D.box;
+  [x0, x1] = box.x; [y0, y1] = box.y;
+  xName = p.x_label || D.system.x_label;
+  yName = p.y_label || D.system.y_label;
+  for (const f of D.frames){
+    for (const e of f.equilibria){
+      if (e.state && e.state.length){
+        const q = projectWith(M, e.state); e.x = q[0]; e.y = q[1];
+      }
+    }
+  }
+  for (const c of D.cycles){
+    if (c.orbit && c.orbit.length) c.states = c.orbit.map(st => projectWith(M, st));
+  }
+  for (const f of D.frames){
+    for (const mf of f.manifolds){
+      if (mf.curve && mf.curve.length){
+        mf.points = mf.curve.map(st => projectWith(M, st));
+      }
+    }
+  }
+  for (const q of P){ const r = projectWith(M, q.x); q.u = r[0]; q.v = r[1]; }
 }
 function spawn(p){
   if (V){
@@ -427,6 +467,53 @@ function label(sel, x, y, text, fill, anchor){
     .attr("font-size",11).attr("font-family",mono)
     .attr("text-anchor", anchor || "start").text(text);
 }
+// The stage carries a scale, not just a pair of axis names: ticks at round
+// values with their numbers, and the zero lines picked out where they fall
+// inside the box. d3.ticks chooses the round values; how many is set by the
+// pixel width so a narrow phone does not crowd them together.
+const TICK_PX = 68;
+function ticksFor(lo, hi, extent){
+  return d3.ticks(lo, hi, Math.max(2, Math.min(8, Math.round(extent / TICK_PX))));
+}
+function tickText(v, step){
+  // Enough decimals for the step to be visible, and no more.
+  const places = Math.max(0, Math.min(4, -Math.floor(Math.log10(step)) ));
+  const text = v.toFixed(places);
+  return text === "-0" ? "0" : text;
+}
+function drawAxes(){
+  const xs = ticksFor(x0, x1, W), ys = ticksFor(y0, y1, H);
+  const xStep = xs.length > 1 ? xs[1]-xs[0] : (x1-x0);
+  const yStep = ys.length > 1 ? ys[1]-ys[0] : (y1-y0);
+  const grid = css("--grid"), faint = css("--faint");
+  for (const v of xs){
+    const px = sx(v);
+    skel.append("line").attr("x1",px).attr("x2",px).attr("y1",0).attr("y2",H)
+      .attr("stroke",grid).attr("stroke-width",1).attr("opacity",.45);
+    skel.append("line").attr("x1",px).attr("x2",px).attr("y1",H-6).attr("y2",H)
+      .attr("stroke",faint).attr("stroke-width",1).attr("opacity",.7);
+    label(skel, px, H-10, tickText(v, xStep), faint, "middle")
+      .attr("font-size",10).attr("opacity",.85);
+  }
+  for (const v of ys){
+    const py = sy(v);
+    skel.append("line").attr("y1",py).attr("y2",py).attr("x1",0).attr("x2",W)
+      .attr("stroke",grid).attr("stroke-width",1).attr("opacity",.45);
+    skel.append("line").attr("y1",py).attr("y2",py).attr("x1",0).attr("x2",6)
+      .attr("stroke",faint).attr("stroke-width",1).attr("opacity",.7);
+    label(skel, 9, py-4, tickText(v, yStep), faint)
+      .attr("font-size",10).attr("opacity",.85);
+  }
+  // Zero is worth more than a gridline, but only when it is on screen.
+  if (x0 < 0 && x1 > 0){
+    skel.append("line").attr("x1",sx(0)).attr("x2",sx(0)).attr("y1",0).attr("y2",H)
+      .attr("stroke",faint).attr("stroke-width",1).attr("opacity",.55);
+  }
+  if (y0 < 0 && y1 > 0){
+    skel.append("line").attr("y1",sy(0)).attr("y2",sy(0)).attr("x1",0).attr("x2",W)
+      .attr("stroke",faint).attr("stroke-width",1).attr("opacity",.55);
+  }
+}
 function drawSkeleton(){
   const fr = viewAt(t); skel.selectAll("*").remove();
   const line = d3.line().x(d=>sx(d[0])).y(d=>sy(d[1]));
@@ -436,10 +523,7 @@ function drawSkeleton(){
   const merge = glow.append("feMerge");
   merge.append("feMergeNode").attr("in","b");
   merge.append("feMergeNode").attr("in","SourceGraphic");
-  skel.append("line").attr("x1",sx(0)).attr("x2",sx(0)).attr("y1",0).attr("y2",H)
-    .attr("stroke",css("--grid")).attr("stroke-width",1);
-  skel.append("line").attr("y1",sy(0)).attr("y2",sy(0)).attr("x1",0).attr("x2",W)
-    .attr("stroke",css("--grid")).attr("stroke-width",1);
+  drawAxes();
   if (document.getElementById("l-manifolds").checked){
     for (const mf of fr.manifolds){
       skel.append("path").attr("d", line(mf.points)).attr("fill","none")
@@ -463,9 +547,9 @@ function drawSkeleton(){
     skel.append("circle").attr("cx",sx(e.x)).attr("cy",sy(e.y)).attr("r",5)
       .attr("fill",col).attr("stroke",css("--panel")).attr("stroke-width",1.5);
   }
-  label(skel, W-12, sy(0)-8, D.system.x_label, css("--faint"), "end")
+  label(skel, W-12, H-24, xName, css("--faint"), "end")
     .attr("font-size",12);
-  label(skel, sx(0)+8, 14, D.system.y_label, css("--faint")).attr("font-size",12);
+  label(skel, 10, 16, yName, css("--faint")).attr("font-size",12);
   document.getElementById("stage-p").textContent =
     `${PARAM} = ${paramAt(t).toFixed(4)}`;
 }
@@ -796,9 +880,33 @@ for (const id of ["l-manifolds","l-cycle","l-trails"]){
   document.getElementById(id).addEventListener("change",
     () => { drawSkeleton(); drawClock(); });
 }
+// The plane picker only appears where there is a choice to make, so a planar
+// system's controls are unchanged.
+if (!D.frames.some(f => f.manifolds.length)){
+  // A saddle's manifold is only drawn where it is a curve; a system with no
+  // saddle, or whose manifolds are surfaces, has nothing for the toggle to do.
+  document.getElementById("l-manifolds").closest("label").hidden = true;
+}
+if (PROJS.length > 1){
+  const sel = document.getElementById("plane");
+  PROJS.forEach((p, k) => {
+    const o = document.createElement("option");
+    o.value = String(k);
+    o.textContent = p.name || `${p.x_label || "?"} - ${p.y_label || "?"}`;
+    sel.appendChild(o);
+  });
+  sel.value = "0";
+  document.getElementById("plane-group").hidden = false;
+  sel.addEventListener("change", e => {
+    applyProjection(+e.target.value);
+    setDensity(+document.getElementById("density").value);
+    drawSkeleton();
+  });
+}
 setKicker(document.getElementById("ro-p-kicker"), "", PARAM);
 document.getElementById("tl-hint").textContent =
   `drag the playhead ${DOT} ${D.system.x_label} against ${PARAM}`;
+if (PROJS.length) applyProjection(0);
 window.addEventListener("resize", resize);
 matchMedia("(prefers-color-scheme: dark)").addEventListener("change", resize);
 new MutationObserver(resize).observe(document.documentElement,
@@ -903,6 +1011,8 @@ _BODY = """
       min="0.2" max="3" step="0.1" value="1"></label>
     <label class="group">particles <input class="range" id="density" type="range"
       min="400" max="6000" step="200" value="2600"></label>
+    <label class="group" id="plane-group" hidden>plane
+      <select class="sel" id="plane"></select></label>
     <label class="toggle"><input id="l-manifolds" type="checkbox" checked>
       <span class="sw"></span>manifolds</label>
     <label class="toggle"><input id="l-cycle" type="checkbox" checked>
