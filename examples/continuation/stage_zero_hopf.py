@@ -39,6 +39,7 @@ from discrecontinual_equations.webplot.stage_builder import Continued, Film, sta
 
 try:  # python -m examples.continuation.stage_zero_hopf
     from examples.continuation.stage_support import (
+        BranchLimits,
         Mu,
         continue_branch,
         equation,
@@ -48,6 +49,7 @@ try:  # python -m examples.continuation.stage_zero_hopf
     )
 except ImportError:  # run as a script path: only this directory is on sys.path
     from stage_support import (
+        BranchLimits,
         Mu,
         continue_branch,
         equation,
@@ -184,7 +186,7 @@ def zero_hopf_stage() -> StageScene:
         [math.sqrt(P_HI), 0.0, 0.0],
         (P_HI, P_LO),
         ["fold"],
-        step=0.01,
+        BranchLimits(step=0.01),
     )
     system = StageSystem(
         "Zero-Hopf",

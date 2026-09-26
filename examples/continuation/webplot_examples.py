@@ -8,12 +8,9 @@ notation, and writes an atlas linking them.
 
 import math
 import sys
-from pathlib import Path
 
 import numpy as np
-from sweet_tea.registry import Registry
 
-import discrecontinual_equations
 from discrecontinual_equations.continuation.branch import Branch
 from discrecontinual_equations.continuation.builder import ContinuerBuilder
 from discrecontinual_equations.continuation.codim2_builder import (
@@ -103,6 +100,12 @@ from discrecontinual_equations.webplot.scene_builder import (
     with_regions,
 )
 from discrecontinual_equations.webplot.stage_renderer import StageRenderer
+
+try:  # python -m examples.continuation.webplot_examples
+    from examples.continuation.component_registry import ensure_registry
+except ImportError:  # run as a script path: only this directory is on sys.path
+    from component_registry import ensure_registry
+
 
 try:  # python -m examples.continuation.webplot_examples
     from examples.continuation import stage_bogdanov_takens as bt
@@ -2407,11 +2410,7 @@ def _connecting_orbit_entries() -> list[tuple[str, Scene]]:
 
 def main(output_dir: str = "plots") -> None:
     """Render every scene to ``output_dir`` and write the atlas."""
-    Registry.fill_registry(
-        path=str(Path(discrecontinual_equations.__file__).parent),
-        module="discrecontinual_equations",
-        exclude=["*.tests", "*.examples", "*.plot"],
-    )
+    ensure_registry()
     report = PlotReport(D3Renderer(), output_dir)
     entries: list[AtlasEntry] = []
     for filename, scene in _catalogue():

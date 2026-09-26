@@ -17,17 +17,10 @@ branch are the library's own continuation output.
 
 import math
 import sys
-from pathlib import Path
 
 import numpy as np
 from scipy.integrate import solve_ivp
-from sweet_tea.registry import Registry
 
-import discrecontinual_equations
-from discrecontinual_equations.continuation.builder import ContinuerBuilder
-from discrecontinual_equations.continuation.continuation_config import (
-    ContinuationConfig,
-)
 from discrecontinual_equations.continuation.cycle_continuation import (
     CycleContinuation,
     CyclePoint,
@@ -36,8 +29,7 @@ from discrecontinual_equations.continuation.cycle_continuation import (
 from discrecontinual_equations.differential_equation import DifferentialEquation
 from discrecontinual_equations.parameter import Parameter
 from discrecontinual_equations.systems import FerroelectricRing
-from discrecontinual_equations.variable import Variable
-from discrecontinual_equations.webplot.report import AtlasEntry, PlotReport
+from discrecontinual_equations.webplot.report import AtlasEntry
 from discrecontinual_equations.webplot.stage import (
     Frame,
     Lattice,
@@ -48,7 +40,25 @@ from discrecontinual_equations.webplot.stage import (
     View,
 )
 from discrecontinual_equations.webplot.stage_builder import Continued, Film, stage_scene
-from discrecontinual_equations.webplot.stage_renderer import StageRenderer
+
+try:  # python -m examples.continuation.stage_ferroelectric_ring
+    from examples.continuation.stage_support import (
+        BranchLimits,
+        continue_branch,
+        ensure_registry,
+        equation,
+        keep_cycles,
+        publish,
+    )
+except ImportError:  # run as a script path: only this directory is on sys.path
+    from stage_support import (
+        BranchLimits,
+        continue_branch,
+        ensure_registry,
+        equation,
+        keep_cycles,
+        publish,
+    )
 
 CELLS = 3
 GAIN = 1.0
@@ -99,7 +109,9 @@ _PERIOD_RANGE = (1.0, 400.0)
 ONSET = 0.34
 # A state whose first two cells agree this closely lies on the symmetric axis.
 _SYMMETRIC_TOLERANCE = 1.0e-6
-_registered = False
+# The ring's branch stops close to its own span, as its own hand-rolled
+# continuation did.
+LIMITS = BranchLimits(step=0.02, margin=0.02, maximum_points=800)
 
 
 class Coupling(Parameter, name="Coupling", abbreviation="lam"):
@@ -114,39 +126,12 @@ class Field(Parameter, name="Field", abbreviation="eps"):
     pass
 
 
-class State(Variable, name="State", abbreviation="v"):
-    pass
-
-
-class Time(Variable, name="Time", abbreviation="t"):
-    pass
-
-
-def ensure_registry() -> None:
-    """Fill the component registry once; the continuation builders need it."""
-    global _registered  # noqa: PLW0603 (module-level guard)
-    if _registered:
-        return
-    Registry.fill_registry(
-        path=str(Path(discrecontinual_equations.__file__).parent),
-        module="discrecontinual_equations",
-        exclude=["*.tests", "*.examples", "*.plot"],
-    )
-    _registered = True
-
-
-def equation(coupling: float) -> DifferentialEquation:
-    parameters = [Coupling(value=coupling), Gain(value=GAIN), Field(value=0.0)]
-    return DifferentialEquation(
-        variables=[State() for _ in range(CELLS)],
-        time=Time(),
-        parameters=parameters,
-        derivative=FerroelectricRing(
-            variables=[State() for _ in range(CELLS)],
-            parameters=parameters,
-            results=[State() for _ in range(CELLS)],
-            time=None,
-        ),
+def ring_equation(coupling: float) -> DifferentialEquation:
+    """The ring at this coupling, with the gain fixed and no applied field."""
+    return equation(
+        FerroelectricRing,
+        [Coupling(value=coupling), Gain(value=GAIN), Field(value=0.0)],
+        count=CELLS,
     )
 
 
@@ -206,7 +191,7 @@ def _integrated_wave(eq: DifferentialEquation, coupling: float):
 
 
 def _trace_from(coupling: float, direction: float) -> list[CyclePoint]:
-    eq = equation(coupling)
+    eq = ring_equation(coupling)
     states, period = _integrated_wave(eq, coupling)
     continuation = CycleContinuation(eq, 0, INTERVALS, phase_index=0, phase_value=0.0)
     points, _ = continuation.trace(
@@ -215,13 +200,7 @@ def _trace_from(coupling: float, direction: float) -> list[CyclePoint]:
         STEPS_DOWN if direction < 0 else STEPS_UP,
         direction,
     )
-    accepted: list[CyclePoint] = []
-    for point in points:
-        period_ok = _PERIOD_RANGE[0] < point.solution.period < _PERIOD_RANGE[1]
-        if point.amplitude < _MIN_AMPLITUDE or not period_ok:
-            break
-        accepted.append(point)
-    return accepted
+    return keep_cycles(points, _MIN_AMPLITUDE, _PERIOD_RANGE)
 
 
 def wave_branch() -> list[CyclePoint]:
@@ -232,19 +211,7 @@ def wave_branch() -> list[CyclePoint]:
 
 
 def _branch(seed: list[float], detectors: list[str]):
-    eq = equation(P_LO)
-    config = ContinuationConfig(
-        continuation_parameter_index=0,
-        detectors=detectors,
-        initial_parameter=P_LO,
-        direction=1,
-        measure="component",
-        parameter_lower_bound=P_LO - 0.02,
-        parameter_upper_bound=P_HI + 0.02,
-        maximum_points=800,
-        maximum_step=0.02,
-    )
-    return ContinuerBuilder.build(config, eq).solve(eq, seed)
+    return continue_branch(ring_equation(P_LO), seed, (P_LO, P_HI), detectors, LIMITS)
 
 
 def describe(frame: Frame) -> str | None:
@@ -316,7 +283,7 @@ def ferroelectric_ring_stage() -> StageScene:
     )
     scene = stage_scene(
         Continued(
-            equation(P_LO),
+            ring_equation(P_LO),
             0,
             [symmetric, trivial],
             waves,
@@ -342,10 +309,8 @@ STAGE_ENTRY = AtlasEntry(
 
 def main(output_dir: str = "plots") -> None:
     """Write the stage page (and a one-card atlas) to ``output_dir``."""
-    report = PlotReport(StageRenderer(), output_dir)
-    path = report.write(ferroelectric_ring_stage(), STAGE_FILENAME)
-    report.write_atlas([STAGE_ENTRY])
-    print(f"wrote {path}")
+    scene = ferroelectric_ring_stage()
+    print(f"wrote {publish(scene, STAGE_FILENAME, STAGE_ENTRY, output_dir)}")
 
 
 if __name__ == "__main__":
