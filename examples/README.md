@@ -77,23 +77,33 @@ uv run python -m examples.continuation.stage_hopf plots
 Swap the module for any of the ten. Roughly how long each takes, and what it is
 for:
 
-| Module | Minutes | What it shows |
+| Module | Seconds | What it shows |
 | --- | --- | --- |
-| `stage_hopf` | ~1 | The canonical Hopf: a pair crosses, a cycle of radius √μ opens |
-| `stage_fold_of_cycles` | ~4 | Two cycles meeting and annihilating at a fold |
-| `stage_van_der_pol` | ~3 | A relaxation oscillator stiffening as μ grows |
-| `stage_snic` | ~6 | A cycle whose period runs to infinity as two equilibria land on it |
-| `stage_extended_bautin` | ~2 | Three nested cycles at once, between two folds of cycles |
-| `stage_zero_hopf` | ~2 | A fold that produces not two points but two circles |
-| `stage_hopf_hopf` | ~2 | Four eigenvalues on the clock, one pair crossing |
-| `stage_shilnikov` | ~1 | A saddle-focus whose saddle index crosses one |
-| `stage_bogdanov_takens` | ~5 | Fold, Hopf and homoclinic meeting at one point |
-| `stage_ferroelectric_ring` | ~5 | A unidirectionally coupled ring of three cells |
+| `stage_hopf` | 6 | The canonical Hopf: a pair crosses, a cycle of radius √μ opens |
+| `stage_extended_bautin` | 10 | Three nested cycles at once, between two folds of cycles |
+| `stage_van_der_pol` | 17 | A relaxation oscillator stiffening as μ grows |
+| `stage_fold_of_cycles` | 27 | Two cycles meeting and annihilating at a fold |
+| `stage_snic` | 36 | A cycle whose period runs to infinity as two equilibria land on it |
+| `stage_bogdanov_takens` | 48 | Fold, Hopf and homoclinic meeting at one point |
+| `stage_zero_hopf` | 126 | A fold that produces not two points but two circles |
+| `stage_shilnikov` | 143 | A saddle-focus whose saddle index crosses one |
+| `stage_hopf_hopf` | 157 | Four eigenvalues on the clock, one pair crossing |
+| `stage_ferroelectric_ring` | 169 | A unidirectionally coupled ring of three cells |
 
-The cycle branches dominate those timings: `CycleContinuation` builds a dense
-finite-difference Jacobian at every step, so a film with cycles costs about a
-second per continuation step at 80 mesh intervals. The two films without one
-(`stage_shilnikov`, and the equilibrium half of the rest) are the quick ones.
+What costs the time has changed, and the order of that table is now the reverse
+of what it used to be. Cycle branches used to dominate: `CycleContinuation` built
+a dense finite-difference Jacobian at every step, about a second per continuation
+step at 80 mesh intervals. It now assembles that Jacobian from its analytic
+collocation blocks and solves it sparsely, which is twenty to seventy times
+faster and linear in the mesh rather than cubic, so the films that are only
+cycles are the quick ones.
+
+The slow ones are now the films with a **two-dimensional manifold**. A surface is
+drawn as a fan of twelve trajectories through it, each integrated to the
+manifold's horizon, so a saddle with two surfaces costs twenty-four integrations
+per frame. That is why the four three- and four-dimensional films sit at the
+bottom of the table and the planar ones at the top. `StageSettings.manifold_fan`
+is the dial if a coarser fan still reads as a surface.
 
 `build_sites.py` builds all ten as part of the `continuation` example, along
 with the rest of the atlas.
