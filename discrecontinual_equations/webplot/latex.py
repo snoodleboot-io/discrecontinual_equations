@@ -4,6 +4,9 @@ Equations are typeset once at build time with Matplotlib's mathtext engine and
 emitted as vector SVG, so they stay crisp at any zoom and add only a few kilobytes
 per figure. The glyph fill is rewritten to ``currentColor`` so the surrounding
 theme (light, dark, or print) controls the ink without re-rendering.
+
+The date Matplotlib would otherwise record in the SVG's metadata is suppressed,
+so the same equation typesets to the same bytes on every build.
 """
 
 import io
@@ -32,6 +35,11 @@ def latex_to_svg(expression: str, fontsize: float = 20.0) -> str:
         bbox_inches="tight",
         pad_inches=0.02,
         transparent=True,
+        # Matplotlib stamps the current time into the SVG's Dublin Core metadata
+        # as <dc:date>, which made two builds of the same commit differ - the
+        # same page, the same length, eight digits apart. An equation is the
+        # same equation whenever it was typeset, so the date is dropped.
+        metadata={"Date": None},
     )
     plt.close(figure)
     svg = buffer.getvalue().decode("utf-8")
