@@ -11,6 +11,7 @@ no longer curves), and the view's polynomial field is checked against the
 system before it is trusted. Nothing here is specific to a system.
 """
 
+import math
 from collections.abc import Callable, Sequence
 from itertools import pairwise
 
@@ -78,6 +79,15 @@ _STEP = 1.0e-7
 # An eigenvalue with an imaginary part smaller than this is a real one, and
 # so spans a line rather than joining a pair that spans a plane.
 _REAL_EIGENVALUE = 1.0e-9
+# A candidate direction shorter than this after projecting out the basis
+# so far was already spanned by it.
+_BASIS_TOLERANCE = 1.0e-8
+# A two-dimensional manifold is drawn as this many trajectories through a
+# ring of chart points: enough to read as a surface, few enough not to
+# drown the flow the stage is mostly showing.
+_DEFAULT_MANIFOLD_FAN = 12
+# The eigenspace dimension a fan can draw.
+_SURFACE = 2
 
 
 class Continued:
@@ -131,15 +141,17 @@ class Film:
 class StageSettings:
     """How far and how accurately the saddle manifolds are followed."""
 
-    __slots__ = ["manifold_order", "manifold_time"]
+    __slots__ = ["manifold_fan", "manifold_order", "manifold_time"]
 
     def __init__(
         self,
         manifold_time: float = _DEFAULT_MANIFOLD_TIME,
         manifold_order: int = _DEFAULT_MANIFOLD_ORDER,
+        manifold_fan: int = _DEFAULT_MANIFOLD_FAN,
     ) -> None:
         self.manifold_time = manifold_time
         self.manifold_order = manifold_order
+        self.manifold_fan = manifold_fan
 
 
 def stage_scene(
@@ -333,21 +345,38 @@ def _frame_manifolds(
     return manifolds
 
 
-def _is_curve(jacobian: np.ndarray, unstable: bool) -> bool:  # noqa: FBT001
-    """Whether that manifold is a curve: exactly one real eigenvalue of its sign.
+def _eigenspace(
+    jacobian: np.ndarray,
+    unstable: bool,  # noqa: FBT001
+) -> tuple[int, list[np.ndarray]]:
+    """How many dimensions that manifold has, and a real basis for its tangent.
 
-    This, and not the dimension of the system, is what decides whether a
-    manifold can be drawn as a line. A planar saddle has one real eigenvalue of
-    each sign, so both of its manifolds are curves. A three-dimensional
-    saddle-focus has one real eigenvalue and a complex pair, so one manifold is
-    a curve and the other is a surface; drawing the curve is worth doing even
-    though the surface is not, and for a Shilnikov saddle-focus that curve is
-    the orbit the whole system is about.
+    The dimension, not the dimension of the system, is what decides how a
+    manifold can be drawn. A planar saddle has one eigenvalue of each sign, so
+    both its manifolds are curves. A three-dimensional saddle-focus has one real
+    eigenvalue and a complex pair: one manifold is a curve and the other a
+    two-dimensional surface, drawn as a fan of the trajectories through it.
+
+    A complex pair spans a real plane through the real and imaginary parts of
+    either eigenvector, which is why the basis is built from both rather than
+    from one eigenvector per eigenvalue.
     """
-    values = np.linalg.eigvals(jacobian)
-    real = [v.real for v in values if abs(v.imag) < _REAL_EIGENVALUE]
-    wanted = [v for v in real if (v > 0.0 if unstable else v < 0.0)]
-    return len(wanted) == 1
+    values, vectors = np.linalg.eig(jacobian)
+    wanted = values.real > 0.0 if unstable else values.real < 0.0
+    count = int(np.count_nonzero(wanted))
+    basis: list[np.ndarray] = []
+    for index in np.flatnonzero(wanted):
+        for part in (vectors[:, index].real, vectors[:, index].imag):
+            norm = float(np.linalg.norm(part))
+            if norm < _REAL_EIGENVALUE:
+                continue
+            candidate = part / norm
+            for existing in basis:
+                candidate = candidate - (candidate @ existing) * existing
+            norm = float(np.linalg.norm(candidate))
+            if norm > _BASIS_TOLERANCE:
+                basis.append(candidate / norm)
+    return count, basis[:count]
 
 
 def saddle_manifolds(
@@ -363,9 +392,12 @@ def saddle_manifolds(
     on its tangent line, and is then carried by the flow - forward for the
     unstable manifold, backward for the stable - until it leaves ``bounds``.
 
-    A manifold whose eigenspace is two-dimensional or more is a surface, not a
-    line, and is left out: one trajectory across a surface would be an
-    arbitrary choice presented as the object itself.
+    A one-dimensional manifold is two branches, one either side. A
+    two-dimensional one is a surface, drawn as a fan of the trajectories through
+    a ring of chart points around the equilibrium - a surface rather than a
+    single arbitrary trajectory across it - and reported with ``-surface``
+    appended to its kind so the page can draw it as one. Three dimensions or
+    more is left out, since a ring would sample one arbitrary plane of it.
 
     Each branch carries its full states in ``curve``, and ``points`` holds the
     first two coordinates - which is the branch itself for a planar system,
@@ -378,12 +410,36 @@ def saddle_manifolds(
         ("unstable", UnstableManifold(), True),
         ("stable", StableManifold(), False),
     ):
-        if not _is_curve(jacobian, kind == "unstable"):
+        dimension, _ = _eigenspace(jacobian, kind == "unstable")
+        if dimension < 1:
             continue
         chart = _Chart(function, equilibrium, jacobian, selection, settings)
-        for sign in (1.0, -1.0):
-            states = _flow(function, chart.start(sign), bounds, settings, forward)
-            branch = Manifold(kind, [(state[0], state[1]) for state in states])
+        if dimension == 1:
+            starts = [chart.start(sign) for sign in (1.0, -1.0)]
+            name = kind
+        elif dimension == _SURFACE:
+            starts = [
+                chart.start_at(
+                    [
+                        _CHART_OFFSET * math.cos(angle),
+                        _CHART_OFFSET * math.sin(angle),
+                    ],
+                )
+                for angle in np.linspace(
+                    0.0,
+                    2.0 * math.pi,
+                    settings.manifold_fan,
+                    endpoint=False,
+                )
+            ]
+            name = f"{kind}-surface"
+        else:
+            # Three dimensions or more: a fan through a ring would sample one
+            # arbitrary plane of it and read as a surface it is not.
+            continue
+        for start in starts:
+            states = _flow(function, start, bounds, settings, forward)
+            branch = Manifold(name, [(state[0], state[1]) for state in states])
             branch.curve = states
             manifolds.append(branch)
     return manifolds
@@ -488,7 +544,7 @@ def cycles_at(cycles: list[Cycle], value: float, spacing: float) -> list[int]:
 class _Chart:
     """Where a manifold branch starts: on its Taylor chart, or its tangent."""
 
-    __slots__ = ["_direction", "_equilibrium", "_point"]
+    __slots__ = ["_basis", "_direction", "_equilibrium", "_point"]
 
     def __init__(
         self,
@@ -499,6 +555,8 @@ class _Chart:
         settings: StageSettings,
     ) -> None:
         self._equilibrium = equilibrium
+        unstable = isinstance(selection, UnstableManifold)
+        _, self._basis = _eigenspace(jacobian, unstable)
         self._direction = _eigenvector(jacobian, selection)
         try:
             chart = TaylorManifold(order=settings.manifold_order).compute(
@@ -515,15 +573,29 @@ class _Chart:
             self._point = None
 
     def start(self, sign: float) -> np.ndarray:
+        """A point on a one-dimensional manifold, one side of the equilibrium."""
+        return self.start_at([sign * _CHART_OFFSET])
+
+    def start_at(self, coordinates: Sequence[float]) -> np.ndarray:
+        """A point on the manifold at these chart coordinates.
+
+        The chart is parameterised over as many coordinates as the manifold has
+        dimensions, so asking a two-dimensional chart for a point on one
+        coordinate raises - and asking a one-dimensional chart for two does too.
+        Either way the tangent basis gives a start that is exact to first order,
+        which is all a start needs.
+        """
         if self._point is not None:
             try:
-                return np.asarray(self._point([sign * _CHART_OFFSET]), dtype=float)
+                return np.asarray(self._point(list(coordinates)), dtype=float)
             except (IndexError, ValueError, TypeError):
-                # A chart parameterised over more than one coordinate cannot be
-                # asked for a point on a single one. The eigenvector offset is
-                # exact to first order, which is all the start needs.
                 pass
-        return self._equilibrium + sign * _CHART_OFFSET * self._direction
+        offset = np.zeros_like(self._equilibrium, dtype=float)
+        for value, direction in zip(coordinates, self._basis, strict=False):
+            offset = offset + value * direction
+        if not self._basis:
+            offset = float(coordinates[0]) * self._direction
+        return self._equilibrium + offset
 
 
 def _eigenvector(jacobian: np.ndarray, selection: ManifoldSelection) -> np.ndarray:

@@ -53,10 +53,21 @@ except ImportError:  # run as a script path: only this directory is on sys.path
 B2 = 0.5
 P_LO, P_HI, FRAMES = -0.6, 0.1, 57
 BOX = ((-1.25, 0.9), (-0.85, 0.85))
-# 80 nodes build in minutes and carry a Floquet error the page reports beside
-# the multipliers (9% where the orbit hugs the saddle; 160 would give 2.5%, 320
-# 0.6%). CycleContinuation's dense finite-difference Jacobian (DEQ-15) makes the
-# finer meshes hour-long builds until it is replaced.
+# The page reports this mesh's own Floquet error beside the multipliers. Measured
+# where the orbit hugs the saddle, which is the hardest orbit on the branch:
+#
+#     80 nodes   59.3%    605 cycles traced    36 s
+#    160 nodes    8.3%    689 cycles           70 s
+#    320 nodes    0.8%    801 cycles          143 s
+#
+# An earlier comment here claimed 9%, 2.5% and 0.6%; the first two were wrong,
+# optimistic by about one mesh doubling. The finer mesh also follows the branch
+# further toward the homoclinic, which is why the cycle count rises with it.
+#
+# Raising this is now affordable - DEQ-15 replaced the dense finite-difference
+# Jacobian with the analytic banded one, so 320 nodes costs minutes rather than
+# not finishing - but it changes every page this film produces, so which mesh
+# the film ships at belongs to DEQ-13 rather than here.
 INTERVALS = 80
 GRID = 36
 # The cycle continuation is seeded this far below the Hopf, where the cycle is

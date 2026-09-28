@@ -525,10 +525,17 @@ function drawSkeleton(){
   merge.append("feMergeNode").attr("in","SourceGraphic");
   drawAxes();
   if (document.getElementById("l-manifolds").checked){
+    // A two-dimensional manifold arrives as a fan of the trajectories through
+    // it, each marked "-surface". Drawn thin and faint the fan reads as the
+    // surface it samples; drawn like a 1-D branch it would read as a dozen of
+    // them.
     for (const mf of fr.manifolds){
+      const surface = mf.kind.endsWith("-surface");
       skel.append("path").attr("d", line(mf.points)).attr("fill","none")
-        .attr("stroke", css(mf.kind==="stable" ? "--stable" : "--unstable"))
-        .attr("stroke-width",1.6).attr("opacity", .85 * (mf.alpha ?? 1));
+        .attr("stroke", css(mf.kind.startsWith("stable") ? "--stable" : "--unstable"))
+        .attr("stroke-width", surface ? 0.9 : 1.6)
+        .attr("stroke-linecap","round")
+        .attr("opacity", (surface ? .30 : .85) * (mf.alpha ?? 1));
     }
   }
   if (document.getElementById("l-cycle").checked){
