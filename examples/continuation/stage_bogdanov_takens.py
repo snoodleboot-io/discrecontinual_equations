@@ -53,21 +53,26 @@ except ImportError:  # run as a script path: only this directory is on sys.path
 B2 = 0.5
 P_LO, P_HI, FRAMES = -0.6, 0.1, 57
 BOX = ((-1.25, 0.9), (-0.85, 0.85))
-# The page reports this mesh's own Floquet error beside the multipliers. Measured
-# where the orbit hugs the saddle, which is the hardest orbit on the branch:
+# The page reports this mesh's own Floquet error beside the multipliers. Two
+# figures are worth keeping apart, because they answer different questions:
 #
-#     80 nodes   59.3%    605 cycles traced    36 s
-#    160 nodes    8.3%    689 cycles           70 s
-#    320 nodes    0.8%    801 cycles          143 s
+#                       at b1 = -0.404      worst on the branch
+#     80 nodes                8.9%                 59.3%    605 cycles    36 s
+#    160 nodes                2.5%                  8.3%    689 cycles    70 s
+#    320 nodes                0.6%                  0.8%    801 cycles   143 s
 #
-# An earlier comment here claimed 9%, 2.5% and 0.6%; the first two were wrong,
-# optimistic by about one mesh doubling. The finer mesh also follows the branch
-# further toward the homoclinic, which is why the cycle count rises with it.
+# The left column is the cycle DEQ-13 investigated - a representative orbit, and
+# what this comment used to quote. The right is the maximum over every cycle
+# traced, which falls on the orbit hugging the saddle at b1 = -0.4575 with a
+# period of 10.4: the hardest orbit on the branch, and the one that says what
+# the mesh cannot yet do. The finer mesh also follows the branch further toward
+# the homoclinic, which is why the cycle count rises with it.
 #
-# Raising this is now affordable - DEQ-15 replaced the dense finite-difference
+# Raising this is affordable now - DEQ-15 replaced the dense finite-difference
 # Jacobian with the analytic banded one, so 320 nodes costs minutes rather than
-# not finishing - but it changes every page this film produces, so which mesh
-# the film ships at belongs to DEQ-13 rather than here.
+# not finishing. But a uniform mesh is the wrong lever: DEQ-13 asks for
+# AdaptivePeriodicOrbit here, which puts nodes where the orbit hugs the saddle
+# instead of everywhere, and would cut the right-hand column at any node count.
 INTERVALS = 80
 GRID = 36
 # The cycle continuation is seeded this far below the Hopf, where the cycle is
