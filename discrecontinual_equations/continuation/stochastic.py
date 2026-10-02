@@ -1,4 +1,4 @@
-"""Stochastic bifurcation of one-dimensional systems.
+"""Stochastic bifurcation of one-dimensional systems, in closed form.
 
 For ``dx = f(x) dt + g(x) dW`` there are two distinct notions of bifurcation, and
 this module treats them as different objects:
@@ -15,6 +15,15 @@ this module treats them as different objects:
 
 The Ito/Stratonovich distinction is explicit through :class:`NoiseConvention`,
 since it shifts the effective drift and therefore both thresholds.
+
+Both closed forms stop at one dimension, and for different reasons. The density
+formula is an antiderivative, and a vector field has one only when it is a gradient,
+which a planar drift carrying a rotation is not; :mod:`.fokker_planck` therefore
+solves the stationary equation on a grid instead. The exponent formula is the
+one-dimensional case of a spectrum, which above one dimension has to be accumulated
+along an orbit; :mod:`.lyapunov` does that. Locating either threshold in the parameter
+is :mod:`.stochastic_threshold`. :class:`NoiseConvention` is reused unchanged by all
+three, because the shift it describes is the same shift in any dimension.
 """
 
 from abc import ABC, abstractmethod

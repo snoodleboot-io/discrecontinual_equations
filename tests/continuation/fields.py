@@ -408,3 +408,118 @@ def _integrate(
         k4 = np.array(function.eval(point=list(current + step * k3), time=None))
         current = current + step / 6.0 * (k1 + 2.0 * k2 + 2.0 * k3 + k4)
     return current
+
+
+class Kappa(Parameter, name="kappa", abbreviation="k"):
+    """How fast the noise amplitude grows with the radius."""
+
+
+class DiagonalGrowthField(DeterministicFunction):
+    """x' = a1 x, y' = a2 y; the eigenvalues are the parameters themselves."""
+
+    def eval(
+        self,
+        point: list[float],
+        time: float | None = None,  # noqa: ARG002 (base signature)
+    ) -> list[float]:
+        first = self.parameters[0].value
+        second = self.parameters[1].value
+        return [first * point[0], second * point[1]]
+
+
+class IsotropicNoiseColumn(DeterministicFunction):
+    """One column of the isotropic amplitude ``s sqrt(1 + k r^2) I``.
+
+    Each column drives a different component from an independent Brownian motion, so
+    ``D = G G^T = s^2 (1 + k r^2) I`` has full rank and the planar density exists. At
+    ``k = 0`` the noise is additive, and the exact density of the noisy Hopf system is
+    ``exp((mu r^2 - r^4 / 2) / s^2)``; at ``k > 0`` it is multiplicative but stays
+    bounded away from zero, which keeps the stationary equation elliptic while still
+    shifting the phenomenological threshold to ``mu = k s^2`` (Ito).
+    """
+
+    def __init__(
+        self,
+        index: int,
+        variables: list[Variable],
+        parameters: list[Parameter],
+        results: list[Variable],
+        time: Variable | None = None,
+    ) -> None:
+        super().__init__(variables, parameters, results, time)
+        self._index = index
+
+    def eval(
+        self,
+        point: list[float],
+        time: float | None = None,  # noqa: ARG002 (base signature)
+    ) -> list[float]:
+        sigma = self.parameters[1].value
+        kappa = self.parameters[2].value
+        radius = sum(value * value for value in point)
+        amplitude = sigma * math.sqrt(1.0 + kappa * radius)
+        return [amplitude if axis == self._index else 0.0 for axis in range(len(point))]
+
+
+class ConstantNoiseColumn(DeterministicFunction):
+    """A constant noise column, one parameter per component.
+
+    Two of these with overlapping components give a diffusion matrix with off-diagonal
+    entries, which is the only way to exercise the cross-diffusion part of the
+    Fokker-Planck discretisation.
+    """
+
+    def eval(
+        self,
+        point: list[float],
+        time: float | None = None,  # noqa: ARG002 (base signature)
+    ) -> list[float]:
+        return [parameter.value for parameter in self.parameters[: len(point)]]
+
+
+class DiagonalMultiplicativeColumn(DeterministicFunction):
+    """Column ``index`` of ``diag(s_i x_i)``: independent noise on each component.
+
+    The components decouple into geometric Brownian motions, so the Lyapunov spectrum
+    is ``{a_i - s_i^2 / 2}`` (Ito) exactly, which is the analytic oracle for a genuine
+    matrix amplitude above one dimension.
+    """
+
+    def __init__(
+        self,
+        index: int,
+        variables: list[Variable],
+        parameters: list[Parameter],
+        results: list[Variable],
+        time: Variable | None = None,
+    ) -> None:
+        super().__init__(variables, parameters, results, time)
+        self._index = index
+
+    def eval(
+        self,
+        point: list[float],
+        time: float | None = None,  # noqa: ARG002 (base signature)
+    ) -> list[float]:
+        sigma = self.parameters[self._index].value
+        return [
+            sigma * point[axis] if axis == self._index else 0.0
+            for axis in range(len(point))
+        ]
+
+
+class ScaledStateColumn(DeterministicFunction):
+    """The single column ``s x``: one Brownian motion scaling the whole state.
+
+    For a linear drift this is the one planar case whose top exponent is known in
+    closed form: ``x = exp(s W - s^2 t / 2) y`` with ``y' = A y``, so the exponent is
+    ``max Re eig(A) - s^2 / 2`` (Ito) and ``max Re eig(A)`` (Stratonovich).
+    """
+
+    def eval(
+        self,
+        point: list[float],
+        time: float | None = None,  # noqa: ARG002 (base signature)
+    ) -> list[float]:
+        sigma = self.parameters[1].value
+        return [sigma * value for value in point]
