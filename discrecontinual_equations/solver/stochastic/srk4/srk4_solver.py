@@ -23,9 +23,13 @@ class SRK4Solver(Solver):
     def __init__(self, solver_config: SRK4Config):
         super().__init__(solver_config=solver_config)
 
-        # Set random seed for reproducibility
-        if self.solver_config.random_seed is not None:
-            np.random.seed(self.solver_config.random_seed)
+        # Nothing is seeded here because nothing is drawn: the stage increments below
+        # use sqrt(dt) where a Wiener increment belongs, so this scheme is currently
+        # deterministic and solver_config.random_seed has no effect on it. That missing
+        # increment is a defect of the scheme and is left untouched here. What is
+        # removed is the np.random.seed call that used to sit in this constructor,
+        # which reseeded the process-wide stream - and so changed every draw made
+        # anywhere afterwards - purely as a side effect of constructing this object.
 
     def solve(self, equation: DifferentialEquation, initial_values: list[float]):
         results = [
