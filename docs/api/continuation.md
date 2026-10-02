@@ -116,6 +116,76 @@ quadrature is not the limit — on the exact orbit sampled at 80 nodes it return
 the multipliers to four figures — so more substeps do nothing; only nodes help.
 Stage pages print the error beside the multipliers and draw the trivial one grey.
 
+### Refusing the part of a branch that cannot be believed
+
+The error above is a property of the *discretisation*, so it varies enormously along
+one branch. On the same Bogdanov–Takens branch at 80 nodes it reads 8.9% on the
+representative cycle in that table and **59.3%** on the orbit nearest the
+homoclinic — the one whose period the same mesh gets 3.8% wrong. A single sampled
+point says nothing about the rest.
+
+`resolved_branch` cuts a traced branch where its multipliers stop being trustworthy:
+
+```python
+points, _ = continuation.trace(seed, 0.02, 400, direction=-1.0)
+branch = resolved_branch(points, tolerance=2.0e-2)
+if branch.refused:
+    ...  # the trace went further than the mesh can follow: raise the node count
+for point in branch.points:
+    ...  # stability here is worth reading
+```
+
+What comes back is an **unbroken run**, not a filter: `classify_transition` compares
+*adjacent* points, so a branch with holes in it would have a crossing interpolated
+across a gap that was never examined. `ResolvedBranch.bifurcations` is therefore
+re-derived over the kept run.
+
+It is the **longest** such run rather than the leading one, because a branch is not
+always handed over in the order it was traced. Resolution degrades monotonically
+outward from the seed, so for `trace`'s own output the leading run is the answer — but
+a film that traces both ways from a seed and sorts by parameter, the usual shape here,
+puts the *worst* point first, and a leading run would then refuse the whole branch
+including the well-resolved middle. `refused` is reported as a count because "traced
+further than it can be trusted" and "the cycle really ended" need telling apart.
+
+The default tolerance is 2%: a crossing of the unit circle is located by linearly
+interpolating `|mu| - 1` between adjacent points, so a couple of percent moves the
+reported crossing by a comparable fraction of one step, while tens of percent can
+invent a crossing, hide one, or place it a long way off.
+
+### What does *not* fix it
+
+Adapting the mesh. This was measured on the Bogdanov–Takens branch's worst orbit at
+80 nodes and does not work:
+
+| 80-node mesh | spacing ratio | period error | trivial multiplier |
+|---|---|---|---|
+| uniform | 1.0 | 3.83% | **59.3%** |
+| equidistributed `curvature` | 61.4 | 9.13% | 61.0% |
+| equidistributed `curvature^1/2` | 9.3 | 3.17% | 56.5% |
+| equidistributed `curvature^1/3` (what `AdaptivePeriodicOrbit` uses) | 4.4 | 2.89% | 54.8% |
+| equidistributed `norm(dx/ds)` | 32.7 | 3.69% | **46.5%** |
+| equidistributed `norm(dx/ds)^1/2` | 6.2 | 2.55% | 49.2% |
+
+The best of them is a factor of 1.3, and the most aggressive make the period *worse*.
+Re-adapting along the branch instead of once — re-projecting the pseudo-arclength
+tangent onto each new mesh and re-solving — took the worst case from 59.3% to 49.3%
+for 7.5x the time (302 s against 40 s), left the median slightly worse (3.95%
+against 3.71%), and stopped marginally sooner on the branch. There is no 80-node
+mesh that resolves this orbit, so no monitor could have found one.
+
+What fixes it is the **order of the collocation**, not the mesh. The same orbit, the
+same 80 *uniform* nodes, under `HermiteSimpsonOrbit`'s fourth-order collocation:
+
+| 80 uniform nodes | period error | trivial multiplier | nontrivial (true 226.45) |
+|---|---|---|---|
+| trapezoidal | 3.83% | 59.3% | 337.4 (49.0% off) |
+| Hermite–Simpson | 0.00% | **0.12%** | 226.2 (0.1% off) |
+
+A factor of 500 for no extra nodes, and 8.9% → under 0.01% on the representative
+cycle. `CycleContinuation` is trapezoidal-only; wiring Hermite–Simpson into it is
+the change that would move these numbers.
+
 ## Trusting a computed connecting orbit
 
 A homoclinic or heteroclinic orbit has **two** independent resolutions, and either

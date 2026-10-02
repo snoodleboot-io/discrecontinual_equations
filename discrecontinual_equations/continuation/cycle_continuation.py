@@ -13,7 +13,8 @@ of a cycle:
   circle (a torus is born).
 """
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
+from itertools import pairwise
 
 import numpy as np
 from scipy.sparse import coo_matrix
@@ -38,6 +39,15 @@ _NOISE_FLOOR = 1.0e-9
 _ANGLE_BAND = 0.12
 _HALF = 0.5
 _AUTODIFF = AutomaticDifferentiation()
+# How far the trivial multiplier may drift from one before a cycle point is refused
+# as unresolved. A crossing of the unit circle is located by linearly interpolating
+# ``|mu| - 1`` between adjacent points, so an error of a couple of percent in ``|mu|``
+# moves the reported crossing by a comparable fraction of one continuation step -
+# tolerable. Tens of percent does not: it can invent a crossing, hide one, or place
+# it a long way from where it is, and on the Bogdanov-Takens branch at 80 nodes the
+# error reaches 59%. On a Bogdanov-Takens-like cycle this sits between what 160
+# and 320 nodes buy (8.9% at 80, 2.5% at 160, 0.6% at 320).
+_FLOQUET_TOLERANCE = 2.0e-2
 
 
 class CycleSeed:
@@ -110,8 +120,26 @@ class CyclePoint:
         more sensitive than the period, which was 0.2% off at 80 nodes. The
         monodromy quadrature itself is not the limit: on the exact orbit it
         returns the multipliers to four figures at 80 nodes.
+
+        It is a measure of the *discretisation*, not of the parameter, so it
+        varies enormously along one branch: on that same Bogdanov-Takens branch
+        at 80 nodes it reads 8.9% on a typical cycle and 59% on the one nearest
+        the homoclinic, whose period the same mesh gets 3.8% wrong. Use
+        :func:`resolved_branch` rather than a single sampled point to decide
+        whether a branch's multipliers can be believed.
         """
         return float(np.min(np.abs(self._multipliers - 1.0)))
+
+    def resolved(self, tolerance: float = _FLOQUET_TOLERANCE) -> bool:
+        """Whether this cycle's multipliers are accurate enough to be believed.
+
+        The counterpart of :meth:`AdaptivePeriodicOrbit.continue_to_resolved` for a
+        cycle, and far cheaper for the same reason ``floquet_error`` is: the period
+        has to be re-solved on a doubled mesh before anyone can say how wrong it is,
+        whereas the trivial multiplier's exact value is known in advance, so this
+        measurement arrives with the point and costs nothing.
+        """
+        return self.floquet_error < tolerance
 
     @property
     def amplitude(self) -> float:
@@ -138,6 +166,55 @@ class CycleBifurcation:
     def parameter(self) -> float:
         """Parameter value at the bifurcation (linear estimate)."""
         return self._parameter
+
+
+class ResolvedBranch:
+    """The stretch of a traced branch whose Floquet multipliers can be believed.
+
+    ``refused`` is kept as a count rather than thrown away, because it is the useful
+    half of the answer. A branch that was traced further than it can be trusted is
+    not the same thing as a branch that ended: the first says raise the node count,
+    the second says the cycle really is gone. Only the count can tell them apart.
+    """
+
+    __slots__ = ["_bifurcations", "_points", "_refused", "_tolerance"]
+
+    def __init__(
+        self,
+        points: list[CyclePoint],
+        bifurcations: list[CycleBifurcation],
+        refused: int,
+        tolerance: float,
+    ) -> None:
+        self._points = points
+        self._bifurcations = bifurcations
+        self._refused = refused
+        self._tolerance = tolerance
+
+    @property
+    def points(self) -> list[CyclePoint]:
+        """The longest unbroken run of cycles whose multipliers met the tolerance."""
+        return self._points
+
+    @property
+    def bifurcations(self) -> list[CycleBifurcation]:
+        """Bifurcations detected between adjacent *kept* points."""
+        return self._bifurcations
+
+    @property
+    def refused(self) -> int:
+        """How many of the branch's points fell outside that run."""
+        return self._refused
+
+    @property
+    def tolerance(self) -> float:
+        """The Floquet error the kept points were required to stay under."""
+        return self._tolerance
+
+    @property
+    def worst_error(self) -> float:
+        """Largest Floquet error among the kept points; ``0`` when none were kept."""
+        return max((point.floquet_error for point in self._points), default=0.0)
 
 
 def _nontrivial(multipliers: np.ndarray) -> np.ndarray:
@@ -223,8 +300,86 @@ def classify_transition(
     return None
 
 
+def resolved_branch(
+    points: Sequence[CyclePoint],
+    tolerance: float = _FLOQUET_TOLERANCE,
+) -> ResolvedBranch:
+    """The stretch of a traced branch whose Floquet multipliers can be believed.
+
+    :meth:`CycleContinuation.trace` answers "where did the branch go"; this answers
+    "how much of it can be believed", which is the question a caller about to read
+    stability off the multipliers actually has. A converged cycle proves only that the
+    *discrete* collocation system was satisfied; an under-resolved mesh satisfies it
+    perfectly well while reporting multipliers tens of percent out - far enough to
+    move a crossing of the unit circle, which is the thing the branch was traced to
+    find. Nothing in the residual can catch that, and the trivial multiplier can.
+
+    An unbroken run and not a filter, because :func:`classify_transition` compares
+    *adjacent* points: a branch with holes punched in it would have it interpolating a
+    crossing across a gap neither of whose ends it looked at. So the bifurcations are
+    re-derived over the kept run rather than sieved out of the full trace.
+
+    The *longest* such run, rather than the leading one, because a branch is not
+    always handed over in the order it was traced. Resolution does degrade
+    monotonically outward from the seed, so for :meth:`CycleContinuation.trace`'s own
+    output the leading run is the answer. But a film that traces both ways from a seed
+    and sorts the result by parameter - which is the usual shape here - puts the
+    *worst* point first, and a leading run would then refuse the whole branch
+    including the well-resolved middle it was asked about. Taking the longest run
+    gives the right answer to both.
+
+    This is a gate, not a remedy. Raising the node count is the remedy, and nothing
+    cheaper was found to be one - see the note on
+    :class:`CycleContinuation` about the adaptive mesh that was measured and rejected.
+    """
+    best_start, best_length, start = 0, 0, 0
+    for index, point in enumerate(points):
+        if not point.resolved(tolerance):
+            start = index + 1
+            continue
+        if index + 1 - start > best_length:
+            best_start, best_length = start, index + 1 - start
+    kept = list(points[best_start : best_start + best_length])
+    bifurcations = [
+        transition
+        for lower, upper in pairwise(kept)
+        if (transition := classify_transition(lower, upper)) is not None
+    ]
+    return ResolvedBranch(kept, bifurcations, len(points) - len(kept), tolerance)
+
+
 class CycleContinuation:
-    """Pseudo-arclength continuation of a limit cycle in one parameter."""
+    """Pseudo-arclength continuation of a limit cycle in one parameter.
+
+    Every cycle on the branch is discretised on the same uniform mesh of
+    ``intervals`` intervals in rescaled time. An adaptive mesh was tried here as the
+    cure for the Floquet error that a near-homoclinic orbit carries, and rejected on
+    measurement. Three things were found, in order of how much they settle:
+
+    * The mesh is not the lever. On the Bogdanov-Takens branch's worst orbit at 80
+      nodes, equidistributing every monitor tried - curvature and its square and cube
+      roots, ``|dx/ds|`` and its roots, arclength-plus-curvature, each with and
+      without a floor - moved the Floquet error from 59% to between 47% and 64%, the
+      best of them a factor of 1.3. The monitor
+      :class:`AdaptivePeriodicOrbit` actually uses lands on 55%. There is no
+      80-node mesh that resolves this orbit, so no mesh monitor could have found one.
+    * The order is the lever. The same orbit on the same 80 *uniform* nodes under
+      fourth-order Hermite-Simpson collocation gives 0.12%, a factor of 500, with the
+      period right to five figures where trapezoidal gets it 3.8% wrong. The error is
+      the second-order collocation of the orbit itself, not the mesh it sits on and
+      not the monodromy quadrature - on the exact orbit sampled at 80 nodes that
+      quadrature returns the multipliers to 0.2%.
+    * Re-meshing along the branch also costs more than it returns. Re-adapting at
+      every point whose error exceeded tolerance, re-projecting the tangent and
+      re-solving on the moved mesh, took the worst case from 59.3% to 49.3% while
+      taking 7.5x the time (302 s against 40 s), leaving the median slightly worse
+      (3.95% against 3.71%) and stopping marginally *sooner* on the branch
+      (b1 = -0.4557 against -0.4575).
+
+    So the remedy for an unresolved cycle branch here is node count, or a
+    higher-order collocation if one is ever wired in; :func:`resolved_branch` is how
+    a caller finds out that it needs one.
+    """
 
     __slots__ = [
         "_dimension",

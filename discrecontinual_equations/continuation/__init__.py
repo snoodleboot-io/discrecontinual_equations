@@ -55,7 +55,9 @@ from discrecontinual_equations.continuation.cycle_continuation import (
     CycleContinuation,
     CyclePoint,
     CycleSeed,
+    ResolvedBranch,
     classify_transition,
+    resolved_branch,
 )
 from discrecontinual_equations.continuation.deflation import (
     DeflatedSolver,
@@ -196,6 +198,7 @@ __all__ = [
     "ResolutionLevel",
     "ResolutionSettings",
     "ResolutionStudy",
+    "ResolvedBranch",
     "ResolvedCycle",
     "ReturnSettings",
     "RobustPeriodicOrbit",
@@ -219,5 +222,6 @@ __all__ = [
     "equivariance_defect",
     "fourier_reduce",
     "lyapunov_spectrum",
+    "resolved_branch",
     "stochastic_lyapunov",
 ]
