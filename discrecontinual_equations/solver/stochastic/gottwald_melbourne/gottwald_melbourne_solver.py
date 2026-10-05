@@ -41,9 +41,13 @@ class GottwaldMelbourneSolver(Solver):
         if self.solver_config.epsilon <= 0:
             raise ValueError("ε must be positive")
 
-        # Set random seed for reproducibility
-        if self.solver_config.random_seed is not None:
-            np.random.seed(self.solver_config.random_seed)
+        # A generator of this solver's own, never np.random.seed. Seeding the global
+        # stream is a correctness hazard rather than a convenience: it changes every
+        # draw made anywhere afterwards, so one solver's result can depend on how many
+        # draws something else happened to take first, and two solvers constructed with
+        # the same seed share one stream instead of repeating one another. A seed of
+        # None still means fresh entropy, as before.
+        self._generator = np.random.default_rng(self.solver_config.random_seed)
 
         # Compute Thaler map parameters
         self._gamma = self.solver_config.gamma
@@ -125,7 +129,7 @@ class GottwaldMelbourneSolver(Solver):
 
         # Initialize fast dynamics
         x = 0.5  # Start in the middle of [0,1]
-        chi = 1 if np.random.random() < (1 + self.solver_config.beta) / 2 else -1
+        chi = 1 if self._generator.random() < (1 + self.solver_config.beta) / 2 else -1
 
         # Append initial point
         self.solution.append([t, [0] * len(initial_values), z.tolist()])
@@ -163,7 +167,7 @@ class GottwaldMelbourneSolver(Solver):
                     # In hyperbolic region, sample new chi
                     chi = (
                         1
-                        if np.random.random() < (1 + self.solver_config.beta) / 2
+                        if self._generator.random() < (1 + self.solver_config.beta) / 2
                         else -1
                     )
 

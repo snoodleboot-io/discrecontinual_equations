@@ -35,9 +35,13 @@ class EulerMaruyamaSolver(Solver):
     def __init__(self, solver_config: EulerMaruyamaConfig):
         super().__init__(solver_config=solver_config)
 
-        # Set random seed for reproducibility
-        if self.solver_config.random_seed is not None:
-            np.random.seed(self.solver_config.random_seed)
+        # A generator of this solver's own, never np.random.seed. Seeding the global
+        # stream is a correctness hazard rather than a convenience: it changes every
+        # draw made anywhere afterwards, so one solver's result can depend on how many
+        # draws something else happened to take first, and two solvers constructed with
+        # the same seed share one stream instead of repeating one another. A seed of
+        # None still means fresh entropy, as before.
+        self._generator = np.random.default_rng(self.solver_config.random_seed)
 
     def solve(self, equation: DifferentialEquation, initial_values: list[float]):
         results = [
@@ -105,7 +109,7 @@ class EulerMaruyamaSolver(Solver):
 
             # Generate Wiener increment: ΔW ~ N(0, dt)
             dt = self.solver_config.dt
-            dW = np.random.normal(0, np.sqrt(dt), size=len(y))
+            dW = self._generator.normal(0, np.sqrt(dt), size=len(y))
 
             # Euler-Maruyama step: y_{n+1} = y_n + μ(y_n, t_n) dt + σ(y_n, t_n) dW
             y_new = y + drift * dt + diffusion * dW

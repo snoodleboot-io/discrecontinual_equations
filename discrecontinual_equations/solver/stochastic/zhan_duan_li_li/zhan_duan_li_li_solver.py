@@ -27,9 +27,13 @@ class ZhanDuanLiLiSolver(Solver):
     def __init__(self, solver_config: ZhanDuanLiLiConfig):
         super().__init__(solver_config=solver_config)
 
-        # Set random seed for reproducibility
-        if self.solver_config.random_seed is not None:
-            np.random.seed(self.solver_config.random_seed)
+        # A generator of this solver's own, never np.random.seed. Seeding the global
+        # stream is a correctness hazard rather than a convenience: it changes every
+        # draw made anywhere afterwards, so one solver's result can depend on how many
+        # draws something else happened to take first, and two solvers constructed with
+        # the same seed share one stream instead of repeating one another. A seed of
+        # None still means fresh entropy, as before.
+        self._generator = np.random.default_rng(self.solver_config.random_seed)
 
         # Theta parameter from config (controls implicit/explicit balance)
         self.theta = self.solver_config.method_parameter
@@ -68,7 +72,7 @@ class ZhanDuanLiLiSolver(Solver):
             t_next = self.solver_config.times[i + 1]
 
             # Generate Wiener increment: ΔW ~ N(0, dt)
-            dW = np.random.normal(0, np.sqrt(dt), size=len(y))
+            dW = self._generator.normal(0, np.sqrt(dt), size=len(y))
 
             # Stochastic theta method with trapezoidal rule
             y_new = self._stochastic_theta_step(y, t_current, t_next, dt, dW, equation)

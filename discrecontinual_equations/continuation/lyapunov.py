@@ -13,14 +13,38 @@ A sign change of the top exponent as a parameter varies is a *dynamical (D)
 bifurcation* - the loss of stability of the reference motion. For a linear system
 ``x' = A x`` the spectrum is exactly the real parts of the eigenvalues of ``A``,
 which gives a clean check on the numerics.
+
+Two stochastic estimators live here, differing only in how many Brownian motions
+drive the flow. :func:`stochastic_lyapunov` takes one shared driver, which is all the
+exponent needs and is the cheapest thing to integrate;
+:func:`matrix_noise_lyapunov` takes an ``N x K`` amplitude, because a system whose
+*density* can be asked for must have independent drivers (see :mod:`.noise`) and it
+would be no use to have the two notions of stochastic bifurcation describe two
+different systems. Locating the parameter at which the top exponent changes sign is
+:mod:`.stochastic_threshold`.
+
+All three take their field and Jacobian evaluations from :mod:`.noise` rather than
+keeping their own. That is not only to avoid three copies of a finite difference: the
+step there is scaled by the size of the state, and an estimator that used an absolute
+step would silently report a zero Jacobian once the reference orbit grew past the point
+where the perturbation rounds away - which a stochastic reference orbit above its own
+dynamical threshold does. Sharing the helpers means the scalar and matrix estimators
+cannot disagree about the same system for a reason as arbitrary as that.
 """
 
 import numpy as np
 
+from discrecontinual_equations.continuation.noise import (
+    NoiseMatrix,
+    field_at,
+    jacobian_at,
+    state_drift_shift,
+    stratonovich_factor,
+    variational_drift_shift,
+)
 from discrecontinual_equations.continuation.stochastic import NoiseConvention
 from discrecontinual_equations.function.function import Function
 
-_STEP = 1.0e-7
 _DEFAULT_DT = 1.0e-2
 _DEFAULT_HORIZON = 20000
 _DEFAULT_TRANSIENT = 2000
@@ -62,21 +86,6 @@ class LyapunovSpectrum:
         return float(self._exponents[0])
 
 
-def _field(function: Function, state: np.ndarray) -> np.ndarray:
-    return np.array(function.eval(point=list(state), time=None), dtype=float)
-
-
-def _jacobian(function: Function, state: np.ndarray) -> np.ndarray:
-    base = _field(function, state)
-    dimension = state.size
-    columns = np.empty((dimension, dimension))
-    for j in range(dimension):
-        shifted = state.copy()
-        shifted[j] += _STEP
-        columns[:, j] = (_field(function, shifted) - base) / _STEP
-    return columns
-
-
 def _step(
     function: Function,
     state: np.ndarray,
@@ -84,14 +93,14 @@ def _step(
     dt: float,
 ) -> tuple[np.ndarray, np.ndarray]:
     """One RK4 step of the state and its co-evolving tangent frame."""
-    f1 = _field(function, state)
-    y1 = _jacobian(function, state) @ frame
-    f2 = _field(function, state + 0.5 * dt * f1)
-    y2 = _jacobian(function, state + 0.5 * dt * f1) @ (frame + 0.5 * dt * y1)
-    f3 = _field(function, state + 0.5 * dt * f2)
-    y3 = _jacobian(function, state + 0.5 * dt * f2) @ (frame + 0.5 * dt * y2)
-    f4 = _field(function, state + dt * f3)
-    y4 = _jacobian(function, state + dt * f3) @ (frame + dt * y3)
+    f1 = field_at(function, state)
+    y1 = jacobian_at(function, state) @ frame
+    f2 = field_at(function, state + 0.5 * dt * f1)
+    y2 = jacobian_at(function, state + 0.5 * dt * f1) @ (frame + 0.5 * dt * y1)
+    f3 = field_at(function, state + 0.5 * dt * f2)
+    y3 = jacobian_at(function, state + 0.5 * dt * f2) @ (frame + 0.5 * dt * y2)
+    f4 = field_at(function, state + dt * f3)
+    y4 = jacobian_at(function, state + dt * f3) @ (frame + dt * y3)
     new_state = state + dt / 6.0 * (f1 + 2.0 * f2 + 2.0 * f3 + f4)
     new_frame = frame + dt / 6.0 * (y1 + 2.0 * y2 + 2.0 * y3 + y4)
     return new_state, new_frame
@@ -174,10 +183,10 @@ class _Coefficients:
 
     def __init__(self, system: "StochasticSystem", state: np.ndarray) -> None:
         self.half = system.convention.drift_correction(1.0, 1.0)
-        self.drift = _field(system.drift, state)
-        self.diffusion = _field(system.diffusion, state)
-        self.drift_jacobian = _jacobian(system.drift, state)
-        self.diffusion_jacobian = _jacobian(system.diffusion, state)
+        self.drift = field_at(system.drift, state)
+        self.diffusion = field_at(system.diffusion, state)
+        self.drift_jacobian = jacobian_at(system.drift, state)
+        self.diffusion_jacobian = jacobian_at(system.diffusion, state)
 
     def reference_drift(self) -> np.ndarray:
         """Ito-equivalent drift of the reference (Stratonovich adds g_x g / 2)."""
@@ -237,6 +246,103 @@ def stochastic_lyapunov(
             + coefficients.reference_drift() * dt
             + coefficients.diffusion * increment
         )
+        if (i + 1) % _RENORMALISE_EVERY == 0:
+            frame, upper = np.linalg.qr(frame)
+            totals += np.log(np.abs(np.diag(upper)))
+        elapsed += dt
+    exponents = np.sort(totals / elapsed)[::-1]
+    return LyapunovSpectrum(exponents)
+
+
+class MatrixNoiseSystem:
+    """A flow ``dx = f(x) dt + G(x) dW`` with ``K`` independent Brownian drivers."""
+
+    __slots__ = ["convention", "drift", "noise"]
+
+    def __init__(
+        self,
+        drift: Function,
+        noise: NoiseMatrix,
+        convention: NoiseConvention,
+    ) -> None:
+        self.drift = drift
+        self.noise = noise
+        self.convention = convention
+
+
+class _MatrixCoefficients:
+    """The Ito-equivalent drifts at one state, with each field evaluated once."""
+
+    __slots__ = ["columns", "jacobians", "reference", "variational"]
+
+    def __init__(
+        self,
+        system: "MatrixNoiseSystem",
+        state: np.ndarray,
+        factor: float,
+    ) -> None:
+        self.columns = system.noise.columns_at(state)
+        self.jacobians = system.noise.jacobians_at(state)
+        self.reference = field_at(system.drift, state) + state_drift_shift(
+            self.jacobians,
+            self.columns,
+            factor,
+        )
+        self.variational = jacobian_at(system.drift, state) + variational_drift_shift(
+            self.jacobians,
+            factor,
+        )
+
+
+def matrix_noise_lyapunov(
+    system: MatrixNoiseSystem,
+    start: np.ndarray,
+    count: int | None = None,
+    settings: StochasticLyapunovSettings | None = None,
+) -> LyapunovSpectrum:
+    """Estimate the Lyapunov spectrum of a flow driven by ``K`` independent noises.
+
+    This is :func:`stochastic_lyapunov` with the single Brownian increment replaced by
+    one per driver, and it exists because the scalar-noise estimator and the planar
+    stationary density cannot be asked about the same system: the noise that makes a
+    density possible has independent drivers, and the noise the scalar estimator
+    accepts has exactly one (see :mod:`.noise`). A one-column
+    :class:`~.noise.NoiseMatrix` reproduces :func:`stochastic_lyapunov` increment for
+    increment, so nothing is forked - the scalar case is recovered, not reimplemented.
+
+    Two sanity points the tests lean on. With additive noise the amplitude has no
+    Jacobian, so the tangent equation carries no noise at all and the spectrum of a
+    linear system is exactly the real parts of its eigenvalues, with no Monte-Carlo
+    error. With noise ``G = diag(s_i x_i)`` the components decouple into geometric
+    Brownian motions and the spectrum is ``{a_i - s_i^2 / 2}`` (Ito) exactly.
+    """
+    control = settings if settings is not None else StochasticLyapunovSettings()
+    dt = control.dt
+    root_dt = np.sqrt(dt)
+    factor = stratonovich_factor(system.convention)
+    generator = np.random.default_rng(control.seed)
+    drivers = system.noise.drivers
+    state = np.asarray(start, dtype=float).copy()
+    dimension = state.size
+    directions = dimension if count is None else count
+    for _ in range(control.transient):
+        coefficients = _MatrixCoefficients(system, state, factor)
+        increments = root_dt * generator.standard_normal(drivers)
+        state = state + coefficients.reference * dt + increments @ coefficients.columns
+    frame = np.eye(dimension)[:, :directions]
+    totals = np.zeros(directions)
+    elapsed = 0.0
+    for i in range(control.horizon):
+        coefficients = _MatrixCoefficients(system, state, factor)
+        increments = root_dt * generator.standard_normal(drivers)
+        variation = np.einsum(
+            "k,kij,jl->il",
+            increments,
+            coefficients.jacobians,
+            frame,
+        )
+        frame = frame + coefficients.variational @ frame * dt + variation
+        state = state + coefficients.reference * dt + increments @ coefficients.columns
         if (i + 1) % _RENORMALISE_EVERY == 0:
             frame, upper = np.linalg.qr(frame)
             totals += np.log(np.abs(np.diag(upper)))
