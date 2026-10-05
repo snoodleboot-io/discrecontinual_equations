@@ -9,6 +9,7 @@ from discrecontinual_equations.continuation.cycle_continuation import (
     CycleContinuation,
     CyclePoint,
     CycleSeed,
+    resolved_branch,
 )
 from discrecontinual_equations.continuation.periodic_orbit import (
     PeriodicOrbit,
@@ -201,3 +202,100 @@ class TestFloquetError(TestCase):
             np.array([1.0, 0.5 + 0.5j]),
         )
         assert point.floquet_error == 0.0
+
+
+class TestResolvedBranch(TestCase):
+    """The gate that refuses cycle points whose multipliers cannot be believed."""
+
+    def _point(
+        self,
+        parameter: float,
+        trivial: float,
+        nontrivial: complex,
+    ) -> CyclePoint:
+        return CyclePoint(
+            parameter,
+            PeriodicOrbitSolution(np.zeros((3, 2)), 6.0),
+            np.array([trivial, nontrivial]),
+        )
+
+    def test_keeps_a_branch_that_is_resolved_throughout(self):
+        points = [self._point(0.1 * i, 1.0 - 1.0e-4, 0.5) for i in range(5)]
+        branch = resolved_branch(points, tolerance=1.0e-2)
+        assert len(branch.points) == 5
+        assert branch.refused == 0
+        assert branch.worst_error < 1.0e-2
+
+    def test_cuts_the_tail_a_trace_could_not_resolve(self):
+        good = [self._point(0.1 * i, 1.0 - 1.0e-4, 0.5) for i in range(3)]
+        bad = [self._point(0.3 + 0.1 * i, 0.4, 0.5) for i in range(4)]
+        branch = resolved_branch(good + bad, tolerance=1.0e-2)
+        assert len(branch.points) == 3
+        assert branch.refused == 4
+        assert branch.tolerance == 1.0e-2
+
+    def test_refuses_every_point_when_none_is_resolved(self):
+        branch = resolved_branch(
+            [self._point(0.1 * i, 0.4, 0.5) for i in range(4)],
+            tolerance=1.0e-2,
+        )
+        assert branch.points == []
+        assert branch.refused == 4
+        assert branch.worst_error == 0.0
+
+    def test_keeps_the_resolved_middle_of_a_parameter_sorted_branch(self):
+        # Two traces from one seed, sorted by parameter, put the worst-resolved
+        # point first: a leading run would refuse the whole branch.
+        points = (
+            [self._point(-0.46, 0.4, 0.5)]
+            + [self._point(-0.40 + 0.01 * i, 1.0 - 1.0e-4, 0.5) for i in range(4)]
+            + [self._point(-0.25, 0.3, 0.5)]
+        )
+        branch = resolved_branch(points, tolerance=1.0e-2)
+        assert len(branch.points) == 4
+        assert branch.refused == 2
+        assert [round(p.parameter, 2) for p in branch.points] == [
+            -0.40,
+            -0.39,
+            -0.38,
+            -0.37,
+        ]
+
+    def test_takes_the_longest_run_when_there_is_more_than_one(self):
+        resolved = 1.0 - 1.0e-4
+        trivia = [resolved, resolved, 0.4, resolved, resolved, resolved]
+        points = [self._point(0.1 * i, t, 0.5) for i, t in enumerate(trivia)]
+        branch = resolved_branch(points, tolerance=1.0e-2)
+        assert len(branch.points) == 3
+        assert branch.refused == 3
+        assert abs(branch.points[0].parameter - 0.3) < 1.0e-12
+
+    def test_does_not_interpolate_a_crossing_into_the_refused_tail(self):
+        # A fold of cycles across the cut: the kept run stops before it, so the
+        # crossing must not be reported from a pair whose far end was refused.
+        resolved = self._point(0.0, 1.0 - 1.0e-6, 0.5)
+        unresolved = self._point(0.1, 0.4, 1.5)
+        branch = resolved_branch([resolved, unresolved], tolerance=1.0e-2)
+        assert len(branch.points) == 1
+        assert branch.bifurcations == []
+
+    def test_still_classifies_a_crossing_inside_the_kept_run(self):
+        branch = resolved_branch(
+            [
+                self._point(0.0, 1.0 - 1.0e-6, 0.5),
+                self._point(0.1, 1.0 - 1.0e-6, 1.5),
+            ],
+            tolerance=1.0e-2,
+        )
+        assert len(branch.points) == 2
+        assert [b.kind for b in branch.bifurcations] == ["fold_of_cycles"]
+
+    def test_point_level_gate_reads_the_trivial_multiplier(self):
+        assert self._point(0.0, 0.999, 6.0).resolved(tolerance=1.0e-2)
+        assert not self._point(0.0, 0.911, 6.0).resolved(tolerance=1.0e-2)
+
+    def test_empty_trace_is_an_empty_resolved_branch(self):
+        branch = resolved_branch([])
+        assert branch.points == []
+        assert branch.refused == 0
+        assert branch.bifurcations == []
