@@ -6,6 +6,7 @@ from discrecontinual_equations.solver.solver import Solver
 from discrecontinual_equations.solver.stochastic.milstein.milstein_config import (
     MilsteinConfig,
 )
+from discrecontinual_equations.solver.stochastic.wiener import WienerSource
 from discrecontinual_equations.variable import Variable
 
 
@@ -22,7 +23,12 @@ class MilsteinSolver(Solver):
     The discretization is: X_{n+1} = X_n + μ Δt + σ ΔW + (1/2)σ ∂σ/∂x (ΔW² - Δt)
 
     For Stratonovich SDEs of the form: dX_t = μ(X_t, t) dt + σ(X_t, t) ∘ dW_t
-    The Ito equivalent is solved with modified drift: μ_corrected = μ - (1/2)σ ∂σ/∂x
+    The Ito equivalent has the drift μ_corrected = μ + (1/2)σ ∂σ/∂x (the sign is
+    argued in :mod:`discrecontinual_equations.solver.stochastic.coefficients`), and
+    the step is written in its Stratonovich form, which absorbs that correction:
+    X_{n+1} = X_n + μ Δt + σ ΔW + (1/2)σ ∂σ/∂x ΔW², since the extra
+    (1/2)σ ∂σ/∂x Δt of the corrected drift is exactly the Δt the Ito step takes
+    off its last term.
 
     This method achieves strong order 1.0 and weak order 1.0 convergence.
 
@@ -31,7 +37,11 @@ class MilsteinSolver(Solver):
       Kluwer Academic Publishers, 1995
     """
 
-    def __init__(self, solver_config: MilsteinConfig):
+    def __init__(
+        self,
+        solver_config: MilsteinConfig,
+        wiener: WienerSource | None = None,
+    ):
         super().__init__(solver_config=solver_config)
 
         # A generator of this solver's own, never np.random.seed. Seeding the global
@@ -41,6 +51,14 @@ class MilsteinSolver(Solver):
         # the same seed share one stream instead of repeating one another. A seed of
         # None still means fresh entropy, as before.
         self._generator = np.random.default_rng(self.solver_config.random_seed)
+
+        # A caller may supply the increments instead - a Brownian path fixed in
+        # advance, which is what a strong-convergence measurement needs, since the
+        # scheme and the exact solution must be driven by the same path. The solver's
+        # own draw stays the default rather than being routed through a
+        # GaussianWienerSource, which takes two normals per step, so that a seeded run
+        # gives the same numbers it always has.
+        self._wiener = wiener
 
     def solve(self, equation: DifferentialEquation, initial_values: list[float]):
         results = [
@@ -73,7 +91,11 @@ class MilsteinSolver(Solver):
 
             # Generate Wiener increment: ΔW ~ N(0, dt)
             dt = self.solver_config.dt
-            dW = self._generator.normal(0, np.sqrt(dt), size=len(y))
+            dW = (
+                self._generator.normal(0, np.sqrt(dt), size=len(y))
+                if self._wiener is None
+                else self._wiener.increments(t_current, dt, len(y)).delta_w
+            )
 
             # Milstein correction term
             if len(y) == 1:
@@ -99,7 +121,10 @@ class MilsteinSolver(Solver):
                     # Ito Milstein: (1/2) σ ∂σ/∂x (ΔW² - Δt)
                     correction = 0.5 * diffusion * dsigma_dx * (dW**2 - dt)
                 else:  # stratonovich
-                    # Stratonovich Milstein: (1/2) σ ∂σ/∂x ΔW²
+                    # Stratonovich Milstein: (1/2) b b' dW^2. This is the Ito step
+                    # with the drift raised by (1/2) b b' - the correction is added,
+                    # never subtracted (DEQ-27); the dW^2 form leaves the drift
+                    # untouched by folding that (1/2) b b' dt into this term.
                     correction = 0.5 * diffusion * dsigma_dx * dW**2
 
                 milstein_term = correction

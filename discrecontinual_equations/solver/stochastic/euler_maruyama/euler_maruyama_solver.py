@@ -3,9 +3,11 @@ import numpy as np
 from discrecontinual_equations.curve import Curve
 from discrecontinual_equations.differential_equation import DifferentialEquation
 from discrecontinual_equations.solver.solver import Solver
+from discrecontinual_equations.solver.stochastic.coefficients import ItoCoefficients
 from discrecontinual_equations.solver.stochastic.euler_maruyama.euler_maruyama_config import (
     EulerMaruyamaConfig,
 )
+from discrecontinual_equations.solver.stochastic.wiener import WienerSource
 from discrecontinual_equations.variable import Variable
 
 
@@ -20,7 +22,11 @@ class EulerMaruyamaSolver(Solver):
     The discretization is: X_{n+1} = X_n + μ(X_n, t_n) Δt + σ(X_n, t_n) ΔW_n
 
     For Stratonovich SDEs of the form: dX_t = μ(X_t, t) dt + σ(X_t, t) ∘ dW_t
-    The equivalent Ito form is used with drift correction: μ_corrected = μ - (1/2)σ ∂σ/∂x
+    The equivalent Ito form is used, with drift μ_corrected = μ + (1/2)σ ∂σ/∂x
+    (the sign is argued in
+    :mod:`discrecontinual_equations.solver.stochastic.coefficients`; with the
+    diagonal noise this interface implies, the correction applies to systems
+    component by component).
 
     Where ΔW_n ~ N(0, Δt) is a Wiener increment. This method achieves strong order 0.5
     and weak order 1.0 convergence.
@@ -32,7 +38,11 @@ class EulerMaruyamaSolver(Solver):
       Differential Equations" Springer-Verlag, 1992
     """
 
-    def __init__(self, solver_config: EulerMaruyamaConfig):
+    def __init__(
+        self,
+        solver_config: EulerMaruyamaConfig,
+        wiener: WienerSource | None = None,
+    ):
         super().__init__(solver_config=solver_config)
 
         # A generator of this solver's own, never np.random.seed. Seeding the global
@@ -42,6 +52,14 @@ class EulerMaruyamaSolver(Solver):
         # the same seed share one stream instead of repeating one another. A seed of
         # None still means fresh entropy, as before.
         self._generator = np.random.default_rng(self.solver_config.random_seed)
+
+        # A caller may supply the increments instead - a Brownian path fixed in
+        # advance, which is what a strong-convergence measurement needs, since the
+        # scheme and the exact solution must be driven by the same path. The solver's
+        # own draw stays the default rather than being routed through a
+        # GaussianWienerSource, which takes two normals per step, so that a seeded run
+        # gives the same numbers it always has.
+        self._wiener = wiener
 
     def solve(self, equation: DifferentialEquation, initial_values: list[float]):
         results = [
@@ -53,6 +71,8 @@ class EulerMaruyamaSolver(Solver):
             variables=equation.derivative.variables,
             results=results,
         )
+
+        coefficients = ItoCoefficients(equation, self.solver_config.calculus)
 
         # Initialize
         t = self.solver_config.start_time
@@ -66,50 +86,22 @@ class EulerMaruyamaSolver(Solver):
             # Current time
             t_current = self.solver_config.times[i]
 
-            # Evaluate drift and diffusion
-            drift = np.array(equation.derivative.eval(point=y.tolist(), time=t_current))
-            diffusion = np.array(
-                equation.derivative.diffusion(point=y.tolist(), time=t_current),
-            )
-
-            # Apply Stratonovich correction if requested
-            if self.solver_config.calculus == "stratonovich":
-                # For Stratonovich: effective drift = μ - (1/2) σ ∇σ
-                # For simplicity, implement numerical differentiation for 1D case
-                if len(y) == 1:
-                    # Numerical differentiation of diffusion w.r.t. x
-                    eps = 1e-8
-                    y_plus = y + eps
-                    y_minus = y - eps
-                    diffusion_plus = np.array(
-                        equation.derivative.diffusion(
-                            point=y_plus.tolist(),
-                            time=t_current,
-                        ),
-                    )
-                    diffusion_minus = np.array(
-                        equation.derivative.diffusion(
-                            point=y_minus.tolist(),
-                            time=t_current,
-                        ),
-                    )
-                    dsigma_dx = (diffusion_plus - diffusion_minus) / (2 * eps)
-
-                    # Stratonovich correction: subtract (1/2) σ dσ/dx
-                    correction = 0.5 * diffusion * dsigma_dx
-                    drift = drift - correction
-                else:
-                    # For multi-dimensional, Stratonovich is more complex
-                    # For now, issue a warning and use Ito
-                    import warnings
-
-                    warnings.warn(
-                        "Stratonovich calculus for multi-dimensional SDEs not implemented. Using Ito interpretation.",
-                    )
+            # Evaluate drift and diffusion in the Ito sense. The step below is an Ito
+            # scheme, so a Stratonovich equation is integrated as the Ito equation
+            # with drift a + (1/2) b b' - the correction is added, not subtracted
+            # (DEQ-27). ItoCoefficients holds that sign and the derivative estimate
+            # for every stochastic solver, so they agree by construction; in Ito mode
+            # it returns a and b untouched.
+            drift = coefficients.drift(y, t_current)
+            diffusion = coefficients.diffusion(y, t_current)
 
             # Generate Wiener increment: ΔW ~ N(0, dt)
             dt = self.solver_config.dt
-            dW = self._generator.normal(0, np.sqrt(dt), size=len(y))
+            dW = (
+                self._generator.normal(0, np.sqrt(dt), size=len(y))
+                if self._wiener is None
+                else self._wiener.increments(t_current, dt, len(y)).delta_w
+            )
 
             # Euler-Maruyama step: y_{n+1} = y_n + μ(y_n, t_n) dt + σ(y_n, t_n) dW
             y_new = y + drift * dt + diffusion * dW
