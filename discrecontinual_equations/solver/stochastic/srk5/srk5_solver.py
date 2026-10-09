@@ -1,225 +1,69 @@
-import numpy as np
-
-from discrecontinual_equations.curve import Curve
 from discrecontinual_equations.differential_equation import DifferentialEquation
 from discrecontinual_equations.solver.solver import Solver
 from discrecontinual_equations.solver.stochastic.srk5.srk5_config import SRK5Config
-from discrecontinual_equations.variable import Variable
 
 
 class SRK5Solver(Solver):
-    """
-    Stochastic Runge-Kutta method of order 5 (SRK5) for solving stochastic differential equations (SDEs).
+    """Refused: no five-stage scheme of strong order 2.5 exists for this interface.
 
-    This implements a 5-stage SRK method with support for both Ito and Stratonovich calculus.
-    Provides the highest accuracy among the implemented SRK methods through additional stages.
+    This solver refuses to run. The previous version of this file claimed "strong
+    order 2.5 and weak order 5.0" from five Runge-Kutta stages whose noise terms
+    were weighted by ``sqrt(dt)`` in place of a Wiener increment, so it drew no
+    random number and integrated the ordinary differential equation
+    ``dX = (a + b / sqrt(h)) dt`` - a drift with a deterministic bias that grows,
+    relative to the drift, as the step shrinks (DEQ-25). The other three schemes in
+    this package were rebuilt from derivations in Kloeden and Platen and their
+    orders measured; for this one there was nothing defensible to build.
 
-    For Ito SDEs: dX_t = μ(X_t, t) dt + σ(X_t, t) dW_t
-    For Stratonovich SDEs: dX_t = μ(X_t, t) dt + σ(X_t, t) ∘ dW_t
+    **Why not.** For a scalar SDE with multiplicative noise the strong order of a
+    scheme is set by which iterated Ito integrals it carries with their exact joint
+    law. Order 1.0 needs ``dW`` and ``I_(1,1) = (dW^2 - h) / 2`` (:class:`SRK2Solver`);
+    order 1.5 adds ``I_(1,0)`` and ``I_(1,1,1)`` (:class:`SRK3Solver`); order 2.0 adds
+    ``I_(1,1,0)``, ``I_(1,0,1)``, ``I_(0,1,1)`` and ``I_(1,1,1,1)``, of which the
+    mixed ones have no closed-form sampler and are usually approximated by series
+    (Kloeden-Platen Section 10.5 and Chapter 5), and order 2.5 adds a further layer.
+    Strong order 2.0 and above are therefore written down only for additive noise
+    (``b`` constant), where the mixed integrals drop out, and this library's
+    interface cannot tell additive noise from multiplicative noise before the fact.
+    Weak order 5.0 is not a scheme at all for a general SDE; the only route to it in
+    Kloeden and Platen is Richardson extrapolation of expectations across step
+    sizes (Section 15.3), which produces a number, not a path, and so does not fit
+    a solver that returns a trajectory. Finally, a "stage count" of five says
+    nothing about stochastic order - the deterministic order of a Runge-Kutta
+    tableau does not survive the addition of noise, since the noise terms need
+    their own order conditions (Burrage and Burrage, 1996; Roessler, 2010).
 
-    The method achieves strong order 2.5 and weak order 5.0 convergence.
+    **What would be needed.** Either a strong order 2.0 scheme for additive noise
+    with ``(dW, I_(1,0), I_(1,0,0))`` drawn jointly and a check that ``b`` is
+    constant, measured on an additive-noise SDE with an exact solution (the
+    Ornstein-Uhlenbeck process); or an honest weak order 3.0 scheme for additive
+    noise. Both are real derivations with their own convergence tests. Until one
+    is done, ``solve`` raises, because a solver named ``srk5`` that silently ran at
+    an unknown order would be the present defect in a harder-to-notice form.
+
+    Use :class:`SRK3Solver` for the highest measured strong order (1.5, scalar
+    noise) or :class:`SRK4Solver` for the highest measured weak order (2.0, scalar
+    noise).
+
+    References:
+    - Kloeden, P. E. and Platen, E. "Numerical Solution of Stochastic Differential
+      Equations", Springer, 1992, Chapters 10, 11, 14 and 15.
+    - Burrage, K. and Burrage, P. M. "High strong order explicit Runge-Kutta methods
+      for stochastic ordinary differential equations", Applied Numerical Mathematics
+      22, 1996.
+    - Roessler, A. "Runge-Kutta methods for the strong approximation of solutions of
+      stochastic differential equations", SIAM Journal on Numerical Analysis 48, 2010.
     """
 
     def __init__(self, solver_config: SRK5Config):
         super().__init__(solver_config=solver_config)
 
-        # Nothing is seeded here because nothing is drawn: the stage increments below
-        # use sqrt(dt) where a Wiener increment belongs, so this scheme is currently
-        # deterministic and solver_config.random_seed has no effect on it. That missing
-        # increment is a defect of the scheme and is left untouched here. What is
-        # removed is the np.random.seed call that used to sit in this constructor,
-        # which reseeded the process-wide stream - and so changed every draw made
-        # anywhere afterwards - purely as a side effect of constructing this object.
-
     def solve(self, equation: DifferentialEquation, initial_values: list[float]):
-        results = [
-            Variable(name=f"Integral of {variable.name}")
-            for variable in equation.derivative.variables
-        ]
-        self.solution = Curve(
-            time=equation.derivative.time,
-            variables=equation.derivative.variables,
-            results=results,
+        message = (
+            "SRK5Solver has no implementation: a stochastic Runge-Kutta scheme of "
+            "strong order 2.5 or weak order 5.0 for general multiplicative noise does "
+            "not exist, and the previous version of this solver was a deterministic "
+            "ODE step mislabelled as one (DEQ-25). Use SRK3Solver (strong order 1.5, "
+            "scalar noise) or SRK4Solver (weak order 2.0, scalar noise)."
         )
-
-        # Initialize
-        t = self.solver_config.start_time
-        y = np.array(initial_values, dtype=float)
-
-        # Append initial point
-        self.solution.append([t, [0] * len(initial_values), y.tolist()])
-
-        # Time stepping loop
-        for i in range(self.solver_config.n_steps):
-            # Current time
-            t_current = self.solver_config.times[i]
-
-            dt = self.solver_config.dt
-
-            # SRK5 step
-            y_new = self._srk5_step(y, t_current, dt, equation)
-
-            # Update time and state
-            t_next = self.solver_config.times[i + 1]
-            y = y_new
-
-            # Append to solution
-            self.solution.append([t_next, [0] * len(initial_values), y.tolist()])
-
-    def _srk5_step(
-        self,
-        y: np.ndarray,
-        t: float,
-        dt: float,
-        equation: DifferentialEquation,
-    ) -> np.ndarray:
-        """Perform one SRK5 step with 5 stages."""
-        # Stage 1
-        k1 = np.array(equation.derivative.eval(point=y.tolist(), time=t))
-        l1 = np.array(equation.derivative.diffusion(point=y.tolist(), time=t))
-
-        # Apply Stratonovich correction to K1 if requested
-        if self.solver_config.calculus == "stratonovich" and len(y) == 1:
-            eps = 1e-8
-            y_plus = y + eps
-            y_minus = y - eps
-            diffusion_plus = np.array(
-                equation.derivative.diffusion(point=y_plus.tolist(), time=t),
-            )
-            diffusion_minus = np.array(
-                equation.derivative.diffusion(point=y_minus.tolist(), time=t),
-            )
-            dsigma_dx = (diffusion_plus - diffusion_minus) / (2 * eps)
-            stratonovich_correction = 0.5 * l1 * dsigma_dx
-            k1 = k1 - stratonovich_correction
-
-        # Stage 2
-        y_temp2 = y + (1 / 5) * k1 * dt + (1 / 5) * l1 * np.sqrt(dt)
-        k2 = np.array(equation.derivative.eval(point=y_temp2.tolist(), time=t + dt / 5))
-        l2 = np.array(
-            equation.derivative.diffusion(point=y_temp2.tolist(), time=t + dt / 5),
-        )
-
-        # Apply Stratonovich correction to K2 if requested
-        if self.solver_config.calculus == "stratonovich" and len(y) == 1:
-            eps = 1e-8
-            y_temp2_plus = y_temp2 + eps
-            y_temp2_minus = y_temp2 - eps
-            diffusion_temp2_plus = np.array(
-                equation.derivative.diffusion(
-                    point=y_temp2_plus.tolist(),
-                    time=t + dt / 5,
-                ),
-            )
-            diffusion_temp2_minus = np.array(
-                equation.derivative.diffusion(
-                    point=y_temp2_minus.tolist(),
-                    time=t + dt / 5,
-                ),
-            )
-            dsigma_dx_temp2 = (diffusion_temp2_plus - diffusion_temp2_minus) / (2 * eps)
-            stratonovich_correction_temp2 = 0.5 * l2 * dsigma_dx_temp2
-            k2 = k2 - stratonovich_correction_temp2
-
-        # Stage 3
-        y_temp3 = y + (1 / 3) * k2 * dt + (1 / 3) * l2 * np.sqrt(dt)
-        k3 = np.array(equation.derivative.eval(point=y_temp3.tolist(), time=t + dt / 3))
-        l3 = np.array(
-            equation.derivative.diffusion(point=y_temp3.tolist(), time=t + dt / 3),
-        )
-
-        # Apply Stratonovich correction to K3 if requested
-        if self.solver_config.calculus == "stratonovich" and len(y) == 1:
-            eps = 1e-8
-            y_temp3_plus = y_temp3 + eps
-            y_temp3_minus = y_temp3 - eps
-            diffusion_temp3_plus = np.array(
-                equation.derivative.diffusion(
-                    point=y_temp3_plus.tolist(),
-                    time=t + dt / 3,
-                ),
-            )
-            diffusion_temp3_minus = np.array(
-                equation.derivative.diffusion(
-                    point=y_temp3_minus.tolist(),
-                    time=t + dt / 3,
-                ),
-            )
-            dsigma_dx_temp3 = (diffusion_temp3_plus - diffusion_temp3_minus) / (2 * eps)
-            stratonovich_correction_temp3 = 0.5 * l3 * dsigma_dx_temp3
-            k3 = k3 - stratonovich_correction_temp3
-
-        # Stage 4
-        y_temp4 = y + (1 / 2) * k3 * dt + (1 / 2) * l3 * np.sqrt(dt)
-        k4 = np.array(equation.derivative.eval(point=y_temp4.tolist(), time=t + dt / 2))
-        l4 = np.array(
-            equation.derivative.diffusion(point=y_temp4.tolist(), time=t + dt / 2),
-        )
-
-        # Apply Stratonovich correction to K4 if requested
-        if self.solver_config.calculus == "stratonovich" and len(y) == 1:
-            eps = 1e-8
-            y_temp4_plus = y_temp4 + eps
-            y_temp4_minus = y_temp4 - eps
-            diffusion_temp4_plus = np.array(
-                equation.derivative.diffusion(
-                    point=y_temp4_plus.tolist(),
-                    time=t + dt / 2,
-                ),
-            )
-            diffusion_temp4_minus = np.array(
-                equation.derivative.diffusion(
-                    point=y_temp4_minus.tolist(),
-                    time=t + dt / 2,
-                ),
-            )
-            dsigma_dx_temp4 = (diffusion_temp4_plus - diffusion_temp4_minus) / (2 * eps)
-            stratonovich_correction_temp4 = 0.5 * l4 * dsigma_dx_temp4
-            k4 = k4 - stratonovich_correction_temp4
-
-        # Stage 5
-        y_temp5 = y + (3 / 4) * k4 * dt + (3 / 4) * l4 * np.sqrt(dt)
-        k5 = np.array(
-            equation.derivative.eval(point=y_temp5.tolist(), time=t + 3 * dt / 4),
-        )
-        l5 = np.array(
-            equation.derivative.diffusion(point=y_temp5.tolist(), time=t + 3 * dt / 4),
-        )
-
-        # Apply Stratonovich correction to K5 if requested
-        if self.solver_config.calculus == "stratonovich" and len(y) == 1:
-            eps = 1e-8
-            y_temp5_plus = y_temp5 + eps
-            y_temp5_minus = y_temp5 - eps
-            diffusion_temp5_plus = np.array(
-                equation.derivative.diffusion(
-                    point=y_temp5_plus.tolist(),
-                    time=t + 3 * dt / 4,
-                ),
-            )
-            diffusion_temp5_minus = np.array(
-                equation.derivative.diffusion(
-                    point=y_temp5_minus.tolist(),
-                    time=t + 3 * dt / 4,
-                ),
-            )
-            dsigma_dx_temp5 = (diffusion_temp5_plus - diffusion_temp5_minus) / (2 * eps)
-            stratonovich_correction_temp5 = 0.5 * l5 * dsigma_dx_temp5
-            k5 = k5 - stratonovich_correction_temp5
-
-        # Final SRK5 combination
-        y_new = (
-            y
-            + (1 / 24) * k1 * dt
-            + (4 / 24) * k2 * dt
-            + (6 / 24) * k3 * dt
-            + (8 / 24) * k4 * dt
-            + (5 / 24) * k5 * dt
-            + (1 / 24) * l1 * np.sqrt(dt)
-            + (4 / 24) * l2 * np.sqrt(dt)
-            + (6 / 24) * l3 * np.sqrt(dt)
-            + (8 / 24) * l4 * np.sqrt(dt)
-            + (5 / 24) * l5 * np.sqrt(dt)
-        )
-
-        return y_new
+        raise NotImplementedError(message)
