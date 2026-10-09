@@ -189,8 +189,13 @@ solver returns the same near-optimal result as the uniform mesh (no regression).
   top exponent stays positive). Extending to genuinely unbounded references or
   multi-channel (vector) noise remains open.
 - **Higher-order collocation** is implemented (`HermiteSimpsonOrbit`, fourth order,
-  verified by convergence rate). Gauss/Lobatto schemes would raise the order further
-  and are the remaining option here.
+  verified by convergence rate) and is now the default scheme of
+  `CycleContinuation` as well, with its own analytic sparse Jacobian. Gauss/Lobatto
+  schemes would raise the order further and are the remaining option here. The
+  monodromy still integrates along the piecewise-linear interpolant between nodes,
+  which is second order and is now where the Floquet error bottoms out (about 0.2%
+  at 80 nodes on the Bogdanov-Takens worst orbit); a Hermite interpolant there is
+  the obvious follow-up.
 - **Heteroclinic networks** among three or more saddles (see section 2) are the main
   substantial item still fully open, blocked on a clean oracle for a three-saddle
   connection cycle rather than on machinery.
