@@ -73,17 +73,37 @@ class RadialCrater(DensityProbe):
     potential, so the logarithm is the smooth object and its curvature is the thing the
     bifurcation changes the sign of. The probe inherits an ``O(h^2)`` error from the
     one-cell difference, which is the accuracy of any threshold located with it.
+
+    ``offset`` moves the reference cell that many cells out from the one nearest
+    the centre before the difference is taken. It exists for a grid that straddles
+    the centre rather than landing a cell on it - the only grid a noise that
+    vanishes at the centre allows, since a cell there would make the diffusion
+    singular and the solve refuse. On such a grid the nearest cell is a tie
+    broken by rounding, and when it falls on the lower side its neighbour sits at
+    the same radius, so the difference says nothing about the curvature. There is
+    a second reason to step out: a finite-volume solve overshoots the few cells
+    around a singular centre by a factor fixed in cells rather than in length,
+    so a probe within them carries a bias no refinement removes, while a probe
+    several cells out trades it for the ``O(h^2)`` one above, which refinement
+    does remove. The default keeps the cell nearest the centre, as before.
     """
 
-    __slots__ = ["_axis", "_centre"]
+    __slots__ = ["_axis", "_centre", "_offset"]
 
-    def __init__(self, centre: Sequence[float], axis: int = 0) -> None:
+    def __init__(
+        self,
+        centre: Sequence[float],
+        axis: int = 0,
+        offset: int = 0,
+    ) -> None:
         self._centre = list(centre)
         self._axis = axis
+        self._offset = offset
 
     def value(self, density: GridDensity) -> float:
         """Difference of ``log p`` between the neighbour cell and the reference cell."""
         index = list(density.grid.nearest(self._centre))
+        index[self._axis] += self._offset
         here = density.at(index)
         index[self._axis] += 1
         there = density.at(index)

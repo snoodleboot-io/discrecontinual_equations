@@ -171,7 +171,11 @@ _STYLE = """
   @media (prefers-reduced-motion: reduce){ .btn.play{display:none} }
 """
 
-_SCRIPT = r"""
+# The page script, in the segments a variant of the page can swap. The
+# deterministic page is their concatenation, byte for byte; a stochastic
+# stage keeps the head and the skeleton and brings its own particles,
+# panels, timeline, readouts and orchestration.
+_SCRIPT_HEAD = r"""
 (function(){
 const D = window.__STAGE__;
 const css = k =>
@@ -341,7 +345,9 @@ function fieldAt(x, y, out){
   out[0] = ua*(1-f) + ub*f; out[1] = va*(1-f) + vb*f;
 }
 
-// ---------- stage: particles on canvas ----------
+"""
+
+_SCRIPT_PARTICLES = r"""// ---------- stage: particles on canvas ----------
 // A planar system's particles ride the sampled grid. A system seen through a
 // view is integrated in its own dimension from the polynomial terms - exact in
 // the parameter - and only drawn projected, so what flows is the real flow.
@@ -461,7 +467,9 @@ function stepParticles(){
   ctx.stroke();
 }
 
-// ---------- stage: skeleton on svg ----------
+"""
+
+_SCRIPT_SKELETON = r"""// ---------- stage: skeleton on svg ----------
 function label(sel, x, y, text, fill, anchor){
   return sel.append("text").attr("x",x).attr("y",y).attr("fill",fill)
     .attr("font-size",11).attr("font-family",mono)
@@ -561,7 +569,9 @@ function drawSkeleton(){
     `${PARAM} = ${paramAt(t).toFixed(4)}`;
 }
 
-// ---------- spectral clock ----------
+"""
+
+_SCRIPT_CLOCK = r"""// ---------- spectral clock ----------
 const clock = d3.select("#clock");
 // Eigenvalue tracks: each equilibrium chained across frames by class and
 // position, each of its eigenvalues chained by nearest neighbour in the plane
@@ -667,7 +677,9 @@ function drawClock(){
   }
 }
 
-// ---------- timeline ----------
+"""
+
+_SCRIPT_TIMELINE = r"""// ---------- timeline ----------
 const tl = d3.select("#tl");
 function drawTimeline(){
   const r = tl.node().getBoundingClientRect(); const tw = r.width, th = r.height;
@@ -787,7 +799,9 @@ function drawTimeline(){
   drawTimeline.updatePlayhead();
 }
 
-// ---------- readouts ----------
+"""
+
+_SCRIPT_READOUTS = r"""// ---------- readouts ----------
 const fmtC = ([re,im]) => `${re>=0?"+":MINUS}${Math.abs(re).toFixed(3)} `
   + `${im>=0?"+":MINUS} ${Math.abs(im).toFixed(3)}i`;
 function genericRegime(fr){
@@ -848,7 +862,9 @@ function readouts(){
   document.getElementById("ro-regime").textContent = fr.label || genericRegime(fr);
 }
 
-// ---------- orchestration ----------
+"""
+
+_SCRIPT_TAIL = r"""// ---------- orchestration ----------
 let lastFrame = -1;
 function setT(v){ t = clamp(v, 0, LAST); onFrame(); }
 function onFrame(){
@@ -926,13 +942,25 @@ requestAnimationFrame(loop);
 })();
 """
 
+_SCRIPT = (
+    _SCRIPT_HEAD
+    + _SCRIPT_PARTICLES
+    + _SCRIPT_SKELETON
+    + _SCRIPT_CLOCK
+    + _SCRIPT_TIMELINE
+    + _SCRIPT_READOUTS
+    + _SCRIPT_TAIL
+)
+
 _FONTS = (
     "https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght,SOFT@9..144,300..600,"
     "0..100&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500"
     "&display=swap"
 )
 
-_BODY = """
+# The page body in the same segments as the script, so a variant can
+# keep the mast, stage and timeline and put other panels between them.
+_BODY_OPEN = """
 <div class="wrap">
   <div class="topbar">
     <a class="back" href="index.html">&larr; atlas</a>
@@ -941,7 +969,9 @@ _BODY = """
       <button class="theme-btn" data-theme="light">Light</button>
     </div>
   </div>
-  <div class="mast">
+"""
+
+_BODY_MAST = """  <div class="mast">
     <div>
       <div class="kicker">Stage &amp; timeline &middot; continuation as a film</div>
       <h1>__TITLE__</h1>
@@ -950,7 +980,9 @@ _BODY = """
     <p class="lede">__SUBTITLE__</p>
   </div>
 
-  <div class="instrument">
+"""
+
+_BODY_STAGE = """  <div class="instrument">
     <section class="stage" aria-label="phase portrait">
       <div class="panel-head">
         <span class="kicker">Stage &middot; phase plane</span>
@@ -968,7 +1000,9 @@ _BODY = """
         <span><span class="dot" style="background:var(--saddle)"></span>saddle</span>
       </div>
     </section>
-    <section class="clock" aria-label="spectral clock">
+"""
+
+_BODY_CLOCK = """    <section class="clock" aria-label="spectral clock">
       <div class="panel-head">
         <span class="kicker">Spectral clock</span><span class="mono">&#8450;</span>
       </div>
@@ -986,7 +1020,9 @@ _BODY = """
     </section>
   </div>
 
-  <div class="readouts" id="readouts">
+"""
+
+_BODY_READOUTS = """  <div class="readouts" id="readouts">
     <div class="ro"><span class="kicker" id="ro-p-kicker"></span>
       <div class="val" id="ro-p">&mdash;</div>
       <div class="sub" id="ro-regime-sub"></div></div>
@@ -1003,15 +1039,21 @@ _BODY = """
       <div class="val" id="ro-regime">&mdash;</div></div>
   </div>
 
-  <section class="timeline" aria-label="bifurcation diagram timeline">
-    <div class="panel-head">
+"""
+
+_BODY_TIMELINE = (
+    '  <section class="timeline" aria-label="bifurcation diagram timeline">\n'
+    """    <div class="panel-head">
       <span class="kicker">Timeline &middot; bifurcation diagram</span>
       <span class="mono" id="tl-hint"></span>
     </div>
     <div class="frame"><svg id="tl"></svg></div>
   </section>
 
-  <div class="controls">
+"""
+)
+
+_BODY_CONTROLS = """  <div class="controls">
     <button class="btn play" id="play" aria-pressed="false">Play
       <kbd>space</kbd></button>
     <label class="group">speed <input class="range" id="speed" type="range"
@@ -1028,9 +1070,22 @@ _BODY = """
       <span class="sw"></span>eigen-trails</label>
   </div>
 
-  <p class="foot">__NOTE__</p>
+"""
+
+_BODY_FOOT = """  <p class="foot">__NOTE__</p>
 </div>
 """
+
+_BODY = (
+    _BODY_OPEN
+    + _BODY_MAST
+    + _BODY_STAGE
+    + _BODY_CLOCK
+    + _BODY_READOUTS
+    + _BODY_TIMELINE
+    + _BODY_CONTROLS
+    + _BODY_FOOT
+)
 
 _TEMPLATE = (
     '<!DOCTYPE html>\n<html lang="en">\n<head>\n<meta charset="utf-8">\n'
