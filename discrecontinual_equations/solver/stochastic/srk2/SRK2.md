@@ -2,33 +2,33 @@
 
 ## Overview
 
-SRK2 (Stochastic Runge-Kutta order 2) implements Platen's scheme for second-order stochastic Runge-Kutta methods. It provides higher accuracy than Euler-Maruyama through a 2-stage Runge-Kutta approach while maintaining reasonable computational cost.
+SRK2 is Platen's two-stage explicit strong scheme of order 1.0 for Ito SDEs,
+Kloeden and Platen (1992) equation (11.1.7). It is the Milstein scheme with the
+derivative of the diffusion replaced by a difference between two stages, so it
+needs no derivative from the user and reaches the same strong order 1.0 Milstein
+does. The "2" counts stages; the scheme is not second order in any sense.
+
+Until DEQ-25 this file described, and the solver implemented, a scheme that drew no
+random number: `sqrt(dt)` stood where the Wiener increment belonged. The solver now
+draws its increments from a source it owns and the orders below are measured.
 
 ## Architecture
 
 ```
 SRK2Solver
 ├── Config: start_time, end_time, step_size, random_seed, calculus
-├── Method: 2-stage stochastic Runge-Kutta (Platen's scheme)
-├── Order: Strong 1.0, Weak 1.0
-└── Calculus: Supports Ito and Stratonovich
+├── Base: StochasticRungeKuttaSolver (shared stepping loop, owns the Wiener source)
+├── Method: Kloeden-Platen (11.1.7), one supporting value per noise channel
+├── Order: Strong 1.0, Weak 1.0 (measured 0.99 / 0.97)
+└── Calculus: Ito, or Stratonovich via the Ito drift a + (1/2) b b'
 ```
-
-## Executive Summary
-
-**Purpose**: Higher-order stochastic integration with improved accuracy
-**Key Features**: 2-stage Runge-Kutta, stochastic increments, calculus support
-**Performance**: Better accuracy than Euler-Maruyama, moderate computational cost
-**Use Cases**: Accurate SDE simulation, financial modeling, scientific computing
 
 ## Core Classes
 
 ### SRK2Config
 
 ```python
-class SRK2Config(SolverConfig):
-    """Configuration for SRK2 method."""
-
+class SRK2Config(StochasticConfig):
     start_time: float = 0.0
     end_time: float = 1.0
     step_size: float = 0.01
@@ -39,62 +39,17 @@ class SRK2Config(SolverConfig):
 ### SRK2Solver
 
 ```python
-class SRK2Solver(Solver):
-    """SRK2 method using Platen's 2-stage scheme."""
+class SRK2Solver(StochasticRungeKuttaSolver):
+    def __init__(self, solver_config: SRK2Config, wiener: WienerSource | None = None): ...
 
-    def solve(self, equation: DifferentialEquation, initial_values: list[float]):
-        """Solve SDE using SRK2 method."""
-
-    def _srk2_step(self, y, t, dt, equation):
-        """Single SRK2 step with 2 stages."""
+    @staticmethod
+    def _step(y, t, h, coefficients, increments) -> np.ndarray:
+        """One step of Kloeden-Platen (11.1.7)."""
 ```
 
-## UML Class Diagram
-
-```mermaid
-classDiagram
-    class Solver {
-        +solution: Curve | None
-        +solve(equation, initial_values)*
-    }
-
-    class StochasticSolver {
-        +calculus: str
-        +_apply_calculus_correction(drift, diffusion, point)
-    }
-
-    class SRK2Solver {
-        +_srk2_step(y, t, dt, equation)
-        +_compute_stages(y, t, dt, equation)
-    }
-
-    Solver <|-- StochasticSolver
-    StochasticSolver <|-- SRK2Solver
-```
-
-## Sequence Diagram - SRK2 Step
-
-```mermaid
-sequenceDiagram
-    participant Solver
-    participant Equation
-    participant RNG
-
-    Solver->>Equation: eval(y, t) - Stage 1 drift K₁
-    Solver->>Equation: diffusion(y, t) - Stage 1 diffusion L₁
-    alt calculus == "stratonovich"
-        Solver->>Solver: apply drift correction to K₁
-    end
-
-    Solver->>Solver: y_temp = y + K₁Δt + L₁√Δt
-    Solver->>Equation: eval(y_temp, t+Δt) - Stage 2 drift K₂
-    Solver->>Equation: diffusion(y_temp, t+Δt) - Stage 2 diffusion L₂
-    alt calculus == "stratonovich"
-        Solver->>Solver: apply drift correction to K₂
-    end
-
-    Solver->>Solver: y_new = y + (K₁+K₂)Δt/2 + (L₁+L₂)√Δt/2
-```
+`wiener` defaults to a `GaussianWienerSource` seeded from `random_seed`; a
+`BrownianPath` fixed in advance may be passed instead, which is how the
+convergence tests drive every step size with the same path.
 
 ## Folder Structure
 
@@ -106,199 +61,84 @@ srk2/
 └── SRK2.md
 ```
 
-## Examples
+Shared with the other `srk*` packages:
 
-### Geometric Brownian Motion
+```
+stochastic/
+├── wiener.py        - WienerIncrements, WienerSource, GaussianWienerSource, BrownianPath
+├── coefficients.py  - ItoCoefficients (drift in the Ito sense, diffusion)
+└── runge_kutta.py   - StochasticRungeKuttaSolver (the stepping loop)
+```
+
+## Example
 
 ```python
-from discrecontinual_equations.solver.stochastic.srk2 import SRK2Config, SRK2Solver
+from discrecontinual_equations.solver.stochastic.srk2.srk2_config import SRK2Config
+from discrecontinual_equations.solver.stochastic.srk2.srk2_solver import SRK2Solver
 
-# dX = μX dt + σX dW
-class GBM(StochasticFunction):
-    def eval(self, point, time=None):
-        x = point[0]
-        return [0.08 * x]  # 8% drift
-
-    def diffusion(self, point, time=None):
-        x = point[0]
-        return [0.25 * x]  # 25% volatility
-
-config = SRK2Config(
-    start_time=0, end_time=1, step_size=0.01,
-    calculus="ito", random_seed=42
-)
-
+# dX = mu X dt + sigma X dW
+config = SRK2Config(start_time=0.0, end_time=1.0, step_size=0.01, random_seed=42)
 solver = SRK2Solver(config)
-solver.solve(equation, [100.0])  # Start at $100
+solver.solve(equation, [100.0])
 ```
 
-### Stochastic Lorenz System
+## Mathematical Foundation
 
-```python
-# 3D stochastic Lorenz with noise in Z equation
-class StochasticLorenz(StochasticFunction):
-    def eval(self, point, time=None):
-        x, y, z = point
-        sigma, rho, beta = 10, 28, 8/3
-        return [
-            sigma * (y - x),           # dx/dt
-            x * (rho - z) - y,         # dy/dt
-            x * y - beta * z           # dz/dt
-        ]
+With `a` the Ito drift, `b` the diffusion, `h` the step and `dW = W(t+h) - W(t)`:
 
-    def diffusion(self, point, time=None):
-        return [0, 0, 0.1]  # Noise only in Z
-
-config = SRK2Config(
-    start_time=0, end_time=50, step_size=0.001,
-    calculus="stratonovich", random_seed=123
-)
-
-solver = SRK2Solver(config)
-solver.solve(equation, [1.0, 1.0, 1.0])
+```
+Y_bar  = Y + a h + b sqrt(h)
+Y_next = Y + a h + b dW + (b(Y_bar) - b) (dW^2 - h) / (2 sqrt(h))
 ```
 
-## Functionality Explanation
+Expanding `b(Y_bar)` gives `(b(Y_bar) - b) / (2 sqrt(h)) = (1/2) b b' + O(sqrt(h))`,
+so the last term is the Milstein correction `(1/2) b b' (dW^2 - h)` to a remainder
+of strong order 1.5. The `sqrt(h)` in the supporting value is a probe distance for
+that difference quotient, not an increment.
 
-### Mathematical Foundation
+For a system the diffusion interface returns one coefficient per component, each
+with its own Wiener process. The scheme uses one supporting value per channel,
+`Y_bar_j = Y + a h + b_j e_j sqrt(h)`, reproducing the diagonal Milstein terms
+`(1/2) b_j (d b_j / d x_j) (dW_j^2 - h)`. The cross terms `b_k (d b_j / d x_k)
+I_(k,j)` need Levy areas, which have no exact sampler, and are omitted: order 1.0
+therefore holds when each `b_j` depends only on `x_j`, and falls to 0.5 otherwise.
 
-SRK2 implements Platen's scheme for stochastic Runge-Kutta methods:
+A Stratonovich equation `dX = a dt + b o dW` is integrated as the Ito equation with
+drift `a + (1/2) b b'`; see `coefficients.py` for the sign.
 
-**Stage 1:**
-```
-K₁ = μ(X_n, t_n)
-L₁ = σ(X_n, t_n)
-```
+## Convergence, as measured
 
-**Stage 2:**
-```
-K₂ = μ(X_n + K₁Δt + L₁√Δt, t_n + Δt)
-L₂ = σ(X_n + K₁Δt + L₁√Δt, t_n + Δt)
-```
+Geometric Brownian motion `dX = X dt + 0.5 X dW`, `X(0) = 1`, on `[0, 1]`, exact
+solution `exp((mu - sigma^2 / 2) t + sigma W(t))`, 100000 paths, the same Brownian
+path at every step size. Weak error estimated path-coupled, standard error in
+brackets.
 
-**Final Update:**
-```
-X_{n+1} = X_n + (K₁ + K₂)Δt/2 + (L₁ + L₂)√Δt/2
-```
+| h | strong error | weak error |
+|---|---|---|
+| 1/8 | 2.130e-01 | 1.521e-01 (8e-04) |
+| 1/16 | 1.109e-01 | 8.015e-02 (5e-04) |
+| 1/32 | 5.616e-02 | 4.139e-02 (2e-04) |
+| 1/64 | 2.809e-02 | 2.096e-02 (1e-04) |
+| 1/128 | 1.397e-02 | 1.054e-02 (6e-05) |
+| 1/256 | 6.936e-03 | 5.271e-03 (3e-05) |
+| **slope** | **0.99** | **0.97** |
 
-### Ito vs Stratonovich Calculus
+Euler-Maruyama and Milstein in the same run: 0.59 / 0.97 and 0.97 / 0.97.
 
-For Stratonovich interpretation, drift terms are corrected:
-```
-K_corrected = K - (1/2)σ ∂σ/∂x
-```
-
-This converts the Ito SRK2 to Stratonovich SRK2.
-
-### Stability and Accuracy
-
-- **Strong order 1.0**: Better path-wise accuracy than Euler-Maruyama
-- **Weak order 1.0**: Same expected value accuracy as Euler-Maruyama
-- **A-stable**: Good stability properties for many problems
-
-## Algorithm Details
-
-### Stage Computation
-
-```python
-def _srk2_step(self, y, t, dt, equation):
-    # Stage 1
-    K1 = np.array(equation.derivative.eval(y, t))
-    L1 = np.array(equation.derivative.diffusion(y, t))
-
-    if self.calculus == "stratonovich":
-        K1 = self._apply_stratonovich_correction(K1, L1, y, t, equation)
-
-    # Stage 2
-    y_temp = y + K1 * dt + L1 * np.sqrt(dt)
-    K2 = np.array(equation.derivative.eval(y_temp, t + dt))
-    L2 = np.array(equation.derivative.diffusion(y_temp, t + dt))
-
-    if self.calculus == "stratonovich":
-        K2 = self._apply_stratonovich_correction(K2, L2, y_temp, t + dt, equation)
-
-    # SRK2 combination
-    y_new = y + (K1 + K2) * dt / 2 + (L1 + L2) * np.sqrt(dt) / 2
-    return y_new
-```
-
-### Stratonovich Correction
-
-```python
-def _apply_stratonovich_correction(self, K, L, y, t, equation, eps=1e-8):
-    """Apply Stratonovich drift correction."""
-    # Compute ∂σ/∂x using finite differences
-    L_plus = np.array(equation.derivative.diffusion(y + eps, t))
-    L_minus = np.array(equation.derivative.diffusion(y - eps, t))
-    dL_dx = (L_plus - L_minus) / (2 * eps)
-
-    # Apply correction: K_corrected = K - (1/2)L * dL_dx
-    return K - 0.5 * L * dL_dx
-```
-
-## Convergence Analysis
-
-### Strong Convergence
-- **Order 1.0**: `E[|X(t) - X̂(t)|] = O(Δt)`
-- **Improvement**: Factor of √Δt better than Euler-Maruyama
-
-### Weak Convergence
-- **Order 1.0**: `|E[f(X(t))] - E[f(X̂(t))]| = O(Δt)`
-- **Same as Euler-Maruyama** for expected values
-
-### Computational Complexity
-- **Per step**: 4 function evaluations (2 eval + 2 diffusion)
-- **Memory**: O(dimension) additional storage
-- **Total cost**: O(N × d) for N steps, d dimensions
-
-## Performance Characteristics
-
-| Method | Strong Order | Function Calls/Step | Relative Speed |
-|--------|-------------|-------------------|----------------|
-| Euler-Maruyama | 0.5 | 2 | Fastest |
-| Milstein | 1.0 | 2 + derivatives | Medium |
-| SRK2 | 1.0 | 4 | Medium-Slow |
-| Higher SRK | 1.5+ | 6+ | Slow |
-
-## Error Analysis
-
-### Local Truncation Error
-- **Deterministic part**: O(Δt³)
-- **Stochastic part**: O(Δt^{5/2})
-- **Combined**: O(Δt^{3/2})
-
-### Implementation Considerations
-- **Numerical differentiation** for Stratonovich correction
-- **Multi-dimensional support** with component-wise corrections
-- **Adaptive step sizing** possible but not implemented
-
-## Applications
-
-### Financial Engineering
-- **Option pricing**: More accurate Black-Scholes paths
-- **Risk management**: Better VaR calculations
-- **Portfolio optimization**: Improved stochastic simulations
-
-### Scientific Computing
-- **Population models**: Logistic growth with demographic noise
-- **Chemical kinetics**: Stochastic reaction rates
-- **Climate models**: Atmospheric noise processes
-
-### Engineering Systems
-- **Control systems**: Stochastic feedback loops
-- **Signal processing**: Noise reduction algorithms
-- **Communications**: Channel modeling with noise
+Cost per step: one drift evaluation and `1 + d` diffusion evaluations for `d`
+components (two for a scalar equation).
 
 ## References
 
-- Platen, E. (1991). "An introduction to numerical methods for stochastic differential equations"
-- Rößler, A. (2006). "Runge-Kutta methods for the numerical solution of stochastic differential equations"
-- Burrage, K. & Burrage, P.M. (1996). "High strong order methods for non-commutative stochastic ordinary differential equations"
+- Kloeden, P. E. and Platen, E. (1992). *Numerical Solution of Stochastic
+  Differential Equations*. Springer. Section 11.1, equation (11.1.7).
+- Platen, E. (1984). *Zur zeitdiskreten Approximation von Itoprozessen*. Diss. B,
+  Akademie der Wissenschaften der DDR.
 
 ---
 
 **Parent Module:** [STOCHASTIC](../STOCHASTIC.md)
 
 **Related Modules:**
-- [EULER_MARUYAMA](../euler_maruyama/EULER_MARUYAMA.md) - Basic stochastic method
-- [MILSTEIN](../milstein/MILSTEIN.md) - Alternative order 1.0 method
+- [MILSTEIN](../milstein/MILSTEIN.md) - the scheme this is a derivative-free form of
+- [SRK3](../srk3/SRK3.md) - strong order 1.5, scalar noise

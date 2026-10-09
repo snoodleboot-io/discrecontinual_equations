@@ -10,10 +10,10 @@ The `stochastic` submodule provides numerical algorithms for solving stochastic 
 Stochastic Solvers
 ├── EulerMaruyamaSolver - Strong order 0.5, weak order 1.0
 ├── MilsteinSolver - Strong order 1.0, weak order 1.0
-├── SRK2Solver - Strong order 1.0, weak order 1.0
-├── SRK3Solver - Strong order 1.5, weak order 3.0
-├── SRK4Solver - Strong order 2.0, weak order 4.0
-├── SRK5Solver - Strong order 2.5, weak order 5.0
+├── SRK2Solver - Strong order 1.0, weak order 1.0 (Kloeden-Platen 11.1.7, measured)
+├── SRK3Solver - Strong order 1.5, scalar noise (Kloeden-Platen 11.2.1, measured)
+├── SRK4Solver - Weak order 2.0, strong order 1.0, scalar noise (Kloeden-Platen 15.1.4, measured)
+├── SRK5Solver - Refuses to run; no scheme of the claimed order exists (DEQ-25)
 ├── GottwaldMelbourneSolver - Deterministic homogenisation for α-stable SDEs
 └── ZhanDuanLiLiSolver - Zhan-Duan-Li-Li method for SDEs
 ```
@@ -193,7 +193,7 @@ solver.solve(equation, [100.0])  # Start at $100
 ```python
 from discrecontinual_equations.solver.stochastic.srk4 import SRK4Config, SRK4Solver
 
-# Use SRK4 for high accuracy
+# Use SRK4 for weak order 2.0 (expectations); SRK3 for strong order 1.5 (paths)
 config = SRK4Config(
     start_time=0, end_time=1, step_size=0.001,
     calculus="stratonovich", random_seed=123
@@ -237,10 +237,18 @@ wiener_increments = np.random.normal(0, np.sqrt(dt), size=(n_steps, n_dim))
 |--------|-------------|------------|-------------|----------------|
 | Euler-Maruyama | 0.5 | 1.0 | 1 | Fastest |
 | Milstein | 1.0 | 1.0 | 1 | Fast |
-| SRK2 | 1.0 | 1.0 | 2 | Medium |
-| SRK3 | 1.5 | 3.0 | 3 | Medium |
-| SRK4 | 2.0 | 4.0 | 4 | Slow |
-| SRK5 | 2.5 | 5.0 | 5 | Slowest |
+| SRK2 | 1.0 (measured 0.99) | 1.0 (measured 0.97) | 2 | Medium |
+| SRK3 | 1.5 (measured 1.48), scalar noise | measured 1.98 | 3 drift + 6 diffusion | Slow |
+| SRK4 | 1.0 (measured 1.05), scalar noise | 2.0 (measured 1.96) | 2 drift + 4 diffusion | Medium |
+| SRK5 | refused | refused | - | - |
+
+The measured slopes are from 100000 paths of geometric Brownian motion
+`dX = X dt + 0.5 X dW` on `[0, 1]`, every step size driven by the same Brownian
+path; the tables are in each solver's docstring. Euler-Maruyama and Milstein
+measured 0.59 / 0.97 and 0.97 / 0.97 in the same run. For systems, SRK2's order
+1.0 needs each component's diffusion to depend only on that component; SRK3 and
+SRK4 refuse systems because the Levy areas their derivations need cannot be
+sampled.
 
 ## Calculus Conversion Algorithm
 
