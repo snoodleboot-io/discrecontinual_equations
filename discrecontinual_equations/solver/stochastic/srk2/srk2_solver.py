@@ -1,130 +1,112 @@
 import numpy as np
 
-from discrecontinual_equations.curve import Curve
-from discrecontinual_equations.differential_equation import DifferentialEquation
-from discrecontinual_equations.solver.solver import Solver
+from discrecontinual_equations.solver.stochastic.coefficients import ItoCoefficients
+from discrecontinual_equations.solver.stochastic.runge_kutta import (
+    StochasticRungeKuttaSolver,
+)
 from discrecontinual_equations.solver.stochastic.srk2.srk2_config import SRK2Config
-from discrecontinual_equations.variable import Variable
+from discrecontinual_equations.solver.stochastic.wiener import (
+    WienerIncrements,
+    WienerSource,
+)
 
 
-class SRK2Solver(Solver):
-    """
-    Stochastic Runge-Kutta method of order 2 (SRK2) for solving stochastic differential equations (SDEs).
+class SRK2Solver(StochasticRungeKuttaSolver):
+    """Platen's two-stage explicit strong scheme of order 1.0 for Ito SDEs.
 
-    This implements Platen's SRK2 scheme with support for both Ito and Stratonovich calculus.
-    A higher-order method that improves upon Euler-Maruyama by using a 2-stage Runge-Kutta approach.
+    This is the explicit order 1.0 strong scheme of Kloeden and Platen, "Numerical
+    Solution of Stochastic Differential Equations" (Springer, 1992), equation
+    (11.1.7), due to Platen (1984). It is the Milstein scheme with the derivative
+    of the diffusion replaced by a difference between two stages, which is where the
+    "Runge-Kutta" comes from and what the second stage is for::
 
-    For Ito SDEs of the form: dX_t = μ(X_t, t) dt + σ(X_t, t) dW_t
-    The discretization uses: K₁, L₁ = μ(X_n, t_n), σ(X_n, t_n)
-    K₂, L₂ = μ(X_n + K₁ Δt + L₁ √Δt, t_n + Δt), σ(X_n + K₁ Δt + L₁ √Δt, t_n + Δt)
-    X_{n+1} = X_n + (K₁ + K₂) Δt/2 + (L₁ + L₂) √Δt/2
+        Y_bar  = Y + a h + b sqrt(h)
+        Y_next = Y + a h + b dW + (b(Y_bar) - b) (dW^2 - h) / (2 sqrt(h))
 
-    For Stratonovich SDEs: Applies drift correction μ_corrected = μ - (1/2)σ ∂σ/∂x
+    where ``dW = W(t + h) - W(t)`` is one Wiener increment, ``N(0, h)``. Expanding
+    ``b(Y_bar)`` shows ``(b(Y_bar) - b) / (2 sqrt(h)) = (1/2) b b' + O(sqrt(h))``, so
+    the last term is the Milstein correction ``(1/2) b b' (dW^2 - h)`` up to a
+    remainder of strong order 1.5. The ``sqrt(h)`` in the supporting value is
+    therefore a legitimate part of the scheme - it is a probe distance, not an
+    increment - and the defect of the previous version of this file was to use it
+    *as* the increment as well, so that nothing was random (DEQ-25).
 
-    This method achieves strong order 1.0 and weak order 1.0 convergence.
+    **Order, as measured.** Strong order 1.0 and weak order 1.0, the same as the
+    Milstein scheme it is a derivative-free form of, and the same as the body of this
+    docstring always claimed; the "2" in the name counts stages, not an order, and
+    there is no sense in which this scheme is second order. Measured on geometric
+    Brownian motion ``dX = X dt + 0.5 X dW``, ``X(0) = 1``, over ``[0, 1]``, against
+    the exact solution ``X0 exp((mu - sigma^2/2) t + sigma W(t))`` driven by the same
+    Brownian path at every step size (100000 paths; the weak error is the mean of the
+    path-coupled difference, whose standard error is in brackets):
+
+    ====== ============ ====================
+    h      strong       weak (std. error)
+    ====== ============ ====================
+    1/8    2.130e-01    1.521e-01 (8e-04)
+    1/16   1.109e-01    8.015e-02 (5e-04)
+    1/32   5.616e-02    4.139e-02 (2e-04)
+    1/64   2.809e-02    2.096e-02 (1e-04)
+    1/128  1.397e-02    1.054e-02 (6e-05)
+    1/256  6.936e-03    5.271e-03 (3e-05)
+    slope  0.99         0.97
+    ====== ============ ====================
+
+    In the same run Euler-Maruyama measured strong 0.59 / weak 0.97 and Milstein
+    strong 0.97 / weak 0.97, so the harness resolves the orders it is meant to.
+
+    **Systems.** The diffusion interface returns one coefficient per component, so
+    the noise is diagonal: component ``i`` has its own Wiener process. The scheme is
+    applied with one supporting value per channel, ``Y_bar_j = Y + a h + b_j e_j
+    sqrt(h)``, which reproduces exactly the terms ``(1/2) b_j (d b_j / d x_j)`` of
+    the diagonal Milstein scheme. What it omits are the cross terms ``b_k (d b_j /
+    d x_k) I_(k,j)`` for ``k != j``, which need the Levy areas ``I_(k,j)`` that have
+    no exact sampler. So for a system the measured order 1.0 holds when each ``b_j``
+    depends only on ``x_j`` (the noise then commutes and the omitted terms are zero);
+    if some ``b_j`` depends on another component, the omission costs a local error of
+    order ``h`` and the strong order falls to 0.5, which is what Euler-Maruyama gives.
+
+    **Stratonovich.** A Stratonovich equation is integrated as the Ito equation with
+    drift ``a + (1/2) b b'`` (the sign is argued in
+    :mod:`discrecontinual_equations.solver.stochastic.coefficients`), so the order
+    above applies to either calculus.
 
     References:
-    - Platen, Eckhard. "An introduction to numerical methods for stochastic differential equations"
-      Acta Numerica, 2004
-    - Rößler, Andreas. "Runge–Kutta methods for the numerical solution of stochastic differential equations"
-      Journal of Computational and Applied Mathematics, 2006
+    - Kloeden, P. E. and Platen, E. "Numerical Solution of Stochastic Differential
+      Equations", Springer, 1992, Section 11.1, equation (11.1.7).
+    - Platen, E. "Zur zeitdiskreten Approximation von Itoprozessen", Diss. B,
+      Akademie der Wissenschaften der DDR, 1984.
     """
 
-    def __init__(self, solver_config: SRK2Config):
-        super().__init__(solver_config=solver_config)
+    def __init__(self, solver_config: SRK2Config, wiener: WienerSource | None = None):
+        super().__init__(solver_config=solver_config, wiener=wiener)
 
-        # Nothing is seeded here because nothing is drawn: the stage increments below
-        # use sqrt(dt) where a Wiener increment belongs, so this scheme is currently
-        # deterministic and solver_config.random_seed has no effect on it. That missing
-        # increment is a defect of the scheme and is left untouched here. What is
-        # removed is the np.random.seed call that used to sit in this constructor,
-        # which reseeded the process-wide stream - and so changed every draw made
-        # anywhere afterwards - purely as a side effect of constructing this object.
-
-    def solve(self, equation: DifferentialEquation, initial_values: list[float]):
-        results = [
-            Variable(name=f"Integral of {variable.name}")
-            for variable in equation.derivative.variables
-        ]
-        self.solution = Curve(
-            time=equation.derivative.time,
-            variables=equation.derivative.variables,
-            results=results,
-        )
-
-        # Initialize
-        t = self.solver_config.start_time
-        y = np.array(initial_values, dtype=float)
-
-        # Append initial point
-        self.solution.append([t, [0] * len(initial_values), y.tolist()])
-
-        # Time stepping loop
-        for i in range(self.solver_config.n_steps):
-            # Current time
-            t_current = self.solver_config.times[i]
-
-            dt = self.solver_config.dt
-
-            # SRK2 step
-            y_new = self._srk2_step(y, t_current, dt, equation)
-
-            # Update time and state
-            t_next = self.solver_config.times[i + 1]
-            y = y_new
-
-            # Append to solution
-            self.solution.append([t_next, [0] * len(initial_values), y.tolist()])
-
-    def _srk2_step(
-        self,
+    @staticmethod
+    def _step(
         y: np.ndarray,
         t: float,
-        dt: float,
-        equation: DifferentialEquation,
+        h: float,
+        coefficients: ItoCoefficients,
+        increments: WienerIncrements,
     ) -> np.ndarray:
-        """Perform one SRK2 step."""
-        # Stage 1
-        K1 = np.array(equation.derivative.eval(point=y.tolist(), time=t))
-        L1 = np.array(equation.derivative.diffusion(point=y.tolist(), time=t))
+        """One step of Kloeden-Platen (11.1.7), one supporting value per channel."""
+        root = np.sqrt(h)
+        drift = coefficients.drift(y, t)
+        diffusion = coefficients.diffusion(y, t)
+        delta_w = increments.delta_w
 
-        # Apply Stratonovich correction to drift if requested
-        if self.solver_config.calculus == "stratonovich" and len(y) == 1:
-            # For 1D Stratonovich: modify drift by -(1/2)σ dσ/dx
-            eps = 1e-8
-            y_plus = y + eps
-            y_minus = y - eps
-            diffusion_plus = np.array(
-                equation.derivative.diffusion(point=y_plus.tolist(), time=t),
+        # Supporting values are evaluated at t + h: a non-autonomous equation is the
+        # autonomous one with time as a component of zero diffusion, whose supporting
+        # value is t + 1 * h.
+        predictor = y + drift * h
+        correction = np.empty_like(y)
+        for channel in range(len(y)):
+            support = predictor.copy()
+            support[channel] += diffusion[channel] * root
+            supported = coefficients.diffusion(support, t + h)[channel]
+            correction[channel] = (
+                (supported - diffusion[channel])
+                * (delta_w[channel] ** 2 - h)
+                / (2.0 * root)
             )
-            diffusion_minus = np.array(
-                equation.derivative.diffusion(point=y_minus.tolist(), time=t),
-            )
-            dsigma_dx = (diffusion_plus - diffusion_minus) / (2 * eps)
-            stratonovich_correction = 0.5 * L1 * dsigma_dx
-            K1 = K1 - stratonovich_correction
-
-        # Stage 2
-        y_temp = y + K1 * dt + L1 * np.sqrt(dt)
-        K2 = np.array(equation.derivative.eval(point=y_temp.tolist(), time=t + dt))
-        L2 = np.array(equation.derivative.diffusion(point=y_temp.tolist(), time=t + dt))
-
-        # Apply Stratonovich correction to K2 if requested
-        if self.solver_config.calculus == "stratonovich" and len(y) == 1:
-            eps = 1e-8
-            y_temp_plus = y_temp + eps
-            y_temp_minus = y_temp - eps
-            diffusion_temp_plus = np.array(
-                equation.derivative.diffusion(point=y_temp_plus.tolist(), time=t + dt),
-            )
-            diffusion_temp_minus = np.array(
-                equation.derivative.diffusion(point=y_temp_minus.tolist(), time=t + dt),
-            )
-            dsigma_dx_temp = (diffusion_temp_plus - diffusion_temp_minus) / (2 * eps)
-            stratonovich_correction_temp = 0.5 * L2 * dsigma_dx_temp
-            K2 = K2 - stratonovich_correction_temp
-
-        # Final step - SRK2 combination
-        y_new = y + (K1 + K2) * dt / 2 + (L1 + L2) * np.sqrt(dt) / 2
-
-        return y_new
+        return y + drift * h + diffusion * delta_w + correction

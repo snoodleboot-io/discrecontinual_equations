@@ -119,30 +119,35 @@ class SolverConfig(BaseModel):
 
 ### Stochastic Runge-Kutta Methods (SRK)
 
-#### SRK2 (Order 2)
-- **Strong Order**: 1.0, **Weak Order**: 1.0
-- **Stages**: 2 stochastic Runge-Kutta stages
-- **Formula**: Multi-stage with stochastic increments
-- **Calculus**: Supports both Ito and Stratonovich
-- **Reference**: Rößler (2006)
+The numbers in the names count stages, not orders. Each order below was measured on
+geometric Brownian motion driven by one Brownian path at every step size (DEQ-25);
+the derivations are in Kloeden and Platen (1992).
 
-#### SRK3 (Order 3)
-- **Strong Order**: 1.5, **Weak Order**: 3.0
-- **Stages**: 3 stochastic Runge-Kutta stages
-- **Formula**: 3-stage implementation with refined coefficients
-- **Calculus**: Supports both Ito and Stratonovich
-
-#### SRK4 (Order 4)
-- **Strong Order**: 2.0, **Weak Order**: 4.0
-- **Stages**: 4 stochastic Runge-Kutta stages
-- **Formula**: 4-stage implementation for high accuracy
+#### SRK2 (two stages)
+- **Strong Order**: 1.0, **Weak Order**: 1.0 (measured slopes 0.99 / 0.97)
+- **Scheme**: explicit order 1.0 strong scheme, Kloeden-Platen (11.1.7); the
+  Milstein scheme with the diffusion derivative taken as a stage difference
+- **Noise**: diagonal; order 1.0 holds when each component's diffusion depends only
+  on that component (otherwise the omitted Levy areas reduce it to 0.5)
 - **Calculus**: Supports both Ito and Stratonovich
 
-#### SRK5 (Order 5)
-- **Strong Order**: 2.5, **Weak Order**: 5.0
-- **Stages**: 5 stochastic Runge-Kutta stages
-- **Formula**: 5-stage implementation providing maximum accuracy
+#### SRK3 (three drift stages, six diffusion stages)
+- **Strong Order**: 1.5 (measured 1.48); weak slope measured 1.98
+- **Scheme**: explicit order 1.5 strong scheme, Kloeden-Platen (11.2.1), driven by
+  the Wiener increment and its time integral drawn jointly
+- **Noise**: scalar only; systems are refused
 - **Calculus**: Supports both Ito and Stratonovich
+
+#### SRK4 (two drift stages, four diffusion stages)
+- **Weak Order**: 2.0, **Strong Order**: 1.0 (measured 1.96 / 1.05)
+- **Scheme**: explicit order 2.0 weak scheme, Kloeden-Platen (15.1.4)
+- **Noise**: scalar only; systems are refused
+- **Calculus**: Supports both Ito and Stratonovich
+
+#### SRK5 (refused)
+- Raises on `solve`. Strong order 2.5 or weak order 5.0 for general multiplicative
+  noise is not a scheme that exists; the previous implementation was a deterministic
+  drift step with a `sqrt(dt)` bias. See the class docstring for what would be needed.
 
 ## Calculus Interpretations for SDEs
 
@@ -235,7 +240,7 @@ solver.solve(stochastic_equation, [0.0])
 | **Stiff ODEs** | Adaptive Runge-Kutta | Automatic step size control |
 | **Basic SDEs** | Euler-Maruyama | Fundamental stochastic method |
 | **Accurate SDEs** | SRK2, Milstein | Higher-order stochastic methods |
-| **High-Precision SDEs** | SRK4, SRK5 | Maximum accuracy for stochastic problems |
+| **High-Precision SDEs** | SRK3 (paths), SRK4 (expectations) | Strong order 1.5 and weak order 2.0, scalar noise |
 | **Financial Modeling** | Ito calculus methods | Standard for Black-Scholes type models |
 | **Physical Systems** | Stratonovich calculus | Natural for physical stochastic processes |
 
@@ -250,7 +255,7 @@ solver.solve(stochastic_equation, [0.0])
 ### Accuracy vs Speed Trade-offs
 - **Low Accuracy**: Euler, Euler-Maruyama (fastest)
 - **Medium Accuracy**: Adams-Bashforth, SRK2, Milstein
-- **High Accuracy**: Adaptive RK, SRK4, SRK5 (slowest)
+- **High Accuracy**: Adaptive RK, SRK3, SRK4 (slowest)
 
 ### Memory Requirements
 - **Fixed-step**: Minimal memory usage

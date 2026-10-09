@@ -1,190 +1,133 @@
 import numpy as np
 
-from discrecontinual_equations.curve import Curve
-from discrecontinual_equations.differential_equation import DifferentialEquation
-from discrecontinual_equations.solver.solver import Solver
+from discrecontinual_equations.solver.stochastic.coefficients import ItoCoefficients
+from discrecontinual_equations.solver.stochastic.runge_kutta import (
+    StochasticRungeKuttaSolver,
+)
 from discrecontinual_equations.solver.stochastic.srk4.srk4_config import SRK4Config
-from discrecontinual_equations.variable import Variable
+from discrecontinual_equations.solver.stochastic.wiener import (
+    WienerIncrements,
+    WienerSource,
+)
 
 
-class SRK4Solver(Solver):
+class SRK4Solver(StochasticRungeKuttaSolver):
+    """Platen's explicit weak scheme of order 2.0 for scalar Ito SDEs.
+
+    This is the explicit order 2.0 weak scheme of Kloeden and Platen, "Numerical
+    Solution of Stochastic Differential Equations" (Springer, 1992), equation
+    (15.1.4), for one state variable driven by one Wiener process. It is the
+    derivative-free form of the order 2.0 weak Taylor scheme (their (14.2.1))::
+
+        Y_bar  = Y + a h + b dW
+        Y+-    = Y + a h +- b sqrt(h)
+        Y_next = Y + (a(Y_bar) + a) h / 2
+                 + (b(Y+) + b(Y-) + 2 b) dW / 4
+                 + (b(Y+) - b(Y-)) (dW^2 - h) / (4 sqrt(h))
+
+    with ``dW = W(t + h) - W(t)``, ``N(0, h)``. Why this is weak order 2.0 and not
+    strong order 2.0: expanding the stages, the first line is ``a h + (1/2) a a' h^2 +
+    (1/2) a' b h dW + (1/4) a'' b^2 h dW^2``, the second is ``b dW + (1/2)(a b' + (1/2)
+    b^2 b'') h dW``, and the third is the Milstein term ``(1/2) b b' (dW^2 - h)``.
+    Against the order 2.0 weak Taylor scheme, ``(1/2) h dW`` stands in for
+    ``I_(1,0) = dZ`` and ``I_(0,1) = h dW - dZ``: it has the same mean and the same
+    covariance with ``dW`` (``h^2 / 2``) but variance ``h^3 / 4`` instead of ``h^3 /
+    3``. That mismatch is invisible to any expectation at order ``h^2`` - which is
+    all a weak order 2.0 scheme promises - but it is a pathwise error of order
+    ``h^{3/2}``, so in the strong sense the scheme is the Milstein scheme and nothing
+    more. Four evaluations of ``b`` and two of ``a`` per step.
+
+    **Order, as measured.** Weak order 2.0 and strong order 1.0. The previous version
+    of this file claimed "strong order 2.0 and weak order 4.0" and was deterministic
+    (DEQ-25). Strong order 2.0 for multiplicative noise would require the iterated
+    integrals ``I_(1,1,0)``, ``I_(1,0,1)``, ``I_(0,1,1)`` and ``I_(1,1,1,1)`` with
+    their exact joint law; weak order 4.0 is not a scheme anyone has written down
+    for a general scalar SDE, only an extrapolation result (Kloeden-Platen Section
+    15.3) that applies to expectations, not to a path. Measured on geometric Brownian
+    motion ``dX = X dt + 0.5 X dW``, ``X(0) = 1``, over ``[0, 1]``, against the exact
+    solution ``X0 exp((mu - sigma^2/2) t + sigma W(t))``: the strong error is the
+    mean absolute pathwise difference with the same Brownian path at every step size,
+    and the weak error is ``|E[X_h - X_exact]|`` estimated path-coupled over the same
+    paths, which removes the variance of ``X`` itself and leaves the standard error in
+    brackets (100000 paths):
+
+    ====== ============ ====================
+    h      strong       weak (std. error)
+    ====== ============ ====================
+    1/8    1.679e-02    6.388e-03 (1e-04)
+    1/16   7.584e-03    1.675e-03 (4e-05)
+    1/32   3.582e-03    4.119e-04 (2e-05)
+    1/64   1.751e-03    9.584e-05 (9e-06)
+    1/128  8.660e-04    2.420e-05 (4e-06)
+    1/256  4.320e-04    8.141e-06 (2e-06)
+    slope  1.05         1.96
+    ====== ============ ====================
+
+    In the same run Euler-Maruyama measured strong 0.59 / weak 0.97 and Milstein
+    strong 0.97 / weak 0.97, so the harness resolves the orders it is meant to.
+
+    **Systems are refused.** Kloeden and Platen's scheme for several Wiener processes
+    ((15.1.5)) needs, for each pair of channels, extra supporting values and an
+    independent two-point variable standing in for the Levy area ``I_(j,k)``; this
+    file implements the scalar scheme only, so ``solve`` raises for more than one
+    variable rather than run a component-wise variant of unknown order, and points at
+    :class:`SRK2Solver`.
+
+    **Stratonovich.** A Stratonovich equation is integrated as the Ito equation with
+    drift ``a + (1/2) b b'`` (see
+    :mod:`discrecontinual_equations.solver.stochastic.coefficients`), so the order
+    above applies to either calculus.
+
+    References:
+    - Kloeden, P. E. and Platen, E. "Numerical Solution of Stochastic Differential
+      Equations", Springer, 1992, Section 15.1, equation (15.1.4); the Taylor scheme
+      it is derived from is Section 14.2, equation (14.2.1).
+    - Talay, D. and Tubaro, L. "Expansion of the global error for numerical schemes
+      solving stochastic differential equations", Stochastic Analysis and
+      Applications 8, 1990 - the extrapolation route to higher weak order.
     """
-    Stochastic Runge-Kutta method of order 4 (SRK4) for solving stochastic differential equations (SDEs).
 
-    This implements a 4-stage SRK method with support for both Ito and Stratonovich calculus.
-    Provides higher accuracy than SRK3 through additional stages and refined coefficients.
+    def __init__(self, solver_config: SRK4Config, wiener: WienerSource | None = None):
+        super().__init__(solver_config=solver_config, wiener=wiener)
 
-    For Ito SDEs: dX_t = μ(X_t, t) dt + σ(X_t, t) dW_t
-    For Stratonovich SDEs: dX_t = μ(X_t, t) dt + σ(X_t, t) ∘ dW_t
+    def _check_dimension(self, dimension: int) -> None:
+        if dimension != 1:
+            message = (
+                "SRK4Solver is the scalar-noise weak scheme of Kloeden-Platen "
+                f"(15.1.4); it was asked to integrate {dimension} variables. The "
+                "several-channel form needs a two-point variable per pair of channels "
+                "standing in for their Levy area, which this solver does not "
+                "implement, so systems are refused rather than integrated at an "
+                "unknown order. "
+                "Use SRK2Solver or EulerMaruyamaSolver for systems."
+            )
+            raise ValueError(message)
 
-    The method achieves strong order 2.0 and weak order 4.0 convergence.
-    """
-
-    def __init__(self, solver_config: SRK4Config):
-        super().__init__(solver_config=solver_config)
-
-        # Nothing is seeded here because nothing is drawn: the stage increments below
-        # use sqrt(dt) where a Wiener increment belongs, so this scheme is currently
-        # deterministic and solver_config.random_seed has no effect on it. That missing
-        # increment is a defect of the scheme and is left untouched here. What is
-        # removed is the np.random.seed call that used to sit in this constructor,
-        # which reseeded the process-wide stream - and so changed every draw made
-        # anywhere afterwards - purely as a side effect of constructing this object.
-
-    def solve(self, equation: DifferentialEquation, initial_values: list[float]):
-        results = [
-            Variable(name=f"Integral of {variable.name}")
-            for variable in equation.derivative.variables
-        ]
-        self.solution = Curve(
-            time=equation.derivative.time,
-            variables=equation.derivative.variables,
-            results=results,
-        )
-
-        # Initialize
-        t = self.solver_config.start_time
-        y = np.array(initial_values, dtype=float)
-
-        # Append initial point
-        self.solution.append([t, [0] * len(initial_values), y.tolist()])
-
-        # Time stepping loop
-        for i in range(self.solver_config.n_steps):
-            # Current time
-            t_current = self.solver_config.times[i]
-
-            dt = self.solver_config.dt
-
-            # SRK4 step
-            y_new = self._srk4_step(y, t_current, dt, equation)
-
-            # Update time and state
-            t_next = self.solver_config.times[i + 1]
-            y = y_new
-
-            # Append to solution
-            self.solution.append([t_next, [0] * len(initial_values), y.tolist()])
-
-    def _srk4_step(
-        self,
+    @staticmethod
+    def _step(
         y: np.ndarray,
         t: float,
-        dt: float,
-        equation: DifferentialEquation,
+        h: float,
+        coefficients: ItoCoefficients,
+        increments: WienerIncrements,
     ) -> np.ndarray:
-        """Perform one SRK4 step with 4 stages."""
-        # Stage 1
-        K1 = np.array(equation.derivative.eval(point=y.tolist(), time=t))
-        L1 = np.array(equation.derivative.diffusion(point=y.tolist(), time=t))
+        """One step of Kloeden-Platen (15.1.4)."""
+        root = np.sqrt(h)
+        delta_w = increments.delta_w
+        drift = coefficients.drift(y, t)
+        diffusion = coefficients.diffusion(y, t)
 
-        # Apply Stratonovich correction to K1 if requested
-        if self.solver_config.calculus == "stratonovich" and len(y) == 1:
-            eps = 1e-8
-            y_plus = y + eps
-            y_minus = y - eps
-            diffusion_plus = np.array(
-                equation.derivative.diffusion(point=y_plus.tolist(), time=t),
-            )
-            diffusion_minus = np.array(
-                equation.derivative.diffusion(point=y_minus.tolist(), time=t),
-            )
-            dsigma_dx = (diffusion_plus - diffusion_minus) / (2 * eps)
-            stratonovich_correction = 0.5 * L1 * dsigma_dx
-            K1 = K1 - stratonovich_correction
+        # Supporting values sit at t + h, as for the other schemes: time is a
+        # component of zero diffusion in the autonomous form of the equation.
+        later = t + h
+        predictor = y + drift * h
+        drift_bar = coefficients.drift(predictor + diffusion * delta_w, later)
+        diffusion_plus = coefficients.diffusion(predictor + diffusion * root, later)
+        diffusion_minus = coefficients.diffusion(predictor - diffusion * root, later)
 
-        # Stage 2
-        y_temp2 = y + (1 / 4) * K1 * dt + (1 / 4) * L1 * np.sqrt(dt)
-        K2 = np.array(equation.derivative.eval(point=y_temp2.tolist(), time=t + dt / 4))
-        L2 = np.array(
-            equation.derivative.diffusion(point=y_temp2.tolist(), time=t + dt / 4),
-        )
-
-        # Apply Stratonovich correction to K2 if requested
-        if self.solver_config.calculus == "stratonovich" and len(y) == 1:
-            eps = 1e-8
-            y_temp2_plus = y_temp2 + eps
-            y_temp2_minus = y_temp2 - eps
-            diffusion_temp2_plus = np.array(
-                equation.derivative.diffusion(
-                    point=y_temp2_plus.tolist(),
-                    time=t + dt / 4,
-                ),
-            )
-            diffusion_temp2_minus = np.array(
-                equation.derivative.diffusion(
-                    point=y_temp2_minus.tolist(),
-                    time=t + dt / 4,
-                ),
-            )
-            dsigma_dx_temp2 = (diffusion_temp2_plus - diffusion_temp2_minus) / (2 * eps)
-            stratonovich_correction_temp2 = 0.5 * L2 * dsigma_dx_temp2
-            K2 = K2 - stratonovich_correction_temp2
-
-        # Stage 3
-        y_temp3 = y + (1 / 2) * K2 * dt + (1 / 2) * L2 * np.sqrt(dt)
-        K3 = np.array(equation.derivative.eval(point=y_temp3.tolist(), time=t + dt / 2))
-        L3 = np.array(
-            equation.derivative.diffusion(point=y_temp3.tolist(), time=t + dt / 2),
-        )
-
-        # Apply Stratonovich correction to K3 if requested
-        if self.solver_config.calculus == "stratonovich" and len(y) == 1:
-            eps = 1e-8
-            y_temp3_plus = y_temp3 + eps
-            y_temp3_minus = y_temp3 - eps
-            diffusion_temp3_plus = np.array(
-                equation.derivative.diffusion(
-                    point=y_temp3_plus.tolist(),
-                    time=t + dt / 2,
-                ),
-            )
-            diffusion_temp3_minus = np.array(
-                equation.derivative.diffusion(
-                    point=y_temp3_minus.tolist(),
-                    time=t + dt / 2,
-                ),
-            )
-            dsigma_dx_temp3 = (diffusion_temp3_plus - diffusion_temp3_minus) / (2 * eps)
-            stratonovich_correction_temp3 = 0.5 * L3 * dsigma_dx_temp3
-            K3 = K3 - stratonovich_correction_temp3
-
-        # Stage 4
-        y_temp4 = y + K3 * dt + L3 * np.sqrt(dt)
-        K4 = np.array(equation.derivative.eval(point=y_temp4.tolist(), time=t + dt))
-        L4 = np.array(
-            equation.derivative.diffusion(point=y_temp4.tolist(), time=t + dt),
-        )
-
-        # Apply Stratonovich correction to K4 if requested
-        if self.solver_config.calculus == "stratonovich" and len(y) == 1:
-            eps = 1e-8
-            y_temp4_plus = y_temp4 + eps
-            y_temp4_minus = y_temp4 - eps
-            diffusion_temp4_plus = np.array(
-                equation.derivative.diffusion(point=y_temp4_plus.tolist(), time=t + dt),
-            )
-            diffusion_temp4_minus = np.array(
-                equation.derivative.diffusion(
-                    point=y_temp4_minus.tolist(),
-                    time=t + dt,
-                ),
-            )
-            dsigma_dx_temp4 = (diffusion_temp4_plus - diffusion_temp4_minus) / (2 * eps)
-            stratonovich_correction_temp4 = 0.5 * L4 * dsigma_dx_temp4
-            K4 = K4 - stratonovich_correction_temp4
-
-        # Final SRK4 combination
-        y_new = (
+        return (
             y
-            + (1 / 6) * K1 * dt
-            + (2 / 6) * K2 * dt
-            + (2 / 6) * K3 * dt
-            + (1 / 6) * K4 * dt
-            + (1 / 6) * L1 * np.sqrt(dt)
-            + (2 / 6) * L2 * np.sqrt(dt)
-            + (2 / 6) * L3 * np.sqrt(dt)
-            + (1 / 6) * L4 * np.sqrt(dt)
+            + (drift_bar + drift) * h / 2.0
+            + (diffusion_plus + diffusion_minus + 2.0 * diffusion) * delta_w / 4.0
+            + (diffusion_plus - diffusion_minus) * (delta_w**2 - h) / (4.0 * root)
         )
-
-        return y_new

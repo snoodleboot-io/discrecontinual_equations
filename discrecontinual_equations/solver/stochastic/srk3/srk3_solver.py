@@ -1,165 +1,152 @@
 import numpy as np
 
-from discrecontinual_equations.curve import Curve
-from discrecontinual_equations.differential_equation import DifferentialEquation
-from discrecontinual_equations.solver.solver import Solver
+from discrecontinual_equations.solver.stochastic.coefficients import ItoCoefficients
+from discrecontinual_equations.solver.stochastic.runge_kutta import (
+    StochasticRungeKuttaSolver,
+)
 from discrecontinual_equations.solver.stochastic.srk3.srk3_config import SRK3Config
-from discrecontinual_equations.variable import Variable
+from discrecontinual_equations.solver.stochastic.wiener import (
+    WienerIncrements,
+    WienerSource,
+)
 
 
-class SRK3Solver(Solver):
+class SRK3Solver(StochasticRungeKuttaSolver):
+    """Platen's explicit strong scheme of order 1.5 for scalar Ito SDEs.
+
+    This is the explicit order 1.5 strong scheme of Kloeden and Platen, "Numerical
+    Solution of Stochastic Differential Equations" (Springer, 1992), equation
+    (11.2.1), for one state variable driven by one Wiener process. It is the order
+    1.5 strong Ito-Taylor scheme (their (10.4.1)) with every derivative of ``a`` and
+    ``b`` replaced by a difference of supporting values::
+
+        Y+-    = Y + a h +- b sqrt(h)
+        Phi+-  = Y+ +- b(Y+) sqrt(h)
+        Y_next = Y + b dW
+                 + (a(Y+) - a(Y-)) dZ / (2 sqrt(h))
+                 + (a(Y+) + 2 a + a(Y-)) h / 4
+                 + (b(Y+) - b(Y-)) (dW^2 - h) / (4 sqrt(h))
+                 + (b(Y+) - 2 b + b(Y-)) (dW h - dZ) / (2 h)
+                 + (b(Phi+) - b(Phi-) - b(Y+) + b(Y-)) (dW^2 / 3 - h) dW / (4 h)
+
+    with ``dW = W(t + h) - W(t)`` and ``dZ = integral_t^{t+h} (W(s) - W(t)) ds``, the
+    pair being jointly Gaussian with ``Var dZ = h^3 / 3`` and ``Cov(dW, dZ) = h^2 / 2``
+    (see :mod:`discrecontinual_equations.solver.stochastic.wiener`). Term by term:
+    the ``dZ`` line is ``a' b dZ``; the ``h / 4`` line is ``a h + (1/2)(a a' + (1/2)
+    b^2 a'') h^2``; the ``(dW^2 - h)`` line is the Milstein term ``(1/2) b b' (dW^2 -
+    h)``; the ``(dW h - dZ)`` line is ``(a b' + (1/2) b^2 b'')(dW h - dZ)``; and the
+    last line is ``(1/2) b (b b'' + b'^2)((1/3) dW^2 - h) dW``, the ``I_(1,1,1)``
+    term. Those are exactly the terms of the order 1.5 strong Taylor scheme, each
+    reproduced to a remainder of strong order 2.0, which is how the scheme earns its
+    order. Six evaluations of ``b`` and three of ``a`` per step.
+
+    **Order, as measured.** Strong order 1.5 for scalar noise. The previous version
+    of this file claimed "order 3 convergence" from a "simplified Butcher tableau"
+    and, further down, "strong order 1.5 and weak order 3.0"; it was in fact
+    deterministic (DEQ-25). No weak order is claimed here: the scheme is a strong
+    one, its weak order is not separately established in the derivation and was not
+    separately measured. Measured on geometric Brownian motion ``dX = X dt + 0.5 X
+    dW``, ``X(0) = 1``, over ``[0, 1]``, against the exact solution ``X0 exp((mu -
+    sigma^2/2) t + sigma W(t))`` driven by the same Brownian path at every step size
+    (100000 paths):
+
+    ====== ============ ====================
+    h      strong       weak (std. error)
+    ====== ============ ====================
+    1/8    1.818e-02    6.366e-03 (9e-05)
+    1/16   6.609e-03    1.664e-03 (3e-05)
+    1/32   2.397e-03    4.091e-04 (1e-05)
+    1/64   8.665e-04    1.036e-04 (4e-06)
+    1/128  3.088e-04    2.618e-05 (1e-06)
+    1/256  1.090e-04    6.691e-06 (5e-07)
+    slope  1.48         1.98
+    ====== ============ ====================
+
+    In the same run Euler-Maruyama measured strong 0.59 / weak 0.97 and Milstein
+    strong 0.97 / weak 0.97, so the harness resolves the orders it is meant to.
+
+    **Systems are refused.** The scheme is derived for one Wiener process. For a
+    system with diagonal noise the order 1.5 expansion contains the iterated
+    integrals ``I_(j,k)``, ``I_(j,0)``, ``I_(0,j)`` and ``I_(j,k,l)`` across channels
+    ``j != k``, and the Levy areas among them have no exact sampler; applying the
+    scalar formula component-wise would be a scheme of unknown order, which is the
+    defect this file is being cured of. ``solve`` therefore raises for more than one
+    variable and points at :class:`SRK2Solver`, whose order 1.0 for commuting diagonal
+    noise is established.
+
+    **Stratonovich.** A Stratonovich equation is integrated as the Ito equation with
+    drift ``a + (1/2) b b'`` (see
+    :mod:`discrecontinual_equations.solver.stochastic.coefficients`), so the order
+    above applies to either calculus.
+
+    References:
+    - Kloeden, P. E. and Platen, E. "Numerical Solution of Stochastic Differential
+      Equations", Springer, 1992, Section 11.2, equation (11.2.1); the Taylor scheme
+      it is derived from is Section 10.4, equation (10.4.1).
     """
-    Stochastic Runge-Kutta method of order 3 (SRK3) for solving stochastic differential equations (SDEs).
 
-    This implements a 3-stage SRK method with support for both Ito and Stratonovich calculus.
-    Uses a simplified Butcher tableau that provides order 3 convergence for suitable problems.
+    def __init__(self, solver_config: SRK3Config, wiener: WienerSource | None = None):
+        super().__init__(solver_config=solver_config, wiener=wiener)
 
-    For Ito SDEs: dX_t = μ(X_t, t) dt + σ(X_t, t) dW_t
-    For Stratonovich SDEs: dX_t = μ(X_t, t) dt + σ(X_t, t) ∘ dW_t
+    def _check_dimension(self, dimension: int) -> None:
+        if dimension != 1:
+            message = (
+                "SRK3Solver is the scalar-noise scheme of Kloeden-Platen (11.2.1); "
+                f"it was asked to integrate {dimension} variables. Its order 1.5 "
+                "needs the Levy areas between noise channels, which cannot be "
+                "sampled, so systems are refused rather than integrated at an "
+                "unknown order. Use SRK2Solver (strong order 1.0 for diagonal noise "
+                "whose coefficients commute) or EulerMaruyamaSolver for systems."
+            )
+            raise ValueError(message)
 
-    The method achieves strong order 1.5 and weak order 3.0 convergence.
-    """
-
-    def __init__(self, solver_config: SRK3Config):
-        super().__init__(solver_config=solver_config)
-
-        # Nothing is seeded here because nothing is drawn: the stage increments below
-        # use sqrt(dt) where a Wiener increment belongs, so this scheme is currently
-        # deterministic and solver_config.random_seed has no effect on it. That missing
-        # increment is a defect of the scheme and is left untouched here. What is
-        # removed is the np.random.seed call that used to sit in this constructor,
-        # which reseeded the process-wide stream - and so changed every draw made
-        # anywhere afterwards - purely as a side effect of constructing this object.
-
-    def solve(self, equation: DifferentialEquation, initial_values: list[float]):
-        results = [
-            Variable(name=f"Integral of {variable.name}")
-            for variable in equation.derivative.variables
-        ]
-        self.solution = Curve(
-            time=equation.derivative.time,
-            variables=equation.derivative.variables,
-            results=results,
-        )
-
-        # Initialize
-        t = self.solver_config.start_time
-        y = np.array(initial_values, dtype=float)
-
-        # Append initial point
-        self.solution.append([t, [0] * len(initial_values), y.tolist()])
-
-        # Time stepping loop
-        for i in range(self.solver_config.n_steps):
-            # Current time
-            t_current = self.solver_config.times[i]
-
-            dt = self.solver_config.dt
-
-            # SRK3 step
-            y_new = self._srk3_step(y, t_current, dt, equation)
-
-            # Update time and state
-            t_next = self.solver_config.times[i + 1]
-            y = y_new
-
-            # Append to solution
-            self.solution.append([t_next, [0] * len(initial_values), y.tolist()])
-
-    def _srk3_step(
-        self,
+    @staticmethod
+    def _step(
         y: np.ndarray,
         t: float,
-        dt: float,
-        equation: DifferentialEquation,
+        h: float,
+        coefficients: ItoCoefficients,
+        increments: WienerIncrements,
     ) -> np.ndarray:
-        """Perform one SRK3 step with 3 stages."""
-        # Stage 1
-        K1 = np.array(equation.derivative.eval(point=y.tolist(), time=t))
-        L1 = np.array(equation.derivative.diffusion(point=y.tolist(), time=t))
+        """One step of Kloeden-Platen (11.2.1)."""
+        root = np.sqrt(h)
+        delta_w = increments.delta_w
+        delta_z = increments.delta_z
+        drift = coefficients.drift(y, t)
+        diffusion = coefficients.diffusion(y, t)
 
-        # Apply Stratonovich correction to K1 if requested
-        if self.solver_config.calculus == "stratonovich" and len(y) == 1:
-            eps = 1e-8
-            y_plus = y + eps
-            y_minus = y - eps
-            diffusion_plus = np.array(
-                equation.derivative.diffusion(point=y_plus.tolist(), time=t),
-            )
-            diffusion_minus = np.array(
-                equation.derivative.diffusion(point=y_minus.tolist(), time=t),
-            )
-            dsigma_dx = (diffusion_plus - diffusion_minus) / (2 * eps)
-            stratonovich_correction = 0.5 * L1 * dsigma_dx
-            K1 = K1 - stratonovich_correction
+        # Supporting values sit at t + h: a non-autonomous equation is the autonomous
+        # one with time as a component of zero diffusion, so the second difference
+        # (b(Y+) - 2 b + b(Y-)) / (2 h) picks up d b / d t along with (a b' + ...),
+        # which is the L^0 b term the derivation asks for.
+        later = t + h
+        plus = y + drift * h + diffusion * root
+        minus = y + drift * h - diffusion * root
+        drift_plus = coefficients.drift(plus, later)
+        drift_minus = coefficients.drift(minus, later)
+        diffusion_plus = coefficients.diffusion(plus, later)
+        diffusion_minus = coefficients.diffusion(minus, later)
+        phi_plus = plus + diffusion_plus * root
+        phi_minus = plus - diffusion_plus * root
+        diffusion_phi_plus = coefficients.diffusion(phi_plus, later)
+        diffusion_phi_minus = coefficients.diffusion(phi_minus, later)
 
-        # Stage 2
-        y_temp2 = y + (1 / 3) * K1 * dt + (1 / 3) * L1 * np.sqrt(dt)
-        K2 = np.array(equation.derivative.eval(point=y_temp2.tolist(), time=t + dt / 3))
-        L2 = np.array(
-            equation.derivative.diffusion(point=y_temp2.tolist(), time=t + dt / 3),
-        )
-
-        # Apply Stratonovich correction to K2 if requested
-        if self.solver_config.calculus == "stratonovich" and len(y) == 1:
-            eps = 1e-8
-            y_temp2_plus = y_temp2 + eps
-            y_temp2_minus = y_temp2 - eps
-            diffusion_temp2_plus = np.array(
-                equation.derivative.diffusion(
-                    point=y_temp2_plus.tolist(),
-                    time=t + dt / 3,
-                ),
-            )
-            diffusion_temp2_minus = np.array(
-                equation.derivative.diffusion(
-                    point=y_temp2_minus.tolist(),
-                    time=t + dt / 3,
-                ),
-            )
-            dsigma_dx_temp2 = (diffusion_temp2_plus - diffusion_temp2_minus) / (2 * eps)
-            stratonovich_correction_temp2 = 0.5 * L2 * dsigma_dx_temp2
-            K2 = K2 - stratonovich_correction_temp2
-
-        # Stage 3
-        y_temp3 = y + (2 / 3) * K2 * dt + (2 / 3) * L2 * np.sqrt(dt)
-        K3 = np.array(
-            equation.derivative.eval(point=y_temp3.tolist(), time=t + 2 * dt / 3),
-        )
-        L3 = np.array(
-            equation.derivative.diffusion(point=y_temp3.tolist(), time=t + 2 * dt / 3),
-        )
-
-        # Apply Stratonovich correction to K3 if requested
-        if self.solver_config.calculus == "stratonovich" and len(y) == 1:
-            eps = 1e-8
-            y_temp3_plus = y_temp3 + eps
-            y_temp3_minus = y_temp3 - eps
-            diffusion_temp3_plus = np.array(
-                equation.derivative.diffusion(
-                    point=y_temp3_plus.tolist(),
-                    time=t + 2 * dt / 3,
-                ),
-            )
-            diffusion_temp3_minus = np.array(
-                equation.derivative.diffusion(
-                    point=y_temp3_minus.tolist(),
-                    time=t + 2 * dt / 3,
-                ),
-            )
-            dsigma_dx_temp3 = (diffusion_temp3_plus - diffusion_temp3_minus) / (2 * eps)
-            stratonovich_correction_temp3 = 0.5 * L3 * dsigma_dx_temp3
-            K3 = K3 - stratonovich_correction_temp3
-
-        # Final SRK3 combination
-        y_new = (
+        return (
             y
-            + (1 / 4) * K1 * dt
-            + (3 / 8) * K2 * dt
-            + (3 / 8) * K3 * dt
-            + (1 / 4) * L1 * np.sqrt(dt)
-            + (3 / 8) * L2 * np.sqrt(dt)
-            + (3 / 8) * L3 * np.sqrt(dt)
+            + diffusion * delta_w
+            + (drift_plus - drift_minus) * delta_z / (2.0 * root)
+            + (drift_plus + 2.0 * drift + drift_minus) * h / 4.0
+            + (diffusion_plus - diffusion_minus) * (delta_w**2 - h) / (4.0 * root)
+            + (diffusion_plus - 2.0 * diffusion + diffusion_minus)
+            * (delta_w * h - delta_z)
+            / (2.0 * h)
+            + (
+                diffusion_phi_plus
+                - diffusion_phi_minus
+                - diffusion_plus
+                + diffusion_minus
+            )
+            * (delta_w**2 / 3.0 - h)
+            * delta_w
+            / (4.0 * h)
         )
-
-        return y_new

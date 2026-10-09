@@ -32,7 +32,7 @@ The library is organized into hierarchical modules providing complete functional
 ### 🎲 **Stochastic Solvers (6 methods)**
 - **Euler-Maruyama**: Fundamental SDE method (strong order 0.5)
 - **Milstein**: Higher-order with diffusion correction (strong order 1.0)
-- **SRK2-5**: Stochastic Runge-Kutta family (orders 1.0 to 2.5)
+- **SRK2-4**: Stochastic Runge-Kutta schemes from Kloeden and Platen, measured at strong order 1.0 (SRK2), strong order 1.5 (SRK3, scalar noise) and weak order 2.0 (SRK4, scalar noise); SRK5 refuses to run (DEQ-25)
 
 ### 📊 **Calculus Support**
 - **Ito Calculus**: Standard interpretation for SDEs

@@ -14,7 +14,7 @@ A comprehensive Python library for solving differential equations using advanced
 ### 🎲 **Stochastic SDE Solvers**
 - **Euler-Maruyama**: Fundamental stochastic method (strong order 0.5)
 - **Milstein**: Higher-order with diffusion correction (strong order 1.0)
-- **Stochastic Runge-Kutta**: SRK2, SRK3, SRK4, SRK5 (orders 1.0 to 2.5)
+- **Stochastic Runge-Kutta**: SRK2 (strong order 1.0), SRK3 (strong order 1.5, scalar noise), SRK4 (weak order 2.0, scalar noise); SRK5 refuses to run - see DEQ-25
 
 ### 📊 **Calculus Support**
 - **Ito Calculus**: Standard interpretation for SDEs
@@ -121,7 +121,7 @@ Solver (base)
 └── Stochastic Solvers
     ├── Euler-Maruyama (order 0.5)
     ├── Milstein (order 1.0)
-    └── SRK2-5 (orders 1.0-2.5)
+    └── SRK2-4 (measured orders: strong 1.0, strong 1.5, weak 2.0); SRK5 refused
 ```
 
 ### Calculus Interpretations

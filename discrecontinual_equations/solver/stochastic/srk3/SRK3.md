@@ -2,93 +2,42 @@
 
 ## Overview
 
-SRK3 (Stochastic Runge-Kutta order 3) implements a 3-stage stochastic Runge-Kutta method that provides higher accuracy than SRK2 through additional stages and refined coefficient combinations. It achieves strong order 1.5 convergence for suitable stochastic differential equations.
+SRK3 is Platen's explicit strong scheme of order 1.5 for scalar Ito SDEs, Kloeden
+and Platen (1992) equation (11.2.1): the order 1.5 strong Ito-Taylor scheme with
+every derivative of the drift and diffusion replaced by a difference of supporting
+values. It is driven by two Wiener functionals per step, the increment `dW` and its
+time integral `dZ`, drawn jointly.
+
+The previous version of this file claimed "order 3 convergence" from a "simplified
+Butcher tableau" and strong 1.5 / weak 3.0 further down; the solver it described
+drew no random number (DEQ-25). The order below is measured. Systems are refused:
+the scheme is derived for one Wiener process, and its several-channel form needs
+Levy areas that cannot be sampled.
 
 ## Architecture
 
 ```
 SRK3Solver
 ├── Config: start_time, end_time, step_size, random_seed, calculus
-├── Method: 3-stage stochastic Runge-Kutta with optimized coefficients
-├── Order: Strong 1.5, Weak 3.0
-└── Calculus: Supports Ito and Stratonovich
+├── Base: StochasticRungeKuttaSolver (shared stepping loop, owns the Wiener source)
+├── Method: Kloeden-Platen (11.2.1), scalar noise, increments (dW, dZ)
+├── Order: Strong 1.5 (measured 1.48); weak slope measured 1.98
+├── Systems: refused with a ValueError pointing at SRK2Solver
+└── Calculus: Ito, or Stratonovich via the Ito drift a + (1/2) b b'
 ```
-
-## Executive Summary
-
-**Purpose**: High-accuracy stochastic integration with 3-stage approach
-**Key Features**: 3-stage Runge-Kutta, optimized coefficients, calculus support
-**Performance**: Superior accuracy to SRK2, higher computational cost
-**Use Cases**: Precision SDE simulation, scientific computing, financial modeling
 
 ## Core Classes
 
-### SRK3Config
-
 ```python
-class SRK3Config(SolverConfig):
-    """Configuration for SRK3 method."""
+class SRK3Config(StochasticConfig): ...
 
-    start_time: float = 0.0
-    end_time: float = 1.0
-    step_size: float = 0.01
-    random_seed: int | None = None
-    calculus: Literal["ito", "stratonovich"] = "ito"
-```
+class SRK3Solver(StochasticRungeKuttaSolver):
+    def __init__(self, solver_config: SRK3Config, wiener: WienerSource | None = None): ...
+    def _check_dimension(self, dimension: int) -> None: ...  # raises for dimension != 1
 
-### SRK3Solver
-
-```python
-class SRK3Solver(Solver):
-    """SRK3 method with 3-stage stochastic Runge-Kutta."""
-
-    def solve(self, equation: DifferentialEquation, initial_values: list[float]):
-        """Solve SDE using SRK3 method."""
-
-    def _srk3_step(self, y, t, dt, equation):
-        """Single SRK3 step with 3 stages."""
-```
-
-## UML Class Diagram
-
-```mermaid
-classDiagram
-    class Solver {
-        +solution: Curve | None
-        +solve(equation, initial_values)*
-    }
-
-    class StochasticSolver {
-        +calculus: str
-        +_apply_calculus_correction(drift, diffusion, point)
-    }
-
-    class SRK3Solver {
-        +_srk3_step(y, t, dt, equation)
-        +_compute_3_stages(y, t, dt, equation)
-    }
-
-    Solver <|-- StochasticSolver
-    StochasticSolver <|-- SRK3Solver
-```
-
-## Sequence Diagram - SRK3 Step
-
-```mermaid
-sequenceDiagram
-    participant Solver
-    participant Equation
-    participant RNG
-
-    Solver->>Equation: eval(y, t) - Stage 1: K₁, L₁
-    Solver->>Solver: y₂ = y + (1/3)K₁Δt + (1/3)L₁√Δt
-    Solver->>Equation: eval(y₂, t+Δt/3) - Stage 2: K₂, L₂
-    Solver->>Solver: y₃ = y + (2/3)K₂Δt + (2/3)L₂√Δt
-    Solver->>Equation: eval(y₃, t+2Δt/3) - Stage 3: K₃, L₃
-    alt calculus == "stratonovich"
-        Solver->>Solver: apply corrections to K₁, K₂, K₃
-    end
-    Solver->>Solver: y_new = y + (1/4)K₁ + (3/8)K₂ + (3/8)K₃ weights
+    @staticmethod
+    def _step(y, t, h, coefficients, increments) -> np.ndarray:
+        """One step of Kloeden-Platen (11.2.1)."""
 ```
 
 ## Folder Structure
@@ -101,110 +50,68 @@ srk3/
 └── SRK3.md
 ```
 
-## Examples
-
-### Geometric Brownian Motion with SRK3
+## Example
 
 ```python
-from discrecontinual_equations.solver.stochastic.srk3 import SRK3Config, SRK3Solver
+from discrecontinual_equations.solver.stochastic.srk3.srk3_config import SRK3Config
+from discrecontinual_equations.solver.stochastic.srk3.srk3_solver import SRK3Solver
 
-class GBM(StochasticFunction):
-    def eval(self, point, time=None):
-        x = point[0]
-        return [0.1 * x]  # 10% drift
-
-    def diffusion(self, point, time=None):
-        x = point[0]
-        return [0.2 * x]  # 20% volatility
-
-config = SRK3Config(
-    start_time=0, end_time=1, step_size=0.01,
-    calculus="ito", random_seed=42
-)
-
+config = SRK3Config(start_time=0.0, end_time=1.0, step_size=0.01, random_seed=42)
 solver = SRK3Solver(config)
-solver.solve(equation, [100.0])
+solver.solve(scalar_equation, [1.0])  # one variable; systems raise
 ```
 
-## Functionality Explanation
+## Mathematical Foundation
 
-### 3-Stage Algorithm
+With `dW = W(t+h) - W(t)` and `dZ = integral_t^{t+h} (W(s) - W(t)) ds`, jointly
+Gaussian with `Var dZ = h^3 / 3` and `Cov(dW, dZ) = h^2 / 2`:
 
-**Stage 1:**
 ```
-K₁ = μ(X_n, t_n), L₁ = σ(X_n, t_n)
-```
-
-**Stage 2:**
-```
-y₂ = X_n + (1/3)K₁Δt + (1/3)L₁√Δt
-K₂ = μ(y₂, t_n + Δt/3), L₂ = σ(y₂, t_n + Δt/3)
-```
-
-**Stage 3:**
-```
-y₃ = X_n + (2/3)K₂Δt + (2/3)L₂√Δt
-K₃ = μ(y₃, t_n + 2Δt/3), L₃ = σ(y₃, t_n + 2Δt/3)
+Y+-    = Y + a h +- b sqrt(h)
+Phi+-  = Y+ +- b(Y+) sqrt(h)
+Y_next = Y + b dW
+         + (a(Y+) - a(Y-)) dZ / (2 sqrt(h))
+         + (a(Y+) + 2 a + a(Y-)) h / 4
+         + (b(Y+) - b(Y-)) (dW^2 - h) / (4 sqrt(h))
+         + (b(Y+) - 2 b + b(Y-)) (dW h - dZ) / (2 h)
+         + (b(Phi+) - b(Phi-) - b(Y+) + b(Y-)) (dW^2 / 3 - h) dW / (4 h)
 ```
 
-**Final Combination:**
-```
-X_{n+1} = X_n + (1/4)K₁ + (3/8)K₂ + (3/8)K₃ for drift terms
-X_{n+1} = X_n + (1/4)L₁ + (3/8)L₂ + (3/8)L₃ for diffusion terms
-```
+Line by line these are `a' b dZ`; `a h + (1/2)(a a' + (1/2) b^2 a'') h^2`; the
+Milstein term `(1/2) b b' (dW^2 - h)`; `(a b' + (1/2) b^2 b'')(dW h - dZ)`; and
+`(1/2) b (b b'' + b'^2)((1/3) dW^2 - h) dW`, the `I_(1,1,1)` term - the terms of
+the order 1.5 strong Taylor scheme (Kloeden-Platen (10.4.1)), each reproduced to a
+remainder of strong order 2.0. Three drift and six diffusion evaluations per step.
 
-### Convergence Properties
-- **Strong Order**: 1.5 - Superior path-wise accuracy
-- **Weak Order**: 3.0 - Excellent for expected value calculations
-- **Computational Cost**: 6 function evaluations per step
+## Convergence, as measured
 
-## Algorithm Details
+Geometric Brownian motion `dX = X dt + 0.5 X dW`, `X(0) = 1`, on `[0, 1]`, 100000
+paths, the same Brownian path at every step size; weak error estimated
+path-coupled, standard error in brackets.
 
-```python
-def _srk3_step(self, y, t, dt, equation):
-    # Stage 1
-    K1, L1 = self._compute_stage(y, t, equation)
+| h | strong error | weak error |
+|---|---|---|
+| 1/8 | 1.818e-02 | 6.366e-03 (9e-05) |
+| 1/16 | 6.609e-03 | 1.664e-03 (3e-05) |
+| 1/32 | 2.397e-03 | 4.091e-04 (1e-05) |
+| 1/64 | 8.665e-04 | 1.036e-04 (4e-06) |
+| 1/128 | 3.088e-04 | 2.618e-05 (1e-06) |
+| 1/256 | 1.090e-04 | 6.691e-06 (5e-07) |
+| **slope** | **1.48** | **1.98** |
 
-    # Stage 2
-    y2 = y + (1/3) * K1 * dt + (1/3) * L1 * np.sqrt(dt)
-    K2, L2 = self._compute_stage(y2, t + dt/3, equation)
+The weak slope is reported as measured; the derivation is a strong one and the
+docstring makes no weak-order claim beyond this number.
 
-    # Stage 3
-    y3 = y + (2/3) * K2 * dt + (2/3) * L2 * np.sqrt(dt)
-    K3, L3 = self._compute_stage(y3, t + 2*dt/3, equation)
+## References
 
-    # SRK3 combination
-    y_new = y + (1/4)*K1*dt + (3/8)*K2*dt + (3/8)*K3*dt + \
-                 (1/4)*L1*np.sqrt(dt) + (3/8)*L2*np.sqrt(dt) + (3/8)*L3*np.sqrt(dt)
-
-    return y_new
-```
-
-## Performance Characteristics
-
-| Method | Strong Order | Stages | Function Calls/Step | Relative Accuracy |
-|--------|-------------|---------|-------------------|-------------------|
-| SRK2 | 1.0 | 2 | 4 | Good |
-| SRK3 | 1.5 | 3 | 6 | Very Good |
-| SRK4 | 2.0 | 4 | 8 | Excellent |
-| SRK5 | 2.5 | 5 | 10 | Superior |
-
-## Applications
-
-### High-Precision Financial Modeling
-- **Risk analysis**: More accurate tail risk calculations
-- **Option pricing**: Better convergence for complex derivatives
-- **Portfolio optimization**: Improved stochastic optimization
-
-### Scientific Computing
-- **Molecular dynamics**: Stochastic thermostat methods
-- **Population biology**: Demographic stochasticity models
-- **Neural networks**: Stochastic gradient noise analysis
+- Kloeden, P. E. and Platen, E. (1992). *Numerical Solution of Stochastic
+  Differential Equations*. Springer. Section 11.2, equation (11.2.1); Section 10.4,
+  equation (10.4.1).
 
 ---
 
 **Parent Module:** [STOCHASTIC](../STOCHASTIC.md)
 
 **Related Modules:**
-- [SRK2](../srk2/SRK2.md) - Order 1.0 method
-- [SRK4](../srk4/SRK4.md) - Order 2.0 method
+- [SRK2](../srk2/SRK2.md) - strong order 1.0, handles systems with commuting noise
+- [SRK4](../srk4/SRK4.md) - weak order 2.0
