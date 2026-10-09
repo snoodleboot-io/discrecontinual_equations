@@ -16,7 +16,9 @@ from discrecontinual_equations.webplot.scene import Scene
 from discrecontinual_equations.webplot.scene_builder import (
     with_equation,
 )
-from discrecontinual_equations.webplot.stage_renderer import StageRenderer
+from discrecontinual_equations.webplot.stochastic_stage_renderer import (
+    StochasticStageRenderer,
+)
 
 try:  # python -m examples.continuation.webplot_examples
     from examples.continuation.component_registry import ensure_registry
@@ -178,6 +180,7 @@ try:  # python -m examples.continuation.webplot_examples
     from examples.continuation import stage_fold_of_cycles as fold
     from examples.continuation import stage_hopf as hopf
     from examples.continuation import stage_hopf_hopf as hopfhopf
+    from examples.continuation import stage_noisy_hopf as noisy
     from examples.continuation import stage_shilnikov as shilnikov
     from examples.continuation import stage_snic as snic
     from examples.continuation import stage_van_der_pol as vdp
@@ -189,6 +192,7 @@ except ImportError:  # run as a script path: only this directory is on sys.path
     import stage_fold_of_cycles as fold
     import stage_hopf as hopf
     import stage_hopf_hopf as hopfhopf
+    import stage_noisy_hopf as noisy
     import stage_shilnikov as shilnikov
     import stage_snic as snic
     import stage_van_der_pol as vdp
@@ -376,12 +380,17 @@ def _stages() -> tuple[tuple, ...]:
             shilnikov.STAGE_FILENAME,
             shilnikov.STAGE_ENTRY,
         ),
+        (noisy.noisy_hopf_stage, noisy.STAGE_FILENAME, noisy.STAGE_ENTRY),
     )
 
 
 def _stage_entries(output_dir: str) -> list[AtlasEntry]:
-    """Write the playable pages with their own renderer; they share the atlas."""
-    report = PlotReport(StageRenderer(), output_dir)
+    """Write the playable pages with their own renderer; they share the atlas.
+
+    The stochastic renderer draws a deterministic stage exactly as the stage
+    renderer does, so one renderer serves every film.
+    """
+    report = PlotReport(StochasticStageRenderer(), output_dir)
     entries = []
     for build, filename, entry in _stages():
         report.write(build(), filename)

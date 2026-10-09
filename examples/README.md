@@ -44,7 +44,7 @@ python examples/build_sites.py --list            # names and rough timings
 ```
 
 Three kinds of example are handled. Those that write self-contained HTML (the
-continuation atlas and its ten stage films) are handed the output
+continuation atlas and its eleven stage films) are handed the output
 directory; those that write PNG and HTML beside their own source have the
 figures they just wrote harvested into a gallery page; and those that only
 print have their console output made into a page.
@@ -74,8 +74,8 @@ name:
 uv run python -m examples.continuation.stage_hopf plots
 ```
 
-Swap the module for any of the ten. Roughly how long each takes, and what it is
-for:
+Swap the module for any of the eleven. Roughly how long each takes, and what it
+is for:
 
 | Module | Seconds | What it shows |
 | --- | --- | --- |
@@ -86,6 +86,7 @@ for:
 | `stage_snic` | 36 | A cycle whose period runs to infinity as two equilibria land on it |
 | `stage_bogdanov_takens` | 48 | Fold, Hopf and homoclinic meeting at one point |
 | `stage_zero_hopf` | 126 | A fold that produces not two points but two circles |
+| `stage_noisy_hopf` | 142 | The noisy Hopf: the D-bifurcation at μ = 0, the P-bifurcation at μ = σ² |
 | `stage_shilnikov` | 143 | A saddle-focus whose saddle index crosses one |
 | `stage_hopf_hopf` | 157 | Four eigenvalues on the clock, one pair crossing |
 | `stage_ferroelectric_ring` | 169 | A unidirectionally coupled ring of three cells |
@@ -105,7 +106,18 @@ per frame. That is why the four three- and four-dimensional films sit at the
 bottom of the table and the planar ones at the top. `StageSettings.manifold_fan`
 is the dial if a coarser fan still reads as a surface.
 
-`build_sites.py` builds all ten as part of the `continuation` example, along
+`stage_noisy_hopf` is the one stochastic film, and its page is a variant of
+the stage: the particles are sample paths of the SDE, integrated in the browser
+by Euler-Maruyama from a generator seeded in the page; a density panel shows
+the stationary density solved on a grid at every frame, with its interior
+maxima; and the spectral clock is replaced by the top Lyapunov exponent drawn
+against the parameter, since for a stochastic system that one number's sign is
+what the dynamical bifurcation changes. The timeline marks both thresholds as
+rules at their own parameter values. Its time goes on the exponent, a
+simulated path at each of about seven parameter values, and on sixty sparse
+solves of the stationary Fokker-Planck equation, one per frame with a density.
+
+`build_sites.py` builds all eleven as part of the `continuation` example, along
 with the rest of the atlas.
 
 ## Running Examples

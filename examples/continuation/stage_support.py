@@ -27,6 +27,7 @@ from discrecontinual_equations.differential_equation import DifferentialEquation
 from discrecontinual_equations.function.deterministic import DeterministicFunction
 from discrecontinual_equations.parameter import Parameter
 from discrecontinual_equations.variable import Variable
+from discrecontinual_equations.webplot.renderer import HtmlRenderer
 from discrecontinual_equations.webplot.report import AtlasEntry, PlotReport
 from discrecontinual_equations.webplot.stage import StageScene
 from discrecontinual_equations.webplot.stage_renderer import StageRenderer
@@ -189,6 +190,7 @@ def publish(
     filename: str,
     entry: AtlasEntry,
     output_dir: str,
+    renderer: HtmlRenderer | None = None,
 ) -> Path:
     """Write one stage page, and a one-card atlas only where none exists.
 
@@ -197,8 +199,11 @@ def publish(
     card - so a ten-film loop left an index naming only the last of them. The
     page is what the run is for; an index already there belongs to whatever
     built it and is left alone.
+
+    ``renderer`` is for a film whose page is a variant of the stage - the
+    stochastic one brings its own panels - and defaults to the stage renderer.
     """
-    report = PlotReport(StageRenderer(), output_dir)
+    report = PlotReport(renderer or StageRenderer(), output_dir)
     path = report.write(scene, filename)
     if not (Path(output_dir) / "index.html").exists():
         report.write_atlas([entry])

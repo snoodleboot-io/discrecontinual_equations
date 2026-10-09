@@ -508,6 +508,42 @@ class DiagonalMultiplicativeColumn(DeterministicFunction):
         ]
 
 
+class ConformalColumn(DeterministicFunction):
+    """Column ``index`` of ``s [[x, -y], [y, x]]``: the conformal noise ``s z dB``.
+
+    Two independent Brownian motions multiplying ``z = x + i y`` by a complex
+    increment. ``D = G G^T = s^2 r^2 I`` is isotropic and vanishes only at the
+    origin, which stays invariant, so the planar density of a radial drift is
+    the one-dimensional closed form in the radius and the origin's top exponent
+    is exact: for the Hopf drift ``p = C r^(2 mu / s^2 - 2) exp(-r^2 / s^2)``,
+    cratering at ``mu = s^2``, and the exponent is ``mu`` itself. The
+    Stratonovich correction vanishes identically, since the first column's
+    Jacobian is ``s I`` and the second's a right-angle rotation.
+    """
+
+    def __init__(
+        self,
+        index: int,
+        variables: list[Variable],
+        parameters: list[Parameter],
+        results: list[Variable],
+        time: Variable | None = None,
+    ) -> None:
+        super().__init__(variables, parameters, results, time)
+        self._index = index
+
+    def eval(
+        self,
+        point: list[float],
+        time: float | None = None,  # noqa: ARG002 (base signature)
+    ) -> list[float]:
+        sigma = self.parameters[1].value
+        x, y = point[0], point[1]
+        if self._index == 0:
+            return [sigma * x, sigma * y]
+        return [-sigma * y, sigma * x]
+
+
 class ScaledStateColumn(DeterministicFunction):
     """The single column ``s x``: one Brownian motion scaling the whole state.
 

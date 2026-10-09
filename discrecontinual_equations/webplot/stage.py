@@ -11,6 +11,11 @@ polynomial :class:`Term` lists - and the particles are integrated in full
 dimension and drawn projected. Like :class:`~.scene.Scene` it holds no drawing
 code, so a stage can be built and unit-tested without a browser, and
 :func:`stage_payload` turns it into the plain JSON the renderer embeds.
+
+A stochastic system is the same scene with two things added after it is built:
+a :class:`StochasticStage` on the scene, carrying the noise and the top
+Lyapunov exponent across the parameter, and a :class:`Density` on each frame.
+Both are optional, and a deterministic scene's payload does not mention them.
 """
 
 from collections.abc import Sequence
@@ -289,9 +294,19 @@ class Frame:
     branch that exists at this parameter - a folded branch has two, a stable
     and an unstable one - and is empty where none does. ``label`` is an
     optional sentence naming the regime; the page composes one otherwise.
+    ``density`` is the stationary density at this parameter, set only on the
+    frames of a stochastic stage.
     """
 
-    __slots__ = ["cycles", "equilibria", "field", "label", "manifolds", "parameter"]
+    __slots__ = [
+        "cycles",
+        "density",
+        "equilibria",
+        "field",
+        "label",
+        "manifolds",
+        "parameter",
+    ]
 
     def __init__(
         self,
@@ -307,6 +322,129 @@ class Frame:
         self.manifolds = manifolds
         self.cycles = cycles
         self.label: str | None = None
+        # Set after construction, like ``label``, and only by a stochastic
+        # stage: the stationary density at this parameter.
+        self.density: Density | None = None
+
+
+class Density:
+    """The stationary density at one frame, as the density panel draws it.
+
+    ``values`` is the density on the scene's density window, scaled so its
+    peak is one: ``ny * nx`` floats in row-major order (rows of constant
+    ``y``), the layout the field uses. It is empty where the frame has no
+    density on the plane at all - below the dynamical threshold of an
+    invariant point every path falls into it and the whole mass sits on one
+    point - which the page draws as a point rather than a field. ``peak`` is
+    the value the rest were scaled by. ``maxima`` are the interior maxima the
+    solve found and ``mode`` the global one. ``crest`` is the radius of the
+    ring the maxima form once the peak has left the reference state, and
+    ``None`` while it still sits there: it is the single number the
+    phenomenological bifurcation changes, so the timeline draws it against
+    the parameter.
+    """
+
+    __slots__ = ["crest", "maxima", "mode", "peak", "values"]
+
+    def __init__(
+        self,
+        values: list[float],
+        maxima: Pairs,
+        mode: tuple[float, float] | None,
+        crest: float | None,
+        peak: float = 0.0,
+    ) -> None:
+        self.values = values
+        self.maxima = maxima
+        self.mode = mode
+        self.crest = crest
+        self.peak = peak
+
+
+class PathModel:
+    """How the page integrates sample paths of ``dx = f dt + G dW``.
+
+    ``noise`` is the amplitude ``G`` as polynomial terms: one :class:`Term`
+    list per state component, per independent Brownian driver. With the drift
+    terms the lattice's view already carries, the page steps paths by
+    Euler-Maruyama with step ``step``, drawing every random number from a
+    generator it seeds with ``seed``, so the film is the same on every build
+    and every reload and the paths are the real paths of the equation rather
+    than a precomputed replay. ``convention`` names the reading - Ito or
+    Stratonovich - the equation is written in; the builder checks that the
+    view's drift terms are the Ito drift of the system under that reading,
+    since that is what the scheme integrates.
+    """
+
+    __slots__ = ["convention", "noise", "seed", "step"]
+
+    def __init__(
+        self,
+        noise: Sequence[Sequence[Sequence[Term]]],
+        convention: str,
+        seed: int = 0,
+        step: float = 0.02,
+    ) -> None:
+        self.noise = [[list(component) for component in driver] for driver in noise]
+        self.convention = convention
+        self.seed = seed
+        self.step = step
+
+
+class DensityWindow:
+    """The window every frame's :class:`Density` is sampled on.
+
+    ``box`` is the extent of the cells drawn and ``shape`` their count per
+    axis; ``centre`` is the reference state the crest radius is measured
+    from. ``exact_crest`` is an optional closed form for that radius against
+    the parameter, drawn beside the measured one so the page shows its own
+    error rather than hiding it.
+    """
+
+    __slots__ = ["box", "centre", "exact_crest", "shape"]
+
+    def __init__(
+        self,
+        box: Box,
+        shape: tuple[int, int],
+        centre: tuple[float, float] = (0.0, 0.0),
+        exact_crest: Pairs | None = None,
+    ) -> None:
+        self.box = box
+        self.shape = shape
+        self.centre = (float(centre[0]), float(centre[1]))
+        self.exact_crest = exact_crest
+
+
+class ExponentCurve:
+    """The top Lyapunov exponent across the parameter, which replaces the clock.
+
+    For a stochastic system the dynamical bifurcation changes the sign of this
+    one real number, not of a spectrum. ``samples`` are the computed values
+    and ``exact`` an optional closed form drawn beside them.
+    """
+
+    __slots__ = ["exact", "samples"]
+
+    def __init__(self, samples: Pairs, exact: Pairs | None = None) -> None:
+        self.samples = samples
+        self.exact = exact
+
+
+class StochasticStage:
+    """What makes a staged system stochastic: its paths, density and exponent."""
+
+    __slots__ = ["exponent", "paths", "window"]
+
+    def __init__(
+        self,
+        paths: PathModel,
+        window: DensityWindow,
+        exponent: ExponentCurve,
+    ) -> None:
+        self.paths = paths
+        self.window = window
+        self.exponent = exponent
 
 
 class BranchPoint:
@@ -368,7 +506,7 @@ class Timeline:
 class StageScene:
     """A continuation as a film: the timeline and every frame along it."""
 
-    __slots__ = ["cycles", "frames", "lattice", "system", "timeline"]
+    __slots__ = ["cycles", "frames", "lattice", "stochastic", "system", "timeline"]
 
     def __init__(
         self,
@@ -383,6 +521,8 @@ class StageScene:
         self.timeline = timeline
         self.cycles = cycles
         self.frames = frames
+        # Set after construction, and only by a stochastic stage.
+        self.stochastic: StochasticStage | None = None
 
 
 # The page draws to screen precision, and the field is interpolated anyway, so
@@ -424,24 +564,98 @@ def _view_payload(view: View | None) -> dict | None:
             for projection in view.projections
         ],
         "bounds": [[float(lo), float(hi)] for lo, hi in view.bounds],
-        "field": [
-            [
-                {
-                    "c": float(term.coefficient),
-                    "e": list(term.exponents),
-                    "q": int(term.parameter_power),
-                }
-                for term in component
-            ]
-            for component in view.field
-        ],
+        "field": _terms_payload(view.field),
     }
 
 
-def stage_payload(scene: StageScene) -> dict:
-    """The scene as plain JSON-ready data, in the shape the page script reads."""
-    system, lattice = scene.system, scene.lattice
+def _terms_payload(field: Sequence[Sequence[Term]]) -> list[list[dict]]:
+    return [
+        [
+            {
+                "c": float(term.coefficient),
+                "e": list(term.exponents),
+                "q": int(term.parameter_power),
+            }
+            for term in component
+        ]
+        for component in field
+    ]
+
+
+def _density_payload(density: Density) -> dict:
     return {
+        "values": _field(density.values),
+        "peak": float(density.peak),
+        "maxima": _pairs(density.maxima),
+        "mode": [_num(v) for v in density.mode] if density.mode is not None else None,
+        "crest": _num(density.crest) if density.crest is not None else None,
+    }
+
+
+def _stochastic_payload(stochastic: StochasticStage) -> dict:
+    paths, window, exponent = stochastic.paths, stochastic.window, stochastic.exponent
+    return {
+        "convention": paths.convention,
+        "seed": int(paths.seed),
+        "step": float(paths.step),
+        "centre": [_num(v) for v in window.centre],
+        "noise": [_terms_payload(driver) for driver in paths.noise],
+        "density": {
+            "box": {"x": list(window.box[0]), "y": list(window.box[1])},
+            "nx": int(window.shape[0]),
+            "ny": int(window.shape[1]),
+        },
+        "exponent": _pairs(exponent.samples),
+        "exact_exponent": _pairs(exponent.exact) if exponent.exact else None,
+        "exact_crest": _pairs(window.exact_crest) if window.exact_crest else None,
+    }
+
+
+def _frame_payload(frame: Frame) -> dict:
+    """One frame as the page reads it.
+
+    The density key is written only where the frame has one, so a
+    deterministic film's payload is exactly what it was before densities
+    existed: the deterministic pages are the oracle that nothing here moved.
+    """
+    payload = {
+        "p": _num(frame.parameter),
+        "field": _field(frame.field),
+        "equilibria": [
+            {
+                "x": _num(item.x),
+                "y": _num(item.y),
+                "stability": item.stability,
+                "eig": _pairs(item.eigenvalues),
+                "state": [_num(value) for value in item.state],
+            }
+            for item in frame.equilibria
+        ],
+        "manifolds": [
+            {
+                "kind": item.kind,
+                "points": _pairs(item.points),
+                "curve": [[_num(v) for v in state] for state in item.curve],
+            }
+            for item in frame.manifolds
+        ],
+        "cycles": list(frame.cycles),
+        "label": frame.label,
+    }
+    if frame.density is not None:
+        payload["density"] = _density_payload(frame.density)
+    return payload
+
+
+def stage_payload(scene: StageScene) -> dict:
+    """The scene as plain JSON-ready data, in the shape the page script reads.
+
+    A stochastic stage adds one ``stochastic`` block, and a density to each
+    frame that has one; a deterministic stage's payload has neither key, not
+    even a null, so it is byte for byte what it was.
+    """
+    system, lattice = scene.system, scene.lattice
+    payload = {
         "system": {
             "title": system.title,
             "subtitle": system.subtitle,
@@ -489,31 +703,8 @@ def stage_payload(scene: StageScene) -> dict:
             }
             for cycle in scene.cycles.cycles
         ],
-        "frames": [
-            {
-                "p": _num(frame.parameter),
-                "field": _field(frame.field),
-                "equilibria": [
-                    {
-                        "x": _num(item.x),
-                        "y": _num(item.y),
-                        "stability": item.stability,
-                        "eig": _pairs(item.eigenvalues),
-                        "state": [_num(value) for value in item.state],
-                    }
-                    for item in frame.equilibria
-                ],
-                "manifolds": [
-                    {
-                        "kind": item.kind,
-                        "points": _pairs(item.points),
-                        "curve": [[_num(v) for v in state] for state in item.curve],
-                    }
-                    for item in frame.manifolds
-                ],
-                "cycles": list(frame.cycles),
-                "label": frame.label,
-            }
-            for frame in scene.frames
-        ],
+        "frames": [_frame_payload(frame) for frame in scene.frames],
     }
+    if scene.stochastic is not None:
+        payload["stochastic"] = _stochastic_payload(scene.stochastic)
+    return payload
