@@ -8,6 +8,10 @@ from discrecontinual_equations.solver.stochastic.euler_maruyama.euler_maruyama_s
     EulerMaruyamaSolver,
 )
 from discrecontinual_equations.variable import Variable
+from tests.solver.geometric_brownian_motion import GeometricBrownianMotionCase, slope
+
+_STEPS = [2.0**-k for k in range(3, 8)]
+_RESOLUTION = 2.0**-10
 
 
 class StochasticTestFunction(StochasticFunction):
@@ -73,3 +77,22 @@ class TestEulerMaruyamaSolver:
         # With α=1, σ=0.5, starting at x=1, it should tend toward 0
         # But due to stochasticity, we just check it's a reasonable value
         assert -2.0 < final_value < 3.0  # Allow reasonable range due to noise
+
+
+class TestEulerMaruyamaConvergence:
+    def test_stratonovich_converges_to_the_stratonovich_solution(self):
+        # Pins the sign of the drift correction (DEQ-27): the Stratonovich solution
+        # X0 exp(mu t + sigma W) is only reached if (1/2) b b' is added to the drift,
+        # not taken off. With the sign inverted the scheme converges to a different
+        # process: the slope measures about 0.05 and the finest-step error stays
+        # near 0.7, against about 0.6 and 0.03 with the sign right. The thresholds
+        # sit between, with room for the sampling noise of 40 paths.
+        errors = GeometricBrownianMotionCase(seed=200, calculus="stratonovich").errors(
+            EulerMaruyamaSolver,
+            EulerMaruyamaConfig,
+            _STEPS,
+            paths=40,
+            resolution=_RESOLUTION,
+        )
+        assert slope({h: e[0] for h, e in errors.items()}) > 0.35, errors
+        assert errors[_STEPS[-1]][0] < 0.1, errors
