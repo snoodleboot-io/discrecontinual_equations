@@ -183,8 +183,26 @@ same 80 *uniform* nodes, under `HermiteSimpsonOrbit`'s fourth-order collocation:
 | Hermite–Simpson | 0.00% | **0.12%** | 226.2 (0.1% off) |
 
 A factor of 500 for no extra nodes, and 8.9% → under 0.01% on the representative
-cycle. `CycleContinuation` is trapezoidal-only; wiring Hermite–Simpson into it is
-the change that would move these numbers.
+cycle. `CycleContinuation` now takes that scheme as its `collocation` argument,
+`"hermite_simpson"` by default and `"trapezoidal"` on request, with the analytic
+sparse Jacobian derived for both (each agrees with finite differences to about
+5e-8, the difference scheme's own floor). The sparsity pattern is unchanged - an
+interval still couples only its own two nodes - so the midpoint's chain-rule
+terms simply widen the same four blocks, and the sparse solve stays the fast
+path: on the Bogdanov–Takens branch a step costs 0.069 s at 80 nodes and 0.129 s
+at 160, against 0.049 s and 0.113 s for trapezoidal (1.4x and 1.15x; the per-step
+cost is shared with the monodromy and the tangent solve, which the scheme does
+not touch).
+
+With it the whole 80-node Bogdanov–Takens branch is under the 2% gate: the worst
+Floquet error over its 605 cycles falls from 59.3% to 0.077%, and `resolved_branch`
+keeps all 605 where it kept 212. What remains in the Floquet error is the
+monodromy's piecewise-linear interpolant between nodes, which is second order and
+sits at about 0.2% on this orbit; that is now the floor, and a cubic Hermite
+interpolant in the monodromy would be the next lever if one is ever needed. The
+floor is also why a cycle the mesh does not resolve at all - the ferroelectric
+ring's wave at period 35 on 80 nodes, near its onset - reads no better under the
+fourth-order scheme: there the error is the interpolant's, not the collocation's.
 
 ## Trusting a computed connecting orbit
 

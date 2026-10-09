@@ -4,11 +4,13 @@ import math
 from unittest import TestCase
 
 import numpy as np
+import pytest
 
 from discrecontinual_equations.continuation.cycle_continuation import (
     CycleContinuation,
     CyclePoint,
     CycleSeed,
+    _Arc,
     resolved_branch,
 )
 from discrecontinual_equations.continuation.periodic_orbit import (
@@ -25,14 +27,187 @@ from discrecontinual_equations.differential_equation import DifferentialEquation
 from tests.continuation.fields import (
     Alpha,
     FoldOfCyclesField,
+    HopfField,
     NeimarkSackerField,
     PeriodDoublingField,
     SnicField,
     State,
     Time,
+    VanDerPolField,
 )
 
 _SADDLE_JACOBIAN = np.array([[0.0, 1.0], [1.0, 0.0]])
+# A forward difference with step 1e-7 is itself only good to about 1e-7 times the
+# second derivative, so this is the finite-difference oracle's own floor, not the
+# analytic Jacobian's. DEQ-15 measured the trapezoidal blocks at this level.
+_JACOBIAN_AGREEMENT = 1.0e-6
+
+
+def _equation(field_type: type, dimension: int, value: float) -> DifferentialEquation:
+    parameters = [Alpha(value=value)]
+    return DifferentialEquation(
+        variables=[State() for _ in range(dimension)],
+        time=Time(),
+        parameters=parameters,
+        derivative=field_type(
+            variables=[State() for _ in range(dimension)],
+            parameters=parameters,
+            results=[State() for _ in range(dimension)],
+            time=None,
+        ),
+    )
+
+
+class TestCollocationJacobian(TestCase):
+    """The analytic sparse Jacobian of each scheme against finite differences.
+
+    Checked off the cycle, on a perturbed seed, so that every term is exercised:
+    on the exact cycle several of the Hermite-Simpson chain-rule terms are small
+    enough that a wrong sign in one would pass unnoticed.
+    """
+
+    def _system(self, scheme: str) -> tuple[CycleContinuation, np.ndarray, int]:
+        intervals, dimension = 12, 4
+        nodes = intervals + 1
+        grid = np.linspace(0.0, 1.0, nodes)
+        states = np.column_stack(
+            [
+                0.7 * np.cos(2.0 * math.pi * grid),
+                0.7 * np.sin(2.0 * math.pi * grid),
+                0.1 * np.cos(4.0 * math.pi * grid),
+                0.05 * np.sin(2.0 * math.pi * grid),
+            ],
+        )
+        states += 0.05 * np.random.default_rng(7).standard_normal(states.shape)
+        unknowns = np.concatenate([states.ravel(), [5.9], [-0.07]])
+        continuation = CycleContinuation(
+            _equation(NeimarkSackerField, dimension, -0.07),
+            0,
+            intervals,
+            phase_index=1,
+            collocation=scheme,
+        )
+        continuation._dimension = dimension  # noqa: SLF001 (trace sets this)
+        return continuation, unknowns, nodes
+
+    def _disagreement(self, scheme: str) -> float:
+        continuation, unknowns, nodes = self._system(scheme)
+        tangent = np.random.default_rng(11).standard_normal(unknowns.size)
+        tangent /= np.linalg.norm(tangent)
+        arc = _Arc(unknowns - 0.01 * tangent, tangent, 0.01)
+        residual = continuation._augmented(unknowns, nodes, arc)  # noqa: SLF001
+        analytic = continuation._bordered(unknowns, nodes, tangent)  # noqa: SLF001
+        numerical = continuation._numerical_jacobian(  # noqa: SLF001
+            unknowns,
+            nodes,
+            arc,
+            residual,
+        )
+        return float(np.max(np.abs(analytic.toarray() - numerical)))
+
+    def test_trapezoidal_matches_finite_differences(self):
+        assert self._disagreement("trapezoidal") < _JACOBIAN_AGREEMENT
+
+    def test_hermite_simpson_matches_finite_differences(self):
+        assert self._disagreement("hermite_simpson") < _JACOBIAN_AGREEMENT
+
+    def test_hermite_simpson_has_the_same_sparsity_pattern(self):
+        # Each interval still touches only its own two nodes, so the shared
+        # assembly is right for both: same nonzeros, same places.
+        patterns = []
+        for scheme in ("trapezoidal", "hermite_simpson"):
+            continuation, unknowns, nodes = self._system(scheme)
+            border = np.ones(unknowns.size)
+            matrix = continuation._bordered(unknowns, nodes, border)  # noqa: SLF001
+            patterns.append(matrix.toarray() != 0.0)
+        assert np.array_equal(patterns[0], patterns[1])
+
+    def test_rejects_an_unknown_scheme(self):
+        with pytest.raises(ValueError, match="collocation must be one of"):
+            CycleContinuation(
+                _equation(HopfField, 2, 0.5),
+                0,
+                10,
+                collocation="gauss",
+            )
+
+    def test_defaults_to_hermite_simpson(self):
+        continuation = CycleContinuation(_equation(HopfField, 2, 0.5), 0, 10)
+        assert continuation.collocation == "hermite_simpson"
+
+
+class TestCollocationOrder(TestCase):
+    """Doubling the mesh divides the error by 16 under Hermite-Simpson, 4 under
+    trapezoidal. Measured on the continued branch, not a single solve: the Hopf
+    normal form has period exactly 2 pi at every mu, so the period of the last
+    traced point is the continuation's own discretisation error outright."""
+
+    def _period_error(self, scheme: str, intervals: int) -> float:
+        mu, steps = 0.5, 4
+        grid = np.linspace(0.0, 1.0, intervals + 1)
+        seed = np.column_stack(
+            [
+                math.sqrt(mu) * np.cos(2.0 * math.pi * grid),
+                math.sqrt(mu) * np.sin(2.0 * math.pi * grid),
+            ],
+        )
+        continuation = CycleContinuation(
+            _equation(HopfField, 2, mu),
+            0,
+            intervals,
+            phase_index=1,
+            collocation=scheme,
+        )
+        points, _ = continuation.trace(CycleSeed(seed, 6.0, mu), 0.05, steps)
+        assert len(points) == steps + 1
+        return abs(points[-1].solution.period - 2.0 * math.pi)
+
+    def _orders(self, scheme: str) -> list[float]:
+        errors = [self._period_error(scheme, n) for n in (10, 20, 40)]
+        return [math.log2(errors[k] / errors[k + 1]) for k in range(len(errors) - 1)]
+
+    def test_hermite_simpson_is_fourth_order(self):
+        for order in self._orders("hermite_simpson"):
+            assert 3.7 < order < 4.3
+
+    def test_trapezoidal_is_second_order(self):
+        for order in self._orders("trapezoidal"):
+            assert 1.8 < order < 2.3
+
+    def test_hermite_simpson_beats_trapezoidal_on_the_same_mesh(self):
+        hermite = self._period_error("hermite_simpson", 20)
+        trapezoidal = self._period_error("trapezoidal", 20)
+        assert hermite < 0.01 * trapezoidal
+
+
+class TestSeedSolve(TestCase):
+    """The first point is reached in two stages: second order, then the scheme.
+
+    Van der Pol at ``mu = 0.08`` from the normal form's circle of radius two is
+    the case that found this. The fourth-order Newton started from that circle
+    takes the period to -2592 on its first step and never returns, where the
+    trapezoidal one, from the same seed, recovers; the fourth-order cycle is then
+    a few quadratic steps from the trapezoidal one. The period it lands on is
+    ``2 pi (1 + mu^2 / 16)`` to the order shown, which trapezoidal at 80 nodes
+    misses by 3e-3 - so the check also says which scheme the first point is on.
+    """
+
+    def test_fourth_order_reaches_a_seed_its_own_newton_cannot(self):
+        mu, intervals = 0.08, 80
+        grid = np.linspace(0.0, 1.0, intervals + 1)
+        seed = np.column_stack(
+            [2.0 * np.cos(2.0 * math.pi * grid), 2.0 * np.sin(2.0 * math.pi * grid)],
+        )
+        continuation = CycleContinuation(
+            _equation(VanDerPolField, 2, mu),
+            0,
+            intervals,
+            phase_index=1,
+        )
+        points, _ = continuation.trace(CycleSeed(seed, 2.0 * math.pi, mu), 0.04, 2)
+        assert len(points) == 3
+        expected = 2.0 * math.pi * (1.0 + mu * mu / 16.0)
+        assert abs(points[0].solution.period - expected) < 1.0e-4
 
 
 class TestCycleBifurcations(TestCase):

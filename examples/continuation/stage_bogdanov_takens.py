@@ -56,21 +56,19 @@ BOX = ((-1.25, 0.9), (-0.85, 0.85))
 # The page reports this mesh's own Floquet error beside the multipliers. Two
 # figures are worth keeping apart, because they answer different questions:
 #
-#                       at b1 = -0.404      worst on the branch
+#   trapezoidal          at b1 = -0.404      worst on the branch
 #     80 nodes                8.9%                 59.3%    605 cycles    36 s
 #    160 nodes                2.5%                  8.3%    689 cycles    70 s
 #    320 nodes                0.6%                  0.8%    801 cycles   143 s
+#   Hermite-Simpson
+#     80 nodes               0.00%                0.077%    605 cycles   101 s
 #
 # The left column is the cycle DEQ-13 investigated - a representative orbit, and
 # what this comment used to quote. The right is the maximum over every cycle
-# traced, which falls on the orbit hugging the saddle at b1 = -0.4575 with a
-# period of 10.4: the hardest orbit on the branch, and the one that says what
-# the mesh cannot yet do. The finer mesh also follows the branch further toward
-# the homoclinic, which is why the cycle count rises with it.
-#
-# Raising this is affordable now - DEQ-15 replaced the dense finite-difference
-# Jacobian with the analytic banded one, so 320 nodes costs minutes rather than
-# not finishing. And raising it is, for the moment, the only lever there is.
+# traced, which under trapezoidal falls on the orbit hugging the saddle at
+# b1 = -0.4575 with a period of 10.4: the hardest orbit on the branch, and the one
+# that says what the mesh cannot do. The finer mesh also follows the branch
+# further toward the homoclinic, which is why the cycle count rises with it.
 #
 # DEQ-13 expected an adapted mesh to do the job instead, concentrating nodes where
 # the orbit hugs the saddle rather than adding them everywhere. It measured out
@@ -78,11 +76,15 @@ BOX = ((-1.25, 0.9), (-0.85, 0.85))
 # arclength-plus-curvature, each at powers 1, 1/2 and 1/3, with and without a floor
 # - got the 59% below 47%, and re-adapting along the branch cost 7.5x the time to
 # reach 49% while ending marginally sooner. There is no 80-node mesh that resolves
-# this orbit, because what is wrong is not where the nodes are: it is that the
-# collocation is second order. The same orbit on these same 80 uniform nodes under
-# HermiteSimpsonOrbit's fourth-order collocation reads 0.12%, and the representative
-# cycle 0.00% against 8.9% - a factor of 500 for no extra nodes. Wiring that into
-# CycleContinuation is the ticket that would move this number.
+# this orbit under second-order collocation, because what is wrong is not where
+# the nodes are: it is the order. DEQ-26 made Hermite-Simpson the continuation's
+# default, and on these same 80 uniform nodes the whole branch is now under 0.1%,
+# with resolved_branch keeping every one of its 605 points where it kept 212. The
+# 605 is the 400-step cap on the downward trace in both cases, not where the mesh
+# gives out; the fourth-order branch ends at b1 = -0.4554 because its arclength
+# steps cover a little less parameter per step. The mesh is left at 80 on
+# purpose: whether it can now be *lowered*, or whether 80 is simply right, is a
+# decision about every film and not a side effect of this one.
 INTERVALS = 80
 GRID = 36
 # The cycle continuation is seeded this far below the Hopf, where the cycle is

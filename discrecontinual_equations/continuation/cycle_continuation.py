@@ -11,6 +11,11 @@ of a cycle:
 * **period-doubling** - a real nontrivial multiplier passes ``-1``;
 * **Neimark-Sacker** - a complex-conjugate pair of multipliers crosses the unit
   circle (a torus is born).
+
+The orbit is discretised by collocation on a uniform mesh, and the scheme is a
+choice: fourth-order Hermite-Simpson by default, second-order trapezoidal on
+request. See :class:`CycleContinuation` for why the order, and not the mesh, is
+what decides whether the multipliers can be believed.
 """
 
 from collections.abc import Callable, Sequence
@@ -38,16 +43,222 @@ _IMAGINARY_TOLERANCE = 1.0e-6
 _NOISE_FLOOR = 1.0e-9
 _ANGLE_BAND = 0.12
 _HALF = 0.5
+# Simpson's rule weights the end fields by h/6 and the midpoint field by four times
+# that; the cubic Hermite interpolant places the midpoint h/8 along the difference
+# of the end slopes.
+_SIXTH = 6.0
+_EIGHTH = 8.0
+_MIDPOINT_WEIGHT = 4.0
 _AUTODIFF = AutomaticDifferentiation()
 # How far the trivial multiplier may drift from one before a cycle point is refused
 # as unresolved. A crossing of the unit circle is located by linearly interpolating
 # ``|mu| - 1`` between adjacent points, so an error of a couple of percent in ``|mu|``
 # moves the reported crossing by a comparable fraction of one continuation step -
 # tolerable. Tens of percent does not: it can invent a crossing, hide one, or place
-# it a long way from where it is, and on the Bogdanov-Takens branch at 80 nodes the
-# error reaches 59%. On a Bogdanov-Takens-like cycle this sits between what 160
-# and 320 nodes buy (8.9% at 80, 2.5% at 160, 0.6% at 320).
+# it a long way from where it is, and on the Bogdanov-Takens branch at 80 nodes
+# under trapezoidal collocation the error reaches 59%. On a Bogdanov-Takens-like
+# cycle this sits between what 160 and 320 trapezoidal nodes buy (8.9% at 80, 2.5%
+# at 160, 0.6% at 320); Hermite-Simpson is under it on the whole branch at 80.
 _FLOQUET_TOLERANCE = 2.0e-2
+
+
+class _VectorField:
+    """``f``, ``df/dx`` and ``df/dp`` of the equation, as three callables.
+
+    Each takes ``(state, parameter)``. Bundled so that a collocation scheme asks
+    one object for whatever it needs at a node or a midpoint, and so that the
+    scheme itself holds no reference to the equation and stays a stateless
+    singleton.
+    """
+
+    __slots__ = ["jacobian", "parameter_derivative", "value"]
+
+    def __init__(
+        self,
+        value: Callable[[np.ndarray, float], np.ndarray],
+        jacobian: Callable[[np.ndarray, float], np.ndarray],
+        parameter_derivative: Callable[[np.ndarray, float], np.ndarray],
+    ) -> None:
+        self.value = value
+        self.jacobian = jacobian
+        self.parameter_derivative = parameter_derivative
+
+
+class _Collocation:
+    """One way of discretising ``x'(s) = T f(x(s), p)`` on the uniform mesh.
+
+    A scheme is two things: the residual of one interval, and the Jacobian of that
+    residual against the interval's two end nodes, the period, and the parameter.
+    Both schemes here couple an interval only to its own two nodes, so the sparsity
+    pattern :meth:`CycleContinuation._blocks` assembles is the same for each and
+    only the block values differ. That is why the scheme supplies values and not
+    triplets: the index arithmetic DEQ-15 got right stays in one place.
+    """
+
+    name = ""
+
+    def residual(
+        self,
+        field: _VectorField,
+        states: np.ndarray,
+        period: float,
+        parameter: float,
+        step: float,
+    ) -> np.ndarray:
+        """The collocation residual, one row of ``dimension`` per interval."""
+        raise NotImplementedError
+
+    def blocks(
+        self,
+        field: _VectorField,
+        states: np.ndarray,
+        period: float,
+        parameter: float,
+        step: float,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Per-interval Jacobian blocks: ``(left, right, period, parameter)``.
+
+        ``left`` and ``right`` are the ``dimension x dimension`` blocks against
+        nodes ``i`` and ``i+1``; ``period`` and ``parameter`` are the interval's
+        rows of the two dense columns.
+        """
+        raise NotImplementedError
+
+
+class _Trapezoidal(_Collocation):
+    """Second order: ``x_{i+1} - x_i = (hT/2)(f_i + f_{i+1})``."""
+
+    name = "trapezoidal"
+
+    def residual(
+        self,
+        field: _VectorField,
+        states: np.ndarray,
+        period: float,
+        parameter: float,
+        step: float,
+    ) -> np.ndarray:
+        fields = np.array([field.value(state, parameter) for state in states])
+        weight = _HALF * period * step
+        return states[1:] - states[:-1] - weight * (fields[:-1] + fields[1:])
+
+    def blocks(
+        self,
+        field: _VectorField,
+        states: np.ndarray,
+        period: float,
+        parameter: float,
+        step: float,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        identity = np.eye(states.shape[1])
+        weight = _HALF * period * step
+        derivatives = np.array([field.jacobian(state, parameter) for state in states])
+        fields = np.array([field.value(state, parameter) for state in states])
+        parameter_fields = np.array(
+            [field.parameter_derivative(state, parameter) for state in states],
+        )
+        left = -identity[None] - weight * derivatives[:-1]
+        right = identity[None] - weight * derivatives[1:]
+        period_values = -_HALF * step * (fields[:-1] + fields[1:])
+        parameter_values = -weight * (parameter_fields[:-1] + parameter_fields[1:])
+        return left, right, period_values, parameter_values
+
+
+class _HermiteSimpson(_Collocation):
+    """Fourth order: Simpson's rule with the midpoint on the cubic Hermite.
+
+    The midpoint state is ``m = (x_i + x_{i+1})/2 + (hT/8)(f_i - f_{i+1})`` and the
+    residual ``x_{i+1} - x_i - (hT/6)(f_i + 4 f(m) + f_{i+1})``, exactly as
+    :class:`HermiteSimpsonOrbit` forms it, including the period scaling the slopes
+    that place the midpoint. What makes the Jacobian wider than trapezoidal's is
+    that ``m`` depends on everything: both end nodes through the mean and the
+    slopes, the period through the slopes, and the parameter through the fields.
+    Every block therefore carries a chain-rule term ``4a Df(m) dm/d(.)`` with
+    ``a = hT/6``, and the end-node blocks pick up a product ``Df(m) Df(x_i)`` that
+    trapezoidal never has. The pattern is unchanged - each interval still touches
+    only its own two nodes - so the sparse assembly and solve are the same.
+    """
+
+    name = "hermite_simpson"
+
+    def _midpoints(
+        self,
+        states: np.ndarray,
+        fields: np.ndarray,
+        period: float,
+        step: float,
+    ) -> np.ndarray:
+        slope = period * step / _EIGHTH
+        return _HALF * (states[:-1] + states[1:]) + slope * (fields[:-1] - fields[1:])
+
+    def residual(
+        self,
+        field: _VectorField,
+        states: np.ndarray,
+        period: float,
+        parameter: float,
+        step: float,
+    ) -> np.ndarray:
+        fields = np.array([field.value(state, parameter) for state in states])
+        midpoints = self._midpoints(states, fields, period, step)
+        middles = np.array([field.value(point, parameter) for point in midpoints])
+        weight = period * step / _SIXTH
+        return (
+            states[1:]
+            - states[:-1]
+            - weight * (fields[:-1] + _MIDPOINT_WEIGHT * middles + fields[1:])
+        )
+
+    def blocks(
+        self,
+        field: _VectorField,
+        states: np.ndarray,
+        period: float,
+        parameter: float,
+        step: float,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        identity = np.eye(states.shape[1])
+        fields = np.array([field.value(state, parameter) for state in states])
+        derivatives = np.array([field.jacobian(state, parameter) for state in states])
+        parameter_fields = np.array(
+            [field.parameter_derivative(state, parameter) for state in states],
+        )
+        midpoints = self._midpoints(states, fields, period, step)
+        middles = np.array([field.value(point, parameter) for point in midpoints])
+        middle_derivatives = np.array(
+            [field.jacobian(point, parameter) for point in midpoints],
+        )
+        middle_parameter_fields = np.array(
+            [field.parameter_derivative(point, parameter) for point in midpoints],
+        )
+
+        end_weight = period * step / _SIXTH
+        middle_weight = _MIDPOINT_WEIGHT * end_weight
+        slope = period * step / _EIGHTH
+        # dm/dx_i and dm/dx_{i+1}: the mean, then the Hermite slope through Df.
+        midpoint_left = _HALF * identity[None] + slope * derivatives[:-1]
+        midpoint_right = _HALF * identity[None] - slope * derivatives[1:]
+        # dm/dT and dm/dp: only the slope term moves, through f and df/dp.
+        midpoint_period = (step / _EIGHTH) * (fields[:-1] - fields[1:])
+        midpoint_parameter = slope * (parameter_fields[:-1] - parameter_fields[1:])
+
+        chain = middle_weight * middle_derivatives
+        left = -identity[None] - end_weight * derivatives[:-1] - chain @ midpoint_left
+        right = identity[None] - end_weight * derivatives[1:] - chain @ midpoint_right
+        period_values = -(step / _SIXTH) * (
+            fields[:-1] + _MIDPOINT_WEIGHT * middles + fields[1:]
+        ) - np.einsum("ijk,ik->ij", chain, midpoint_period)
+        parameter_values = -end_weight * (
+            parameter_fields[:-1]
+            + _MIDPOINT_WEIGHT * middle_parameter_fields
+            + parameter_fields[1:]
+        ) - np.einsum("ijk,ik->ij", chain, midpoint_parameter)
+        return left, right, period_values, parameter_values
+
+
+_COLLOCATIONS: dict[str, _Collocation] = {
+    scheme.name: scheme for scheme in (_Trapezoidal(), _HermiteSimpson())
+}
 
 
 class CycleSeed:
@@ -114,19 +325,21 @@ class CyclePoint:
         One multiplier is exactly ``1`` along the orbit, so its computed value
         measures the error of the whole set: the monodromy is integrated along
         the *discrete* orbit, and an under-resolved mesh shifts every multiplier
-        by about this fraction. Measured on a Bogdanov-Takens cycle hugging a
-        saddle (nontrivial multiplier 6.16): 8.9% at 80 nodes, 2.5% at 160,
-        0.6% at 320, 0.2% at 640 - second order in the mesh, and forty times
-        more sensitive than the period, which was 0.2% off at 80 nodes. The
-        monodromy quadrature itself is not the limit: on the exact orbit it
-        returns the multipliers to four figures at 80 nodes.
+        by about this fraction. Measured under trapezoidal collocation on a
+        Bogdanov-Takens cycle hugging a saddle (nontrivial multiplier 6.16): 8.9%
+        at 80 nodes, 2.5% at 160, 0.6% at 320, 0.2% at 640 - second order in the
+        mesh, and forty times more sensitive than the period, which was 0.2% off
+        at 80 nodes. The monodromy quadrature itself is not the limit: on the
+        exact orbit it returns the multipliers to four figures at 80 nodes.
 
         It is a measure of the *discretisation*, not of the parameter, so it
         varies enormously along one branch: on that same Bogdanov-Takens branch
-        at 80 nodes it reads 8.9% on a typical cycle and 59% on the one nearest
-        the homoclinic, whose period the same mesh gets 3.8% wrong. Use
-        :func:`resolved_branch` rather than a single sampled point to decide
-        whether a branch's multipliers can be believed.
+        at 80 trapezoidal nodes it reads 8.9% on a typical cycle and 59% on the
+        one nearest the homoclinic, whose period the same mesh gets 3.8% wrong.
+        Under the default Hermite-Simpson scheme the same branch stays under 1%
+        throughout, and what is left is the monodromy's own interpolation
+        between nodes. Use :func:`resolved_branch` rather than a single sampled
+        point to decide whether a branch's multipliers can be believed.
         """
         return float(np.min(np.abs(self._multipliers - 1.0)))
 
@@ -376,12 +589,24 @@ class CycleContinuation:
       (3.95% against 3.71%) and stopping marginally *sooner* on the branch
       (b1 = -0.4557 against -0.4575).
 
-    So the remedy for an unresolved cycle branch here is node count, or a
-    higher-order collocation if one is ever wired in; :func:`resolved_branch` is how
-    a caller finds out that it needs one.
+    So that higher-order collocation is now wired in, and is the default.
+    ``collocation`` picks the scheme: ``"hermite_simpson"`` (fourth order) or
+    ``"trapezoidal"`` (second order). It is a parameter and not a replacement
+    because the two answer different questions. Trapezoidal is the oracle the
+    fourth-order claim is measured against - the convergence-order test needs both
+    on the same mesh - and it is what every film shipped until this landed, so a
+    film that wants to keep its old output, or to show the two side by side, can
+    say so at the call site rather than by checking out an old revision. The cost
+    is small: both schemes share the sparse assembly, the solve, the corrector and
+    the tangent, and differ only in the per-interval residual and block values,
+    which :class:`_Collocation` keeps to about thirty lines each. Hermite-Simpson
+    is the default because a new caller should get the scheme whose multipliers
+    can be believed without having to know this history. :func:`resolved_branch`
+    remains the way a caller finds out whether the mesh it chose was enough.
     """
 
     __slots__ = [
+        "_collocation",
         "_dimension",
         "_equation",
         "_intervals",
@@ -390,20 +615,34 @@ class CycleContinuation:
         "_phase_value",
     ]
 
-    def __init__(
+    def __init__(  # noqa: PLR0913 (one scheme flag on the established signature)
         self,
         equation: DifferentialEquation,
         parameter_index: int,
         intervals: int,
         phase_index: int = 0,
         phase_value: float = 0.0,
+        *,
+        collocation: str = "hermite_simpson",
     ) -> None:
+        if collocation not in _COLLOCATIONS:
+            message = (
+                f"collocation must be one of {sorted(_COLLOCATIONS)}, "
+                f"got {collocation!r}"
+            )
+            raise ValueError(message)
         self._equation = equation
         self._parameter_index = parameter_index
         self._intervals = intervals
         self._phase_index = phase_index
         self._phase_value = phase_value
+        self._collocation = _COLLOCATIONS[collocation]
         self._dimension = 0
+
+    @property
+    def collocation(self) -> str:
+        """The collocation scheme: ``"hermite_simpson"`` or ``"trapezoidal"``."""
+        return self._collocation.name
 
     def _field(self, state: np.ndarray, parameter: float) -> np.ndarray:
         self._equation.derivative.parameters[self._parameter_index].value = parameter
@@ -412,22 +651,41 @@ class CycleContinuation:
             dtype=float,
         )
 
+    def _parameter_derivative(self, state: np.ndarray, parameter: float) -> np.ndarray:
+        """``df/dp`` at one state, by a forward difference in the parameter.
+
+        One extra field evaluation per node, against the whole augmented residual
+        that a finite-difference column of the full Jacobian would have cost.
+        """
+        base = self._field(state, parameter)
+        return (self._field(state, parameter + _STEP) - base) / _STEP
+
+    def _vector_field(self) -> _VectorField:
+        return _VectorField(
+            self._field,
+            self._state_jacobian,
+            self._parameter_derivative,
+        )
+
     def _cycle_residual(self, unknowns: np.ndarray, nodes: int) -> np.ndarray:
         dimension = self._dimension
         states = unknowns[: nodes * dimension].reshape(nodes, dimension)
         period = float(unknowns[nodes * dimension])
         parameter = float(unknowns[-1])
-        step = 1.0 / self._intervals
-        blocks = []
-        for i in range(self._intervals):
-            here = self._field(states[i], parameter)
-            ahead = self._field(states[i + 1], parameter)
-            blocks.append(
-                states[i + 1] - states[i] - 0.5 * period * step * (here + ahead),
-            )
-        blocks.append(states[-1] - states[0])
-        blocks.append(np.array([states[0, self._phase_index] - self._phase_value]))
-        return np.concatenate(blocks)
+        collocation = self._collocation.residual(
+            self._vector_field(),
+            states,
+            period,
+            parameter,
+            1.0 / self._intervals,
+        )
+        return np.concatenate(
+            [
+                collocation.ravel(),
+                states[-1] - states[0],
+                [states[0, self._phase_index] - self._phase_value],
+            ],
+        )
 
     def _augmented(self, unknowns: np.ndarray, nodes: int, arc: _Arc) -> np.ndarray:
         cycle = self._cycle_residual(unknowns, nodes)
@@ -490,11 +748,14 @@ class CycleContinuation:
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """The cycle residual's Jacobian as sparse triplets.
 
-        Trapezoidal collocation makes this bordered almost-block-diagonal: a band
-        from the interval blocks, one dense column for the period and another for
-        the parameter, the periodicity rows coupling the first and last nodes, and
-        the phase row. Interval ``i`` contributes ``-I - w Df(x_i)`` against node
-        ``i`` and ``I - w Df(x_{i+1})`` against node ``i+1``.
+        Either collocation makes this bordered almost-block-diagonal: a band from
+        the interval blocks, one dense column for the period and another for the
+        parameter, the periodicity rows coupling the first and last nodes, and the
+        phase row. Under trapezoidal collocation interval ``i`` contributes
+        ``-I - w Df(x_i)`` against node ``i`` and ``I - w Df(x_{i+1})`` against node
+        ``i+1``; Hermite-Simpson adds the midpoint's chain-rule terms to the same
+        four blocks (see :class:`_HermiteSimpson`), so the scheme supplies the
+        values and this method owns the pattern.
 
         This is what DEQ-4 and DEQ-6 did for the periodic orbit solver, which the
         cycle *continuation* never got: it perturbed every unknown and re-evaluated
@@ -507,23 +768,14 @@ class CycleContinuation:
         period = float(unknowns[nodes * dimension])
         parameter = float(unknowns[-1])
         size = unknowns.size
-        identity = np.eye(dimension)
-        step = 1.0 / intervals
-        weight = _HALF * period * step
 
-        derivatives = np.array(
-            [self._state_jacobian(states[i], parameter) for i in range(nodes)],
+        left, right, period_values, parameter_values = self._collocation.blocks(
+            self._vector_field(),
+            states,
+            period,
+            parameter,
+            1.0 / intervals,
         )
-        fields = np.array([self._field(states[i], parameter) for i in range(nodes)])
-        # df/dp at every node: one field evaluation each, against the whole
-        # augmented residual a finite-difference column would have cost.
-        ahead = np.array(
-            [self._field(states[i], parameter + _STEP) for i in range(nodes)],
-        )
-        parameter_fields = (ahead - fields) / _STEP
-
-        left = -identity[None] - weight * derivatives[:-1]
-        right = identity[None] - weight * derivatives[1:]
         span = np.arange(dimension)
         starts = np.arange(intervals) * dimension
         block_rows = np.broadcast_to(
@@ -536,8 +788,6 @@ class CycleContinuation:
         )
         right_columns = left_columns + dimension
         border_rows = starts[:, None] + span
-        period_values = -_HALF * step * (fields[:-1] + fields[1:])
-        parameter_values = -weight * (parameter_fields[:-1] + parameter_fields[1:])
         periodic = intervals * dimension + span
 
         rows = np.concatenate(
@@ -692,6 +942,48 @@ class CycleContinuation:
         )
         return orbit.floquet_multipliers(PeriodicOrbitSolution(states, period))
 
+    def _solve_seed(self, seed: CycleSeed, nodes: int) -> np.ndarray | None:
+        """The first point on the branch: the seed, solved at its own parameter.
+
+        Two stages whatever the scheme. First the trapezoidal orbit solver every
+        film has always seeded from; then the continuation's own sparse Newton,
+        with the parameter held fixed, carries that cycle onto the scheme in use.
+        For trapezoidal the second stage is a no-op - the orbit solver has already
+        met the corrector's tolerance, so it returns after one residual - and the
+        path is exactly what it was before a scheme could be chosen.
+
+        Two stages and not one, because a seed is a rough guess - a circle, a few
+        integration samples - and the fourth-order system's Newton basin around
+        such a guess is smaller than the second-order one's. On van der Pol's
+        circle seed at ``mu = 0.08`` the smallest singular value of the
+        Hermite-Simpson seed Jacobian is 6e-7 against 2e-5 for trapezoidal, and
+        the first undamped Newton step takes the period to -2592 and never comes
+        back; trapezoidal's first step is itself 148 long, but it recovers. The
+        trapezoidal cycle is within its own ``O(h^2)`` error of the fourth-order
+        one, and from there the correction converges in a few quadratic steps.
+        It is also the cheap way round: the correction uses the analytic sparse
+        Jacobian, where a dense fourth-order orbit solve would cost seconds at
+        160 nodes and dominate a short trace.
+        """
+        orbit = PeriodicOrbit(
+            self._equation.derivative,
+            self._intervals,
+            self._phase_index,
+            self._phase_value,
+        )
+        self._equation.derivative.parameters[
+            self._parameter_index
+        ].value = seed.parameter
+        solved = orbit.solve(seed.states, seed.period)
+        if solved is None:
+            return None
+        unknowns = np.concatenate(
+            [solved.states.flatten(), [solved.period], [seed.parameter]],
+        )
+        fixed_parameter = np.zeros(unknowns.size)
+        fixed_parameter[-1] = 1.0
+        return self._correct(unknowns, nodes, _Arc(unknowns, fixed_parameter, 0.0))
+
     def trace(
         self,
         seed: CycleSeed,
@@ -706,21 +998,9 @@ class CycleContinuation:
         """
         self._dimension = seed.states.shape[1]
         nodes = self._intervals + 1
-        orbit = PeriodicOrbit(
-            self._equation.derivative,
-            self._intervals,
-            self._phase_index,
-            self._phase_value,
-        )
-        self._equation.derivative.parameters[
-            self._parameter_index
-        ].value = seed.parameter
-        solved = orbit.solve(seed.states, seed.period)
-        if solved is None:
+        unknowns = self._solve_seed(seed, nodes)
+        if unknowns is None:
             return [], []
-        unknowns = np.concatenate(
-            [solved.states.flatten(), [solved.period], [seed.parameter]],
-        )
         seed_direction = np.zeros(unknowns.size)
         seed_direction[-1] = direction
         tangent = self._tangent(unknowns, nodes, seed_direction)
