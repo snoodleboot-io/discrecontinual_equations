@@ -18,6 +18,9 @@ of the order of the squared strong error rather than of ``Var X(T)``; this is
 what lets a few thousand paths resolve a second-order weak error.
 """
 
+
+# system need not use)
+
 from dataclasses import dataclass
 
 import numpy as np
@@ -45,6 +48,16 @@ class GeometricBrownianMotion(StochasticFunction):
 
     def diffusion(self, point: list[float], time: float | None = None) -> list[float]:  # noqa: ARG002
         return [self.parameters[1].value * x for x in point]
+
+    def eval_batch(self, points: np.ndarray, time: float | None = None) -> np.ndarray:  # noqa: ARG002
+        return self.parameters[0].value * points
+
+    def diffusion_batch(
+        self,
+        points: np.ndarray,
+        time: float | None = None,  # noqa: ARG002
+    ) -> np.ndarray:
+        return self.parameters[1].value * points
 
 
 @dataclass

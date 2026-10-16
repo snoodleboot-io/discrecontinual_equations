@@ -30,6 +30,37 @@ class ConformalNoise(StochasticFunction):
         return [[self.sigma * x, -self.sigma * y], [self.sigma * y, self.sigma * x]]
 ```
 
+### Ensembles of paths
+
+For statistics - a stationary covariance, an escape rate, a residence-time
+density - step thousands of paths at once with `StochasticEnsemble` instead of
+looping over a per-path solver:
+
+```python
+from discrecontinual_equations.solver.stochastic.ensemble import StochasticEnsemble
+
+config = EulerMaruyamaConfig(start_time=0, end_time=10, step_size=0.005, random_seed=3)
+result = StochasticEnsemble(config).solve(equation, [0.0, 0.0], paths=20000, keep_every=200)
+result.final      # (paths, n) at the end time
+result.samples    # (kept, paths, n) every 200 steps
+```
+
+Every `StochasticFunction` works in an ensemble; one that overrides `eval_batch`
+and `diffusion_batch` with array arithmetic over the `(paths, n)` argument runs
+about a hundred times faster than the per-point default.
+
+```python
+class ConformalNoise(StochasticFunction):
+    ...
+    def eval_batch(self, points, time=None):
+        return self.a * points
+
+    def diffusion_batch(self, points, time=None):
+        x, y = points[:, 0], points[:, 1]
+        s = self.sigma
+        return s * np.stack([np.stack([x, -y], 1), np.stack([y, x], 1)], 1)
+```
+
 ## Custom Solvers
 
 Extend the base `Solver` class to implement custom numerical methods.

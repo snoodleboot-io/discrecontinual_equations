@@ -15,6 +15,9 @@ The second system has one driver for two components, ``m = 1 < n``. Its ``D`` ha
 rank one; the vector interface could not have expressed it at all.
 """
 
+
+# system need not use)
+
 import numpy as np
 from scipy.linalg import solve_continuous_lyapunov
 
@@ -46,6 +49,21 @@ class RotatingOrnsteinUhlenbeck(StochasticFunction):
         time: float | None = None,  # noqa: ARG002
     ) -> list[list[float]]:
         return self.noise_matrix.tolist()
+
+    # The batched forms the ensemble solver uses (DEQ-32): one matrix product for
+    # every path at once, and the constant noise broadcast over the paths.
+    def eval_batch(self, points: np.ndarray, time: float | None = None) -> np.ndarray:  # noqa: ARG002
+        return points @ self.drift_matrix.T
+
+    def diffusion_batch(
+        self,
+        points: np.ndarray,
+        time: float | None = None,  # noqa: ARG002
+    ) -> np.ndarray:
+        return np.broadcast_to(
+            self.noise_matrix,
+            (points.shape[0], *self.noise_matrix.shape),
+        )
 
 
 class OneDriverOrnsteinUhlenbeck(RotatingOrnsteinUhlenbeck):
