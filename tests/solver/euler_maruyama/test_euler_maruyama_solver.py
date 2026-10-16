@@ -1,8 +1,10 @@
+# system need not use)
 import numpy as np
 
 from discrecontinual_equations.differential_equation import DifferentialEquation
 from discrecontinual_equations.function.stochastic import StochasticFunction
 from discrecontinual_equations.parameter import Parameter
+from discrecontinual_equations.solver.stochastic.ensemble import StochasticEnsemble
 from discrecontinual_equations.solver.stochastic.euler_maruyama.euler_maruyama_config import (
     EulerMaruyamaConfig,
 )
@@ -15,8 +17,8 @@ from tests.solver.geometric_brownian_motion import GeometricBrownianMotionCase, 
 from tests.solver.rotating_ornstein_uhlenbeck import (
     OneDriverOrnsteinUhlenbeck,
     RotatingOrnsteinUhlenbeck,
+    equation,
     relative_deviation,
-    sample_covariance,
     stationary_covariance,
 )
 
@@ -41,6 +43,21 @@ class StochasticTestFunction(StochasticFunction):
     def diffusion(self, point: list[float], time: float | None = None) -> list[float]:  # noqa: ARG002
         """Diffusion term: b(x, t) = sigma"""
         return [self.sigma]
+
+
+def _ensemble_covariance(function_type, seed: int) -> np.ndarray:
+    config = EulerMaruyamaConfig(
+        start_time=0.0,
+        end_time=10.0,
+        step_size=0.005,
+        random_seed=seed,
+    )
+    result = StochasticEnsemble(config).solve(
+        equation(function_type),
+        [0.0, 0.0],
+        paths=20000,
+    )
+    return np.cov(result.final.T)
 
 
 class TestEulerMaruyamaSolver:
@@ -153,34 +170,25 @@ class TestEulerMaruyamaMatrixNoise:
         assert abs(ito[_STEPS[-1]] - stratonovich[_STEPS[-1]]) < 1.0e-6
 
     def test_stationary_covariance_of_coupled_noise(self):
-        sample = sample_covariance(
-            EulerMaruyamaSolver,
-            EulerMaruyamaConfig,
-            RotatingOrnsteinUhlenbeck,
-            horizon=500.0,
-            seed=7,
-        )
+        # 20,000 paths of the ensemble solver (DEQ-32), whose one-member path is
+        # hex-identical to this solver's, so the statistic is this solver's too;
+        # the Monte-Carlo error at this size is about 1%.
+        sample = _ensemble_covariance(RotatingOrnsteinUhlenbeck, seed=7)
         drift = RotatingOrnsteinUhlenbeck.drift_matrix
         noise = RotatingOrnsteinUhlenbeck.noise_matrix
         exact = stationary_covariance(drift, noise)
         # What a diagonal reading of the same G would produce: the 0.5 dropped.
         diagonal_only = stationary_covariance(drift, np.diag(np.diag(noise)))
-        assert relative_deviation(sample, exact) < 0.15
+        assert relative_deviation(sample, exact) < 0.04
         assert relative_deviation(sample, exact) < relative_deviation(
             sample,
             diagonal_only,
         )
 
     def test_one_driver_for_two_components(self):
-        sample = sample_covariance(
-            EulerMaruyamaSolver,
-            EulerMaruyamaConfig,
-            OneDriverOrnsteinUhlenbeck,
-            horizon=500.0,
-            seed=11,
-        )
+        sample = _ensemble_covariance(OneDriverOrnsteinUhlenbeck, seed=11)
         exact = stationary_covariance(
             OneDriverOrnsteinUhlenbeck.drift_matrix,
             OneDriverOrnsteinUhlenbeck.noise_matrix,
         )
-        assert relative_deviation(sample, exact) < 0.15
+        assert relative_deviation(sample, exact) < 0.04

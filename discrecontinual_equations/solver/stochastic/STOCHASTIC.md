@@ -240,7 +240,28 @@ drivers the diffusion declares, below.
 
 The Milstein cross terms of a non-commuting matrix noise need Levy areas, which no
 Wiener source samples, so `MilsteinSolver` checks `(dG_k/dx) G_j = (dG_j/dx) G_k`
-at every step and raises `ValueError` naming Euler-Maruyama otherwise. The
+at every step and raises `ValueError` naming Euler-Maruyama otherwise.
+
+### Ensembles
+
+`StochasticEnsemble` (DEQ-32) steps a `(paths, n)` array of states at once with
+`(paths, m)` increments, by Euler-Maruyama or by Milstein for commuting noise, and
+returns the final states plus samples kept every `k` steps - not a `Curve` per
+path. One member driven by the same `WienerSource` as a per-path solver is that
+solver's path hex for hex (diagonal noise) or to the last bit (matrix noise). The
+per-step cost is a few array operations whatever the path count *if* the function
+overrides `eval_batch` and `diffusion_batch` with array arithmetic; the defaults
+loop over paths through `eval` and `diffusion`, so every function works and only
+the batched ones are fast. 20,000 paths of a planar Ornstein-Uhlenbeck process over
+2,000 steps take 4 s and reproduce the Lyapunov-equation covariance within 1%.
+
+```python
+from discrecontinual_equations.solver.stochastic.ensemble import StochasticEnsemble
+
+config = EulerMaruyamaConfig(start_time=0, end_time=10, step_size=0.005, random_seed=3)
+result = StochasticEnsemble(config).solve(equation, [0.0, 0.0], paths=20000)
+covariance = np.cov(result.final.T)
+``` The
 Stratonovich correction for a matrix is `(1/2) sum_k (dG_k/dx) G_k`. The conformal
 noise of the noisy Hopf, two drivers each pushing both components:
 
