@@ -245,7 +245,7 @@ def _symmetry_modes() -> Scene:
     ]
     markers = [
         ("bifurcation", "symmetry breaking", [(gain, 0.0)], None),
-        ("bifurcation", "Hopf (rotating wave)", [(-2.0 * gain, 0.0)], None),
+        ("bifurcation", "Hopf (rotating wave; a<0)", [(-2.0 * gain, 0.0)], None),
     ]
     return curve_scene(
         lines,
@@ -255,7 +255,11 @@ def _symmetry_modes() -> Scene:
         "The circulant linearisation of the three-cell ferroelectric ring, "
         "block-diagonalised by the Fourier basis. The real k=0 mode gives steady "
         "symmetry breaking at lambda = a; the complex k=1,2 modes give a rotating "
-        "wave through a Hopf bifurcation at lambda = -2a.",
+        "wave through a Hopf bifurcation at lambda = -2a. With a = -0.3 as here "
+        "the cells are monostable and the trivial state is stable between the two "
+        "crossings, so this Hopf is the oscillation onset. With a > 0, the "
+        "sensor's double-well regime, the k=0 mode is positive throughout and the "
+        "wave is born elsewhere, at lambda = 0.34a with infinite period (DEQ-14).",
     )
 
 

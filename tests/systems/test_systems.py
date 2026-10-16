@@ -1,15 +1,21 @@
 """Coupled-array sensor systems, as first-class library systems.
 
 The ring topology is checked directly against a hand-written expansion, and each
-device is driven through the continuation library to confirm its known onset: the
-fluxgate breaks symmetry at ``lambda = 1 - c`` and the ferroelectric ring onsets
-oscillations at ``lambda = -2a``.
+device is driven through the continuation library to confirm its known thresholds:
+the fluxgate breaks symmetry at ``lambda = 1 - c``; the ferroelectric ring's trivial
+state has its wave-mode Hopf at ``lambda = -2a`` and its symmetric states theirs at
+``lambda = 4a/7``. Which of those is the *onset* of the sensor's oscillation depends
+on the sign of the gain (DEQ-14), and two integrations pin that: with ``a < 0`` the
+``-2a`` Hopf is the onset and the wave is born with the linear period; with ``a > 0``
+the trivial state is never stable and the wave appears at ``lambda ~ 0.34a`` with a
+period that diverges as ``(lambda - lambda_c)^(-1/2)``.
 """
 
 import math
 from unittest import TestCase
 
 import numpy as np
+from scipy.integrate import solve_ivp
 
 from discrecontinual_equations.continuation.builder import ContinuerBuilder
 from discrecontinual_equations.continuation.continuation_config import (
@@ -73,6 +79,31 @@ def _equation(
         parameters=parameters,
         derivative=derivative,
     )
+
+
+def _period(gain: float, coupling: float, start: list[float]) -> float | None:
+    """Period of the ring's first cell on the attractor, or ``None`` at a fixed point.
+
+    Integrated from ``start`` to ``t = 600`` and read on ``[300, 600]`` from the
+    upward crossings of the cell's mean.
+    """
+    equation = _equation(FerroelectricRing, coupling, gain, 0.0)
+    field = equation.derivative
+    solution = solve_ivp(
+        lambda _t, x: field.eval(point=list(x), time=None),
+        [0.0, 600.0],
+        start,
+        rtol=1.0e-9,
+        atol=1.0e-11,
+        dense_output=True,
+    )
+    times = np.linspace(300.0, 600.0, 60001)
+    first = solution.sol(times)[0]
+    if np.ptp(first) < 1.0e-6:
+        return None
+    centred = first - first.mean()
+    ups = np.where((centred[:-1] < 0.0) & (centred[1:] >= 0.0))[0]
+    return float(np.mean(np.diff(times[ups])))
 
 
 class TestHighDimensionalRing(TestCase):
@@ -157,7 +188,7 @@ class TestCoupledRings(TestCase):
             if p.kind == "pitchfork"
         )
 
-    def test_ferroelectric_oscillation_onset(self):
+    def test_ferroelectric_trivial_state_hopf_at_minus_two_a(self):
         equation = _equation(FerroelectricRing, 0.0, 1.0, 0.0)
         branch = self._continue(equation, "hopf")
         assert any(
@@ -166,11 +197,56 @@ class TestCoupledRings(TestCase):
             if p.kind == "hopf"
         )
 
-    def _continue(self, equation: DifferentialEquation, detector: str):
+    def test_ferroelectric_symmetric_states_hopf_at_four_sevenths_a(self):
+        # +-s(1, 1, 1) with s^2 = a - lambda, continued upward from lambda = -1.
+        equation = _equation(FerroelectricRing, -1.0, 1.0, 0.0)
+        branch = self._continue(
+            equation,
+            "hopf",
+            start=[math.sqrt(2.0)] * 3,
+            initial_parameter=-1.0,
+            direction=1,
+        )
+        assert any(
+            abs(p.parameter - 4.0 / 7.0) < _TOLERANCE
+            for p in branch.special_points
+            if p.kind == "hopf"
+        )
+
+    def test_ferroelectric_wave_onsets_with_infinite_period_for_positive_gain(self):
+        # a = 1: a fixed point at lambda = 0.33, a wave at 0.36 and 0.40 whose
+        # periods extrapolate (1/T^2 linear in lambda) to an onset near 0.34 - not
+        # the trivial state's Hopf at -2a, which is a crossing of an unstable state.
+        assert _period(1.0, 0.33, [1.0, -0.6, -0.4]) is None
+        periods = {lam: _period(1.0, lam, [1.0, -0.6, -0.4]) for lam in (0.36, 0.40)}
+        assert periods[0.36] is not None
+        assert periods[0.40] is not None
+        assert abs(periods[0.36] - 74.9) < 1.0
+        assert abs(periods[0.40] - 43.6) < 1.0
+        slope = (periods[0.40] ** -2 - periods[0.36] ** -2) / 0.04
+        onset = 0.36 - periods[0.36] ** -2 / slope
+        assert abs(onset - 0.34) < 0.01
+
+    def test_ferroelectric_hopf_is_the_onset_for_negative_gain(self):
+        # a = -0.3: monostable cells. The trivial state is stable below -2a = 0.6
+        # and the wave born at that Hopf has the linear period 4 pi / (lambda sqrt 3).
+        assert _period(-0.3, 0.5, [0.3, -0.2, 0.1]) is None
+        period = _period(-0.3, 0.65, [0.3, -0.2, 0.1])
+        assert period is not None
+        assert abs(period - 4.0 * math.pi / (0.65 * math.sqrt(3.0))) < 0.05
+
+    def _continue(
+        self,
+        equation: DifferentialEquation,
+        detector: str,
+        start: list[float] | None = None,
+        initial_parameter: float = 1.6,
+        direction: int = -1,
+    ):
         config = ContinuationConfig(
             continuation_parameter_index=0,
-            initial_parameter=1.6,
-            direction=-1,
+            initial_parameter=initial_parameter,
+            direction=direction,
             measure="norm",
             parameter_lower_bound=-3.2,
             parameter_upper_bound=1.7,
@@ -180,4 +256,4 @@ class TestCoupledRings(TestCase):
             detectors=[detector],
         )
         continuer = ContinuerBuilder.build(config, equation)
-        return continuer.solve(equation, list(np.zeros(3)))
+        return continuer.solve(equation, start if start is not None else [0.0] * 3)
