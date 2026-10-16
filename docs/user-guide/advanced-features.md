@@ -13,6 +13,23 @@ class MySDE(StochasticFunction):
         return [self.sigma]  # Diffusion term
 ```
 
+A vector from `diffusion()` is diagonal noise: one Wiener process per component.
+Return an `n x m` nested list instead and the noise is a full matrix `G` with `m`
+independent drivers, stepped as `G dW` - a rotation, a shear, one driver shared by
+several components. `EulerMaruyamaSolver` takes any `G`; `MilsteinSolver` takes a
+`G` whose columns commute and refuses one that does not; the `srk*` solvers take
+the vector form only.
+
+```python
+class ConformalNoise(StochasticFunction):
+    def eval(self, point, time=None):
+        return [self.a * point[0], self.a * point[1]]
+
+    def diffusion(self, point, time=None):
+        x, y = point
+        return [[self.sigma * x, -self.sigma * y], [self.sigma * y, self.sigma * x]]
+```
+
 ## Custom Solvers
 
 Extend the base `Solver` class to implement custom numerical methods.

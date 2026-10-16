@@ -169,13 +169,31 @@ The difference arises from the interpretation of stochastic integrals.
 
 ### Numerical Differentiation
 
-```python
-def _compute_diffusion_derivative(self, diffusion_func, point, eps=1e-8):
-    """Compute ∂σ/∂x using finite differences."""
-    sigma_plus = diffusion_func(point + eps)
-    sigma_minus = diffusion_func(point - eps)
-    return (sigma_plus - sigma_minus) / (2 * eps)
+The derivative comes from `ItoCoefficients.column_jacobians`: central differences
+with step `1e-6`, the estimate every stochastic solver shares, so the Stratonovich
+drift correction and the Milstein term agree by construction (DEQ-28; before that
+this solver carried its own `eps = 1e-8` estimate).
+
+### Systems and Matrix Noise
+
+For `dX = a dt + G dW` with `m` drivers the Milstein term is
+`(1/2) sum_{j,k} (dG_k/dx) G_j I_(j,k)`, and only the diagonal iterated integrals
+`I_(k,k) = (dW_k^2 - dt)/2` have a closed form; the off-diagonal ones are Levy
+areas. When the noise *commutes* - `(dG_k/dx) G_j = (dG_j/dx) G_k` for every pair -
+the Levy areas drop out and the term is
+
 ```
+(1/2) sum_{j,k} (dG_k/dx) G_j (dW_j dW_k - delta_jk dt)
+```
+
+which is what the solver steps (the `delta_jk dt` left off in the Stratonovich
+form). The identity is checked at every step and a violation raises `ValueError`
+naming Euler-Maruyama. A vector diffusion is `G = diag(b)`: it commutes when each
+`b_i` depends only on `x_i`, and the term is then the per-component
+`(1/2) b_i b_i' (dW_i^2 - dt)`. Before DEQ-28 every system was stepped by
+Euler-Maruyama with a printed warning; two-component geometric Brownian motion now
+measures strong order 0.96, and complex geometric Brownian motion (conformal matrix
+noise) 0.97 against Euler-Maruyama's 0.59 on the same paths.
 
 ## Algorithm Details
 
@@ -244,7 +262,7 @@ def _milstein_step(self, y, t, dt, equation):
 ### Practical Considerations
 - **Numerical differentiation** introduces small errors
 - **Step size sensitivity** affects derivative accuracy
-- **Multi-dimensional** extensions require Jacobian computation
+- **Multi-dimensional** systems need commuting noise (see *Systems and Matrix Noise*); non-commuting noise is refused
 
 ## Applications
 

@@ -21,12 +21,15 @@ Two functionals cover every scheme in this package:
   ``u1`` and ``u2`` the pair is exactly
   ``delta_w = sqrt(h) u1``, ``delta_z = (h^{3/2} / 2) (u1 + u2 / sqrt(3))``.
 
-Both are per noise channel. The diffusion interface of this library returns one
-coefficient per state component, so the noise is diagonal: component ``i`` is
-driven by its own Wiener process ``W_i`` and the channels are independent. What
-no source here provides are the Levy areas ``I_(j,k)`` between channels, which
-have no closed-form sampler; that is why every order claim in this package is
-stated for scalar noise and lowered for systems.
+Both are per noise channel, and the channels are independent. How many there are
+is the equation's business: a vector diffusion has one channel per state
+component (diagonal noise, component ``i`` driven by its own ``W_i``), a matrix
+diffusion ``n x m`` has ``m`` (DEQ-28), and a solver asks for the count
+:meth:`~.coefficients.ItoCoefficients.drivers` reports. What no source here
+provides are the Levy areas ``I_(j,k)`` between channels, which have no
+closed-form sampler; that is why every order claim in this package is stated for
+scalar noise and lowered for systems, and why the Milstein scheme accepts matrix
+noise only when it commutes.
 
 Why the increments come from a source object rather than from a generator inside
 each solver: a strong-order measurement is the expected pathwise distance

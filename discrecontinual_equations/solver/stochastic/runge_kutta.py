@@ -56,6 +56,7 @@ class StochasticRungeKuttaSolver(Solver):
 
         y = np.array(initial_values, dtype=float)
         self._check_dimension(len(y))
+        self._refuse_matrix_noise(coefficients, y, config.start_time)
         self.solution.append([config.start_time, [0] * len(y), y.tolist()])
 
         dt = config.dt
@@ -67,6 +68,28 @@ class StochasticRungeKuttaSolver(Solver):
 
     def _check_dimension(self, dimension: int) -> None:
         """Refuse systems a scheme was not derived for; the default accepts all."""
+
+    def _refuse_matrix_noise(
+        self,
+        coefficients: ItoCoefficients,
+        state: np.ndarray,
+        time: float,
+    ) -> None:
+        """Refuse an ``n x m`` diffusion: these steps read one coefficient per channel.
+
+        Every ``srk*`` step formula reads ``diffusion[channel]`` and perturbs one
+        component per supporting value, which is the diagonal case and nothing
+        else; their orders are stated for scalar noise because the Levy areas a
+        coupled system needs have no sampler (DEQ-25). A matrix diffusion would
+        be misread, not integrated at a lower order, so it is refused up front.
+        """
+        if ItoCoefficients.is_matrix(coefficients.diffusion(state, time)):
+            message = (
+                f"{type(self).__name__} integrates diagonal noise only: the diffusion "
+                "returned an n x m matrix. Use EulerMaruyamaSolver for any matrix "
+                "noise, or MilsteinSolver when the noise commutes (DEQ-28)."
+            )
+            raise ValueError(message)
 
     @staticmethod
     @abstractmethod

@@ -217,18 +217,39 @@ solver.solve(stochastic_equation, [1.0])
 - Corresponds to limit of discrete approximations
 
 **Stratonovich SDEs**: `dX = μ(X,t)dt + σ(X,t) ∘ dW`
-- Equivalent to Ito with modified drift: `μ_corrected = μ - (1/2)σ∂σ/∂x`
+- Equivalent to Ito with modified drift: `μ_corrected = μ + (1/2)σ∂σ/∂x` (added, never subtracted: DEQ-27)
 - Natural for physical systems
 
 ### Wiener Process Generation
 
-```python
-# Generate independent Wiener increments
-dW = np.random.normal(0, np.sqrt(dt), size=n_dimensions)
+Each solver owns a `numpy.random.default_rng(random_seed)` generator, or takes a
+`WienerSource` of the caller's (a `BrownianPath` fixed in advance is what a
+convergence study needs), and draws one `N(0, dt)` increment per noise channel
+and step. The global stream is never seeded: `np.random.seed` would let one
+solver alter another's results (DEQ-22). The channel count is the number of
+drivers the diffusion declares, below.
 
-# Ensure reproducibility with seeds
-np.random.seed(seed)
-wiener_increments = np.random.normal(0, np.sqrt(dt), size=(n_steps, n_dim))
+### Noise Shape
+
+`diffusion()` declares the noise by the shape it returns (DEQ-28):
+
+| Returns | Meaning | Step | Accepted by |
+|---|---|---|---|
+| vector of `n` | diagonal noise: one Wiener process per component | `b * dW` | every solver |
+| `n x m` matrix `G` | `m` independent drivers, any coupling | `G @ dW` | Euler-Maruyama always; Milstein when the noise commutes; srk2-srk4 refuse |
+
+The Milstein cross terms of a non-commuting matrix noise need Levy areas, which no
+Wiener source samples, so `MilsteinSolver` checks `(dG_k/dx) G_j = (dG_j/dx) G_k`
+at every step and raises `ValueError` naming Euler-Maruyama otherwise. The
+Stratonovich correction for a matrix is `(1/2) sum_k (dG_k/dx) G_k`. The conformal
+noise of the noisy Hopf, two drivers each pushing both components:
+
+```python
+class ConformalNoise(StochasticFunction):
+    def diffusion(self, point, time=None):
+        x, y = point
+        s = self.sigma
+        return [[s * x, -s * y], [s * y, s * x]]
 ```
 
 ## Performance Characteristics
@@ -263,8 +284,9 @@ def apply_stratonovich_correction(drift, diffusion, point):
     diffusion_minus = diffusion(point - eps)
     dsigma_dx = (diffusion_plus - diffusion_minus) / (2 * eps)
 
-    # Apply correction
-    corrected_drift = drift - 0.5 * diffusion * dsigma_dx
+    # Apply correction: added, never subtracted (DEQ-27). For a matrix diffusion
+    # the term is 0.5 * sum_k (dG_k/dx) G_k over the columns (DEQ-28).
+    corrected_drift = drift + 0.5 * diffusion * dsigma_dx
     return corrected_drift, diffusion
 ```
 
