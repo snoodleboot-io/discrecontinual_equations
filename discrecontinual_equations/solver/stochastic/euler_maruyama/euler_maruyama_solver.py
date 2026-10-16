@@ -24,12 +24,20 @@ class EulerMaruyamaSolver(Solver):
     For Stratonovich SDEs of the form: dX_t = μ(X_t, t) dt + σ(X_t, t) ∘ dW_t
     The equivalent Ito form is used, with drift μ_corrected = μ + (1/2)σ ∂σ/∂x
     (the sign is argued in
-    :mod:`discrecontinual_equations.solver.stochastic.coefficients`; with the
-    diagonal noise this interface implies, the correction applies to systems
-    component by component).
+    :mod:`discrecontinual_equations.solver.stochastic.coefficients`; with
+    diagonal noise the correction applies to systems component by component, with
+    matrix noise it is (1/2) Σ_k (∂G_k/∂x) G_k over the columns).
 
     Where ΔW_n ~ N(0, Δt) is a Wiener increment. This method achieves strong order 0.5
     and weak order 1.0 convergence.
+
+    **Noise shape.** ``diffusion()`` may return a vector (diagonal noise, one Wiener
+    process per component, the step above) or an ``n x m`` matrix ``G`` (DEQ-28):
+    ``m`` independent drivers and the step ``X_{n+1} = X_n + μ Δt + G ΔW_n`` with
+    ``ΔW_n`` of length ``m``. Euler-Maruyama needs nothing beyond that - no Levy
+    areas, no commutativity - which is why it is the scheme to reach for with
+    coupled noise, and the one the Milstein and ``srk*`` solvers name when they
+    refuse a matrix. The vector form is stepped exactly as before.
 
     References:
     - Maruyama, Gisiro. "Continuous Markov processes and stochastic equations"
@@ -77,6 +85,10 @@ class EulerMaruyamaSolver(Solver):
         # Initialize
         t = self.solver_config.start_time
         y = np.array(initial_values, dtype=float)
+        # One Wiener channel per driver: the component count for a vector
+        # diffusion, the column count for a matrix. The shape is a property of the
+        # equation, so it is read once.
+        drivers = coefficients.drivers(y, t)
 
         # Append initial point
         self.solution.append([t, [0] * len(initial_values), y.tolist()])
@@ -95,16 +107,17 @@ class EulerMaruyamaSolver(Solver):
             drift = coefficients.drift(y, t_current)
             diffusion = coefficients.diffusion(y, t_current)
 
-            # Generate Wiener increment: ΔW ~ N(0, dt)
+            # Generate Wiener increment: delta_w ~ N(0, dt), one per driver
             dt = self.solver_config.dt
-            dW = (
-                self._generator.normal(0, np.sqrt(dt), size=len(y))
+            delta_w = (
+                self._generator.normal(0, np.sqrt(dt), size=drivers)
                 if self._wiener is None
-                else self._wiener.increments(t_current, dt, len(y)).delta_w
+                else self._wiener.increments(t_current, dt, drivers).delta_w
             )
 
-            # Euler-Maruyama step: y_{n+1} = y_n + μ(y_n, t_n) dt + σ(y_n, t_n) dW
-            y_new = y + drift * dt + diffusion * dW
+            # Euler-Maruyama step: y_{n+1} = y_n + a(y_n, t_n) dt + b(y_n, t_n) dW,
+            # the last term b * dW for a vector diffusion and G @ dW for a matrix.
+            y_new = y + drift * dt + coefficients.spread(diffusion, delta_w)
 
             # Update time and state
             t_next = self.solver_config.times[i + 1]

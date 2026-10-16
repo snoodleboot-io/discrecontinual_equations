@@ -82,7 +82,7 @@ sequenceDiagram
     Solver->>Equation: eval(point, time) - get drift μ
     Solver->>Equation: diffusion(point, time) - get volatility σ
     alt calculus == "stratonovich"
-        Solver->>Solver: apply drift correction μ_corrected = μ - (1/2)σ∂σ/∂x
+        Solver->>Solver: apply drift correction μ_corrected = μ + (1/2)σ∂σ/∂x
     end
     Solver->>RNG: normal(0, √dt) - generate Wiener increment ΔW
     Solver->>Solver: y_new = y + μ_corrected * dt + σ * ΔW
@@ -170,11 +170,21 @@ Where `ΔW_n ~ N(0, Δt)` is a Wiener increment.
 
 ### Random Number Generation
 
-```python
-# Reproducible Wiener increments
-np.random.seed(self.random_seed)
-dW = np.random.normal(0, np.sqrt(dt), size=len(y))
-```
+The solver owns `np.random.default_rng(random_seed)` and never touches the global
+stream (DEQ-22); a `WienerSource` passed to the constructor replaces the draw, which
+is how a convergence study drives every step size with one Brownian path. One
+increment is drawn per driver and step.
+
+### Matrix Noise
+
+`diffusion()` may return an `n x m` matrix `G` instead of a vector (DEQ-28): `m`
+independent drivers, any coupling between components. The step is then
+`y + a dt + G @ dW` with `dW` of length `m`, and nothing else changes - no Levy
+areas, no commutativity condition - which is why Euler-Maruyama is the solver the
+others name when they refuse a matrix. The vector form is `G = diag(b)` and is
+stepped exactly as before. Checked against complex geometric Brownian motion (strong
+order measured 0.59, as for the diagonal case) and the stationary covariance of a
+rotating Ornstein-Uhlenbeck process with coupled constant noise.
 
 ## Algorithm Details
 
@@ -210,8 +220,8 @@ def _apply_stratonovich_correction(self, drift, diffusion, point):
     diff_minus = equation.derivative.diffusion(point - eps, t)
     dsigma_dx = (diff_plus - diff_minus) / (2 * eps)
 
-    # Apply correction
-    corrected_drift = drift - 0.5 * diffusion * dsigma_dx
+    # Apply correction: added, never subtracted (DEQ-27)
+    corrected_drift = drift + 0.5 * diffusion * dsigma_dx
     return corrected_drift
 ```
 

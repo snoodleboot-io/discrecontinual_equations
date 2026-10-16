@@ -8,9 +8,11 @@ to Euler-Maruyama's 0.5 - or to a deterministic scheme - cannot pass.
 """
 
 import numpy as np
+import pytest
 
 from discrecontinual_equations.solver.stochastic.srk2.srk2_config import SRK2Config
 from discrecontinual_equations.solver.stochastic.srk2.srk2_solver import SRK2Solver
+from tests.solver.conformal_geometric_brownian_motion import ConformalCase
 from tests.solver.geometric_brownian_motion import GeometricBrownianMotionCase, slope
 
 _STEPS = [2.0**-k for k in range(3, 8)]
@@ -81,3 +83,12 @@ class TestSRK2Convergence:
         )
         assert slope({h: e[0] for h, e in errors.items()}) > 0.85, errors
         assert errors[_STEPS[-1]][0] < 0.05, errors
+
+
+class TestSRK2MatrixNoise:
+    def test_refuses_a_matrix_diffusion(self):
+        # The step reads one coefficient per channel; a matrix would be misread, not
+        # integrated at a lower order, so it is refused with a pointer (DEQ-28).
+        config = SRK2Config(start_time=0.0, end_time=1.0, step_size=0.01)
+        with pytest.raises(ValueError, match="diagonal noise only"):
+            SRK2Solver(config).solve(ConformalCase().equation(), [1.0, 0.0])
