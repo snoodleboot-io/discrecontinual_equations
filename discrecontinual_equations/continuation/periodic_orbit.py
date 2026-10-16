@@ -26,7 +26,14 @@ from discrecontinual_equations.function.function import Function
 _TOLERANCE = 1.0e-11
 _ITERATIONS = 60
 _STEP = 1.0e-7
-_VARIATIONAL_SUBSTEPS = 8
+# Runge-Kutta substeps per mesh interval in the monodromy. The interpolant, not
+# the substep, sets the order; this count sets the Runge-Kutta error under it.
+# Four match eight to within a few percent on every film's branch, at nine
+# Jacobian evaluations per interval against the eight the chord quadrature spent;
+# two lose a factor of 20 on the Bogdanov-Takens orbit nearest the homoclinic.
+# RK4 is stable while T |Df| h / substeps stays under about 2.8, so a cycle far
+# stiffer than any film's wants this raised rather than its mesh refined.
+_VARIATIONAL_SUBSTEPS = 4
 _PERIOD_FLOOR_FRACTION = 0.1
 _BACKTRACK_STEPS = 20
 _BACKTRACK_FACTOR = 0.5
@@ -178,6 +185,34 @@ def _certified(levels: list[ResolutionLevel], tolerance: float) -> float | None:
     if any(agreement is None or agreement >= tolerance for agreement in agreements):
         return None
     return max(agreement for agreement in agreements if agreement is not None)
+
+
+def _hermite_positions(
+    ends: np.ndarray,
+    slopes: np.ndarray,
+    step: float,
+    fractions: np.ndarray,
+) -> np.ndarray:
+    """Points on the cubic Hermite interpolant of one mesh interval.
+
+    ``ends`` holds the two node states and ``slopes`` the orbit's derivative at
+    each in the rescaled time, ``T f(x)``; ``fractions`` are positions along the
+    interval in ``[0, 1]``. At ``1/2`` this gives
+    ``(x_i + x_{i+1})/2 + (hT/8)(f_i - f_{i+1})``, the midpoint Hermite-Simpson
+    collocation places its condition on, so the monodromy walks the same curve
+    the fourth-order orbit converged rather than a chord that is ``O(h^2)`` off
+    it between the nodes. For a trapezoidal orbit the slopes are still exact at
+    the nodes, so the interpolant degrades gracefully to the orbit's own order.
+    """
+    tau = fractions[:, None]
+    square = tau * tau
+    cube = square * tau
+    return (
+        (2.0 * cube - 3.0 * square + 1.0) * ends[0]
+        + (cube - 2.0 * square + tau) * step * slopes[0]
+        + (-2.0 * cube + 3.0 * square) * ends[1]
+        + (cube - square) * step * slopes[1]
+    )
 
 
 class PeriodicOrbit:
@@ -353,23 +388,62 @@ class PeriodicOrbit:
         return columns
 
     def monodromy(self, solution: PeriodicOrbitSolution) -> np.ndarray:
-        """Integrate the variational equation over one period, returning ``Y(1)``."""
+        """Integrate the variational equation over one period, returning ``Y(1)``.
+
+        ``Y'(s) = T Df(x(s)) Y(s)`` is linear in ``Y`` with a coefficient that
+        varies along the orbit, and two choices in integrating it each set a
+        floor under the multipliers that no better orbit can lower.
+
+        Where ``x(s)`` is taken between the nodes: on the cubic Hermite
+        interpolant of the interval, through the node states with the slopes
+        ``T f(x)``, which are exact at every node of a converged orbit. A
+        straight chord is ``O(h^2)`` off the orbit, and on a cycle whose Jacobian
+        trace varies with the radius - every Hopf-like cycle - the chord lies to
+        the same side all the way round, so its error never cancels: on the
+        exact Hopf cycle at 80 nodes the trivial multiplier drifted 1.6e-3,
+        falling 4.0x per mesh doubling however well the orbit was solved, and the
+        hopf film read 0.95% under second- and fourth-order collocation alike.
+
+        Where ``Df`` is evaluated within a Runge-Kutta step: at each stage's own
+        position, ``s``, ``s + h/2`` and ``s + h``, which is RK4 for a
+        non-autonomous linear system. Frozen over the four stages it is RK4 on
+        a piecewise-constant coefficient, first order within the substep.
+
+        With both, the drift on the exact Hopf cycle is 1.7e-7 at 80 nodes and
+        falls 16x per doubling (15.8, 15.9, 16.0, 15.8 measured from 10 to 160
+        nodes): the order of the Hermite-Simpson orbit it walks. The substep
+        count is the Runge-Kutta error's lever, not the interpolant's; two
+        substeps match eight on a Hopf cycle but lose a factor of 20 on the
+        Bogdanov-Takens orbit nearest the homoclinic. The Jacobian is not the
+        floor: an autodiff Jacobian in place of the forward differences moved
+        the Bogdanov-Takens drift by less than its own size.
+        """
         states = solution.states
         period = solution.period
         dimension = states.shape[1]
+        # The orbit's slope in the rescaled time, exact at every node of a
+        # converged orbit whatever the collocation scheme.
+        slopes = period * np.array([self._field(state) for state in states])
+        # Where the Runge-Kutta stages sit along one interval: the start, middle
+        # and end of every substep, each substep's end being the next one's start.
+        fractions = np.linspace(0.0, 1.0, 2 * _VARIATIONAL_SUBSTEPS + 1)
         transition = np.eye(dimension)
         for i in range(self._intervals):
             step = float(self._mesh[i + 1] - self._mesh[i])
             substep = step / _VARIATIONAL_SUBSTEPS
-            start = states[i]
-            velocity = (states[i + 1] - states[i]) / step
+            positions = _hermite_positions(
+                states[i : i + 2],
+                slopes[i : i + 2],
+                step,
+                fractions,
+            )
+            matrices = [period * self._jacobian(position) for position in positions]
             for k in range(_VARIATIONAL_SUBSTEPS):
-                position = start + velocity * (k * substep)
-                matrix = period * self._jacobian(position)
-                k1 = matrix @ transition
-                k2 = matrix @ (transition + 0.5 * substep * k1)
-                k3 = matrix @ (transition + 0.5 * substep * k2)
-                k4 = matrix @ (transition + substep * k3)
+                at_start, at_middle, at_end = matrices[2 * k : 2 * k + 3]
+                k1 = at_start @ transition
+                k2 = at_middle @ (transition + 0.5 * substep * k1)
+                k3 = at_middle @ (transition + 0.5 * substep * k2)
+                k4 = at_end @ (transition + substep * k3)
                 transition = transition + substep / 6.0 * (k1 + 2 * k2 + 2 * k3 + k4)
         return transition
 

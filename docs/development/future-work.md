@@ -192,10 +192,10 @@ solver returns the same near-optimal result as the uniform mesh (no regression).
   verified by convergence rate) and is now the default scheme of
   `CycleContinuation` as well, with its own analytic sparse Jacobian. Gauss/Lobatto
   schemes would raise the order further and are the remaining option here. The
-  monodromy still integrates along the piecewise-linear interpolant between nodes,
-  which is second order and is now where the Floquet error bottoms out (about 0.2%
-  at 80 nodes on the Bogdanov-Takens worst orbit); a Hermite interpolant there is
-  the obvious follow-up.
+  monodromy walks the cubic Hermite interpolant between nodes with the Jacobian
+  at every Runge-Kutta stage, fourth order itself (16x per doubling on the exact
+  Hopf cycle); the smooth films' Floquet errors are now 1e-5 to 1e-3 percent and
+  the remaining lever is the orbit's own resolution.
 - **Heteroclinic networks** among three or more saddles (see section 2) are the main
   substantial item still fully open, blocked on a clean oracle for a three-saddle
   connection cycle rather than on machinery.

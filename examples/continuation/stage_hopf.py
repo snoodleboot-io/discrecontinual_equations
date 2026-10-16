@@ -108,9 +108,9 @@ def hopf_stage() -> StageScene:
             "The origin's branch and its Hopf come from ContinuerBuilder; the "
             "cycle from CycleContinuation, seeded at mu = 0.6 as the circle of "
             "radius sqrt(mu) the normal form predicts and continued both ways. "
-            "The cycle is exactly circular here, so the Floquet readout stays "
-            "near its best: what it reports is close to the mesh's own floor "
-            "rather than the orbit's difficulty."
+            "The cycle is exactly circular here, so the Floquet readout is as "
+            "good as it gets: a few parts in ten million at 80 nodes, the "
+            "monodromy's own fourth-order floor rather than the orbit's difficulty."
         ),
     )
     return stage_scene(
