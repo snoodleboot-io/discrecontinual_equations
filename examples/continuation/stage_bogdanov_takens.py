@@ -85,6 +85,13 @@ BOX = ((-1.25, 0.9), (-0.85, 0.85))
 # steps cover a little less parameter per step. The mesh is left at 80 on
 # purpose: whether it can now be *lowered*, or whether 80 is simply right, is a
 # decision about every film and not a side effect of this one.
+#
+# DEQ-29 then moved the monodromy itself onto the cubic Hermite interpolant with
+# the Jacobian at every Runge-Kutta stage. Every smooth film fell by two to four
+# orders of magnitude; this branch alone did not (0.077% -> 0.089%), because its
+# residual was the orbit's all along - on the integrated cycle at 80 nodes the old
+# quadrature was already at 1e-4 - and the chord's error had been cancelling a
+# little of it. The lever here remains the orbit: nodes, or a higher-order scheme.
 INTERVALS = 80
 GRID = 36
 # The cycle continuation is seeded this far below the Hopf, where the cycle is

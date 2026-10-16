@@ -336,10 +336,13 @@ class CyclePoint:
         varies enormously along one branch: on that same Bogdanov-Takens branch
         at 80 trapezoidal nodes it reads 8.9% on a typical cycle and 59% on the
         one nearest the homoclinic, whose period the same mesh gets 3.8% wrong.
-        Under the default Hermite-Simpson scheme the same branch stays under 1%
-        throughout, and what is left is the monodromy's own interpolation
-        between nodes. Use :func:`resolved_branch` rather than a single sampled
-        point to decide whether a branch's multipliers can be believed.
+        Under the default Hermite-Simpson scheme the same branch stays under 0.1%
+        throughout, and what is left is the orbit's: the monodromy itself walks
+        the cubic Hermite interpolant between nodes and is fourth order (see
+        :meth:`PeriodicOrbit.monodromy`), which took every smooth film from
+        0.3-4% to 1e-5-1e-3 percent. Use :func:`resolved_branch` rather than a
+        single sampled point to decide whether a branch's multipliers can be
+        believed.
         """
         return float(np.min(np.abs(self._multipliers - 1.0)))
 
@@ -581,7 +584,8 @@ class CycleContinuation:
       period right to five figures where trapezoidal gets it 3.8% wrong. The error is
       the second-order collocation of the orbit itself, not the mesh it sits on and
       not the monodromy quadrature - on the exact orbit sampled at 80 nodes that
-      quadrature returns the multipliers to 0.2%.
+      quadrature returned the multipliers to about 1e-4 (re-measured for DEQ-29;
+      the 0.2% once quoted here did not reproduce).
     * Re-meshing along the branch also costs more than it returns. Re-adapting at
       every point whose error exceeded tolerance, re-projecting the tangent and
       re-solving on the moved mesh, took the worst case from 59.3% to 49.3% while

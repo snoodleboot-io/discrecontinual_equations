@@ -22,10 +22,12 @@ from discrecontinual_equations.continuation.periodic_orbit import (
     AnalyticPeriodicOrbit,
     HermiteSimpsonOrbit,
     PeriodicOrbit,
+    PeriodicOrbitSolution,
     ResolutionLevel,
     ResolutionSettings,
     RobustPeriodicOrbit,
     _certified,
+    _hermite_positions,
 )
 from discrecontinual_equations.differential_equation import DifferentialEquation
 from tests.continuation.fields import (
@@ -756,3 +758,68 @@ class TestRobustPeriodicOrbit(TestCase):
             if plain is None or abs(plain.period - oracle) / oracle > 0.5:
                 plain_failures += 1
         assert plain_failures >= 1
+
+
+class TestMonodromyOrder(TestCase):
+    """The monodromy's own convergence, isolated on the exact Hopf cycle.
+
+    The orbit is supplied exactly - radius sqrt(mu) at the nodes, period 2 pi -
+    so whatever drift the trivial multiplier shows is the variational
+    integration's alone, not the orbit's. Walking a straight chord between the
+    nodes with the Jacobian frozen over the Runge-Kutta stages, the drift fell
+    4.0x per mesh doubling and sat at 1.6e-3 on 80 nodes however well the orbit
+    was solved; on the cubic Hermite interpolant with the Jacobian at each
+    stage it falls 16x (15.8, 15.9, 16.0 measured) and sits at 1.7e-7.
+    """
+
+    def _hopf(self, mu: float) -> DifferentialEquation:
+        parameters = [Alpha(value=mu)]
+        return DifferentialEquation(
+            variables=[State(), State()],
+            time=Time(),
+            parameters=parameters,
+            derivative=HopfField(
+                variables=[State(), State()],
+                parameters=parameters,
+                results=[State(), State()],
+                time=None,
+            ),
+        )
+
+    def _multipliers(self, intervals: int, mu: float) -> np.ndarray:
+        nodes = np.linspace(0.0, 1.0, intervals + 1)
+        states = np.column_stack(
+            [
+                math.sqrt(mu) * np.cos(2.0 * math.pi * nodes),
+                math.sqrt(mu) * np.sin(2.0 * math.pi * nodes),
+            ],
+        )
+        orbit = PeriodicOrbit(self._hopf(mu).derivative, intervals, phase_index=1)
+        exact = PeriodicOrbitSolution(states, 2.0 * math.pi)
+        return np.sort(orbit.floquet_multipliers(exact).real)
+
+    def test_trivial_multiplier_converges_at_fourth_order(self):
+        mu = 0.25
+        drifts = [abs(self._multipliers(n, mu)[1] - 1.0) for n in (10, 20, 40)]
+        orders = [
+            math.log(drifts[k] / drifts[k + 1]) / math.log(2.0)
+            for k in range(len(drifts) - 1)
+        ]
+        for order in orders:
+            assert order > 3.5
+
+    def test_nontrivial_multiplier_matches_the_closed_form(self):
+        # 3.4e-7 measured on the interpolant; the chord gave 8.4e-4 on this mesh.
+        mu, intervals = 0.25, 40
+        multipliers = self._multipliers(intervals, mu)
+        assert abs(multipliers[0] - math.exp(-4.0 * math.pi * mu)) < 1.0e-6
+
+    def test_interpolant_passes_through_the_hermite_simpson_midpoint(self):
+        ends = np.array([[0.0, 1.0], [2.0, -1.0]])
+        slopes = np.array([[1.0, 0.5], [-0.5, 2.0]])
+        step = 0.1
+        positions = _hermite_positions(ends, slopes, step, np.array([0.0, 0.5, 1.0]))
+        np.testing.assert_allclose(positions[0], ends[0])
+        np.testing.assert_allclose(positions[-1], ends[1])
+        midpoint = 0.5 * (ends[0] + ends[1]) + (step / 8.0) * (slopes[0] - slopes[1])
+        np.testing.assert_allclose(positions[1], midpoint)

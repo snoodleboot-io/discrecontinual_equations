@@ -111,10 +111,12 @@ multiplier 6.163:
 | 320 | 0.01% | 0.994 (0.6%) | 6.192 |
 | 640 | 0.004% | 0.998 (0.2%) | 6.170 |
 
-Second order in the mesh, forty times more sensitive than the period. The
-quadrature is not the limit — on the exact orbit sampled at 80 nodes it returns
-the multipliers to four figures — so more substeps do nothing; only nodes help.
-Stage pages print the error beside the multipliers and draw the trivial one grey.
+Second order in the mesh, forty times more sensitive than the period. On this
+orbit the quadrature was not the limit — on the exact orbit sampled at 80 nodes it
+returned the multipliers to four figures — so only nodes, or a higher-order scheme,
+help. On a smooth cycle the quadrature *was* the limit, until the monodromy walked
+the Hermite interpolant (below). Stage pages print the error beside the
+multipliers and draw the trivial one grey.
 
 ### Refusing the part of a branch that cannot be believed
 
@@ -196,13 +198,40 @@ not touch).
 
 With it the whole 80-node Bogdanov–Takens branch is under the 2% gate: the worst
 Floquet error over its 605 cycles falls from 59.3% to 0.077%, and `resolved_branch`
-keeps all 605 where it kept 212. What remains in the Floquet error is the
-monodromy's piecewise-linear interpolant between nodes, which is second order and
-sits at about 0.2% on this orbit; that is now the floor, and a cubic Hermite
-interpolant in the monodromy would be the next lever if one is ever needed. The
-floor is also why a cycle the mesh does not resolve at all - the ferroelectric
-ring's wave at period 35 on 80 nodes, near its onset - reads no better under the
-fourth-order scheme: there the error is the interpolant's, not the collocation's.
+keeps all 605 where it kept 212.
+
+### The monodromy's own floor
+
+Seven films did not move under the fourth-order scheme at all - hopf stayed at
+0.950%, the ferroelectric ring at 15.3% - because their error was never the
+orbit's. The variational equation `Y' = T Df(x(s)) Y` was integrated along a
+straight chord between nodes with the Jacobian frozen over the four Runge–Kutta
+stages, both second order, and on a cycle whose Jacobian trace varies with the
+radius the chord lies to the same side all the way round, so its error never
+cancels. `PeriodicOrbit.monodromy` now walks the cubic Hermite interpolant through
+the node states and slopes `T f(x)` - the curve Hermite–Simpson converged - and
+evaluates the Jacobian at each stage's own position. On the exact Hopf cycle the
+trivial multiplier's drift falls 16x per mesh doubling where it fell 4.0x: 1.7e-7
+at 80 nodes against 1.6e-3. Worst Floquet error over each film's branch at 80 nodes:
+
+| film | chord, frozen Jacobian | Hermite, stage-wise Jacobian |
+|---|---|---|
+| hopf | 0.950% | 2.5e-5% |
+| hopf_hopf | 0.761% | 2.0e-5% |
+| zero_hopf | 0.313% | 8.3e-6% |
+| fold_of_cycles | 1.178% | 3.1e-5% |
+| extended_bautin | 3.904% | 1.0e-4% |
+| snic | 1.759% | 4.4e-4% |
+| van_der_pol | 1.126% | 0.053% |
+| ferroelectric_ring | 15.30% | 0.088% |
+| bogdanov_takens | 0.077% | 0.089% |
+
+The ring's period-35 wave, which had looked like a mesh the orbit outran, was the
+chord's error: at `T h = 0.43` per interval the straight line misses a curved orbit
+by a lot. Bogdanov–Takens alone did not improve, because its residual was the
+orbit's all along - on the integrated cycle at 80 nodes the old quadrature was
+already at 1e-4 - and the chord's error had been cancelling a little of it. What is
+left everywhere is the orbit: nodes, or a higher-order collocation scheme.
 
 ## Trusting a computed connecting orbit
 
