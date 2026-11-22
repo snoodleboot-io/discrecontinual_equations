@@ -359,13 +359,18 @@ class TestSnic(TestCase):
             assert abs(float(np.hypot(point[0], point[1])) - 1.0) < 1.0e-6
 
 
+# Three states with some extent: a point collapsed onto one state is refused
+# outright, whatever its multipliers say.
+_TRIANGLE = np.array([[1.0, 0.0], [-0.5, 0.8], [1.0, 0.0]])
+
+
 class TestFloquetError(TestCase):
     """The trivial multiplier's drift from one is the accuracy of the whole set."""
 
     def test_reports_the_multiplier_nearest_one(self):
         point = CyclePoint(
             0.0,
-            PeriodicOrbitSolution(np.zeros((3, 2)), 6.0),
+            PeriodicOrbitSolution(_TRIANGLE, 6.0),
             np.array([0.911, 6.596]),
         )
         assert abs(point.floquet_error - 0.089) < 1.0e-12
@@ -373,7 +378,7 @@ class TestFloquetError(TestCase):
     def test_is_zero_for_an_exact_trivial_multiplier(self):
         point = CyclePoint(
             0.0,
-            PeriodicOrbitSolution(np.zeros((3, 2)), 6.0),
+            PeriodicOrbitSolution(_TRIANGLE, 6.0),
             np.array([1.0, 0.5 + 0.5j]),
         )
         assert point.floquet_error == 0.0
@@ -390,7 +395,7 @@ class TestResolvedBranch(TestCase):
     ) -> CyclePoint:
         return CyclePoint(
             parameter,
-            PeriodicOrbitSolution(np.zeros((3, 2)), 6.0),
+            PeriodicOrbitSolution(_TRIANGLE, 6.0),
             np.array([trivial, nontrivial]),
         )
 

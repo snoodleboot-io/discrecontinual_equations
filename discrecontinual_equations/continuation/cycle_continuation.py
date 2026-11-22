@@ -644,11 +644,13 @@ class CyclePoint:
         A point whose states have collapsed onto one another reads infinite
         under every scheme. Every collocation admits that degenerate solution -
         all states equal at period zero, or an equilibrium at any period - and
-        an under-resolved seed can converge to it (van der Pol at ``mu = 2`` on
-        8 intervals does). Its monodromy is the identity, so both measures
-        above read zero there and would call it resolved.
+        an under-resolved seed can converge to it: van der Pol at ``mu = 2`` on
+        8 intervals reaches period -4e-20 under the one-wide schemes and the
+        origin at period -7.6e-4 under ``m = 4``. Its monodromy is the identity
+        or within ``|T|`` of it, so both measures above read about zero there
+        and would call it resolved.
         """
-        if self.amplitude <= _NOISE_FLOOR * max(
+        if not self.amplitude > _NOISE_FLOOR * max(
             1.0,
             float(np.max(np.abs(self._solution.states))),
         ):

@@ -734,14 +734,15 @@ class TestMultiplierDisagreement(TestCase):
 
 
 class TestCollapsedCycle(TestCase):
-    """A cycle that has collapsed onto a point is not resolved, whatever the scheme.
+    """A cycle collapsed onto one state is not resolved, whatever the scheme.
 
-    An under-resolved seed can converge to the degenerate solution every
-    collocation admits: all states equal and the period zero (or an equilibrium
-    on the phase plane at any period). Its monodromy is the identity, so the
-    trivial drift and the Hermite disagreement both read zero and the point
-    used to pass :meth:`CyclePoint.resolved` - on van der Pol at ``mu = 2``
-    seeded from the exact orbit on 8 intervals, under all three schemes.
+    An under-resolved seed can converge to the degenerate solutions every
+    collocation admits: all states equal at period zero, or an equilibrium at
+    any period. The monodromy is then the identity or within ``|T|`` of it, so
+    the trivial drift and the Hermite disagreement both read about zero and
+    the point used to pass :meth:`CyclePoint.resolved` - on van der Pol at
+    ``mu = 2`` seeded from the exact orbit on 8 intervals, under all three
+    schemes.
     """
 
     def test_a_point_with_no_extent_reports_an_infinite_error(self):
