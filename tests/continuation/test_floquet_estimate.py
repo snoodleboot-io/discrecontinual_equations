@@ -10,6 +10,7 @@ import math
 from unittest import TestCase, mock
 
 import numpy as np
+import pytest
 from scipy.integrate import solve_ivp
 
 from discrecontinual_equations.continuation import cycle_continuation
@@ -214,13 +215,30 @@ class TestProductMultipliers(TestCase):
             message = "forced"
             raise PeriodicSchurError(message)
 
-        with mock.patch.object(
-            cycle_continuation,
-            "periodic_eigenvalues",
-            failing,
+        with (
+            mock.patch.object(cycle_continuation, "periodic_eigenvalues", failing),
+            pytest.warns(RuntimeWarning, match="explicit product"),
         ):
-            computed = _product_multipliers(transfers)
+            computed, method = _product_multipliers(transfers)
         np.testing.assert_array_equal(computed, np.linalg.eigvals(product))
+        assert method == "explicit_product"
+
+    def test_a_point_reports_the_fallback_it_was_read_by(self):
+        """Not silent: the point says which reading its multipliers are."""
+
+        def failing(_factors):
+            message = "forced"
+            raise PeriodicSchurError(message)
+
+        _, point, _ = _point(0.5, 16, 2)
+        assert point.multipliers_method == "periodic_qr"
+        with (
+            mock.patch.object(cycle_continuation, "periodic_eigenvalues", failing),
+            pytest.warns(RuntimeWarning, match="explicit product"),
+        ):
+            _, fallen, _ = _point(0.5, 16, 2)
+        assert fallen.multipliers_method == "explicit_product"
+        np.testing.assert_allclose(fallen.multipliers, point.multipliers, atol=1e-9)
 
     def test_a_real_spectrum_comes_back_real_and_a_pair_stays_complex(self):
         rng = np.random.default_rng(6)
@@ -228,14 +246,15 @@ class TestProductMultipliers(TestCase):
         real = np.array(
             [frames[(k + 1) % 5] @ np.diag([1.1, 0.5]) @ frames[k].T for k in range(5)],
         )
-        computed = _product_multipliers(real)
+        computed, method = _product_multipliers(real)
+        assert method == "periodic_qr"
         assert computed.dtype == float
         assert _multiplier_disagreement(computed, np.array([1.1**5, 0.5**5])) < 1e-12
         angle = 0.3
         rotation = np.array(
             [[np.cos(angle), -np.sin(angle)], [np.sin(angle), np.cos(angle)]],
         )
-        pair = _product_multipliers(np.array([rotation] * 5))
+        pair, _ = _product_multipliers(np.array([rotation] * 5))
         assert np.iscomplexobj(pair)
         expected = np.exp(1j * 5 * angle) * np.array([1.0, 0.0]) + np.exp(
             -1j * 5 * angle,
