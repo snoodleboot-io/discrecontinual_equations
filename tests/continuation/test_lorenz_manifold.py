@@ -1,37 +1,41 @@
-"""The Lorenz manifold to geodesic distance 100, against what is known of it.
+"""The Lorenz manifold, grown as far as it can be trusted, against what is known.
 
 Kept apart from ``test_geodesic_level_sets.py`` the way the connecting-orbit
-tests are kept apart: it grows the film's whole surface. That is under 2 s
-since the BVPs are traced to a first guess, but it is the film's own cost and
-grows with the distance, so it lives where it can be left out.
+tests are kept apart: it grows the film's whole surface and then two larger
+ones - 5 s to 35 s in all, measured, depending on what else the machine is
+doing - which is the cost of the thing under test rather than a defect.
 
-What is checked, and where each number comes from:
+What is checked, and where each number comes from - all measured here:
 
 * the z-axis is in the manifold and is a geodesic of it, so every level set
-  crosses it at ``z = +-r`` exactly - measured to 1.1e-11 relative, which is
+  crosses it at ``z = +-r`` exactly - measured to 3.9e-12 relative, which is
   the BVP tolerance, since a chord along a straight line is the arc;
 * the manifold winds around the positive z-axis like a helix: the level
   sets' tangent where they cross the axis turns steadily with height -
-  measured 7.06 rad (just over one full turn) between r = 1 and r = 100;
-* it reaches around both secondary equilibria: rays from ``C+`` in the plane
-  ``z = rho - 1`` meet it within 25 in 6 of 8 directions - measured;
-* its size: 10,417 vertices, 20,402 triangles, 68 rings at these settings,
-  no BVP lost - measured.
+  measured 6.90 rad (just over one full turn) between r = 1 and r = 100;
+* it reaches around both secondary equilibria by r = 100: rays from ``C+``
+  in the plane ``z = rho - 1`` meet it within 25 in 6 of 8 directions;
+* its size at the film's settings: 10,289 vertices, 20,154 triangles, 67
+  rings, no BVP lost;
+* grown strictly towards 170 it stops at 142.87, with no point lost, and
+  says why: 10 of 891 landings fail at the smallest step. There the flow
+  runs along the level set (``f . t / |f| = 1.0`` at the failing points) and
+  those BVPs have no nearby solution. By then the scrolls have formed: rays
+  from ``C+`` cross three layers of the surface in four of the eight
+  directions;
+* allowed to drop 3% of a ring (``loss=0.03``) it reaches 150 with 62 points
+  lost, and the crochet pattern still adds up round by round.
 
 What is *not* checked. Krauskopf and Osinga's figures show the two scrolls
-rolled up around ``C+-`` in several layers, and the crocheted model's size;
+rolled up around ``C+-`` in more layers, and the crocheted model's size;
 from memory, and unverified because the papers cannot be fetched here, the
 crochet pattern has 25,511 stitches and the computed manifold runs to a
-geodesic distance of about 170. Neither is asserted. At distance 100 the
-scrolls have only begun (one layer around ``C+`` in each direction above).
-Beyond about 105 the flow runs along the level sets in places and some BVPs
-have no nearby solution; with ``loss=0.03`` the growth reaches 135.6 at
-80,422 vertices with 1,063 points dropped, and rays from ``C+`` then cross
-three layers in four of the eight directions - measured, but with holes in
-the mesh, so not asserted either.
+geodesic distance of about 170. Neither is asserted, and this
+implementation's strict growth stops short of 170.
 """
 
 import math
+from itertools import pairwise
 from unittest import TestCase
 
 import numpy as np
@@ -145,6 +149,61 @@ class TestLorenzManifold(TestCase):
 
     def test_the_mesh_size_is_the_measured_one(self):
         # A regression guard on what this growth measured, not a literature
-        # value: 10,417 vertices and 68 rings at these settings.
-        assert abs(len(self.mesh.vertices) - 10_417) < 500
-        assert abs(len(self.mesh.rings) - 68) <= 3
+        # value: 10,289 vertices and 67 rings at these settings.
+        assert abs(len(self.mesh.vertices) - 10_289) < 500
+        assert abs(len(self.mesh.rings) - 67) <= 3
+
+
+def _lorenz(distance: float, loss: float = 0.0):
+    function = LorenzField(
+        variables=[State(), State(), State()],
+        parameters=[Alpha(value=0.0)],
+        results=[State(), State(), State()],
+        time=None,
+    )
+    jacobian = AutomaticDifferentiation().jacobian(function, np.zeros(3), 0.0)
+    return GeodesicLevelSets(
+        GeodesicSettings(initial_radius=1.0, step=1.5, spacing=(1.5, 4.5), loss=loss),
+    ).compute(function, np.zeros(3), jacobian, StableManifold(), distance=distance)
+
+
+class TestLorenzManifoldAsFarAsItGoes(TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.mesh = _lorenz(170.0)
+
+    def test_the_strict_growth_stops_and_says_why(self):
+        assert self.mesh.stopped is not None
+        assert "landings failed" in self.mesh.stopped
+        assert self.mesh.lost == 0
+        # Measured: 142.87, short of the 170 asked for.
+        assert 130.0 < self.mesh.ring_distances[-1] < 170.0
+
+    def test_the_scrolls_have_formed_around_the_secondary_equilibria(self):
+        offset = math.sqrt(_BETA * (_RHO - 1.0))
+        for sign in (1.0, -1.0):
+            centre = np.array([sign * offset, sign * offset, _RHO - 1.0])
+            layered = sum(
+                _crossings(
+                    self.mesh.vertices,
+                    self.mesh.triangles,
+                    centre,
+                    sign * np.array([math.cos(angle), math.sin(angle), 0.0]),
+                    25.0,
+                )
+                >= 3
+                for angle in np.linspace(0.0, 2.0 * math.pi, 8, endpoint=False)
+            )
+            assert layered >= 4
+
+
+class TestLossyLorenzManifold(TestCase):
+    def test_the_crochet_pattern_adds_up_when_points_are_lost(self):
+        mesh = _lorenz(150.0, loss=0.03)
+        assert mesh.stopped is None
+        assert mesh.lost > 0
+        pattern = mesh.crochet_pattern()
+        for previous, current in pairwise(pattern):
+            assert current.stitches == previous.stitches + (
+                current.increases - current.decreases
+            )

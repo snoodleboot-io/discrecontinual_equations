@@ -18,6 +18,7 @@ The long Lorenz computation, with its measured mesh size, lives in
 import math
 from itertools import pairwise
 from unittest import TestCase
+from unittest.mock import patch
 
 import numpy as np
 import pytest
@@ -29,6 +30,7 @@ from discrecontinual_equations.continuation.derivative_provider import (
 from discrecontinual_equations.continuation.geodesic_level_sets import (
     GeodesicLevelSets,
     GeodesicSettings,
+    _advance,
 )
 from discrecontinual_equations.continuation.manifold import (
     StableManifold,
@@ -104,6 +106,9 @@ class TestLinearSaddle(TestCase):
         cls.normal /= np.linalg.norm(cls.normal)
 
     def test_every_vertex_lies_on_the_stable_plane(self):
+        # A sanity check, not the oracle: any orbit method keeps a linear
+        # field's invariant plane, so this would pass for a wrong level set.
+        # The radii below are what a geodesic level set is held to.
         offsets = np.abs(self.mesh.vertices @ self.normal)
         assert float(np.max(offsets)) < 1.0e-9
 
@@ -218,6 +223,135 @@ class TestLinearSaddle(TestCase):
                 UnstableManifold(),
                 distance=1.0,
             )
+
+
+# Linear saddles the plane oracle must hold for, not only the one above: rate
+# ratios up to 20 on the stable plane (Lorenz's is 8.6), eigenvectors close to
+# parallel, another seed radius and step, a coarse step, and an unstable
+# plane. Each is (eigenvectors, eigenvalues, selection, seed, step, spacing,
+# distance). These are the cases an independent review found losing hundreds
+# of points before the BVP was solved from the landing end.
+_PARALLEL = np.array([[1.0, 1.0, 0.0], [0.0, 0.05, 0.0], [0.0, 0.0, 1.0]])
+_MILD = np.array([[1.0, 1.0, 0.0], [0.0, 0.3, 0.0], [0.0, 0.0, 1.0]])
+_SADDLES = {
+    "ratio 3": (_EIGENVECTORS, (-1.0, -3.0, 2.0), True, 0.1, 0.1, (0.05, 0.15), 1.5),
+    "ratio 8.6": (_EIGENVECTORS, (-1.0, -8.6, 2.0), True, 0.1, 0.1, (0.05, 0.15), 1.5),
+    "ratio 12": (_EIGENVECTORS, (-1.0, -12.0, 2.0), True, 0.1, 0.1, (0.05, 0.15), 1.5),
+    "ratio 20": (_EIGENVECTORS, (-1.0, -20.0, 2.0), True, 0.1, 0.1, (0.05, 0.15), 1.5),
+    "mild skew": (_MILD, (-1.0, -2.5, 1.0), True, 0.1, 0.1, (0.05, 0.15), 1.5),
+    "near parallel": (_PARALLEL, (-1.0, -2.5, 1.0), True, 0.1, 0.1, (0.05, 0.15), 1.5),
+    "seed 0.37 step 0.13": (
+        _EIGENVECTORS,
+        (-1.0, -3.0, 2.0),
+        True,
+        0.37,
+        0.13,
+        (0.05, 0.15),
+        3.0,
+    ),
+    "coarse": (_EIGENVECTORS, (-1.0, -3.0, 2.0), True, 0.1, 0.5, (0.25, 0.75), 10.0),
+    "unstable": (_EIGENVECTORS, (1.0, 3.0, -2.0), False, 0.1, 0.1, (0.05, 0.15), 1.5),
+}
+
+
+def _saddle_function(matrix: np.ndarray) -> DeterministicFunction:
+    class Linear(DeterministicFunction):
+        def eval(self, point, time=None):  # noqa: ARG002 (base signature)
+            return list(matrix @ np.asarray(point))
+
+    return _field(Linear)
+
+
+@pytest.mark.parametrize("name", list(_SADDLES))
+def test_the_plane_oracle_holds_for_every_saddle(name):
+    vectors, rates, stable, seed, step, spacing, distance = _SADDLES[name]
+    matrix = vectors @ np.diag(rates) @ np.linalg.inv(vectors)
+    function = _saddle_function(matrix)
+    selection = StableManifold() if stable else UnstableManifold()
+    mesh = GeodesicLevelSets(GeodesicSettings(seed, step, spacing)).compute(
+        function,
+        np.zeros(3),
+        _jacobian(function, np.zeros(3)),
+        selection,
+        distance=distance,
+    )
+    assert mesh.stopped is None
+    assert mesh.lost == 0
+    assert mesh.ring_distances[-1] == pytest.approx(distance)
+    for ring, radius in zip(mesh.rings, mesh.ring_distances, strict=True):
+        radii = np.linalg.norm(mesh.vertices[ring], axis=1)
+        assert float(np.max(np.abs(radii - radius))) < 1.0e-9
+    for ring in mesh.rings[1:]:
+        points = mesh.vertices[ring]
+        gaps = np.linalg.norm(np.roll(points, -1, axis=0) - points, axis=1)
+        assert spacing[0] - 1.0e-9 <= float(np.min(gaps))
+        assert float(np.max(gaps)) <= spacing[1] + 1.0e-9
+    # No triangle is flipped: all face the same way across the plane.
+    chosen = [i for i, rate in enumerate(rates) if (rate < 0.0) == stable]
+    normal = np.cross(vectors[:, chosen[0]], vectors[:, chosen[1]])
+    corners = mesh.vertices[mesh.triangles]
+    facing = (
+        np.cross(corners[:, 1] - corners[:, 0], corners[:, 2] - corners[:, 0]) @ normal
+    )
+    assert np.all(facing > 0.0) or np.all(facing < 0.0)
+    pattern = mesh.crochet_pattern()
+    for previous, current in pairwise(pattern):
+        assert current.stitches == previous.stitches + (
+            current.increases - current.decreases
+        )
+
+
+_ADVANCE = "discrecontinual_equations.continuation.geodesic_level_sets._advance"
+
+
+class TestStopping(TestCase):
+    """A growth that cannot go on says where and why, rather than going on."""
+
+    def _grow(self, advance):
+        function = _field(LinearSaddle)
+        with patch(_ADVANCE, advance):
+            return GeodesicLevelSets(
+                GeodesicSettings(0.1, 0.1, (0.05, 0.15)),
+            ).compute(
+                function,
+                np.zeros(3),
+                _jacobian(function, np.zeros(3)),
+                StableManifold(),
+                distance=1.0,
+            )
+
+    def test_a_ring_that_keeps_too_few_points_stops_the_growth(self):
+        # A ring of fewer than six points cannot bound the band below it;
+        # this used to reach the triangulation and raise an IndexError there.
+        real = _advance
+
+        def starved(field, sense, front, delta, settings):
+            ring = real(field, sense, front, delta, settings)
+            if len(front.points) > 20:
+                ring.points, ring.directions = ring.points[:0], ring.directions[:0]
+                ring.keys = ring.keys[:0]
+            return ring
+
+        mesh = self._grow(starved)
+        assert mesh.stopped is not None
+        assert "fewer than" in mesh.stopped
+        assert mesh.ring_distances[-1] < 1.0
+        assert all(len(ring) >= 6 for ring in mesh.rings)
+
+    def test_failed_landings_at_the_smallest_step_stop_the_growth(self):
+        real = _advance
+
+        def failing(field, sense, front, delta, settings):
+            ring = real(field, sense, front, delta, settings)
+            if len(front.points) > 20:
+                ring.lost = 3
+            return ring
+
+        mesh = self._grow(failing)
+        assert mesh.stopped is not None
+        assert "landings failed" in mesh.stopped
+        assert mesh.lost == 0
+        assert mesh.ring_distances[-1] < 1.0
 
 
 def _arclength(u: float) -> float:
@@ -338,7 +472,9 @@ class TestLorenzManifoldNearTheOrigin(TestCase):
             for sign in (1.0, -1.0):
                 side = points[sign * points[:, 2] > 0.0]
                 nearest = side[np.argmin(np.hypot(side[:, 0], side[:, 1]))]
-                assert abs(abs(nearest[2]) - distance) < 0.05 * distance
+                # The axis is a geodesic and a chord along it is the arc, so
+                # this is exact to the BVP tolerance: measured 1e-11.
+                assert abs(abs(nearest[2]) - distance) < 1.0e-8 * distance
 
     def test_the_manifold_is_symmetric_under_the_rotation_about_z(self):
         mirrored = self.mesh.vertices * np.array([-1.0, -1.0, 1.0])

@@ -14,8 +14,8 @@ level sets of geodesic distance from the equilibrium instead:
   distance ``Delta`` from ``p``. The manifold there is made of the orbits
   through the ring, so ``q`` is the end of an orbit segment that starts on the
   ring (at an unknown place along it, after an unknown time) and lands in that
-  plane at that distance: a two-point boundary-value problem in two unknowns,
-  solved here by Newton's method on a shooting map;
+  plane at that distance: a two-point boundary-value problem, solved here by
+  Newton's method from the landing end (see :func:`_land`);
 * insert points where the new ring's spacing grows too wide and remove them
   where it grows too tight, and shrink ``Delta`` where consecutive radial
   steps turn too sharply - where the manifold curves - and let it grow back
@@ -73,8 +73,6 @@ _TIME_FLOOR = 0.25
 _OUTWARD_FLOOR = 0.2
 # Points of three nearly collinear ring points have no circle through them.
 _COLLINEAR = 1.0e-12
-# A Newton determinant smaller than this is a singular shooting map.
-_SINGULAR = 1.0e-300
 # Gauss-Legendre nodes for the chart rays' arclength, and fixed-point passes
 # that set the seed ring at geodesic distance ``initial_radius``.
 _QUADRATURE = 8
@@ -104,15 +102,14 @@ class GeodesicSettings:
     per orbit segment, and ``max_vertices`` stops a growth that has become
     larger than anyone will draw.
 
-    ``loss`` is the fraction of a ring's points whose BVP may fail before
-    ``Delta`` is shrunk and the ring recomputed. It is zero by default: a
-    lost point is a hole the next ring has to bridge. Where the flow runs
-    along a level set - on the Lorenz manifold beyond a geodesic distance of
-    about 105, measured - the orbits that land beside a point start far
-    along the ring and some BVPs have no nearby solution at any ``Delta``,
-    so a strict growth stalls there with ``Delta`` at its floor and the
-    rings multiplying. A small ``loss`` lets it go on, at the price of
-    those holes.
+    ``loss`` is the fraction of a ring's points whose BVP may fail. More
+    than that and ``Delta`` is shrunk and the ring recomputed; if it still
+    fails at ``step_range[0]`` the growth stops there, and the mesh it
+    returns says so in :attr:`GeodesicMesh.stopped` - a manifold traced as
+    far as it can be trusted, the way a continuation ends a branch it can no
+    longer correct. It is zero by default: a lost point is a hole the next
+    ring has to bridge. A small ``loss`` lets a growth go on past a few such
+    holes, and counts them in :attr:`GeodesicMesh.lost`.
     """
 
     __slots__ = [
@@ -159,7 +156,9 @@ class CrochetRound:
     ``stitches`` is the number of points on the ring; ``increases`` and
     ``decreases`` are how many were inserted and removed against the round
     before it, so ``stitches`` is the previous round's plus ``increases``
-    minus ``decreases``.
+    minus ``decreases``. A point of the round before whose BVP failed is a
+    decrease; an insertion whose BVP failed was never a stitch, and is
+    counted only in :attr:`GeodesicMesh.lost`.
     """
 
     __slots__ = ["decreases", "distance", "increases", "number", "stitches"]
@@ -191,7 +190,9 @@ class GeodesicMesh:
     not converge and were dropped, and ``seed`` says what the first ring came
     from: ``"taylor"`` for the parameterisation-method chart, ``"eigenspace"``
     for the tangent plane where the chart does not exist (a complex pair, or a
-    resonance).
+    resonance). ``stopped`` is ``None`` when the growth reached the distance
+    asked for, and otherwise says why it stopped where it did; the last of
+    ``ring_distances`` is how far it got.
     """
 
     __slots__ = [
@@ -203,6 +204,7 @@ class GeodesicMesh:
         "ring_distances",
         "rings",
         "seed",
+        "stopped",
         "triangles",
         "vertices",
     ]
@@ -226,6 +228,7 @@ class GeodesicMesh:
         self.seed = seed
         self.residual = 0.0
         self.lost = 0
+        self.stopped: str | None = None
 
     def crochet_pattern(self) -> list[CrochetRound]:
         """One round per level set, with its stitches, increases and decreases."""
@@ -286,22 +289,38 @@ class GeodesicLevelSets:
         growth = _Growth(equilibrium, points, directions, settings.initial_radius)
         radius = settings.initial_radius
         step = settings.step
+        low, high = settings.step_range
+        stopped = None
         while radius < distance - 1.0e-12:
             if len(growth.vertices) >= settings.max_vertices:
+                stopped = f"max_vertices ({settings.max_vertices}) reached"
                 break
             delta = min(step, distance - radius)
             ring = _advance(field, sense, growth.front, delta, settings)
-            turn = ring.turn
-            low, high = settings.step_range
             lost = ring.lost > settings.loss * len(growth.front.points)
-            if (lost or turn > settings.angles[1]) and delta > low * (1 + 1e-9):
+            floor = delta <= low * (1 + 1e-9)
+            if (lost or ring.turn > settings.angles[1]) and not floor:
                 step = max(low, _SHRINK * delta)
                 continue
+            if lost:
+                stopped = (
+                    f"{ring.lost} of {len(growth.front.points)} landings failed "
+                    f"at the smallest step {delta:.3g}, beyond distance {radius:.6g}"
+                )
+                break
+            if len(ring.points) < _MINIMUM_RING:
+                stopped = (
+                    f"the ring beyond distance {radius:.6g} kept "
+                    f"{len(ring.points)} points, fewer than {_MINIMUM_RING}"
+                )
+                break
             radius += delta
             growth.add(ring, radius)
-            if turn < settings.angles[0]:
+            if ring.turn < settings.angles[0]:
                 step = min(high, _GROW * step)
-        return growth.mesh(seed)
+        mesh = growth.mesh(seed)
+        mesh.stopped = stopped
+        return mesh
 
     def _seed(
         self,
@@ -548,10 +567,18 @@ def _interpolate(
     return 0.5 * (point_a + point_b), _unit(tangent_a + tangent_b)
 
 
-# Steps the back-trace takes, and how many first-guess flight times it may
-# run for before giving up on finding the ring.
-_TRACE_STEPS = 48
-_TRACE_SPAN = 4.0
+# The back-trace walks along its orbit in steps of this fraction of Delta (or
+# of the widest ring spacing, if that is larger: Delta may have been shrunk to
+# its floor), and gives up after this many steps - 250 such lengths of
+# arclength, far longer than any orbit that reaches the ring at all takes.
+_TRACE_STEP = 0.125
+_TRACE_LIMIT = 2000
+# RK4 steps are kept to this many inverse rates of the local field, which is
+# both stable and accurate to the BVP tolerance on a step of that size.
+_STEP_RATE = 0.5
+_MAXIMUM_STEPS = 4000
+# Relative finite-difference step for the flow's Jacobian in the landing point.
+_SHIFT = 1.0e-7
 
 
 def _first_guess(  # noqa: PLR0913 (the BVP's data)
@@ -562,10 +589,11 @@ def _first_guess(  # noqa: PLR0913 (the BVP's data)
     keys: np.ndarray,
     outward: np.ndarray,
     delta: float,
+    settings: GeodesicSettings,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Where on the ring each orbit starts, and how long it flows: a guess.
 
-    Traced back from ``delta`` straight out where that crosses the ring;
+    Traced back from ``delta`` straight out to where that crosses the ring;
     otherwise the centre's own place and the time the outward part of the
     field would take to cover ``delta``.
     """
@@ -579,7 +607,7 @@ def _first_guess(  # noqa: PLR0913 (the BVP's data)
         sense,
         front,
         centres + delta * outward,
-        times,
+        max(delta, settings.spacing[1]),
     )
     places[traced] = crossing[traced]
     times[traced] = flight[traced]
@@ -591,43 +619,82 @@ def _trace_back(
     sense: float,
     front: "_Front",
     targets: np.ndarray,
-    times: np.ndarray,
+    length: float,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Flow each target back to the ring: where it crosses it, and after how long.
 
     Returns which targets crossed, the ring parameter at the crossing and the
     flight time. A crossing is where the signed distance outside the ring -
     measured along the nearest ring point's outward direction - changes sign.
+
+    The trace runs until it crosses, not for a fixed multiple of a guessed
+    time: where one stable rate is many times the other, the orbit that lands
+    beside a centre can take several times longer than the outward speed
+    suggests, and starts several ring points away. Each step covers a fixed
+    fraction of ``length`` of arclength, capped where the field is slow (near
+    the equilibrium) by the local rate, so RK4 stays stable.
     """
     ring, outward = front.points, front.directions
     count, rows = len(ring), len(targets)
     tree = cKDTree(ring)
-    dt = (_TRACE_SPAN * times / _TRACE_STEPS)[:, None]
     state = targets.copy()
     nearest = tree.query(state)[1]
     side = np.einsum("ij,ij->i", state - ring[nearest], outward[nearest])
     crossed = np.zeros(rows, dtype=bool)
+    alive = side > 0.0
     start = np.zeros(rows)
     flight = np.zeros(rows)
-    with np.errstate(over="ignore", invalid="ignore"):
-        for step in range(1, _TRACE_STEPS + 1):
-            k1 = -sense * field(state)
-            k2 = -sense * field(state + 0.5 * dt * k1)
-            k3 = -sense * field(state + 0.5 * dt * k2)
-            k4 = -sense * field(state + dt * k3)
-            moved = state + dt / 6.0 * (k1 + 2.0 * k2 + 2.0 * k3 + k4)
-            moved = np.where(np.isfinite(moved), moved, state)
+    elapsed = np.zeros(rows)
+    with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
+        for _ in range(_TRACE_LIMIT):
+            going = np.flatnonzero(alive & ~crossed)
+            if going.size == 0:
+                break
+            here = state[going]
+            speed = np.linalg.norm(field(here), axis=1)
+            rate = _local_rate(field, here)
+            dt = np.minimum(
+                _TRACE_STEP * length / np.maximum(speed, 1e-300),
+                _STEP_RATE / np.maximum(rate, 1e-300),
+            )[:, None]
+            k1 = -sense * field(here)
+            k2 = -sense * field(here + 0.5 * dt * k1)
+            k3 = -sense * field(here + 0.5 * dt * k2)
+            k4 = -sense * field(here + dt * k3)
+            moved = here + dt / 6.0 * (k1 + 2.0 * k2 + 2.0 * k3 + k4)
+            finite = np.all(np.isfinite(moved), axis=1)
+            alive[going[~finite]] = False
+            moved = np.where(finite[:, None], moved, here)
             near = tree.query(moved)[1]
             now = np.einsum("ij,ij->i", moved - ring[near], outward[near])
-            hit = ~crossed & (side > 0.0) & (now <= 0.0)
+            hit = finite & (now <= 0.0)
             if np.any(hit):
-                fraction = side[hit] / (side[hit] - now[hit])
-                point = state[hit] + fraction[:, None] * (moved[hit] - state[hit])
-                start[hit] = _ring_parameter(ring, near[hit], point)
-                flight[hit] = (step - 1.0 + fraction) * dt[hit, 0]
-                crossed |= hit
-            state, side = moved, now
+                rows_hit = going[hit]
+                fraction = side[rows_hit] / (side[rows_hit] - now[hit])
+                point = here[hit] + fraction[:, None] * (moved[hit] - here[hit])
+                start[rows_hit] = _ring_parameter(ring, near[hit], point)
+                flight[rows_hit] = elapsed[rows_hit] + fraction * dt[hit, 0]
+                crossed[rows_hit] = True
+            state[going] = moved
+            side[going] = now
+            elapsed[going] += dt[:, 0]
     return crossed & (flight > 0.0), start % count, flight
+
+
+def _local_rate(
+    field: Callable[[np.ndarray], np.ndarray],
+    states: np.ndarray,
+) -> np.ndarray:
+    """A bound on the field's fastest local rate: the Jacobian's largest row sum."""
+    base = field(states)
+    size = states.shape[1]
+    total = np.zeros((len(states), size))
+    for axis in range(size):
+        h = _SHIFT * (1.0 + np.abs(states[:, axis]))
+        shifted = states.copy()
+        shifted[:, axis] += h
+        total += np.abs((field(shifted) - base) / h[:, None])
+    return np.max(total, axis=1)
 
 
 def _ring_parameter(
@@ -682,32 +749,49 @@ def _land(  # noqa: PLR0913 (the BVP's data)
 ) -> _Landing:
     """Solve each centre's BVP: the orbit from the ring that lands at ``delta``.
 
-    The unknowns are ``s``, where along the ring the orbit starts, and
-    ``tau``, how long it flows; the conditions are that it ends in
-    the plane through the centre normal to the ring's tangent, and at distance
-    ``delta`` from the centre. Newton's method on that two-by-two shooting map
-    starts from the centre's own place on the ring and the time the outward
-    part of the field would take to cover ``delta``, with the s-derivative by
-    a finite difference along the ring and the tau-derivative the field.
+    The orbit segment runs from ``C(s)`` on the ring for a time ``tau`` to the
+    new point ``q``, which must lie in the plane through the centre normal to
+    the ring's tangent and at distance ``delta`` from it. It is solved from
+    the landing end: the unknowns are ``q``, ``tau`` and ``s``, and the
+    conditions are those two on ``q`` and that ``q`` flowed back for ``tau``
+    arrives at ``C(s)``. That is the same orbit segment as shooting out from
+    the ring, but a far better conditioned problem. Shooting out, where one
+    rate on the manifold is many times the other, the landing point moves by
+    the ratio's power for every move of ``s``, and at a ratio of 20 no
+    ``s`` in double precision lands within the tolerance. Flowing back, the
+    manifold's directions contract, so ``s`` is pinned without amplification,
+    and it is only the direction off the manifold that grows - which is
+    exactly what pins ``q`` onto it.
 
-    Where the flow runs along the ring rather than out of it - near the
-    Lorenz origin, where the strong stable rate is 8.6 times the weak one -
-    the orbit that lands beside a centre starts far from it along the ring,
-    and Newton from the centre's own place does not find it. So the first
-    guess is traced: the point ``delta`` straight out from the centre is
-    flowed back until it crosses the ring, and where and when it crosses is
-    where Newton starts.
+    The first guess is traced: the point ``delta`` straight out from the
+    centre is flowed back until it crosses the ring, and where and when it
+    crosses is where Newton starts. The flow's Jacobian in ``q`` is by finite
+    differences, all rows integrated together, with as many RK4 steps as the
+    local rate needs.
 
     The ring between its points is the same circular-arc interpolation the
     centres are placed with, not its chords. A chord cuts inside a curved ring
     by its sagitta, and the flow need not carry that error away: on the tilted
     homoclinic system's cylinder the energy is conserved, so an orbit started
     off the manifold by a chord's sagitta stays off it by that much for good.
+
+    A converged landing that is not outward of its centre is a solution of
+    the equations on the wrong side - an orbit that crossed back inside the
+    ring - and is counted lost.
     """
     ring = front.points
-    count, rows = len(ring), len(centres)
-    s, times = _first_guess(field, sense, front, centres, keys, outward, delta)
-    points = centres.copy()
+    rows, size = centres.shape
+    s, times = _first_guess(
+        field,
+        sense,
+        front,
+        centres,
+        keys,
+        outward,
+        delta,
+        settings,
+    )
+    points = centres + delta * outward
     residual = np.full(rows, np.inf)
     valid = np.zeros(rows, dtype=bool)
     active = np.arange(rows)
@@ -717,61 +801,111 @@ def _land(  # noqa: PLR0913 (the BVP's data)
         for _ in range(_NEWTON_ITERATIONS):
             if active.size == 0:
                 break
-            place = np.mod(s[active], count)
-            start, _ = _interpolate(ring, place)
-            nudged, _ = _interpolate(ring, place + _RING_STEP)
-            ends = _flow(
+            values, jacobian, usable = _shooting_system(
                 field,
                 sense,
-                np.vstack([start, nudged]),
-                np.concatenate([times[active], times[active]]),
+                ring,
+                points[active],
+                s[active],
+                times[active],
+                (centres[active], tangents[active], delta),
                 settings.integration_steps,
             )
-            end, shifted = ends[: active.size], ends[active.size :]
-            # An orbit Newton has sent the wrong way overflows rather than lands;
-            # that point is lost, not the ring.
-            finite = np.all(np.isfinite(ends[: active.size]), axis=1) & np.all(
-                np.isfinite(shifted),
-                axis=1,
-            )
-            end = np.where(finite[:, None], end, centres[active])
-            shifted = np.where(finite[:, None], shifted, centres[active])
-            offset = end - centres[active]
-            length = np.linalg.norm(offset, axis=1)
-            plane = np.einsum("ij,ij->i", offset, tangents[active])
-            reach = length - delta
-            points[active] = end
-            residual[active] = np.maximum(np.abs(plane), np.abs(reach))
-            done = residual[active] < settings.tolerance
+            residual[active] = np.max(np.abs(values), axis=1)
+            done = usable & (residual[active] < settings.tolerance)
             valid[active[done]] = True
-            direction = offset / np.maximum(length, 1.0e-300)[:, None]
-            along = (shifted - end) / _RING_STEP
-            flow = sense * field(end)
-            a11 = np.einsum("ij,ij->i", along, tangents[active])
-            a12 = np.einsum("ij,ij->i", flow, tangents[active])
-            a21 = np.einsum("ij,ij->i", along, direction)
-            a22 = np.einsum("ij,ij->i", flow, direction)
-            det = a11 * a22 - a12 * a21
-            singular = np.abs(det) < _SINGULAR
-            det = np.where(singular, 1.0, det)
-            ds = (plane * a22 - a12 * reach) / det
-            dt = (a11 * reach - a21 * plane) / det
+            update = _newton_update(jacobian, values, usable)
+            dy, dt, ds = update[:, :size], update[:, size], update[:, size + 1]
             current = times[active]
-            # One damping factor for both unknowns, so the step stays a
-            # Newton direction: clipping s alone and not tau sent tau
-            # downhill until it reached zero wherever the flow ran along the
-            # ring and the start had to be found more than a segment away.
+            # One damping factor for every unknown, so the step stays a
+            # Newton direction: no more than a ring segment along the ring,
+            # half of delta for the point, and a bounded change of time.
             damping = np.minimum(1.0, _RING_JUMP / np.maximum(np.abs(ds), 1e-300))
+            damping = np.minimum(
+                damping,
+                0.5 * delta / np.maximum(np.linalg.norm(dy, axis=1), 1e-300),
+            )
             shrink = (1.0 - _TIME_FLOOR) * current / np.maximum(dt, 1e-300)
             stretch = (1.0 / _TIME_FLOOR - 1.0) * current / np.maximum(-dt, 1e-300)
             damping = np.minimum(damping, np.where(dt > 0.0, shrink, stretch))
-            ds = damping * ds
-            updated = current - damping * dt
-            keep = ~done & ~singular & finite & np.isfinite(ds) & np.isfinite(updated)
-            s[active[keep]] -= ds[keep]
-            times[active[keep]] = updated[keep]
-            active = active[keep]
-    return _Landing(points, times, residual, valid)
+            keep = ~done & usable & np.all(np.isfinite(update), axis=1)
+            rows_kept = active[keep]
+            points[rows_kept] -= damping[keep, None] * dy[keep]
+            times[rows_kept] = current[keep] - damping[keep] * dt[keep]
+            s[rows_kept] -= damping[keep] * ds[keep]
+            active = rows_kept
+    outward_side = np.einsum("ij,ij->i", points - centres, outward) > 0.0
+    return _Landing(points, times, residual, valid & outward_side)
+
+
+def _shooting_system(  # noqa: PLR0913 (the BVP's data)
+    field: Callable[[np.ndarray], np.ndarray],
+    sense: float,
+    ring: np.ndarray,
+    y: np.ndarray,
+    s: np.ndarray,
+    times: np.ndarray,
+    target: tuple[np.ndarray, np.ndarray, float],
+    least_steps: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """The BVP residuals at ``(y, tau, s)``, their Jacobian, and the usable rows.
+
+    Rows are ``(y - P) . T``, ``|y - P| - delta`` and ``phi_tau(y) - C(s)``
+    with ``phi`` the flow towards the ring; columns are ``y``, ``tau``, ``s``.
+    """
+    centres, tangents, delta = target
+    count, m, size = len(ring), len(y), y.shape[1]
+    place = np.mod(s, count)
+    hit, _ = _interpolate(ring, place)
+    nudged, _ = _interpolate(ring, place + _RING_STEP)
+    slope = (nudged - hit) / _RING_STEP
+    h = _SHIFT * (1.0 + np.linalg.norm(y, axis=1))
+    identity = np.eye(size)
+    stack = np.vstack([y, *(y + h[:, None] * identity[k] for k in range(size))])
+    steps = int(
+        np.clip(
+            np.ceil(np.max(times * _local_rate(field, y)) / _STEP_RATE),
+            least_steps,
+            _MAXIMUM_STEPS,
+        ),
+    )
+    ends = _flow(field, -sense, stack, np.tile(times, size + 1), steps)
+    finite = np.all(np.isfinite(ends.reshape(size + 1, m, size)), axis=(0, 2))
+    ends = np.where(np.isfinite(ends), ends, 0.0)
+    back = ends[:m]
+    offset = y - centres
+    length = np.linalg.norm(offset, axis=1)
+    values = np.column_stack(
+        [np.einsum("ij,ij->i", offset, tangents), length - delta, back - hit],
+    )
+    jacobian = np.zeros((m, size + 2, size + 2))
+    jacobian[:, 0, :size] = tangents
+    jacobian[:, 1, :size] = offset / np.maximum(length, 1e-300)[:, None]
+    for k in range(size):
+        jacobian[:, 2:, k] = (ends[(k + 1) * m : (k + 2) * m] - back) / h[:, None]
+    jacobian[:, 2:, size] = -sense * field(back)
+    jacobian[:, 2:, size + 1] = -slope
+    usable = finite & np.all(np.isfinite(jacobian), axis=(1, 2))
+    return values, jacobian, usable
+
+
+def _newton_update(
+    jacobian: np.ndarray,
+    values: np.ndarray,
+    usable: np.ndarray,
+) -> np.ndarray:
+    """Solve every row's Newton system, by least squares where one is singular."""
+    jacobian = np.where(usable[:, None, None], jacobian, np.eye(jacobian.shape[1]))
+    values = np.where(usable[:, None], values, 0.0)
+    try:
+        return np.linalg.solve(jacobian, values[:, :, None])[:, :, 0]
+    except np.linalg.LinAlgError:
+        return np.stack(
+            [
+                np.linalg.lstsq(matrix, value, rcond=None)[0]
+                for matrix, value in zip(jacobian, values, strict=True)
+            ],
+        )
 
 
 class _Ring:
@@ -864,6 +998,7 @@ def _advance(
     landing, steps = _solve(field, sense, front, keys, delta, settings)
     ring = _Ring()
     ring.lost = int(np.count_nonzero(~landing.valid))
+    dropped = ring.lost
     turns = [_turn(front, keys, steps, landing.valid)]
     points = landing.points[landing.valid]
     directions = steps[landing.valid]
@@ -897,7 +1032,7 @@ def _advance(
         if not np.any(good):
             break
     keep = _thin(points, low, high)
-    ring.decreases = int(np.count_nonzero(~keep))
+    ring.decreases = dropped + int(np.count_nonzero(~keep))
     ring.points = points[keep]
     ring.directions = directions[keep]
     ring.keys = keys[keep]
@@ -940,9 +1075,8 @@ def _thin(points: np.ndarray, low: float, high: float) -> np.ndarray:
     for index in range(1, count):
         if count - np.count_nonzero(~keep) <= _MINIMUM_RING:
             break
+        # Points after ``index`` are not yet thinned, so its neighbour is kept.
         following = index + 1
-        while following < count and not keep[following % count]:
-            following += 1
         near = np.linalg.norm(points[index] - points[previous]) < low
         bridged = np.linalg.norm(points[following % count] - points[previous])
         if near and bridged <= high:
@@ -1000,7 +1134,7 @@ class _Growth:
         self.rings.append(indices)
         self.ring_distances.append(radius)
         self.increases.append(ring.increases)
-        self.decreases.append(ring.decreases + ring.lost)
+        self.decreases.append(ring.decreases)
         self.residual = max(self.residual, ring.residual)
         self.lost += ring.lost
         self.front = _Front(ring.points, ring.directions, indices)
