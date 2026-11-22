@@ -398,7 +398,7 @@ def _system() -> StageSystem:
             "OrderedLineIntegral (OLIM-MID) on an 88 x 88 grid over [-2.2, 2.2]^2; "
             "its closed form is (r^2 - mu - mu log(r^2 / mu)) / sigma^2, and on "
             "the drawn box, within U <= 4 and beyond four cells of the origin, "
-            "the marched U agrees with it to 0.08 for mu >= 0.1 and to 0.19 at "
+            "the marched U agrees with it to 0.055 on every frame, including "
             "mu = 0.025, where the cycle is three cells from the origin. Next to "
             "the origin the noise vanishes, U diverges logarithmically, and the "
             "cells there are not claimed. The curves are minimum action paths, "

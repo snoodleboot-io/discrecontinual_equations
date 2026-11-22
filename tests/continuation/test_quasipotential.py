@@ -310,9 +310,9 @@ class TestCycleAttractor(TestCase):
     def test_a_trace_stalled_off_a_small_cycle_has_not_arrived(self):
         # mu = 0.025 on the film's grid: the cycle is three cells from the
         # singular origin and the trace from outside stalls about three cells
-        # short of it, at U = 0.244 against a floor of 0.223. Judged against the
-        # cycle's starting values instead (their largest is 0.79) it reported
-        # arrived.
+        # short of it, at U = 0.067 against a floor of 0.0156. (With the old
+        # straight-climb start the floor was 0.223 and the stall at 0.244, and
+        # before the floor was read after the march it reported arrived.)
         grid, solver, field = _hopf_cycle_field(0.025)
         path = solver.minimum_action_path(field, [1.35, 0.85])
         off = abs(np.linalg.norm(path.states[-1]) - math.sqrt(0.025))
@@ -326,9 +326,23 @@ class TestCycleAttractor(TestCase):
         assert off < 2.0 * grid.spacings[0]
         assert path.arrived
 
-    def test_the_floor_is_what_the_march_left_on_the_band(self):
-        _grid, _solver, field = _hopf_cycle_field(1.0)
-        assert field.floor < 0.04  # 0.032; the starting values' largest is 0.175
+    def test_the_floor_is_the_level_of_u_on_the_band(self):
+        # The largest exact U on the band at mu = 1 is 0.0229; the floor the
+        # march leaves is 0.0219 (it was 0.032 from the old straight-climb
+        # start, whose own largest value was 0.175).
+        grid, _solver, field = _hopf_cycle_field(1.0)
+        parameters = [Alpha(value=1.0), Sigma(value=0.7)]
+        angle = np.linspace(0.0, 2.0 * math.pi, 400, endpoint=False)
+        indices, _values = CycleAttractor(
+            np.column_stack([np.cos(angle), np.sin(angle)]),
+        ).initial(
+            grid,
+            HopfField([State(), State()], parameters, [State(), State()], None),
+            _conformal(parameters),
+        )
+        squared = np.sum(grid.points()[indices] ** 2, axis=1)
+        exact = (squared - 1.0 - np.log(squared)) / 0.7**2
+        assert abs(field.floor - np.max(exact)) < 2.0e-3
 
 
 @functools.cache

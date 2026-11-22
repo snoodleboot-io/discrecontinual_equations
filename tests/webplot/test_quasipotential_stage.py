@@ -160,8 +160,9 @@ class TestNoisyHopfFilmQuasipotential(TestCase):
     quotes them - and a copy of those here would let the page drift from them.
 
     Measured on the built page, within ``U <= 4`` on the drawn box and beyond four
-    cells of the origin: 0.03 to 0.08 for every frame with ``mu >= 0.1``, and 0.19
-    at ``mu = 0.025``, where the cycle is three cells from the singular origin.
+    cells of the origin: 0.031 to 0.054 on every frame, 0.032 at ``mu = 0.025``,
+    where the cycle is three cells from the singular origin (0.19 there before the
+    cycle start was the paper's Simpson-rule one).
     """
 
     def test_the_marched_u_follows_the_closed_form_the_page_quotes(self):
@@ -169,7 +170,7 @@ class TestNoisyHopfFilmQuasipotential(TestCase):
         xs, ys, _extent = density_window(grid, film.BOX)
         points = grid.points().reshape(*grid.shape, 2)[xs, ys].reshape(-1, 2)
         radius = np.linalg.norm(points, axis=1)
-        for mu, bar in ((0.025, 0.25), (1.0, 0.08)):
+        for mu, bar in ((0.025, 0.045), (1.0, 0.045)):
             problem = film.quasipotential_at(mu, grid)
             assert problem is not None
             solver, attractor = problem

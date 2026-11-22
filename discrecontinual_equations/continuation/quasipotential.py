@@ -54,8 +54,10 @@ Ornstein-Uhlenbeck error below at 161 points (1.06e-3 against 5.0e-4).
 The attractor is initialised exactly where it can be: around a stable equilibrium
 ``x*`` the points within a couple of cells get the quadratic quasipotential of the
 linearisation, ``(1/2) (x - x*)^T S^{-1} (x - x*)`` with ``J S + S J^T + D(x*) = 0``;
-around a limit cycle the points within a cell and a half get the one-point action
-from the nearest point of the cycle.
+around a limit cycle the points within a cell and a half get the paper's
+Simpson-rule start from the nearest point of the cycle (see
+:class:`CycleAttractor`), with ``grad U`` from the split of the drift into a
+gradient and a rotational part.
 
 *Measured.* The error in ``U`` against the closed forms, by doubling the grid on a
 fixed box (the tests repeat these):
@@ -197,9 +199,29 @@ class EquilibriumAttractor:
 class CycleAttractor:
     """A stable limit cycle, given as states around it in order.
 
-    ``U`` vanishes on the cycle. The points within ``width`` cells of it are given the
-    one-point action from the nearest point of the cycle, resampled finely enough
-    that the nearest point is the foot of the perpendicular to well inside a cell.
+    ``U`` vanishes on the cycle. The points within ``width`` cells of it start
+    from the value Dahiya and Cameron's initialisation gives (their Eqs. (9) to
+    (12)), carried over to a matrix ``D``. Near the cycle the drift splits as
+    ``f = -(1/2) D grad U + l`` with ``grad U . l = 0``, and ``l`` is close to
+    ``f`` on the cycle, where ``grad U`` vanishes; taking ``l`` parallel to ``f``
+    at the foot ``x*`` of ``x`` on the cycle gives
+
+        ``grad U(z) = -2 D(z)^{-1} (f(z) - c f(x*))``,
+        ``c = <f(z), f(x*)>_A / <f(x*), f(x*)>_A``, ``A = D(z)^{-1}``,
+
+    and ``U(x) = integral of grad U . dx`` from the foot, where ``U`` and
+    ``grad U`` vanish, by Simpson's rule:
+    ``(4 grad U(x_m) + grad U(x)) . (x - x*) / 6`` with ``x_m`` the midpoint.
+    The foot is the projection of ``x`` on the chord from the nearest point of
+    the cycle, resampled to a quarter of a cell, to its neighbour on ``x``'s side.
+
+    A straight-segment action from the foot, the obvious alternative, is wrong
+    by ``O(h)``: across a rotating flow it pays ``|l|`` per unit length. The
+    march accepts the band in the order of these values and cannot repair the
+    first ones it accepts, so that error stays. On Dahiya and Cameron's SDE (24)
+    it left ``U`` next to the cycle off by 5.45e-3 and 3.27e-3 at 161 and 321
+    points (order 0.74); from this start, 1.47e-3 and 3.0e-4 (order 2.3), the
+    same as from the exact values.
     """
 
     __slots__ = ["_states", "_width"]
@@ -222,11 +244,10 @@ class CycleAttractor:
         points = grid.points()
         distance, nearest = cKDTree(samples).query(points)
         near = np.flatnonzero(distance <= self._width * cell)
-        feet = samples[nearest[near]]
         values = np.array(
             [
-                _segment_action(drift, noise, foot, point)
-                for foot, point in zip(feet, points[near], strict=True)
+                _cycle_start(drift, noise, samples, int(index), point)
+                for index, point in zip(nearest[near], points[near], strict=True)
             ],
         )
         return near, values
@@ -247,16 +268,34 @@ def _resample_closed(states: np.ndarray, spacing: float) -> np.ndarray:
     )
 
 
-def _segment_action(
+def _cycle_start(
     drift: Function,
     noise: NoiseMatrix,
-    start: np.ndarray,
-    end: np.ndarray,
+    samples: np.ndarray,
+    index: int,
+    point: np.ndarray,
 ) -> float:
-    """``Q(start, end)`` by the midpoint rule, with ``f`` and ``D`` evaluated there."""
-    middle = _HALF * (start + end)
-    metric = np.linalg.inv(diffusion_matrix(noise.columns_at(middle)))
-    return _geometric(end - start, field_at(drift, middle), metric)
+    """``U`` at ``point`` from the cycle sample ``index`` nearest it (see above)."""
+    closest = samples[index]
+    neighbours = (samples[index - 1], samples[(index + 1) % len(samples)])
+    beside = max(
+        neighbours,
+        key=lambda other: float((point - closest) @ (other - closest)),
+    )
+    tangent = (beside - closest) / np.linalg.norm(beside - closest)
+    foot = closest + float((point - closest) @ tangent) * tangent
+    along = field_at(drift, foot)
+    step = point - foot
+
+    def slope(state: np.ndarray) -> np.ndarray:
+        metric = np.linalg.inv(diffusion_matrix(noise.columns_at(state)))
+        velocity = field_at(drift, state)
+        weight = float(along @ metric @ along)
+        share = float(velocity @ metric @ along) / weight if weight > 0.0 else 0.0
+        return -2.0 * metric @ (velocity - share * along)
+
+    middle = _HALF * (foot + point)
+    return float((4.0 * slope(middle) + slope(point)) @ step / 6.0)
 
 
 def _geometric(step: np.ndarray, velocity: np.ndarray, metric: np.ndarray) -> float:
@@ -496,12 +535,11 @@ class OrderedLineIntegral:
         indices, values = attractor.initial(self._grid, self._drift, self._noise)
         march.run(indices, values)
         # The floor is read after the march, not from what the attractor wrote.
-        # A cycle's one-point starting values overestimate U badly - at mu = 1
-        # on the noisy Hopf film's grid their largest is 0.175 against an exact
-        # 0.023 - and the march lowers almost all of them (359 of 374 there) as
-        # the earlier ones are accepted; the largest it leaves is 0.032. A floor
-        # of 0.175 would count a path stalled three cells off a small cycle as
-        # arrived.
+        # The march still lowers some of the starting values as the earlier ones
+        # are accepted - 173 of 374 at mu = 1 on the noisy Hopf film's grid, the
+        # largest from 0.0230 to 0.0219, and at mu = 0.025, where the cycle is
+        # three cells from the singular origin, 31 of 56, from 0.0208 to 0.0156 -
+        # and what it leaves is the level the grid resolves next to the attractor.
         floor = float(np.max(march.values.ravel()[indices]))
         return GridQuasipotential(self._grid, march.values, floor)
 
