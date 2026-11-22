@@ -233,6 +233,14 @@ from discrecontinual_equations.continuation.symmetry import (
     equivariance_defect,
     fourier_reduce,
 )
+from discrecontinual_equations.continuation.topological_modes import (
+    KernelDensity,
+    ModeCountThreshold,
+    PersistencePair,
+    PersistenceProbe,
+    TopologicalModes,
+    superlevel_persistence,
+)
 
 __all__ = [
     "AdaptivePeriodicOrbit",
@@ -313,6 +321,7 @@ __all__ = [
     "HopfNormalForm",
     "Itinerary",
     "Ito",
+    "KernelDensity",
     "LyapunovExponent",
     "LyapunovSettings",
     "LyapunovSpectrum",
@@ -323,6 +332,7 @@ __all__ = [
     "MeanTopExponent",
     "MeshSpec",
     "MinimumActionPath",
+    "ModeCountThreshold",
     "NetworkCompetition",
     "NetworkConnection",
     "NetworkContinuation",
@@ -337,6 +347,8 @@ __all__ = [
     "ParameterThreshold",
     "PeriodicOrbit",
     "PeriodicOrbitSolution",
+    "PersistencePair",
+    "PersistenceProbe",
     "PhenomenologicalThreshold",
     "RadialCrater",
     "ResolutionLevel",
@@ -364,6 +376,7 @@ __all__ = [
     "Terminus",
     "ThresholdCurve",
     "ThresholdPoint",
+    "TopologicalModes",
     "UnstableManifold",
     "Visit",
     "ZeroHopfNormalForm",
@@ -392,6 +405,7 @@ __all__ = [
     "stochastic_finite_time_exponents",
     "stochastic_lyapunov",
     "stratonovich_factor",
+    "superlevel_persistence",
     "transition_matrices",
     "variational_drift_shift",
     "zero_hopf_normal_form",
