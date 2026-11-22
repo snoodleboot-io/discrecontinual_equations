@@ -202,7 +202,7 @@ def run_complex_ode_example():
         time_points_plot = time_points[start_step:end_step]
         solutions_plot = [sol[start_step:end_step] for sol in solutions]
         print(f"Plotting data from steps {start_step} to {end_step}")
-        print(".1f")
+        print(f"Time range: {time_points_plot[0]:.1f} to {time_points_plot[-1]:.1f}")
     else:
         # If we don't have enough data, use all available
         time_points_plot = time_points

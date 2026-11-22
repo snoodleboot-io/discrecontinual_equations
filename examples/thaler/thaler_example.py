@@ -167,7 +167,7 @@ def run_alpha_stable_diffusion_example():
 
     print(f"Simulating α-stable diffusion with α={alpha}, η={eta}, β={beta}")
     print(f"Number of paths: {n_simulations}")
-    print(".2f")
+    print(f"Total time: {end_time:.2f}")
     print(f"Time steps: {n_steps}")
     print(f"Step size: {step_size:.4f}")
     print(f"Homogenisation ε: {config.epsilon}")
@@ -308,7 +308,7 @@ def run_boundary_preservation_example():
 
     print("Solving SDE: dZ = -Z³ dt + Z²  dW^α,η,β")
     print("Natural boundary at Z = 0 (solutions remain positive)")
-    print(".2f")
+    print(f"Total time: {end_time:.2f}")
     print(f"Time steps: {n_steps}")
     print(f"Homogenisation ε: {config.epsilon}")
     print()
