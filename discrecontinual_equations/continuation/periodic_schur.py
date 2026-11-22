@@ -125,15 +125,28 @@ def _trailing_block(window: np.ndarray) -> np.ndarray:
 
 
 def _shift(window: np.ndarray, *, exceptional: bool) -> complex:
-    """Wilkinson's shift: the trailing block's eigenvalue nearer its last entry."""
+    """Wilkinson's shift: the trailing block's eigenvalue nearer its last entry.
+
+    The block is scaled by a power of two to unit size first. Its determinant
+    is the product of two eigenvalues, which leaves the floating-point range
+    for two below 1e-154 or above 1e154 - a cycle with two strongly
+    contracting directions has those - and a zero or infinite determinant
+    gives a shift that never converges. A power of two scales exactly, so
+    every shift that was representable before is the same to the last bit.
+    """
     block = _trailing_block(window)
     if exceptional:
         return complex(block[1, 1] + _EXCEPTIONAL_FACTOR * abs(block[1, 0]))
+    largest = float(np.max(np.abs(block)))
+    scale = 1.0
+    if np.isfinite(largest) and largest > 0.0:
+        scale = float(np.ldexp(1.0, np.frexp(largest)[1]))
+        block = block / scale
     half_trace = 0.5 * (block[0, 0] + block[1, 1])
     determinant = block[0, 0] * block[1, 1] - block[0, 1] * block[1, 0]
     root = np.sqrt(half_trace * half_trace - determinant)
     candidates = (half_trace + root, half_trace - root)
-    shift = min(candidates, key=lambda value: abs(value - block[1, 1]))
+    shift = scale * min(candidates, key=lambda value: abs(value - block[1, 1]))
     return complex(shift) if np.isfinite(shift) else 0j
 
 
