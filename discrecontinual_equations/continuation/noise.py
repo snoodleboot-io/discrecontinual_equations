@@ -128,11 +128,10 @@ def variational_drift_shift(jacobians: np.ndarray, factor: float) -> np.ndarray:
     tangent frame, and they must come from the same convention factor or the exponent
     and the density would be reported for two different systems.
 
-    The sum is one matrix product: the ``K`` Jacobians side by side, ``n x Kn``,
-    times the same Jacobians stacked, ``Kn x n``. A two-operand ``einsum`` would run
-    it as a loop without BLAS, several times slower at ``n = K = 64``.
+    The ``K`` squares are taken as one batched ``matmul`` and then summed. A
+    two-operand ``einsum`` runs the sum as a loop without BLAS, four times slower at
+    ``n = K = 64``. Folding the sum into one ``(n x Kn) (Kn x n)`` product is no
+    faster on one thread, and on a loaded machine its long inner dimension makes
+    OpenBLAS start threads that measured up to 25 times slower than the loop.
     """
-    drivers, rows, _ = jacobians.shape
-    side_by_side = jacobians.transpose(1, 0, 2).reshape(rows, drivers * rows)
-    stacked = jacobians.reshape(drivers * rows, rows)
-    return factor * (side_by_side @ stacked)
+    return factor * np.matmul(jacobians, jacobians).sum(axis=0)
