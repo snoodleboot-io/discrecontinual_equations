@@ -18,10 +18,11 @@ request, or AUTO's orthogonal collocation at ``m`` Gauss-Legendre points (order
 ``2m``). See :class:`CycleContinuation` for why the order, and not the mesh, is
 what decides whether the multipliers can be believed.
 
-Only the collocation follows AUTO. Whatever the scheme, the phase condition is a
-point (Poincare) condition ``x_0[i] = c`` and the arclength constraint uses the
-plain Euclidean norm of the whole unknown vector, not AUTO's integral phase
-condition and weighted ``L2`` norm.
+The phase condition and the arclength norm are options. By default they are a
+point (Poincare) condition ``x_0[i] = c`` and the plain Euclidean norm of the
+whole unknown vector; ``phase="integral"`` and ``arclength="weighted"`` give
+AUTO's integral phase condition and its ``L2`` arclength (Doedel, Keller and
+Kernevez, IJBC 1, 1991), integrated by the active scheme's own quadrature.
 """
 
 import warnings
@@ -227,6 +228,17 @@ class _Collocation:
         inner = mesh[:-1, None] + fractions[None, :] * np.diff(mesh)[:, None]
         return np.append(inner.ravel(), mesh[-1])
 
+    def weights(self, mesh: np.ndarray) -> np.ndarray:
+        """Quadrature weights over ``[0, 1]`` for the solution's points.
+
+        The trapezoidal rule on the nodes: the only points a one-wide scheme
+        has. Hermite-Simpson's own Simpson rule would need the midpoints, which
+        are not unknowns; and on a uniform periodic mesh the trapezoidal rule
+        is spectrally accurate for a smooth periodic integrand anyway.
+        """
+        widths = np.diff(mesh)
+        return _HALF * (np.append(widths, 0.0) + np.insert(widths, 0, 0.0))
+
 
 class _Trapezoidal(_Collocation):
     """Second order: ``x_{i+1} - x_i = (hT/2)(f_i + f_{i+1})``."""
@@ -363,7 +375,7 @@ class _GaussLegendre(_Collocation):
     """Order ``2m``: orthogonal collocation at ``m`` Gauss-Legendre points, as AUTO.
 
     The collocation is AUTO's; the phase condition and the arclength norm around
-    it are not (see the module docstring).
+    it are AUTO's only on request (see :class:`CycleContinuation`).
 
     On each interval the orbit is the polynomial of degree ``m`` through ``m + 1``
     equally spaced points - the two mesh points and ``m - 1`` between them - and
@@ -403,7 +415,7 @@ class _GaussLegendre(_Collocation):
 
     def __init__(self, points: int) -> None:
         self.width = points
-        roots, _ = leggauss(points)
+        roots, gauss_weights = leggauss(points)
         gauss = _HALF * (roots + 1.0)
         powers = np.arange(points + 1)
         grid = np.linspace(0.0, 1.0, points + 1)
@@ -414,6 +426,25 @@ class _GaussLegendre(_Collocation):
         self._derivatives = (
             powers[None, 1:] * gauss[:, None] ** powers[None, :-1]
         ) @ self._coefficients[1:]
+        # Each of the interval's m + 1 points' weight in the Gauss rule on [0, 1]:
+        # the integral of its Lagrange basis polynomial, exact since the basis
+        # has degree m < 2m.
+        self._quadrature = (_HALF * gauss_weights) @ self._values
+
+    def weights(self, mesh: np.ndarray) -> np.ndarray:
+        """Quadrature weights over ``[0, 1]`` for every point of the solution.
+
+        Each interval integrates its own polynomial exactly by the Gauss rule,
+        which is what Doedel's discretised integrals use (the ``omega_{j,i}``
+        Lagrange quadrature coefficients); a mesh point shared by two intervals
+        collects a weight from each.
+        """
+        widths = np.diff(mesh)
+        total = np.zeros(widths.size * self.width + 1)
+        for interval, width in enumerate(widths):
+            start = interval * self.width
+            total[start : start + self.width + 1] += width * self._quadrature
+        return total
 
     def basis(self, fractions: np.ndarray) -> np.ndarray:
         """The Lagrange basis at positions in ``[0, 1]``: one row per position."""
@@ -495,6 +526,8 @@ _COLLOCATIONS: dict[str, _Collocation] = {
     scheme.name: scheme for scheme in (_Trapezoidal(), _HermiteSimpson())
 }
 _SCHEMES = sorted([*_COLLOCATIONS, _GaussLegendre.name])
+_PHASES = ("integral", "point")
+_ARCLENGTHS = ("euclidean", "weighted")
 # AUTO's default point count (its NCOL), and the most this scheme is tested at.
 _GAUSS_POINTS = 4
 
@@ -1049,11 +1082,7 @@ class CycleContinuation:
 
     ``"gauss_legendre"`` is AUTO's orthogonal collocation, order ``2m`` with
     ``collocation_points`` (default 4) points to an interval - see
-    :class:`_GaussLegendre` for the measured orders. Only the collocation is
-    AUTO's: the phase condition stays the point condition ``x_0[phase_index] =
-    phase_value`` and the arclength the Euclidean norm of the whole unknown
-    vector, where AUTO uses an integral phase condition and a weighted ``L2``
-    norm. Its multipliers come off its
+    :class:`_GaussLegendre` for the measured orders. Its multipliers come off its
     own Jacobian, and its points carry their error explicitly because the
     trivial multiplier of that monodromy no longer measures it (see
     :attr:`CyclePoint.floquet_error`). On 80 mesh intervals it takes the two
@@ -1078,6 +1107,25 @@ class CycleContinuation:
     after the same span passes about ``sqrt(m)`` times the step - the figures
     above doubled it, and then reached further along both branches.
 
+    ``phase`` and ``arclength`` (DEQ-56) choose what pins the cycle's phase
+    and what measures a step. ``phase="point"``, the default, is
+    ``x_0[phase_index] = phase_value``; it needs the orbit to cross that value
+    transversally, and loses the branch where it stops: a circle sliding
+    sideways past ``x = 0`` is followed to the tangency and then round an
+    artificial fold back. ``phase="integral"`` is AUTO's
+    ``int_0^1 <x - x_hat, x_hat'> dt = 0`` against the previous cycle, which
+    needs no crossing and follows that circle on. ``arclength="euclidean"``,
+    the default, is the norm of every unknown, so one step spans less of the
+    parameter the more points a scheme has: on the Hopf branch at 24
+    intervals 9.9e-3 under trapezoidal and Hermite-Simpson, 7.1e-3, 5.8e-3,
+    5.1e-3 under Gauss-Legendre with ``m = 2, 3, 4``. ``"weighted"`` is
+    AUTO's ``L2`` norm of the orbit plus the parameter (the period weighted
+    zero, AUTO's default for cycles), and the same step spans 3.5959e-2 under
+    all five to six figures. Both integrals use the scheme's own quadrature:
+    the trapezoidal rule on the nodes for the one-wide schemes, the Gauss rule
+    on each interval's polynomial for Gauss-Legendre. The defaults are kept
+    because they reproduce every film to the last bit.
+
     Mesh equidistribution was built for it and measured, and is left out. The
     Russell-Christiansen monitor ``|x^(m+1)|^(1/(m+1))``, re-applied every step
     with the polynomial and the tangent carried onto the new mesh and the point
@@ -1094,6 +1142,7 @@ class CycleContinuation:
     """
 
     __slots__ = [
+        "_arclength",
         "_assembled",
         "_collocation",
         "_dimension",
@@ -1101,7 +1150,9 @@ class CycleContinuation:
         "_intervals",
         "_mesh",
         "_parameter_index",
+        "_phase",
         "_phase_index",
+        "_phase_reference",
         "_phase_value",
     ]
 
@@ -1115,7 +1166,20 @@ class CycleContinuation:
         *,
         collocation: str = "hermite_simpson",
         collocation_points: int | None = None,
+        phase: str = "point",
+        arclength: str = "euclidean",
     ) -> None:
+        if phase not in _PHASES:
+            message = f"phase must be one of {list(_PHASES)}, got {phase!r}"
+            raise ValueError(message)
+        if arclength not in _ARCLENGTHS:
+            message = f"arclength must be one of {list(_ARCLENGTHS)}, got {arclength!r}"
+            raise ValueError(message)
+        self._phase = phase
+        self._arclength = arclength
+        # The previous cycle the integral phase condition is taken against, as
+        # (its states, the row of weights times its slope), both flattened.
+        self._phase_reference: tuple[np.ndarray, np.ndarray] | None = None
         if collocation not in _SCHEMES:
             message = f"collocation must be one of {_SCHEMES}, got {collocation!r}"
             raise ValueError(message)
@@ -1210,9 +1274,62 @@ class CycleContinuation:
             [
                 collocation.ravel(),
                 states[-1] - states[0],
-                [states[0, self._phase_index] - self._phase_value],
+                [self._phase_residual(states)],
             ],
         )
+
+    def _phase_residual(self, states: np.ndarray) -> float:
+        """The phase condition: a point condition, or AUTO's integral one.
+
+        Integral: ``int_0^1 <x(t) - x_hat(t), x_hat'(t)> dt`` by the scheme's
+        quadrature, where ``x_hat`` is the previous cycle and ``x_hat'`` its
+        slope ``T f(x_hat)`` in rescaled time. It picks the phase that
+        minimises the distance to ``x_hat`` (Doedel's derivation), so it needs
+        no coordinate to cross any value. Taken against ``x - x_hat`` rather
+        than ``x`` so that ``x_hat`` satisfies it exactly on the mesh too; the
+        two differ by ``int <x_hat, x_hat'>``, zero for any periodic ``x_hat``.
+        """
+        if self._phase == "point":
+            return float(states[0, self._phase_index] - self._phase_value)
+        anchor, row = self._reference()
+        return float(row @ (states.ravel() - anchor))
+
+    def _reference(self) -> tuple[np.ndarray, np.ndarray]:
+        if self._phase_reference is None:  # pragma: no cover (set before solves)
+            message = "the integral phase condition has no reference cycle"
+            raise RuntimeError(message)
+        return self._phase_reference
+
+    def _set_phase_reference(self, unknowns: np.ndarray, nodes: int) -> None:
+        """Take the integral phase condition against the cycle in ``unknowns``."""
+        if self._phase == "point":
+            return
+        dimension = self._dimension
+        states = unknowns[: nodes * dimension].reshape(nodes, dimension)
+        period = float(unknowns[nodes * dimension])
+        parameter = float(unknowns[-1])
+        slopes = period * np.array([self._field(state, parameter) for state in states])
+        weights = self._collocation.weights(self._mesh)
+        row = (weights[:, None] * slopes).ravel()
+        self._phase_reference = (states.ravel().copy(), row)
+
+    def _norm_weights(self, size: int) -> np.ndarray | None:
+        """The weighted arclength's inner product, as a diagonal; ``None`` if plain.
+
+        Doedel's pseudo-arclength: ``int_0^1 <dx(t), x_dot(t)> dt`` by the
+        scheme's quadrature, plus the parameter's term. The period's weight is
+        zero, AUTO's default for periodic solutions (its ``THL = {11: 0}``),
+        which keeps the step from being throttled near an infinite period.
+        """
+        if self._arclength == "euclidean":
+            return None
+        weights = self._collocation.weights(self._mesh)
+        states = np.repeat(weights, self._dimension)
+        diagonal = np.concatenate([states, [0.0], [1.0]])
+        if diagonal.size != size:  # pragma: no cover (shapes are fixed by trace)
+            message = f"{diagonal.size} weights for {size} unknowns"
+            raise ValueError(message)
+        return diagonal
 
     def _augmented(self, unknowns: np.ndarray, nodes: int, arc: _Arc) -> np.ndarray:
         cycle = self._cycle_residual(unknowns, nodes)
@@ -1324,6 +1441,12 @@ class CycleContinuation:
         collocation_rows = intervals * height
         periodic = collocation_rows + span
 
+        if self._phase == "point":
+            phase_columns = np.array([self._phase_index])
+            phase_values = np.array([1.0])
+        else:
+            phase_values = self._reference()[1]
+            phase_columns = np.arange(phase_values.size)
         rows = np.concatenate(
             [
                 block_rows.ravel(),
@@ -1331,7 +1454,7 @@ class CycleContinuation:
                 border_rows.ravel(),
                 periodic,
                 periodic,
-                [collocation_rows + dimension],
+                np.full(phase_columns.size, collocation_rows + dimension),
             ],
         )
         columns = np.concatenate(
@@ -1341,7 +1464,7 @@ class CycleContinuation:
                 np.full(collocation_rows, size - 1),
                 collocation_rows + span,
                 span,
-                [self._phase_index],
+                phase_columns,
             ],
         )
         values = np.concatenate(
@@ -1351,7 +1474,7 @@ class CycleContinuation:
                 parameter_values.ravel(),
                 np.ones(dimension),
                 -np.ones(dimension),
-                [1.0],
+                phase_values,
             ],
         )
         return rows, columns, values
@@ -1452,15 +1575,20 @@ class CycleContinuation:
     ) -> np.ndarray:
         rhs = np.zeros(unknowns.size)
         rhs[-1] = 1.0
+        weights = self._norm_weights(unknowns.size)
+        border = previous if weights is None else weights * previous
         tangent = self._solve_bordered(
             unknowns,
             nodes,
-            previous,
+            border,
             rhs,
-            lambda: self._dense_tangent_system(unknowns, nodes, previous),
+            lambda: self._dense_tangent_system(unknowns, nodes, border),
         )
-        tangent = tangent / np.linalg.norm(tangent)
-        if tangent @ previous < 0.0:
+        if weights is None:
+            tangent = tangent / np.linalg.norm(tangent)
+        else:
+            tangent = tangent / np.sqrt(tangent @ (weights * tangent))
+        if tangent @ border < 0.0:
             tangent = -tangent
         return tangent
 
@@ -1578,12 +1706,14 @@ class CycleContinuation:
             self._phase_value,
             collocation=_GaussLegendre.name,
             collocation_points=width,
+            phase=self._phase,
         )
         fine._dimension = self._dimension
         unknowns = np.concatenate(
             [np.vstack([*pieces, states[-1:]]).ravel(), [period], [parameter]],
         )
         nodes = 2 * self._intervals * width + 1
+        fine._set_phase_reference(unknowns, nodes)
         fixed_parameter = np.zeros(unknowns.size)
         fixed_parameter[-1] = 1.0
         corrected = fine._correct(unknowns, nodes, _Arc(unknowns, fixed_parameter, 0.0))
@@ -1612,6 +1742,23 @@ class CycleContinuation:
         """
         if not (np.isfinite(seed.period) and seed.period > 0.0):
             return None
+        if self._phase == "integral":
+            # Until there is a previous cycle, the seed is the reference: the
+            # first point takes the phase nearest the guess it was given.
+            self._equation.derivative.parameters[self._parameter_index].value = (
+                seed.parameter
+            )
+            filled = self._filled(
+                PeriodicOrbitSolution(
+                    np.asarray(seed.states, dtype=float),
+                    seed.period,
+                ),
+                seed.parameter,
+            )
+            self._set_phase_reference(
+                np.concatenate([filled.ravel(), [seed.period], [seed.parameter]]),
+                nodes,
+            )
         try:
             staged = self._staged_seed(seed, nodes)
         except np.linalg.LinAlgError:
@@ -1839,17 +1986,23 @@ class CycleContinuation:
         unknowns = self._solve_seed(seed, nodes)
         if unknowns is None:
             return [], []
+        self._set_phase_reference(unknowns, nodes)
         seed_direction = np.zeros(unknowns.size)
         seed_direction[-1] = direction
         tangent = self._tangent(unknowns, nodes, seed_direction)
+        weights = self._norm_weights(unknowns.size)
         points = [self._point(unknowns, nodes)]
         bifurcations: list[CycleBifurcation] = []
         for _ in range(steps):
             prediction = unknowns + arclength * tangent
-            arc = _Arc(unknowns, tangent, arclength)
+            # The constraint's row is the tangent in the arclength's own inner
+            # product, so it reads ``arclength`` at the prediction either way.
+            row = tangent if weights is None else weights * tangent
+            arc = _Arc(unknowns, row, arclength)
             corrected = self._correct(prediction, nodes, arc)
             if corrected is None:
                 break
+            self._set_phase_reference(corrected, nodes)
             tangent = self._tangent(corrected, nodes, tangent)
             unknowns = corrected
             point = self._point(unknowns, nodes)
