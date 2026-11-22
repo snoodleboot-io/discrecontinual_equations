@@ -282,3 +282,147 @@ class TestGottwaldMelbourneSolver:
 
             assert solver.solution is not None
             assert len(solver.solution.results[0].discretization) == 6
+
+
+# The ticket's reproduction (DEQ-86): ε = 1 on a grid of 20,000 steps over [0, 1].
+# Before the fix each grid step took one fast step of the map, so the path ran
+# 20,000 units of slow time with ε = 1 and overflowed in the z update at step
+# 17,773, whatever the grid.
+_FINE = 1.0 / 20_000
+
+
+class _Linear(StochasticFunction):
+    def __init__(self, variables, parameters, time=None):
+        super().__init__(variables, parameters, [Variable(name="dZ/dt")], time)
+        self.sigma = parameters[0].value
+
+    def eval(self, point, time=None):
+        return [-point[0]]
+
+    def diffusion(self, point, time=None):
+        return [self.sigma * point[0]]
+
+
+def _linear_equation() -> DifferentialEquation:
+    """dZ = -Z dt + 0.3 Z ⋄ dW^α,η,β, the equation the overflow was found on."""
+    time = Variable(name="t", discretization=[])
+    variables = [Variable(name="Z", discretization=[])]
+    parameters = [Parameter(name="sigma", value=0.3)]
+    return DifferentialEquation(
+        variables=variables,
+        time=time,
+        parameters=parameters,
+        derivative=_Linear(variables, parameters, time),
+    )
+
+
+def _solve_linear(epsilon: float, step_size: float) -> list[float]:
+    """The path of :func:`_linear_equation` from Z = 1 over [0, 1]."""
+    config = GottwaldMelbourneConfig(
+        epsilon=epsilon,
+        start_time=0.0,
+        end_time=1.0,
+        step_size=step_size,
+        random_seed=1,
+    )
+    curve = GottwaldMelbourneSolver(config).solve(_linear_equation(), [1.0])
+    return curve.results[0].discretization
+
+
+class TestEpsilonAgainstTheStepSize:
+    """ε may not exceed the step size (DEQ-86).
+
+    The map advances slow time by ε per fast step: the path at time t is
+    z_⌊t/ε⌋ (Gottwald & Melbourne 2021, Theorem 4.1). A grid step shorter than
+    ε cannot be resolved, and the solver took one fast step per grid step
+    regardless, so the path ran ε/step_size times faster than its own clock.
+    """
+
+    def test_epsilon_one_on_a_fine_grid_is_refused_rather_than_overflowing(self):
+        # Act / Assert: refused before any step is taken, not a path of inf/nan.
+        with pytest.raises(ValueError, match="ε must not exceed step_size"):
+            _solve_linear(epsilon=1.0, step_size=_FINE)
+
+    def test_the_error_names_both_values(self):
+        with pytest.raises(ValueError, match=r"epsilon=0\.02.*step_size=0\.01"):
+            GottwaldMelbourneConfig(epsilon=0.02, step_size=0.01)
+
+    def test_epsilon_equal_to_the_step_size_is_accepted(self):
+        # Arrange / Act
+        config = GottwaldMelbourneConfig(epsilon=0.01, step_size=0.01)
+
+        # Assert
+        assert config.epsilon == config.step_size
+
+    def test_epsilon_just_above_the_step_size_is_refused(self):
+        with pytest.raises(ValueError, match="ε must not exceed step_size"):
+            GottwaldMelbourneConfig(epsilon=0.010000000000000002, step_size=0.01)
+
+    def test_the_solver_refuses_a_config_changed_after_it_was_built(self):
+        # Arrange: a valid config whose step is then shortened below ε.
+        config = GottwaldMelbourneConfig(epsilon=0.01, step_size=0.01)
+        config.step_size = 0.005
+
+        # Act / Assert
+        with pytest.raises(ValueError, match="ε must not exceed step_size"):
+            GottwaldMelbourneSolver(config)
+
+    @pytest.mark.parametrize(
+        ("epsilon", "expected"),
+        [
+            # Recorded on main @ 8a76b6a, before the check existed.
+            (
+                0.005,
+                [
+                    0.1,
+                    0.10219089906285475,
+                    0.10066277607065195,
+                    0.10439490272182965,
+                    0.10520203848482867,
+                    0.10125276693053528,
+                ],
+            ),
+            (
+                0.01,
+                [
+                    0.1,
+                    0.10058386291341516,
+                    0.10348604436645159,
+                    0.10411095092689597,
+                    0.10097947718314447,
+                    0.10390449278678951,
+                ],
+            ),
+        ],
+        ids=["epsilon_below_step", "epsilon_equal_to_step"],
+    )
+    def test_a_path_with_epsilon_within_the_step_is_unchanged(
+        self,
+        epsilon,
+        expected,
+    ):
+        # Arrange
+        time = Variable(name="t", discretization=[])
+        variables = [Variable(name="Z", discretization=[])]
+        equation = DifferentialEquation(
+            variables=variables,
+            time=time,
+            parameters=[],
+            derivative=TestBoundaryFunction(variables, [], time),
+        )
+        config = GottwaldMelbourneConfig(
+            alpha=1.5,
+            eta=0.5,
+            beta=0.5,
+            epsilon=epsilon,
+            start_time=0.0,
+            end_time=0.05,
+            step_size=0.01,
+            random_seed=42,
+        )
+
+        # Act
+        curve = GottwaldMelbourneSolver(config).solve(equation, [0.1])
+
+        # Assert: bit for bit.
+        assert curve.results[0].discretization == expected
