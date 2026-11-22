@@ -8,6 +8,7 @@ read back as the very same strings, and, where a browser is at hand, the page
 it builds must hold no planted element and show the string as text.
 """
 
+import html
 import json
 import re
 import shutil
@@ -129,6 +130,30 @@ def test_the_escapes_are_html_and_script_safe():
     for character in "<>&":
         assert character not in text
     assert json.loads(text) == {"label": HOSTILE}
+
+
+@pytest.mark.parametrize(
+    "filename",
+    [
+        "javascript:alert(1)",
+        " JaVaScRiPt:alert(1)",
+        "java\tscript:alert(1)",
+        "data:text/html,x",
+    ],
+)
+def test_an_atlas_card_never_links_to_a_script_url(filename):
+    # Escaping keeps a filename inside its attribute, but a filename that
+    # is a ``javascript:`` URL is still one, and runs when the card is
+    # clicked (measured in headless Chrome). A card links to a file beside
+    # the atlas, so its href must be a relative path, whatever the name.
+    page = _atlas_html([AtlasEntry(filename, "title", "subtitle")])
+    href = re.search(r'<a class="card" href="([^"]*)"', page).group(1)
+    assert ":" not in html.unescape(href)
+
+
+def test_an_ordinary_filename_links_as_it_is():
+    page = _atlas_html([AtlasEntry("lorenz_manifold.html", "title", "subtitle")])
+    assert 'href="lorenz_manifold.html"' in page
 
 
 RENDERERS = ["d3", "stage", "stochastic stage", "manifold film", "atlas"]
