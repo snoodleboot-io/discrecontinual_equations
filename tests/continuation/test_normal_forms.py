@@ -63,9 +63,9 @@ from tests.continuation.normal_form_reference import (
     fold_hopf_e,
 )
 from tests.continuation.normal_form_systems import (
+    CurvedBogdanovTakens,
     EmbeddedBogdanovTakens,
     EmbeddedHopfHopf,
-    CurvedBogdanovTakens,
     EmbeddedZeroHopf,
     StackedBautin,
     StackedHopfHopf,
