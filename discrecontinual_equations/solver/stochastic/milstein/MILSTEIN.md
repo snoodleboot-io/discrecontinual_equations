@@ -177,23 +177,58 @@ this solver carried its own `eps = 1e-8` estimate).
 ### Systems and Matrix Noise
 
 For `dX = a dt + G dW` with `m` drivers the Milstein term is
-`(1/2) sum_{j,k} (dG_k/dx) G_j I_(j,k)`, and only the diagonal iterated integrals
-`I_(k,k) = (dW_k^2 - dt)/2` have a closed form; the off-diagonal ones are Levy
-areas. When the noise *commutes* - `(dG_k/dx) G_j = (dG_j/dx) G_k` for every pair -
-the Levy areas drop out and the term is
+`sum_{j,k} (dG_k/dx) G_j I_(j,k)`, with `I_(j,k)` the iterated Ito integral whose
+inner index is `j`. Each is `(1/2)(dW_j dW_k - delta_jk dt) + A_(j,k)`, with `A`
+the antisymmetric matrix of Levy areas. When the noise *commutes* -
+`(dG_k/dx) G_j = (dG_j/dx) G_k` for every pair - the areas cancel and the term is
 
 ```
 (1/2) sum_{j,k} (dG_k/dx) G_j (dW_j dW_k - delta_jk dt)
 ```
 
 which is what the solver steps (the `delta_jk dt` left off in the Stratonovich
-form). The identity is checked at every step and a violation raises `ValueError`
-naming Euler-Maruyama. A vector diffusion is `G = diag(b)`: it commutes when each
-`b_i` depends only on `x_i`, and the term is then the per-component
-`(1/2) b_i b_i' (dW_i^2 - dt)`. Before DEQ-28 every system was stepped by
-Euler-Maruyama with a printed warning; two-component geometric Brownian motion now
-measures strong order 0.96, and complex geometric Brownian motion (conformal matrix
-noise) 0.97 against Euler-Maruyama's 0.59 on the same paths.
+form), drawing no area and giving the same numbers bit for bit as before DEQ-36.
+A vector diffusion is `G = diag(b)`: it commutes when each `b_i` depends only on
+`x_i`, and the term is then the per-component `(1/2) b_i b_i' (dW_i^2 - dt)`.
+Two-component geometric Brownian motion measures strong order 0.96, and complex
+geometric Brownian motion (conformal matrix noise) 0.97 against Euler-Maruyama's
+0.59 on the same paths.
+
+When the identity fails, checked at every step, the step adds
+`sum_{j,k} (dG_k/dx) G_j A_(j,k)` (DEQ-36; before that the solver raised). The areas
+come from the Wiener source when one is given - a `BrownianPath` reads them off its
+grid, including the areas inside its cells - and otherwise from a
+`LevyAreaSampler` on a stream spawned from `random_seed`, so a seeded run draws
+the increments Euler-Maruyama draws. The sampler is Mrongowius and Rossler's
+(arXiv:2101.09542): a truncated Fourier series of the Brownian bridge with
+`n = ceil(0.092 sqrt(m / dt))` terms, the remainder's `dW`-linear part simulated
+exactly and the rest by a Gaussian of the mean conditional covariance; the L2 error
+per step is at most `dt^(3/2)`, which keeps strong order 1.0. It costs
+`2 m n + m (m + 1) / 2` normals a step, and a warning says so once per solve.
+
+Measured, `dx = -x/2 dt + cos(y) dW_1`, `dy = -y/2 dt + cos(x) dW_2` on `[0, 1]`,
+100 paths, against the scheme on the path's own `2^-11` grid:
+
+| dt | Milstein | Euler-Maruyama |
+|---|---|---|
+| 1/4 | 1.109e-01 | 1.537e-01 |
+| 1/8 | 5.672e-02 | 1.173e-01 |
+| 1/16 | 2.912e-02 | 7.974e-02 |
+| 1/32 | 1.587e-02 | 5.737e-02 |
+| 1/64 | 7.768e-03 | 3.921e-02 |
+| 1/128 | 3.998e-03 | 2.604e-02 |
+| **slope** | **0.96** | **0.51** |
+
+On `dx = dW_1, dy = x dW_2`, where `y(T)` is the iterated integral itself, the
+scheme is exact on a path that carries its areas (largest difference 3.8e-11, the
+central-difference Jacobians' error) and Euler-Maruyama measures 0.49. Driven by the
+sampler the error there is the sampler's alone, below `0.44 dt` for
+`dt = 2^-3 ... 2^-10`; its slope is 0.78 on that range, and 0.98 for
+`dt = 2^-14 ... 2^-20`. The main cause is the rule's `max(1, ceil(.))`: `n` stays
+at 1 for `dt >= 2^-5`, and with `n` fixed the global error goes like `dt^(1/2)`
+(while staying far below the bound, `0.07` to `0.21 dt`); order 1.0 needs `n` to grow
+like `dt^(-1/2)`, which the ceiling does only in steps. The rest is that for
+`n <= 5` the sampler's error falls more slowly than `1 / n`.
 
 ## Algorithm Details
 

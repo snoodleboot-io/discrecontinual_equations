@@ -12,7 +12,15 @@ The previous version of this file claimed "order 3 convergence" from a "simplifi
 Butcher tableau" and strong 1.5 / weak 3.0 further down; the solver it described
 drew no random number (DEQ-25). The order below is measured. Systems are refused:
 the scheme is derived for one Wiener process, and its several-channel form needs
-Levy areas that cannot be sampled.
+the triple integrals `I_(j,k,l)` across channels, which are not sampled, and one
+pair of supporting values per channel, which is not implemented. The Levy areas
+between channels are sampled since DEQ-36 (`LevyAreaSampler` in `wiener.py`), and
+the Milstein solver uses them for any matrix noise at strong order 1.0; but that
+sampler's default truncation is tuned for order 1.0 (L2 error `h^(3/2)` per step).
+Order 1.5 needs `n ~ h^-1` terms (Kastner and Rossler, arXiv:2201.08424, (67) with
+`gamma = 3/2`) and areas drawn jointly with the `I_(j,k,l)`. Diagonal noise whose
+`b_i` depends only on `x_i` needs none of this: the mixed terms vanish and only
+`I_(j,j,j)` remains.
 
 ## Architecture
 
@@ -22,7 +30,7 @@ SRK3Solver
 ├── Base: StochasticRungeKuttaSolver (shared stepping loop, owns the Wiener source)
 ├── Method: Kloeden-Platen (11.2.1), scalar noise, increments (dW, dZ)
 ├── Order: Strong 1.5 (measured 1.48); weak slope measured 1.98
-├── Systems: refused with a ValueError pointing at SRK2Solver
+├── Systems: refused with a ValueError naming I_(j,k,l) as what is missing
 └── Calculus: Ito, or Stratonovich via the Ito drift a + (1/2) b b'
 ```
 

@@ -99,7 +99,7 @@ def _shear_equation() -> DifferentialEquation:
 
 
 class TestMilsteinMatrixNoise:
-    """Commuting matrix noise gets the full Milstein term; non-commuting is refused.
+    """Commuting matrix noise gets the full Milstein term without Levy areas.
 
     On complex geometric Brownian motion (two coupled multiplicative drivers whose
     noise commutes) the slope measured 0.97 against Euler-Maruyama's 0.59 on the
@@ -160,7 +160,9 @@ class TestMilsteinMatrixNoise:
         solver.solve(equation(RotatingOrnsteinUhlenbeck), [0.0, 0.0])
         assert len(solver.solution.results[0].discretization) == 101
 
-    def test_refuses_non_commuting_noise(self):
+    def test_integrates_non_commuting_noise_with_a_cost_warning(self):
+        # Refused before DEQ-36; the cross terms now get Levy areas. Its order is
+        # measured in test_milstein_levy_area.py.
         config = MilsteinConfig(start_time=0.0, end_time=1.0, step_size=0.01)
-        with pytest.raises(ValueError, match="commuting noise"):
+        with pytest.warns(UserWarning, match="Levy areas"):
             MilsteinSolver(config).solve(_shear_equation(), [1.0, 0.0])

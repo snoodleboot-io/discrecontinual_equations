@@ -100,8 +100,9 @@ For a system the diffusion interface returns one coefficient per component, each
 with its own Wiener process. The scheme uses one supporting value per channel,
 `Y_bar_j = Y + a h + b_j e_j sqrt(h)`, reproducing the diagonal Milstein terms
 `(1/2) b_j (d b_j / d x_j) (dW_j^2 - h)`. The cross terms `b_k (d b_j / d x_k)
-I_(k,j)` need Levy areas, which have no exact sampler, and are omitted: order 1.0
-therefore holds when each `b_j` depends only on `x_j`, and falls to 0.5 otherwise.
+I_(k,j)` need Levy areas, which this scheme does not read, and are omitted: order
+1.0 therefore holds when each `b_j` depends only on `x_j`, and falls to 0.5
+otherwise. For such noise use the Milstein solver, which draws the areas (DEQ-36).
 
 A Stratonovich equation `dX = a dt + b o dW` is integrated as the Ito equation with
 drift `a + (1/2) b b'`; see `coefficients.py` for the sign.

@@ -65,14 +65,28 @@ class SRK3Solver(StochasticRungeKuttaSolver):
     In the same run Euler-Maruyama measured strong 0.59 / weak 0.97 and Milstein
     strong 0.97 / weak 0.97, so the harness resolves the orders it is meant to.
 
-    **Systems are refused.** The scheme is derived for one Wiener process. For a
-    system with diagonal noise the order 1.5 expansion contains the iterated
-    integrals ``I_(j,k)``, ``I_(j,0)``, ``I_(0,j)`` and ``I_(j,k,l)`` across channels
-    ``j != k``, and the Levy areas among them have no exact sampler; applying the
-    scalar formula component-wise would be a scheme of unknown order, which is the
-    defect this file is being cured of. ``solve`` therefore raises for more than one
-    variable and points at :class:`SRK2Solver`, whose order 1.0 for commuting diagonal
-    noise is established.
+    **Systems are refused.** The scheme is derived for one Wiener process. For
+    several channels the order 1.5 Ito-Taylor expansion carries the
+    twofold integrals ``I_(j,k)`` across channels, the mixed ``I_(j,0)`` and
+    ``I_(0,j)`` of each channel, and the triple integrals ``I_(j,k,l)`` - the
+    several-channel form of the last line above, which is ``I_(1,1,1)``. The Levy
+    areas, and with them every ``I_(j,k)``, are sampled since DEQ-36
+    (:class:`~.wiener.LevyAreaSampler`), and ``I_(j,0)`` is each channel's
+    ``delta_z``; what is still missing is a sampler for ``I_(j,k,l)`` with ``j, k,
+    l`` not all equal, and the several-channel form of the step, with one pair of
+    supporting values per channel, that would consume them. Nor would the area
+    sampler serve as it stands: its default truncation is tuned for strong order
+    1.0 (an L2 error of ``h^(3/2)`` per step); order 1.5 needs ``h^2``, so ``n ~
+    h^-1`` terms (Kastner and Rossler, arXiv:2201.08424, (67) with ``gamma =
+    3/2``), and the areas would have to be drawn jointly with the ``I_(j,k,l)``,
+    not independently of them. Diagonal noise whose ``b_i`` depends only on
+    ``x_i`` is the exception: every mixed term vanishes and only ``I_(j,j,j)`` is
+    needed, which the scalar formula already has per channel. Applying the scalar
+    formula component-wise would be a scheme of unknown order, which is the
+    defect this file is being cured of. ``solve`` therefore raises for more than
+    one variable and points at :class:`SRK2Solver`, whose order 1.0 for commuting
+    diagonal noise is established, and at the Milstein solver, which takes any
+    matrix noise at strong order 1.0.
 
     **Stratonovich.** A Stratonovich equation is integrated as the Ito equation with
     drift ``a + (1/2) b b'`` (see
@@ -93,10 +107,13 @@ class SRK3Solver(StochasticRungeKuttaSolver):
             message = (
                 "SRK3Solver is the scalar-noise scheme of Kloeden-Platen (11.2.1); "
                 f"it was asked to integrate {dimension} variables. Its order 1.5 "
-                "needs the Levy areas between noise channels, which cannot be "
-                "sampled, so systems are refused rather than integrated at an "
-                "unknown order. Use SRK2Solver (strong order 1.0 for diagonal noise "
-                "whose coefficients commute) or EulerMaruyamaSolver for systems."
+                "for several noise channels needs the triple integrals I_(j,k,l) "
+                "across channels, which are not sampled (the Levy areas are, since "
+                "DEQ-36), and a several-channel form of its supporting values, so "
+                "systems are refused rather than integrated at an unknown order. "
+                "Use MilsteinSolver (strong order 1.0 for any matrix noise), "
+                "SRK2Solver (strong order 1.0 for diagonal noise whose coefficients "
+                "commute) or EulerMaruyamaSolver."
             )
             raise ValueError(message)
 
