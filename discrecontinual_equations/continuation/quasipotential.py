@@ -81,8 +81,27 @@ underestimates a convex integrand, it is the long updates that are picked. The
 double well's ``x - x^3`` is steep enough on this box for that term to dominate:
 at 81 points the error is 0.0107, 0.0112 and 0.0420 for radii 2, 4 and 8, while
 the rotating case at radius 4 is four times worse than at 8 (4.1e-3). A radius
-that grows slowly with the grid, as the paper recommends (``10 + 4 (log2 N - 7)``
-for its own examples), trades the two; here it is left to the caller.
+that grows slowly with the grid, as the paper recommends (its Eq. (28),
+``K = 10 + 4 (log2 N - 7)`` for ``2^7 <= N <= 2^12``), trades the two; here it is
+left to the caller.
+
+*What the radius must cover.* Below a threshold the radius does not merely cost
+accuracy: the error stops converging. Near the attractor the drift is a gradient
+part ``-(1/2) D grad U`` plus a rotation ``l`` along the level sets, and a minimum
+action path crosses the level sets at a shallow angle - about ``1 / a`` for
+``a = |l|_A / |(1/2) D grad U|_A``, ``A = D^{-1}`` - so the accepted point it
+comes from lies of the order of ``a`` cells back along the front. A stencil much
+narrower than that cannot reach it, and every update is taken from the wrong
+place, at every spacing. On the paper's SDE (21), where ``a = 10`` everywhere
+(``U = 2 x^2 + y^2`` on ``[-1, 1]^2``, max error on ``{U <= 0.9}``): radius 2
+gives 0.381, 0.370 and 0.371 at 129, 257 and 513 points, and radius 4 gives
+0.048 and 0.051 at 129 and 257 - neither converges - against 1.6e-3 at radius 8
+and 3.1e-4 at the paper's 14 on 257 points. The default 8 converges there, if
+slowly (2.28e-3 and 1.34e-3 at 161 and 321 points, order 0.76), and comfortably
+on the rotating Ornstein-Uhlenbeck process below (``a = 2.36``). So the radius
+should be comparable to the largest rotation-to-gradient ratio on the region
+asked about, and a field that does not settle on refining the grid is the
+symptom of one that is too small.
 
 
 *Paths.* :meth:`OrderedLineIntegral.minimum_action_path` follows the computed field
@@ -90,10 +109,12 @@ from a chosen point back to the attractor: along a minimum action path
 ``psi' = f + D grad U`` (the characteristic ``dH / dp``), so the path is traced
 backwards along ``-(f + D grad U)`` with ``grad U`` interpolated from the grid. In the
 gradient case that is steepest descent of ``V`` run in reverse. Between two chosen
-points, :class:`GeometricMinimumAction` relaxes a whole path by the simplified
-geometric minimum action method of Heymann and Vanden-Eijnden (Comm. Pure Appl. Math.
-2008; the semi-implicit form of their PRL of the same year), which needs no grid and
-crosses saddles, which a descent on ``U`` cannot.
+points, :class:`GeometricMinimumAction` relaxes a whole path by the geometric
+minimum action method of Heymann and Vanden-Eijnden (Comm. Pure Appl. Math. 2008),
+in its semi-implicit form for additive noise - the descent flow as Grafke, Schafer
+and Vanden-Eijnden restate it (arXiv 1604.03818, Eq. (19)); the letter usually
+cited for that form is Vanden-Eijnden and Heymann, J. Chem. Phys. 128, 061103
+(2008). It needs no grid and crosses saddles, which a descent on ``U`` cannot.
 
 *Limits.* The method is planar - a two-dimensional :class:`DensityGrid` only; the
 ordered line integral idea extends to three dimensions at a much higher cost and is
@@ -496,8 +517,10 @@ def _action(step_x, step_y, coefficients):
 class OrderedLineIntegral:
     """The quasipotential of a planar ``dx = f dt + G dW`` by OLIM-MID.
 
-    ``update_radius`` is the stencil radius in cells (``K`` in the paper). See the
-    module docstring for the method, the normalisation, and its limits.
+    ``update_radius`` is the stencil radius in cells (``K`` in the paper). It must
+    be comparable to the drift's rotation-to-gradient ratio on the region asked
+    about, or the error does not converge as the grid is refined; see the module
+    docstring for that, the method, the normalisation, and its limits.
     """
 
     __slots__ = ["_drift", "_grid", "_noise", "_offsets"]
