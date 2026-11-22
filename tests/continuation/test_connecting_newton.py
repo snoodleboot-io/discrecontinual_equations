@@ -11,23 +11,31 @@ dense factorisation gives, and the work of one iteration grows linearly in N.
 
 import math
 import tracemalloc
-from unittest import TestCase
+from unittest import TestCase, mock
 
 import numpy as np
-from scipy.sparse import issparse
+from scipy.integrate import solve_ivp
+from scipy.optimize import brentq
+from scipy.sparse import csr_matrix, issparse
 
+from discrecontinual_equations.continuation import connecting_orbit
 from discrecontinual_equations.continuation.connecting_orbit import (
+    HeteroclinicOrbit,
     HomoclinicOrbit,
     MeshSpec,
+    Terminus,
 )
 from discrecontinual_equations.continuation.homoclinic_curve import HomoclinicCurve
 from discrecontinual_equations.differential_equation import DifferentialEquation
 from discrecontinual_equations.function.deterministic import DeterministicFunction
 from tests.continuation.fields import (
+    _TILT,
     BetaOne,
     BetaTwo,
     BogdanovTakensField,
+    HeteroclinicField,
     State,
+    TiltedHomoclinicField,
     Time,
     _saddle,
 )
@@ -358,3 +366,242 @@ class TestHomoclinicCurveNewton(TestCase):
             curve._step(jacobian, residual)  # noqa: SLF001
             counts.append(CountingBogdanovTakens.calls)
         assert counts[1] / counts[0] < 2.2
+
+
+def _tilted_problem(intervals: int):
+    half = 12.0
+    times = np.linspace(-half, half, intervals + 1)
+    field = TiltedHomoclinicField(
+        variables=[State(), State(), State()],
+        parameters=[],
+        results=[State(), State(), State()],
+        time=None,
+    )
+    jacobian = _TILT @ np.array([[0.0, 1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, -2.0]])
+    solver = HomoclinicOrbit(
+        field,
+        np.zeros(3),
+        jacobian @ _TILT.T,
+        MeshSpec(half, intervals, phase_index=0, phase_value=0.3),
+    )
+    zeros = np.zeros_like(times)
+    seed = np.column_stack([1.2 / np.cosh(times / 2.5) ** 2, zeros, zeros]) @ _TILT.T
+    return solver, times, seed
+
+
+def _double_well_jacobian(x: float) -> np.ndarray:
+    return np.array([[0.0, 1.0], [-1.0 + 3.0 * x * x, 0.0]])
+
+
+def _heteroclinic_problem(intervals: int):
+    half = 8.0
+    times = np.linspace(-half, half, intervals + 1)
+    solver = HeteroclinicOrbit(
+        HeteroclinicField(
+            variables=[State(), State()],
+            parameters=[],
+            results=[State(), State()],
+            time=None,
+        ),
+        Terminus(np.array([-1.0, 0.0]), _double_well_jacobian(-1.0)),
+        Terminus(np.array([1.0, 0.0]), _double_well_jacobian(1.0)),
+        MeshSpec(half, intervals),
+    )
+    seed = np.column_stack([np.tanh(times / 2.0), np.zeros_like(times)])
+    return solver, times, seed
+
+
+def _bogdanov_takens_gap(first: float, second: float) -> float:
+    """Shooting defect of the BT homoclinic: where each saddle manifold crosses y = 0.
+
+    The unstable branch is integrated forward and the stable branch backward with
+    DOP853 from the saddle ``(sqrt(-b1), 0)``, each to its first crossing of the
+    section ``y = 0`` at the loop's leftmost point. Their ``x`` values agree exactly
+    when the loop closes. Nothing here is shared with the collocation solver.
+    """
+    saddle = math.sqrt(-first)
+    values, vectors = np.linalg.eig(
+        np.array([[0.0, 1.0], [2.0 * saddle, second + saddle]]),
+    )
+
+    def leftward(vector: np.ndarray) -> np.ndarray:
+        return vector if vector[0] < 0.0 else -vector
+
+    def field(_: float, state: np.ndarray) -> list[float]:
+        x, y = state
+        return [y, first + second * y + x * x + x * y]
+
+    def crossing(direction: int, vector: np.ndarray, horizon: float) -> float:
+        def section(_: float, state: np.ndarray) -> float:
+            return state[1]
+
+        section.terminal = True  # type: ignore[attr-defined]
+        section.direction = direction  # type: ignore[attr-defined]
+        start = np.array([saddle, 0.0]) + 1.0e-7 * saddle * vector
+        path = solve_ivp(
+            field,
+            (0.0, horizon),
+            start,
+            method="DOP853",
+            events=section,
+            rtol=1.0e-12,
+            atol=1.0e-16,
+        )
+        return float(path.y_events[0][0][0])
+
+    unstable = leftward(vectors[:, np.argmax(values)].real)
+    stable = leftward(vectors[:, np.argmin(values)].real)
+    return crossing(1, unstable, 1.0e4) - crossing(-1, stable, -1.0e4)
+
+
+class TestIndependentReferences(TestCase):
+    """References that share no code with the sparse assembly or the collocation."""
+
+    def test_jacobians_match_differences_on_tilted_and_heteroclinic(self):
+        """Off the solution, in 3-D and saddle-to-saddle, exact and differenced paths.
+
+        Entrywise against central differences of the residual at a randomly
+        perturbed iterate, so no term vanishes because the iterate is converged.
+        """
+        generator = np.random.default_rng(7)
+        for name, problem in (
+            ("tilted", _tilted_problem),
+            ("heteroclinic", _heteroclinic_problem),
+        ):
+            solver, times, seed = problem(50)
+            unknowns = seed.flatten() + 0.05 * generator.standard_normal(seed.size)
+
+            def residual(values, solver=solver, times=times, shape=seed.shape):
+                return solver._residual(values, times, shape)  # noqa: SLF001
+
+            reference = _central_differences(residual, unknowns)
+            exact = solver._jacobian(  # noqa: SLF001
+                unknowns,
+                times,
+                seed.shape,
+                residual(unknowns),
+                True,  # noqa: FBT003
+            )
+            differenced = solver._numerical_jacobian(  # noqa: SLF001
+                unknowns,
+                times,
+                seed.shape,
+                reference.shape[0],
+            )
+            with self.subTest(problem=name):
+                assert np.max(np.abs(exact.toarray() - reference)) < 1.0e-8
+                assert np.max(np.abs(differenced.toarray() - reference)) < 1.0e-6
+
+    def test_curve_converges_to_the_shooting_value_at_second_order(self):
+        """The collocated b1 approaches an independent DOP853 shooting value as h^2.
+
+        Measured: errors 3.51e-5 and 8.79e-6 at 100 and 200 intervals (ratio 4.00)
+        against the shooting value -3.8859126e-3 at b2 = (5/7)/16.
+        """
+        epsilon = 0.25
+        sweep = (5.0 / 7.0) * epsilon**2
+        guess = -(49.0 / 25.0) * sweep**2
+        shooting = brentq(
+            lambda first: _bogdanov_takens_gap(first, sweep),
+            1.3 * guess,
+            0.7 * guess,
+            xtol=1.0e-16,
+            rtol=1.0e-14,
+        )
+        errors = []
+        for intervals in (100, 200):
+            curve, times, unknowns, _ = _bogdanov_takens_problem(intervals)
+            nodes = times.size
+            point = curve.solve_point(
+                sweep,
+                unknowns[: nodes * 2].reshape(nodes, 2),
+                unknowns[nodes * 2 : nodes * 2 + 2],
+                float(unknowns[-1]),
+            )
+            assert point is not None
+            errors.append(point.continuation - shooting)
+        assert abs(errors[1]) < 3.0e-3 * abs(shooting)
+        assert 3.6 < errors[0] / errors[1] < 4.4
+
+
+class TestDirectSolvePath(TestCase):
+    """The sparse LU must be the path taken, and its fill must stay linear."""
+
+    def test_well_posed_step_never_reaches_the_fallbacks(self):
+        solver, times, seed = _saddle_problem(200)
+        unknowns = seed.flatten()
+        residual = solver._residual(unknowns, times, seed.shape)  # noqa: SLF001
+        jacobian = solver._jacobian(  # noqa: SLF001
+            unknowns,
+            times,
+            seed.shape,
+            residual,
+            True,  # noqa: FBT003
+        )
+        refuse = mock.Mock(side_effect=AssertionError("fallback reached"))
+        with (
+            mock.patch.object(connecting_orbit, "lsmr", refuse),
+            mock.patch.object(np.linalg, "lstsq", refuse),
+        ):
+            solver._least_squares(jacobian, residual)  # noqa: SLF001
+
+    def test_curve_step_never_reaches_the_dense_fallback(self):
+        curve, times, unknowns, sweep = _bogdanov_takens_problem(200)
+        residual = curve._residual(  # noqa: SLF001
+            unknowns,
+            times,
+            times.size,
+            2,
+            sweep,
+        )
+        jacobian = curve._jacobian(  # noqa: SLF001
+            unknowns,
+            times,
+            2,
+            sweep,
+            residual,
+        )
+        refuse = mock.Mock(side_effect=AssertionError("dense fallback reached"))
+        with mock.patch.object(np.linalg, "lstsq", refuse):
+            curve._step(jacobian, residual)  # noqa: SLF001
+
+    def test_rank_deficient_step_falls_back_to_the_minimum_norm_step(self):
+        """An exactly singular augmented matrix still yields the lstsq step."""
+        solver, times, seed = _saddle_problem(60)
+        unknowns = seed.flatten()
+        residual = solver._residual(unknowns, times, seed.shape)  # noqa: SLF001
+        dense = solver._jacobian(  # noqa: SLF001
+            unknowns,
+            times,
+            seed.shape,
+            residual,
+            True,  # noqa: FBT003
+        ).toarray()
+        dense[:, 5] = dense[:, 0]
+        step = solver._least_squares(csr_matrix(dense), residual)  # noqa: SLF001
+        reference, *_ = np.linalg.lstsq(dense, -residual, rcond=None)
+        assert np.max(np.abs(step - reference)) < 1.0e-6
+
+    def test_factor_fill_is_flat_in_the_nodes(self):
+        """tracemalloc cannot see SuperLU's C allocations, so measure the fill itself.
+
+        Measured nnz(L+U)/nnz(A): 2.59 at 200 nodes and 2.61 at 3200 with COLAMD on
+        scipy 1.15.3, 1.17.1 and 1.18.1; MMD_AT_PLUS_A grows from 22 to 322.
+        """
+        ratios = []
+        for intervals in (400, 1600):
+            solver, times, seed = _saddle_problem(intervals)
+            unknowns = seed.flatten()
+            residual = solver._residual(unknowns, times, seed.shape)  # noqa: SLF001
+            jacobian = solver._jacobian(  # noqa: SLF001
+                unknowns,
+                times,
+                seed.shape,
+                residual,
+                True,  # noqa: FBT003
+            )
+            augmented = connecting_orbit._augmented(jacobian)  # noqa: SLF001
+            factor = connecting_orbit._factor(augmented)  # noqa: SLF001
+            ratios.append((factor.L.nnz + factor.U.nnz) / augmented.nnz)
+        assert max(ratios) < 4.0
+        assert ratios[1] / ratios[0] < 1.1
