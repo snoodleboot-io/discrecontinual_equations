@@ -28,10 +28,13 @@ geodesic distance 100 in 1.5 s with no point lost.
 
 Remaining: complex (spiral) manifolds need the conjugate-coordinate variant (the
 level-set grower seeds a spiral manifold on its tangent plane meanwhile). The
-strict Lorenz growth stops at distance 142.9 (step 1.5, spacing 1.5 to 4.5) and
+strict Lorenz growth stops at distance 157.2 (step 1.5, spacing 1.5 to 4.5) and
 says so in `GeodesicMesh.stopped`: there the flow runs along the level set and
-some BVPs have no nearby solution at any step. With `loss` it goes on, with
-holes; Krauskopf and Osinga went to about 170.
+the front is 0.04 to 0.05 off W^s(0) (measured independently), so the radial
+steps turn by 0.38 rad at every Delta and four landings fail. With `loss` it
+goes on, with holes. Krauskopf and Osinga reached 151.75 (SIADS 2003, Sec. 4.5)
+and 154.75 (IJBC 2005 survey, Sec. 2.3). Their step control also bounds
+Delta * alpha, which this grower does not.
 
 ## 2. Connecting orbits - ORBIT SOLVER IMPLEMENTED, continuation pending
 

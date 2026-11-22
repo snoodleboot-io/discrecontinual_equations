@@ -625,7 +625,12 @@ def _trace_back(
 
     Returns which targets crossed, the ring parameter at the crossing and the
     flight time. A crossing is where the signed distance outside the ring -
-    measured along the nearest ring point's outward direction - changes sign.
+    measured along the nearest ring point's outward direction - changes sign
+    within ``length`` of the ring. Further out that sign says nothing: on the
+    Lorenz scrolls an orbit traced back from beside the ring runs off along
+    the scroll and passes 28 to 37 from the ring where its nearest point's
+    outward direction already says "inside", and counting that as a crossing
+    started Newton 37 ring points from the true orbit.
 
     The trace runs until it crosses, not for a fixed multiple of a guessed
     time: where one stable rate is many times the other, the orbit that lands
@@ -667,7 +672,8 @@ def _trace_back(
             moved = np.where(finite[:, None], moved, here)
             near = tree.query(moved)[1]
             now = np.einsum("ij,ij->i", moved - ring[near], outward[near])
-            hit = finite & (now <= 0.0)
+            gap = np.linalg.norm(moved - ring[near], axis=1)
+            hit = finite & (now <= 0.0) & (side[going] > 0.0) & (gap <= length)
             if np.any(hit):
                 rows_hit = going[hit]
                 fraction = side[rows_hit] / (side[rows_hit] - now[hit])

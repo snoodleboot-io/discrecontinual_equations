@@ -17,21 +17,29 @@ What is checked, and where each number comes from - all measured here:
   in the plane ``z = rho - 1`` meet it within 25 in 6 of 8 directions;
 * its size at the film's settings: 10,289 vertices, 20,154 triangles, 67
   rings, no BVP lost;
-* grown strictly towards 170 it stops at 142.87, with no point lost, and
-  says why: 10 of 891 landings fail at the smallest step. There the flow
-  runs along the level set (``f . t / |f| = 1.0`` at the failing points) and
-  those BVPs have no nearby solution. By then the scrolls have formed: rays
-  from ``C+`` cross three layers of the surface in four of the eight
-  directions;
-* allowed to drop 3% of a ring (``loss=0.03``) it reaches 150 with 62 points
+* grown strictly towards 170 it stops at 157.16, with no point lost, and
+  says why: 4 of 1,119 landings fail at the smallest step. Those are two
+  symmetric pairs where the flow runs along the level set (``|f . t| / |f|
+  = 0.999``) and the front itself is 0.04 to 0.05 off W^s(0), measured
+  independently, so the radial steps there turn by 0.38 rad at every Delta.
+  (It stopped at 142.87 until the back-trace stopped counting false
+  crossings far from the ring; there the BVPs did have a solution, and the
+  grower's own Newton finds it in four iterations from the true start.) By
+  then the scrolls have formed: rays from ``C+`` cross three layers of the
+  surface in four of the eight directions;
+* allowed to drop 3% of a ring (``loss=0.03``) it reaches 160 with 58 points
   lost, and the crochet pattern still adds up round by round.
 
-What is *not* checked. Krauskopf and Osinga's figures show the two scrolls
-rolled up around ``C+-`` in more layers, and the crocheted model's size;
-from memory, and unverified because the papers cannot be fetched here, the
-crochet pattern has 25,511 stitches and the computed manifold runs to a
-geodesic distance of about 170. Neither is asserted, and this
-implementation's strict growth stops short of 170.
+What the papers report, read from them: Krauskopf and Osinga (SIAM J. Appl.
+Dyn. Syst. 2(4) 2003, Sec. 4.5, preprint of 7 May 2003) grew it from 20
+points at distance 1 with alpha in (0.3, 0.4), Delta.alpha in (0.1, 1.0),
+Delta >= 0.01 and spacing 0.25 to 1.0, to 151.75 in 72 circles, the last of
+2,300 points; the IJBC 2005 survey (Sec. 2.3) to 154.75 in 75 bands with
+spacing 0.67 to 2.0. The crocheted model (Math. Intelligencer 26(4), 2004)
+runs to 110.75 (25,511 stitches, by the authors' crochet page). None is
+asserted beyond the strict growth passing 151.75: this grower has no
+Delta.alpha bound and grows Delta by 1.5 rather than 2, so its rings and
+counts differ.
 """
 
 import math
@@ -202,7 +210,7 @@ class TestLorenzManifoldAsFarAsItGoes(TestCase):
 
 class TestLossyLorenzManifold(TestCase):
     def test_the_crochet_pattern_adds_up_when_points_are_lost(self):
-        mesh = _lorenz(150.0, loss=0.03)
+        mesh = _lorenz(160.0, loss=0.03)
         assert mesh.stopped is None
         assert mesh.lost > 0
         pattern = mesh.crochet_pattern()
