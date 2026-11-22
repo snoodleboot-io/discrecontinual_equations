@@ -18,8 +18,6 @@ of the order of the squared strong error rather than of ``Var X(T)``; this is
 what lets a few thousand paths resolve a second-order weak error.
 """
 
-# system need not use)
-
 from dataclasses import dataclass
 
 import numpy as np
