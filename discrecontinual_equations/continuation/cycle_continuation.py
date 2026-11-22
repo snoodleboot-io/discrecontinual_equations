@@ -900,7 +900,7 @@ class CycleContinuation:
                 arc.tangent,
                 -residual,
                 # bound now, not at call time: both are rebound each iteration
-                lambda u=unknowns, r=residual: self._numerical_jacobian(
+                lambda u=unknowns, r=residual: self._numerical_jacobian(  # type: ignore[misc]
                     u,
                     nodes,
                     arc,

@@ -1,5 +1,5 @@
-from pathlib import Path
 import os
+from pathlib import Path
 
 import numpy as np
 import plotly.graph_objects as go

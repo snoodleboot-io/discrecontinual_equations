@@ -223,10 +223,7 @@ def run_alpha_stable_diffusion_example():
         )
 
     # Add theoretical information
-    theoretical_info = (
-        ".2f"
-        ".2f"
-        f"""
+    theoretical_info = f"""
 α-Stable Process Properties:
 • Stability index: α = {alpha}
 • Scale parameter: η = {eta}
@@ -234,7 +231,6 @@ def run_alpha_stable_diffusion_example():
 • Heavy tails: P(|Z| > x) ~ x^(-α) as x → ∞
 • Variance: {"finite" if alpha > 2 else "infinite"}
 • Mean: {"finite" if alpha > 1 else "infinite"}"""
-    )
 
     plot.figure.add_annotation(
         x=0.02,
@@ -415,10 +411,10 @@ def main():
     print()
 
     # Run α-stable diffusion example
-    diffusion_paths = run_alpha_stable_diffusion_example()
+    run_alpha_stable_diffusion_example()
 
     # Run boundary preservation example
-    boundary_path = run_boundary_preservation_example()
+    run_boundary_preservation_example()
 
     print("\n" + "=" * 50)
     print("Examples completed successfully!")

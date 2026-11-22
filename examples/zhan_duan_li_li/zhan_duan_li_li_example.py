@@ -140,7 +140,7 @@ def run_zhan_duan_li_li_example():
 
         all_paths.append((times, path))
         final_price = path[-1]
-        print(".2f")
+        print(f"Path {i + 1}: final price {final_price:.2f}")
 
     print("\nPlotting results...")
 
@@ -287,10 +287,10 @@ def main():
     print()
 
     # Run main example
-    paths = run_zhan_duan_li_li_example()
+    run_zhan_duan_li_li_example()
 
     # Run comparison
-    comparison_results = run_method_comparison()
+    run_method_comparison()
 
     print("\n" + "=" * 50)
     print("Examples completed successfully!")

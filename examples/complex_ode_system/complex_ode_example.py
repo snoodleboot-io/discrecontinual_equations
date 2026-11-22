@@ -388,7 +388,6 @@ def analyze_system_properties(solutions, time_points, k):
     print(f"Final values: {final_values}")
 
     # Check if system reached steady state
-    tolerance = 1e-6
     derivatives_at_end = []
 
     # Approximate derivatives at the end
