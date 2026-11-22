@@ -19,8 +19,11 @@ pattern - stitches, increases and decreases per round - is in a table beneath
 it and can be saved as CSV.
 """
 
-import json
-
+from discrecontinual_equations.webplot.escaping import (
+    ESCAPE_JS,
+    escape_text,
+    script_json,
+)
 from discrecontinual_equations.webplot.latex import latex_to_svg
 from discrecontinual_equations.webplot.manifold_film import ManifoldFilm, film_payload
 from discrecontinual_equations.webplot.renderer import HtmlRenderer
@@ -28,7 +31,6 @@ from discrecontinual_equations.webplot.stage_renderer import (
     _BODY_OPEN,
     _FONTS,
     _STYLE,
-    _escape,
 )
 
 
@@ -40,11 +42,11 @@ class ManifoldFilmRenderer(HtmlRenderer):
     def render(self, scene: ManifoldFilm) -> str:  # type: ignore[override]
         equation = latex_to_svg(scene.equation) if scene.equation else ""
         return (
-            _TEMPLATE.replace("__TITLE__", _escape(scene.title))
-            .replace("__SUBTITLE__", _escape(scene.subtitle))
-            .replace("__NOTE__", _escape(scene.note))
+            _TEMPLATE.replace("__TITLE__", escape_text(scene.title))
+            .replace("__SUBTITLE__", escape_text(scene.subtitle))
+            .replace("__NOTE__", escape_text(scene.note))
             .replace("__EQUATION__", equation)
-            .replace("__FILM_JSON__", json.dumps(film_payload(scene)))
+            .replace("__FILM_JSON__", script_json(film_payload(scene)))
         )
 
 
@@ -150,7 +152,34 @@ document.querySelectorAll(".theme-btn").forEach(b =>
   }));
 
 // ---------- the mesh ----------
-const V = D.vertices, T = D.triangles, RD = D.ringDistances, RINGS = D.rings;
+// Packed (see film_payload): vertices as integer steps from the vertex
+// before, rings as sizes, and each band between two rings as one character
+// per triangle - which ring its zip advanced on. Unpacked once, here.
+function unpack(){
+  const n = D.vertexSteps.length / 3, unit = Math.pow(10, D.vertexDigits);
+  const V = new Float64Array(3 * n), sum = [0, 0, 0];
+  for (let i = 0; i < n; i++) for (let a = 0; a < 3; a++){
+    sum[a] += D.vertexSteps[3*i+a]; V[3*i+a] = sum[a] / unit; }
+  if (D.triangles) return {V, T: D.triangles, RINGS: D.rings};
+  const RINGS = [], T = [];
+  let first = 1;
+  D.ringSizes.forEach(size => {
+    RINGS.push(Array.from({length: size}, (_, k) => first + k)); first += size; });
+  const seed = D.ringSizes[0];
+  for (let i = 0; i < seed; i++) T.push(0, 1 + (i + 1) % seed, 1 + i);
+  let bit = 0;
+  for (let k = 1; k < RINGS.length; k++){
+    const inner = RINGS[k-1], outer = RINGS[k], m = inner.length, s = outer.length;
+    let i = 0, j = 0;
+    for (let c = 0; c < m + s; c++){
+      if (D.bands[bit++] === "0"){
+        T.push(inner[i % m], inner[(i+1) % m], outer[j % s]); i++; }
+      else { T.push(inner[i % m], outer[(j+1) % s], outer[j % s]); j++; }
+    }
+  }
+  return {V, T, RINGS};
+}
+const {V, T, RINGS} = unpack(), RD = D.ringDistances;
 const NV = V.length / 3, NT = T.length / 3, NR = RD.length;
 const ringOf = new Int32Array(NV);          // the equilibrium is ring -1
 ringOf[0] = -1;
@@ -281,7 +310,7 @@ function draw(){
     parts.push(`<circle cx="${sx.toFixed(1)}" cy="${sy.toFixed(1)}" r="5"
       fill="${css("--saddle")}" stroke="${css("--panel")}" stroke-width="1.5"/>`);
     parts.push(`<text x="${(sx+9).toFixed(1)}" y="${(sy-7).toFixed(1)}"
-      fill="${css("--ink")}" font-size="13">${m.label}</text>`);
+      fill="${css("--ink")}" font-size="13">${esc(m.label)}</text>`);
   });
   parts.push(triad());
   svg.innerHTML = parts.join("");
@@ -307,7 +336,7 @@ function triad(){
       stroke="${css("--muted")}" stroke-width="1.4"/>`);
     out.push(`<text x="${(ox + 1.3*len*xr).toFixed(1)}" y="${(oy - 1.3*len*up + 4)
       .toFixed(1)}" fill="${css("--muted")}" font-size="12"
-      text-anchor="middle">${name}</text>`);
+      text-anchor="middle">${esc(name)}</text>`);
   });
   return out.join("");
 }
@@ -402,5 +431,5 @@ _TEMPLATE = (
     f"<style>{_STYLE}{_FILM_STYLE}</style>\n</head>\n"
     f"<body>{_BODY_OPEN}{_BODY_FILM}{_BODY_FOOT}"
     "<script>window.__FILM__ = __FILM_JSON__;</script>\n"
-    f"<script>{_SCRIPT}</script>\n</body>\n</html>\n"
+    f"<script>{ESCAPE_JS}{_SCRIPT}</script>\n</body>\n</html>\n"
 )
