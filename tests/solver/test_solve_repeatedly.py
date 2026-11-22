@@ -277,6 +277,25 @@ class TestSolveRepeatedly:
         assert len(second) == len(first)
         assert len(first.time.discretization) == len(first.results[0].discretization)
 
+    def test_a_second_solve_leaves_the_first_curve_as_it_was(
+        self,
+        make_equation,
+        make_solver,
+    ):
+        # Arrange: a curve kept by the caller, then the same solver run again on
+        # the same equation - the curve must not share storage with the next run.
+        equation = make_equation()
+        solver = make_solver()
+        first = solver.solve(equation, _INITIAL)
+        before = _snapshot(first)
+
+        # Act
+        solver.solve(equation, _INITIAL)
+        make_solver().solve(equation, _INITIAL)
+
+        # Assert
+        assert _snapshot(first) == before
+
     def test_the_solution_keeps_the_equations_names(self, make_equation, make_solver):
         # Arrange
         equation = make_equation()
