@@ -9,7 +9,7 @@ at ``rtol = 1e-13``, independent of the code under test.
 """
 
 import math
-from unittest import TestCase
+from unittest import TestCase, mock
 
 import numpy as np
 from scipy.integrate import solve_ivp
@@ -177,7 +177,7 @@ class TestNonStiffUnchanged(TestCase):
             assert math.isclose(solved[2 * nodes], reference, rel_tol=1e-2)
 
 
-class TestDampedFloor(TestCase):
+class TestSeedSafeguards(TestCase):
     def test_the_damped_newton_never_takes_the_period_under_its_floor(self):
         """Started at 1.05 T, the cycle at T lies under a floor at 1.02 T.
 
@@ -217,3 +217,33 @@ class TestDampedFloor(TestCase):
         floor = 1.02 * reference
         held = continuation._damped_correct(unknowns, nodes, arc, floor)  # noqa: SLF001
         assert held is None or held[2 * nodes] > floor
+
+    def test_a_staged_answer_that_is_no_cycle_gives_way_to_the_direct_one(self):
+        """The staged solve's answer faces the same test as the direct one.
+
+        Here the staged stage is made to return a still state at the seed's
+        own period - the collapse every collocation admits - and the seed path
+        must pass it over for the direct correction, which finds the cycle.
+        """
+        reference, orbit = _reference(1.0)
+        continuation = CycleContinuation(
+            _equation(1.0),
+            0,
+            20,
+            phase_index=1,
+            collocation="gauss_legendre",
+            collocation_points=2,
+        )
+        continuation._dimension = 2  # noqa: SLF001 (trace sets it)
+        nodes = 20 * 2 + 1
+        seed = CycleSeed(orbit(np.linspace(0.0, 1.0, 21)), reference, 1.0)
+        still = np.concatenate([np.tile([0.3, 0.0], nodes), [reference], [1.0]])
+        with mock.patch.object(
+            CycleContinuation,
+            "_staged_seed",
+            return_value=still,
+        ):
+            solved = continuation._solve_seed(seed, nodes)  # noqa: SLF001
+        assert solved is not None
+        assert np.ptp(solved[: 2 * nodes]) > 1.0
+        assert math.isclose(solved[2 * nodes], reference, rel_tol=1e-3)
