@@ -40,6 +40,13 @@ def _equation(mu: float) -> DifferentialEquation:
     )
 
 
+def _circle_states(nodes: int) -> np.ndarray:
+    grid = np.linspace(0.0, 1.0, nodes)
+    return np.column_stack(
+        [2.0 * np.cos(2.0 * math.pi * grid), 2.0 * np.sin(2.0 * math.pi * grid)],
+    )
+
+
 def _reference(mu: float):
     """Van der Pol's period and orbit by DOP853 at ``rtol = 1e-13``."""
 
@@ -123,6 +130,22 @@ class TestRefusal(TestCase):
     def test_a_negative_seed_period_is_refused(self):
         points, _ = _start(1.0, 20, 4, period=-6.66)
         assert points == []
+
+    def test_a_cycle_far_from_the_seeds_period_is_refused(self):
+        """Told the period is three times what it is, the seed path does not
+        trust the cycle it finds: that is another cycle, as far as it knows."""
+        reference, _ = _reference(1.0)
+        points, _ = _start(1.0, 20, 4, period=3.0 * reference)
+        assert points == []
+
+    def test_an_equilibrium_at_a_sensible_period_is_not_a_cycle(self):
+        """The collapse every collocation admits, at the period it was told."""
+        continuation = CycleContinuation(_equation(1.0), 0, 8, phase_index=1)
+        continuation._dimension = 2  # noqa: SLF001 (trace sets it)
+        still = np.concatenate([np.tile([0.3, 0.0], 9), [6.66], [1.0]])
+        moving = np.concatenate([_circle_states(9).ravel(), [6.66], [1.0]])
+        assert not continuation._plausible(still, 9, 6.66)  # noqa: SLF001
+        assert continuation._plausible(moving, 9, 6.66)  # noqa: SLF001
 
     def test_a_collapsed_seed_is_refused_rather_than_continued(self):
         """Van der Pol at ``mu = 2`` on 8 intervals collapsed onto a point."""
