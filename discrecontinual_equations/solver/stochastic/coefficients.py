@@ -36,6 +36,7 @@ is the same differences arranged as the Milstein scheme needs them.
 import numpy as np
 
 from discrecontinual_equations.differential_equation import DifferentialEquation
+from discrecontinual_equations.function.stochastic import StochasticFunction
 
 _MATRIX = 2
 
@@ -43,7 +44,7 @@ _MATRIX = 2
 class ItoCoefficients:
     """Evaluate ``a`` and ``b`` of the Ito form of an equation at a point."""
 
-    __slots__ = ["_equation", "_slope_step", "_stratonovich"]
+    __slots__ = ["_declared", "_equation", "_slope_step", "_stratonovich"]
 
     def __init__(
         self,
@@ -54,6 +55,15 @@ class ItoCoefficients:
         self._equation = equation
         self._stratonovich = calculus == "stratonovich"
         self._slope_step = slope_step
+        derivative = equation.derivative
+        self._declared = (
+            isinstance(derivative, StochasticFunction) and derivative.diagonal_noise
+        )
+
+    @property
+    def declared_diagonal(self) -> bool:
+        """Whether the equation promises ``b_i`` depends on ``x_i`` alone."""
+        return self._declared
 
     def diffusion(self, point: np.ndarray, time: float) -> np.ndarray:
         """``b`` as a vector (diagonal noise) or ``G`` as an ``n x m`` matrix."""
@@ -96,7 +106,7 @@ class ItoCoefficients:
             # (1/2) sum_k (dG_k/dx) G_k: jacobians[k, i, j] = d G[i, k] / d x_j.
             jacobians = self.column_jacobians(point, time)
             return drift + 0.5 * np.einsum("kij,jk->i", jacobians, diffusion)
-        return drift + 0.5 * diffusion * self._diffusion_slope(point, time)
+        return drift + 0.5 * diffusion * self.diagonal_slopes(point, time)
 
     def column_jacobians(self, point: np.ndarray, time: float) -> np.ndarray:
         """``dG_k / dx`` for every driver ``k``, as an ``(m, n, n)`` array.
@@ -124,8 +134,38 @@ class ItoCoefficients:
                 jacobians[np.arange(drivers), np.arange(drivers), j] = difference
         return jacobians
 
-    def _diffusion_slope(self, point: np.ndarray, time: float) -> np.ndarray:
-        """``d b_i / d x_i`` for every component, by central differences."""
+    def diffusion_jacobian(self, point: np.ndarray, time: float) -> np.ndarray:
+        """``d b_k / d x_j`` of a vector diffusion as an ``(n, n)`` array, ``[k, j]``.
+
+        The same central differences as :meth:`column_jacobians`, value for
+        value, without the ``(n, n, n)`` array they are stored in there: for the
+        vector form column ``k``'s Jacobian is this matrix's row ``k`` and zeros,
+        so this is all of it in ``n^2`` numbers (DEQ-48). ``2 n`` evaluations.
+        """
+        jacobian = np.empty((point.size, point.size))
+        for j in range(point.size):
+            forward = point.copy()
+            backward = point.copy()
+            forward[j] += self._slope_step
+            backward[j] -= self._slope_step
+            jacobian[:, j] = (
+                self.diffusion(forward, time) - self.diffusion(backward, time)
+            ) / (2.0 * self._slope_step)
+        return jacobian
+
+    def diagonal_slopes(self, point: np.ndarray, time: float) -> np.ndarray:
+        """``d b_i / d x_i`` for every component, by central differences.
+
+        ``2 n`` evaluations, moving one component at a time; two, moving all of
+        them at once, when the equation declares diagonal noise, since then
+        ``b_i`` reads only ``x_i`` and sees the same moved point either way
+        (DEQ-48).
+        """
+        if self._declared:
+            return (
+                self.diffusion(point + self._slope_step, time)
+                - self.diffusion(point - self._slope_step, time)
+            ) / (2.0 * self._slope_step)
         slope = np.empty(len(point))
         for index in range(len(point)):
             forward = point.copy()

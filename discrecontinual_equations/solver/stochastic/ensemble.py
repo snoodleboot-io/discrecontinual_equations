@@ -27,11 +27,13 @@ unless a source is handed in, in which case the source is asked once per path
 and step and the ensemble is only as fast as that source.
 """
 
+from collections.abc import Iterator
 from dataclasses import dataclass
 
 import numpy as np
 
 from discrecontinual_equations.differential_equation import DifferentialEquation
+from discrecontinual_equations.function.stochastic import StochasticFunction
 from discrecontinual_equations.solver.solver_config import StochasticConfig
 from discrecontinual_equations.solver.stochastic.wiener import WienerSource
 
@@ -65,7 +67,7 @@ class BatchedCoefficients:
     when the equation's batch methods are arrays.
     """
 
-    __slots__ = ["_equation", "_slope_step", "_stratonovich"]
+    __slots__ = ["_declared", "_equation", "_slope_step", "_stratonovich"]
 
     def __init__(
         self,
@@ -76,6 +78,15 @@ class BatchedCoefficients:
         self._equation = equation
         self._stratonovich = calculus == "stratonovich"
         self._slope_step = slope_step
+        derivative = equation.derivative
+        self._declared = (
+            isinstance(derivative, StochasticFunction) and derivative.diagonal_noise
+        )
+
+    @property
+    def declared_diagonal(self) -> bool:
+        """Whether the equation promises ``b_i`` depends on ``x_i`` alone."""
+        return self._declared
 
     def diffusion(self, points: np.ndarray, time: float) -> np.ndarray:
         """``b`` at every point, ``(paths, n)``, or ``G``, ``(paths, n, m)``."""
@@ -118,12 +129,56 @@ class BatchedCoefficients:
         if not self._stratonovich:
             return drift
         diffusion = self.diffusion(points, time)
-        jacobians = self.column_jacobians(points, time)
         if self.is_matrix(diffusion):
+            jacobians = self.column_jacobians(points, time)
             return drift + 0.5 * np.einsum("pkij,pjk->pi", jacobians, diffusion)
-        # Diagonal noise: (1/2) b_i db_i/dx_i, the (i, i, i) entries of the Jacobians.
-        index = np.arange(points.shape[1])
-        return drift + 0.5 * diffusion * jacobians[:, index, index, index]
+        # Diagonal noise: (1/2) b_i db_i/dx_i, which is the (i, i, i) entries of the
+        # column Jacobians and needs only them, (paths, n) not (paths, n, n, n).
+        return drift + 0.5 * diffusion * self.diagonal_slopes(points, time)
+
+    def diagonal_slopes(self, points: np.ndarray, time: float) -> np.ndarray:
+        """``d b_i / d x_i`` of a vector diffusion at every point, ``(paths, n)``.
+
+        The same central differences as :meth:`column_jacobians`, value for
+        value, keeping only the entries the Stratonovich correction of diagonal
+        noise reads: ``O(paths n)`` memory where the Jacobians take ``O(paths
+        n^3)`` (DEQ-48). Still ``2 n`` batched evaluations, since ``b_i`` may
+        depend on every component and only ``x_i`` may be moved to read
+        ``d b_i / d x_i``; two when the equation declares diagonal noise, which
+        moves every component at once.
+        """
+        if self._declared:
+            return (
+                self.diffusion(points + self._slope_step, time)
+                - self.diffusion(points - self._slope_step, time)
+            ) / (2.0 * self._slope_step)
+        slopes = np.empty(points.shape)
+        for j in range(points.shape[1]):
+            slopes[:, j] = self._difference(points, time, j)[:, j]
+        return slopes
+
+    def diagonal_directions(
+        self,
+        points: np.ndarray,
+        time: float,
+    ) -> Iterator[tuple[int, np.ndarray]]:
+        """``(j, d b / d x_j)`` for every direction of a vector diffusion.
+
+        One ``(paths, n)`` difference at a time, the values of
+        :meth:`column_jacobians` without the array that holds them all.
+        """
+        for j in range(points.shape[1]):
+            yield j, self._difference(points, time, j)
+
+    def _difference(self, points: np.ndarray, time: float, j: int) -> np.ndarray:
+        """The central difference of the diffusion in direction ``j``."""
+        forward = points.copy()
+        backward = points.copy()
+        forward[:, j] += self._slope_step
+        backward[:, j] -= self._slope_step
+        return (self.diffusion(forward, time) - self.diffusion(backward, time)) / (
+            2.0 * self._slope_step
+        )
 
     def column_jacobians(self, points: np.ndarray, time: float) -> np.ndarray:
         """``dG_k / dx`` for every path and driver, ``(paths, m, n, n)``.
@@ -273,6 +328,22 @@ class StochasticEnsemble:
         # term in the Ito form only; see MilsteinSolver for the derivation.
         drift = coefficients.written_drift(states, time)
         diffusion = coefficients.diffusion(states, time)
+        if not BatchedCoefficients.is_matrix(diffusion):
+            correction = self._diagonal_correction(
+                coefficients,
+                states,
+                time,
+                dt,
+                diffusion,
+                increments,
+            )
+            if correction is not None:
+                return (
+                    states
+                    + drift * dt
+                    + coefficients.spread(diffusion, increments)
+                    + correction
+                )
         jacobians = coefficients.column_jacobians(states, time)
         if BatchedCoefficients.is_matrix(diffusion):
             columns = np.transpose(diffusion, (0, 2, 1))
@@ -300,3 +371,50 @@ class StochasticEnsemble:
             + coefficients.spread(diffusion, increments)
             + correction
         )
+
+    def _diagonal_correction(  # noqa: PLR0913 (the step's own arguments)
+        self,
+        coefficients: BatchedCoefficients,
+        states: np.ndarray,
+        time: float,
+        dt: float,
+        diffusion: np.ndarray,
+        increments: np.ndarray,
+    ) -> np.ndarray | None:
+        """The Milstein term of vector noise in ``O(paths n)`` memory, or None.
+
+        ``MilsteinSolver._diagonal_correction`` with a leading axis, the products
+        ``P[j, k] = b_j d b_k / d x_j`` formed one direction ``j`` at a time and
+        folded into the sum as they come, so neither the ``(paths, n, n, n)``
+        Jacobians nor the products are ever held (DEQ-48). The commutativity
+        verdict is the general one's: the largest off-diagonal ``|P[j, k]|``
+        against the largest ``|P[j, k]|`` over the ensemble. None when the noise
+        does not commute, so that the general step raises its refusal. Declared
+        diagonal noise commutes by its declaration and needs only the slopes:
+        ``P`` is diagonal, two batched evaluations make it, and the sum over
+        ``j`` has one term.
+        """
+        if coefficients.declared_diagonal:
+            own = diffusion * coefficients.diagonal_slopes(states, time)
+            correction = 0.5 * increments * (own * increments)
+            if self._config.calculus == "ito":
+                correction -= 0.5 * dt * own
+            return correction
+        scale = 0.0
+        asymmetry = 0.0
+        pushed = np.zeros(states.shape)
+        own = np.empty(states.shape)
+        for j, slope in coefficients.diagonal_directions(states, time):
+            products = diffusion[:, j, None] * slope
+            magnitude = np.abs(products)
+            scale = max(scale, float(np.max(magnitude)))
+            own[:, j] = products[:, j]
+            magnitude[:, j] = 0.0
+            asymmetry = max(asymmetry, float(np.max(magnitude)))
+            pushed += products * increments[:, j, None]
+        if scale > 0.0 and asymmetry > _COMMUTATIVITY_TOLERANCE * scale:
+            return None
+        correction = 0.5 * increments * pushed
+        if self._config.calculus == "ito":
+            correction -= 0.5 * dt * own
+        return correction
