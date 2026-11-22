@@ -9,9 +9,9 @@ the fine-grid check of the same closed form.
 
 import json
 import math
-import re
 import shutil
 import subprocess
+from html.parser import HTMLParser
 from pathlib import Path
 from unittest import TestCase
 
@@ -128,6 +128,35 @@ class TestQuasipotentialPanel(TestCase):
             with_quasipotential(scene, _settings())
 
 
+class _InlineScripts(HTMLParser):
+    """Collects the text of every attribute-free ``<script>`` block."""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=False)
+        self.blocks: list[str] = []
+        self._inside = False
+
+    def handle_starttag(self, tag, attrs):
+        if tag == "script" and not attrs:
+            self._inside = True
+            self.blocks.append("")
+
+    def handle_endtag(self, tag):
+        if tag == "script":
+            self._inside = False
+
+    def handle_data(self, data):
+        if self._inside:
+            self.blocks[-1] += data
+
+
+def _inline_scripts(html: str) -> list[str]:
+    parser = _InlineScripts()
+    parser.feed(html)
+    parser.close()
+    return parser.blocks
+
+
 class TestQuasipotentialRenderer(TestCase):
     @classmethod
     def setUpClass(cls):
@@ -143,7 +172,7 @@ class TestQuasipotentialRenderer(TestCase):
 
     @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
     def test_every_script_block_parses(self):
-        blocks = re.findall(r"<script>(.*?)</script>", self.html, re.DOTALL)
+        blocks = _inline_scripts(self.html)
         assert len(blocks) == 3
         node = shutil.which("node")
         for index, block in enumerate(blocks):
