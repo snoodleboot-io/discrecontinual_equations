@@ -9,70 +9,77 @@ on:
     types: [published]
 
 jobs:
-  # Individual lint jobs - must all pass before unit tests run
+  # Individual lint jobs - must all pass before unit tests run.
+  # Each installs the tool versions pinned in uv.lock, so CI runs what `uv run <tool>` runs locally.
   lint-black:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
         with:
-          python-version: "3.13"
-      - name: Install Black
-        run: pip install black
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+      - name: Install the locked dev environment
+        run: uv sync --dev --locked --python 3.13
       - name: Run Black
-        run: black --check --diff .
+        run: uv run --locked black --check --diff .
 
   lint-ruff:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
         with:
-          python-version: "3.13"
-      - name: Install Ruff
-        run: pip install ruff
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+      - name: Install the locked dev environment
+        run: uv sync --dev --locked --python 3.13
       - name: Run Ruff
-        run: ruff check . --fix
+        run: uv run --locked ruff check .
 
   lint-bandit:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
         with:
-          python-version: "3.13"
-      - name: Install Bandit
-        run: pip install bandit[toml]
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+      - name: Install the locked dev environment
+        run: uv sync --dev --locked --python 3.13
       - name: Run Bandit
-        run: bandit -r discrecontinual_equations
+        run: uv run --locked bandit -r discrecontinual_equations
 
   lint-mypy:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
         with:
-          python-version: "3.13"
-      - name: Install MyPy and dependencies
-        run: |
-          pip install mypy
-          pip install pydantic numpy plotly kaleido
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+      - name: Install the locked dev environment
+        run: uv sync --dev --locked --python 3.13
       - name: Run MyPy
-        run: mypy discrecontinual_equations
+        run: uv run --locked mypy
 
   lint-mkdocs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
         with:
-          python-version: "3.13"
-      - name: Install MkDocs and discrecontinual_equations package
-        run: |
-          pip install mkdocs mkdocs-material mkdocstrings[python] pymdown-extensions
-          pip install -e .
-      - name: Build MkDocs
-        run: mkdocs build --strict
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+      - name: Install the locked dev environment
+        run: uv sync --dev --locked --python 3.13
+      - name: Run MkDocs
+        run: uv run --locked mkdocs build --strict
 
   # Unit tests - only run after all lint jobs pass
   test:
@@ -81,6 +88,9 @@ jobs:
     strategy:
       matrix:
         python-version: ["3.13", "3.14"]
+    env:
+      # Make uv sync and uv run use the matrix interpreter, not whichever one it finds first
+      UV_PYTHON: ${{ matrix.python-version }}
 
     steps:
       - uses: actions/checkout@v4
