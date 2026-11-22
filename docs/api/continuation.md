@@ -233,6 +233,142 @@ orbit's all along - on the integrated cycle at 80 nodes the old quadrature was
 already at 1e-4 - and the chord's error had been cancelling a little of it. What is
 left everywhere is the orbit: nodes, or a higher-order collocation scheme.
 
+### Orthogonal collocation
+
+`collocation="gauss_legendre"` is that higher-order scheme: AUTO's orthogonal
+collocation, `collocation_points` Gauss–Legendre points per interval (default 4,
+AUTO's NCOL), a degree-`m` polynomial through `m + 1` equally spaced points per
+interval, order `2m` at the mesh points and for the period. Only the collocation is
+AUTO's: the phase condition is still the point (Poincaré) condition
+`x_0[phase_index] = phase_value`, and the pseudo-arclength constraint the plain
+Euclidean norm of the whole unknown vector, not AUTO's integral phase condition and
+weighted L2 norm. Period error on the continued Hopf branch, with the order per mesh
+doubling:
+
+| m | coarsest | doubled | doubled again | and again |
+|---|---|---|---|---|
+| 2 | 8: 3.2e-3 | 16: 2.1e-4 (3.96) | 32: 1.3e-5 (3.99) | 64: 8.1e-7 (4.00) |
+| 3 | 3: 4.4e-3 | 6: 7.9e-5 (5.79) | 12: 1.3e-6 (5.95) | 24: 2.0e-8 (5.99) |
+| 4 | 3: 8.0e-5 | 6: 3.5e-7 (7.86) | 12: 1.4e-9 (7.97) | 24: 5.4e-12 (7.99) |
+
+Its Floquet multipliers are read off its own collocation Jacobian (Fairgrieve and
+Jepson): each interval's block, solved for its far end, is a transfer matrix, and
+their product round the mesh is the derivative of the discrete period map. Nothing
+is integrated; the blocks are the ones the tangent solve just assembled. The
+nontrivial multiplier on the Hopf cycle converges at 4.00, 5.96 and 7.95 for
+`m = 2, 3, 4`. `CycleContinuation.hermite_multipliers(point)` is the Hermite
+monodromy above, walked through every point of the solution, as a cross-check. It is
+fourth order whatever `m` is, so the two agree only to that order (3.86-3.99 per
+doubling), not to `2m`: the ticket's oracle of agreement "to the collocation order"
+cannot be met by this cross-check.
+
+**The trivial multiplier of that monodromy is not an error measure.** The discrete
+map of a one-step method is the flow of a modified vector field to all orders, so
+its trivial multiplier stays at one far beyond the scheme's order: on van der Pol
+at `m = 2` it read 3.4e-4, 1.4e-9 and 4e-16 at 20, 40 and 80 intervals while the
+nontrivial multiplier was off 2.0e-3, 9.8e-5 and 6.0e-6; on the rotation-symmetric
+Hopf cycle it is one to rounding. A Gauss–Legendre `CyclePoint` therefore carries
+its `floquet_error` explicitly: the larger of the trivial drift and the relative
+disagreement between the Jacobian's multipliers and the Hermite cross-check's. The
+cross-check takes `df/dx` by automatic differentiation, because the forward
+difference floors it at 3e-5 on the Bogdanov–Takens orbit nearest the homoclinic
+however fine the mesh.
+
+**`floquet_error` is a conservative estimate, not the `2m`-order error.** It is the
+largest of three readings: the trivial drift, the relative disagreement with the
+Hermite cross-check, and twice the disagreement with the same cycle re-solved on
+twice the intervals. The factor two is what bounds the error whenever doubling the
+mesh at least halves it: `e_N <= |mu_N - mu_2N| + e_2N <= |mu_N - mu_2N| + e_N / 2`.
+
+The doubled-mesh reading is there because the Hermite one alone did not bound the
+error. At `m = 2` the Jacobian's multipliers and the cross-check are both fourth
+order and their errors partly cancel: on the fold-of-cycles normal form it read up
+to 2.5 times low on every mesh from 4 to 24 intervals, and on 4 intervals passed two
+cycles whose true errors were 3.1e-2 and 3.4e-2 under the default 2e-2; at `m = 3`
+on 3 intervals it read up to six times low. With all three readings, against
+closed-form or DOP853 references on 1391 cycles (van der Pol at `mu` from 0.5 to 10,
+the Brusselator at `b` from 2.5 to 4, the fold branch; `m` from 1 to 4 on 3 to 160
+intervals) the true error never exceeded the estimate and no cycle above 2e-2
+passed:
+
+| `m` | cycles | worst true / estimate | median estimate / true |
+|---|---|---|---|
+| 1 | 300 | 0.75 | 34 |
+| 2 | 482 | 0.61 | 2.3 |
+| 3 | 297 | 0.54 | 5.1 |
+| 4 | 296 | 0.50 | 140 |
+
+Where the fourth-order Hermite term dominates - large `m`, fine meshes - it
+over-reads a great deal. Against an exact reference (a planar cycle's nontrivial
+multiplier is `exp` of the divergence integrated over the period, here by DOP853 at
+`rtol = 1e-12`) with `m = 4`:
+
+| cycle | intervals | `floquet_error` | true error |
+|---|---|---|---|
+| van der Pol, `mu = 1` | 80 | 4.7e-9 | 4.9e-15 |
+| Bogdanov–Takens, b1 = -0.4554 | 80 | 1.9e-7 | 1.2e-10 |
+| Bogdanov–Takens, b1 = -0.4554 | 20 | 8.1e-5 | 1.3e-5 |
+| van der Pol, `mu = 6` | 80 | 4.65e-2 | 6.25e-3 |
+
+The last row is a false refusal: `resolved()` at the default 2e-2 refuses that
+cycle, where Hermite–Simpson on 320 nodes, true error 6.05e-3, is let through. The
+Hermite term is kept regardless, because without it one `m = 1` cycle on 3 intervals
+read eight times low. The doubled-mesh solve makes a point cost 1.3 to 1.5 times as
+much. An estimate that is tight at every `m` is open.
+
+On the two films the fourth-order schemes could not take below 0.01%, worst
+`floquet_error` over the branch - for Gauss–Legendre that is the estimate above, so the
+true errors are smaller still (on the worst Bogdanov–Takens orbit, 1.3e-10 at 80
+intervals and 1.3e-5 at 20) (Hermite–Simpson as shipped, against
+Gauss–Legendre with `m = 4`; "80 intervals" has four times the unknowns, "20
+intervals" the same 81 states as 80 nodes):
+
+| | bogdanov_takens | ferroelectric_ring |
+|---|---|---|
+| Hermite–Simpson, 80 nodes | 0.089% (605 cycles) | 0.088% (761) |
+| Gauss–Legendre, 80 intervals | 4.8e-5% (604) | 4.6e-3% (761) |
+| Gauss–Legendre, 20 intervals | 8.0e-3% (605) | 0.24% (761) |
+
+The Gauss–Legendre rows were recorded before the doubled-mesh reading joined the
+estimate. On the worst Bogdanov–Takens orbit it leaves them unchanged (1.87e-7 on 80
+intervals, 8.06e-5 on 20): at `m = 4` the Hermite term is the larger.
+
+On 80 intervals both films are under the 0.01% bar by orders of magnitude, estimate
+and all. On
+Hermite–Simpson's own unknowns Bogdanov–Takens is under it and the ring is not: its
+period-35 wave has `T h = 1.7` per interval at 20 intervals, and four points to an
+interval do not make up for it.
+
+With four times the unknowns, one pseudo-arclength step covers about half the
+parameter, so the 80-interval runs doubled the step to cover the films' span; they
+then go further toward each branch's end (Bogdanov–Takens to b1 = -0.4593 where
+Hermite–Simpson stops at -0.4554, the ring to a period-62 wave at λ = 0.370 against
+period 35 at 0.430), and the worst errors quoted include those harder orbits. The
+branch costs 3.7x (Bogdanov–Takens, 86 s against 23 s) and 4.5x (ring, 287 s against
+64 s) Hermite–Simpson's at 80 intervals, and 1.1x and 1.9x at 20, so the scheme is
+offered beside the default rather than in place of it, and the films still ship
+under Hermite–Simpson.
+
+### Equidistributing the mesh, measured again
+
+The adaptive mesh rejected above was rejected under trapezoidal collocation, where
+the order was the limit. Under orthogonal collocation it was built again - the
+Russell–Christiansen monitor `|x^(m+1)|^(1/(m+1))` from the jumps of the piecewise
+constant `m`-th derivative, re-applied every step, with the polynomial and the
+tangent carried onto the new mesh and the point re-solved there - and measured on
+both films, `m = 4`, over the stretch of each branch both runs covered:
+
+| worst error | uniform | equidistributed |
+|---|---|---|
+| bogdanov_takens, 80 intervals | 1.44e-7 | 1.43e-7 |
+| ferroelectric_ring, 80 intervals | 3.7e-6 | 4.3e-6 |
+| bogdanov_takens, 20 intervals | 5.7e-5 | 4.5e-5 (and ends sooner) |
+| ferroelectric_ring, 20 intervals | 2.4e-3 | 1.6e-2 |
+
+It grades the Bogdanov–Takens mesh by a factor of six and buys nothing the order has
+not already bought, and on the coarse ring it is seven times worse, so it is left
+out. The interval blocks take a graded mesh all the same.
+
 ## Trusting a computed connecting orbit
 
 A homoclinic or heteroclinic orbit has **two** independent resolutions, and either

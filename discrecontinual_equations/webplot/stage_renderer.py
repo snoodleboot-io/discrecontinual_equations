@@ -1015,7 +1015,7 @@ _BODY_CLOCK = """    <section class="clock" aria-label="spectral clock">
           &mu;</span>
         <span><span class="dot" style="background:transparent;
           border:1.5px solid var(--faint);border-radius:1px"></span>trivial &mu;
-          (should be 1; its drift is the error)</span>
+          (should be 1; Floquet &plusmn; is how far &mu; may be off)</span>
       </div>
     </section>
   </div>

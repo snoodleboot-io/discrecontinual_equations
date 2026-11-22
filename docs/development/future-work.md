@@ -190,12 +190,17 @@ solver returns the same near-optimal result as the uniform mesh (no regression).
   multi-channel (vector) noise remains open.
 - **Higher-order collocation** is implemented (`HermiteSimpsonOrbit`, fourth order,
   verified by convergence rate) and is now the default scheme of
-  `CycleContinuation` as well, with its own analytic sparse Jacobian. Gauss/Lobatto
-  schemes would raise the order further and are the remaining option here. The
+  `CycleContinuation` as well, with its own analytic sparse Jacobian. The
   monodromy walks the cubic Hermite interpolant between nodes with the Jacobian
   at every Runge-Kutta stage, fourth order itself (16x per doubling on the exact
-  Hopf cycle); the smooth films' Floquet errors are now 1e-5 to 1e-3 percent and
-  the remaining lever is the orbit's own resolution.
+  Hopf cycle); the smooth films' Floquet errors are now 1e-5 to 1e-3 percent.
+  Orthogonal collocation at `m` Gauss-Legendre points (order `2m`, measured to
+  7.99 for `m = 4`) is now a third scheme, with multipliers off its own Jacobian;
+  on 80 intervals it takes Bogdanov-Takens from 0.089% to 4.8e-5% and the ring
+  from 0.088% to 4.6e-3%. Mesh equidistribution was measured on top and left out.
+  Open: whether the films should switch, and an arclength norm that means the
+  same step under every scheme (an `m`-point scheme's step covers about
+  `1/sqrt(m)` of the parameter).
 - **Heteroclinic networks** among three or more saddles (see section 2) are the main
   substantial item still fully open, blocked on a clean oracle for a three-saddle
   connection cycle rather than on machinery.

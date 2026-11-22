@@ -234,8 +234,12 @@ class Manifold:
 class Cycle:
     """A cycle on the branch: its orbit, period, and Floquet multipliers.
 
-    ``error`` is the trivial multiplier's distance from one, which bounds how
-    far every multiplier is from its true value; it is drawn with them.
+    ``error`` is the cycle point's ``floquet_error``, drawn with the
+    multipliers: how far they may be from their true values. Under the
+    one-wide collocation schemes that is the trivial multiplier's distance from
+    one; under Gauss-Legendre, whose trivial multiplier stays at one however
+    wrong the rest are, it is the larger of that and the disagreement with the
+    Hermite cross-check, a conservative bound.
 
     ``states`` is the orbit in the plane under the view's opening projection.
     ``orbit``, set after construction the way ``error`` is, holds the full

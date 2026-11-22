@@ -14,14 +14,23 @@ of a cycle:
 
 The orbit is discretised by collocation on a uniform mesh, and the scheme is a
 choice: fourth-order Hermite-Simpson by default, second-order trapezoidal on
-request. See :class:`CycleContinuation` for why the order, and not the mesh, is
+request, or AUTO's orthogonal collocation at ``m`` Gauss-Legendre points (order
+``2m``). See :class:`CycleContinuation` for why the order, and not the mesh, is
 what decides whether the multipliers can be believed.
+
+Only the collocation follows AUTO. Whatever the scheme, the phase condition is a
+point (Poincare) condition ``x_0[i] = c`` and the arclength constraint uses the
+plain Euclidean norm of the whole unknown vector, not AUTO's integral phase
+condition and weighted ``L2`` norm.
 """
 
 from collections.abc import Callable, Sequence
 from itertools import pairwise
+from numbers import Integral
 
 import numpy as np
+from numpy.polynomial.legendre import leggauss
+from scipy.optimize import linear_sum_assignment
 from scipy.sparse import coo_matrix
 from scipy.sparse.linalg import spsolve
 
@@ -31,6 +40,7 @@ from discrecontinual_equations.continuation.derivative_provider import (
 from discrecontinual_equations.continuation.periodic_orbit import (
     PeriodicOrbit,
     PeriodicOrbitSolution,
+    _hermite_positions,
 )
 from discrecontinual_equations.differential_equation import DifferentialEquation
 
@@ -60,6 +70,14 @@ _AUTODIFF = AutomaticDifferentiation()
 # cycle this sits between what 160 and 320 trapezoidal nodes buy (8.9% at 80, 2.5%
 # at 160, 0.6% at 320); Hermite-Simpson is under it on the whole branch at 80.
 _FLOQUET_TOLERANCE = 2.0e-2
+# What a Gauss-Legendre point's gap to the same cycle on the doubled mesh is
+# multiplied by to bound its own error. If doubling the mesh at least halves the
+# error, then e_N <= |mu_N - mu_2N| + e_2N <= |mu_N - mu_2N| + e_N / 2, so
+# e_N <= 2 |mu_N - mu_2N|. Any convergent order gives that once resolved; order
+# 2m gives it with room to spare (the gap is then (1 - 4^-m) e_N, read 2/(1 -
+# 4^-m) ~ 2.1 times high at m = 2). The Hermite cross-check alone could not
+# bound the error at m = 2, where both readings are fourth order and cancel.
+_DOUBLING_SAFETY = 2.0
 
 
 class _VectorField:
@@ -89,13 +107,25 @@ class _Collocation:
 
     A scheme is two things: the residual of one interval, and the Jacobian of that
     residual against the interval's two end nodes, the period, and the parameter.
-    Both schemes here couple an interval only to its own two nodes, so the sparsity
-    pattern :meth:`CycleContinuation._blocks` assembles is the same for each and
-    only the block values differ. That is why the scheme supplies values and not
-    triplets: the index arithmetic DEQ-15 got right stays in one place.
+    Trapezoidal and Hermite-Simpson couple an interval only to its own two nodes,
+    so the sparsity pattern :meth:`CycleContinuation._blocks` assembles is the
+    same for each and only the block values differ. That is why the scheme
+    supplies values and not triplets: the index arithmetic DEQ-15 got right stays
+    in one place.
+
+    ``width`` is how many points of the solution each interval adds: one for
+    those two, ``m`` for :class:`_GaussLegendre`, whose interval carries ``m - 1``
+    interior points besides its right end and so contributes ``m`` rows of
+    equations against ``m + 1`` points. :meth:`interval_blocks` is the one block
+    shape the assembly takes, and a one-wide scheme gets it for free from
+    :meth:`blocks`.
     """
 
     name = ""
+    width = 1
+    # Whether the Floquet multipliers are read off this scheme's own Jacobian
+    # (:func:`_jacobian_monodromy`) rather than the Hermite monodromy.
+    jacobian_monodromy = False
 
     def residual(
         self,
@@ -103,7 +133,7 @@ class _Collocation:
         states: np.ndarray,
         period: float,
         parameter: float,
-        step: float,
+        step: float | np.ndarray,
     ) -> np.ndarray:
         """The collocation residual, one row of ``dimension`` per interval."""
         raise NotImplementedError
@@ -114,7 +144,7 @@ class _Collocation:
         states: np.ndarray,
         period: float,
         parameter: float,
-        step: float,
+        step: float | np.ndarray,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """Per-interval Jacobian blocks: ``(left, right, period, parameter)``.
 
@@ -123,6 +153,36 @@ class _Collocation:
         rows of the two dense columns.
         """
         raise NotImplementedError
+
+    def interval_blocks(
+        self,
+        field: _VectorField,
+        states: np.ndarray,
+        period: float,
+        parameter: float,
+        step: float | np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Per-interval Jacobian blocks in the one shape the assembly takes.
+
+        ``(block, period, parameter)``: ``block`` is ``width * dimension`` rows by
+        ``(width + 1) * dimension`` columns, against the interval's points in
+        order; the other two are the rows of the dense columns. For a scheme
+        with one row per interval this is ``left`` and ``right`` side by side.
+        """
+        left, right, period_values, parameter_values = self.blocks(
+            field,
+            states,
+            period,
+            parameter,
+            float(step),
+        )
+        return np.concatenate([left, right], axis=2), period_values, parameter_values
+
+    def grid(self, mesh: np.ndarray) -> np.ndarray:
+        """Where the solution's points sit on ``mesh``: ``width`` to an interval."""
+        fractions = np.arange(self.width) / self.width
+        inner = mesh[:-1, None] + fractions[None, :] * np.diff(mesh)[:, None]
+        return np.append(inner.ravel(), mesh[-1])
 
 
 class _Trapezoidal(_Collocation):
@@ -136,7 +196,7 @@ class _Trapezoidal(_Collocation):
         states: np.ndarray,
         period: float,
         parameter: float,
-        step: float,
+        step: float | np.ndarray,
     ) -> np.ndarray:
         fields = np.array([field.value(state, parameter) for state in states])
         weight = _HALF * period * step
@@ -148,7 +208,7 @@ class _Trapezoidal(_Collocation):
         states: np.ndarray,
         period: float,
         parameter: float,
-        step: float,
+        step: float | np.ndarray,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         identity = np.eye(states.shape[1])
         weight = _HALF * period * step
@@ -186,7 +246,7 @@ class _HermiteSimpson(_Collocation):
         states: np.ndarray,
         fields: np.ndarray,
         period: float,
-        step: float,
+        step: float | np.ndarray,
     ) -> np.ndarray:
         slope = period * step / _EIGHTH
         return _HALF * (states[:-1] + states[1:]) + slope * (fields[:-1] - fields[1:])
@@ -197,7 +257,7 @@ class _HermiteSimpson(_Collocation):
         states: np.ndarray,
         period: float,
         parameter: float,
-        step: float,
+        step: float | np.ndarray,
     ) -> np.ndarray:
         fields = np.array([field.value(state, parameter) for state in states])
         midpoints = self._midpoints(states, fields, period, step)
@@ -215,7 +275,7 @@ class _HermiteSimpson(_Collocation):
         states: np.ndarray,
         period: float,
         parameter: float,
-        step: float,
+        step: float | np.ndarray,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         identity = np.eye(states.shape[1])
         fields = np.array([field.value(state, parameter) for state in states])
@@ -256,9 +316,204 @@ class _HermiteSimpson(_Collocation):
         return left, right, period_values, parameter_values
 
 
+class _GaussLegendre(_Collocation):
+    """Order ``2m``: orthogonal collocation at ``m`` Gauss-Legendre points, as AUTO.
+
+    The collocation is AUTO's; the phase condition and the arclength norm around
+    it are not (see the module docstring).
+
+    On each interval the orbit is the polynomial of degree ``m`` through ``m + 1``
+    equally spaced points - the two mesh points and ``m - 1`` between them - and
+    the equation is imposed at the ``m`` Gauss-Legendre points of the interval:
+    ``p'(z_k) = h T f(p(z_k))`` in the interval's local coordinate. That is the
+    ``m``-stage Gauss Runge-Kutta method written as a boundary-value problem, and
+    it is superconvergent: order ``2m`` at the mesh points, and for the period,
+    where the polynomial in between is only order ``m + 1``.
+
+    The interval's block is ``D_kj I - h T L_kj Df(p(z_k))`` against its ``m + 1``
+    points, with ``L`` and ``D`` the Lagrange basis and its derivative at the
+    Gauss points; the period column is ``-h f(p(z_k))`` and the parameter column
+    ``-h T df/dp``. Nothing couples two intervals except the shared mesh point,
+    so the pattern is still almost block diagonal, only with ``m`` rows per
+    interval against ``m + 1`` points instead of one against two.
+
+    ``step`` is an array of the intervals' widths here, not a scalar, so the
+    blocks are right on a graded mesh as well; the continuation runs it on the
+    uniform one, for the reason given in :class:`CycleContinuation`.
+
+    Measured on the continued Hopf branch (``mu = 0.5``, period exactly 2 pi),
+    period error and the order per mesh doubling, coarse meshes for large ``m``
+    so the error stays above the corrector's tolerance::
+
+        m = 2    8: 3.2e-3   16: 2.1e-4 (3.96)   32: 1.3e-5 (3.99)   64: 8.1e-7 (4.00)
+        m = 3    3: 4.4e-3    6: 7.9e-5 (5.79)   12: 1.3e-6 (5.95)   24: 2.0e-8 (5.99)
+        m = 4    3: 8.0e-5    6: 3.5e-7 (7.86)   12: 1.4e-9 (7.97)   24: 5.4e-12 (7.99)
+
+    The nontrivial multiplier off the Jacobian against ``exp(-4 pi mu)`` at
+    ``mu = 0.25`` goes the same way: orders 4.13, 4.04, 4.01, 4.00 for ``m = 2``
+    from 4 to 64 intervals, 5.13, 5.82, 5.96 for ``m = 3`` from 4 to 32, and
+    7.72, 7.94, 7.95 for ``m = 4`` from 3 to 24.
+    """
+
+    name = "gauss_legendre"
+    jacobian_monodromy = True
+
+    def __init__(self, points: int) -> None:
+        self.width = points
+        roots, _ = leggauss(points)
+        gauss = _HALF * (roots + 1.0)
+        powers = np.arange(points + 1)
+        grid = np.linspace(0.0, 1.0, points + 1)
+        # Column j of this holds the monomial coefficients of the j-th Lagrange
+        # basis polynomial on the equally spaced grid.
+        self._coefficients = np.linalg.inv(grid[:, None] ** powers[None, :])
+        self._values = self.basis(gauss)
+        self._derivatives = (
+            powers[None, 1:] * gauss[:, None] ** powers[None, :-1]
+        ) @ self._coefficients[1:]
+
+    def basis(self, fractions: np.ndarray) -> np.ndarray:
+        """The Lagrange basis at positions in ``[0, 1]``: one row per position."""
+        powers = np.arange(self.width + 1)
+        return (fractions[:, None] ** powers[None, :]) @ self._coefficients
+
+    def _windows(self, states: np.ndarray) -> np.ndarray:
+        """Each interval's ``m + 1`` points: shape ``(intervals, m + 1, dimension)``."""
+        intervals = (states.shape[0] - 1) // self.width
+        index = np.arange(intervals)[:, None] * self.width + np.arange(self.width + 1)
+        return states[index]
+
+    def residual(
+        self,
+        field: _VectorField,
+        states: np.ndarray,
+        period: float,
+        parameter: float,
+        step: float | np.ndarray,
+    ) -> np.ndarray:
+        windows = self._windows(states)
+        steps = np.broadcast_to(np.asarray(step, dtype=float), windows.shape[:1])
+        points = np.einsum("kj,njd->nkd", self._values, windows)
+        slopes = np.einsum("kj,njd->nkd", self._derivatives, windows)
+        fields = np.array(
+            [
+                [field.value(point, parameter) for point in interval]
+                for interval in points
+            ],
+        )
+        defect = slopes - (period * steps)[:, None, None] * fields
+        return defect.reshape(-1, states.shape[1])
+
+    def interval_blocks(
+        self,
+        field: _VectorField,
+        states: np.ndarray,
+        period: float,
+        parameter: float,
+        step: float | np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        windows = self._windows(states)
+        intervals, width, dimension = windows.shape[0], self.width, states.shape[1]
+        steps = np.broadcast_to(np.asarray(step, dtype=float), (intervals,))
+        points = np.einsum("kj,njd->nkd", self._values, windows)
+        fields = np.array(
+            [
+                [field.value(point, parameter) for point in interval]
+                for interval in points
+            ],
+        )
+        derivatives = np.array(
+            [
+                [field.jacobian(point, parameter) for point in interval]
+                for interval in points
+            ],
+        )
+        parameter_fields = np.array(
+            [
+                [field.parameter_derivative(point, parameter) for point in interval]
+                for interval in points
+            ],
+        )
+        # Rows (stage k, component d) against columns (point j, component e).
+        identity = np.einsum("kj,de->kdje", self._derivatives, np.eye(dimension))
+        chain = np.einsum("kj,nkde->nkdje", self._values, derivatives)
+        scale = period * steps
+        block = identity[None] - scale[:, None, None, None, None] * chain
+        period_values = -steps[:, None, None] * fields
+        parameter_values = -scale[:, None, None] * parameter_fields
+        return (
+            block.reshape(intervals, width * dimension, (width + 1) * dimension),
+            period_values.reshape(intervals, width * dimension),
+            parameter_values.reshape(intervals, width * dimension),
+        )
+
+
 _COLLOCATIONS: dict[str, _Collocation] = {
     scheme.name: scheme for scheme in (_Trapezoidal(), _HermiteSimpson())
 }
+_SCHEMES = sorted([*_COLLOCATIONS, _GaussLegendre.name])
+# AUTO's default point count (its NCOL), and the most this scheme is tested at.
+_GAUSS_POINTS = 4
+
+
+def _multiplier_disagreement(first: np.ndarray, second: np.ndarray) -> float:
+    """Largest relative gap between two readings of one cycle's multipliers.
+
+    Each multiplier of ``first`` is paired with one of ``second`` so that the
+    pairs are as close as possible, and each gap is taken relative to the larger
+    of one and the multiplier's size: the trivial multiplier is compared in
+    absolute terms, as :attr:`CyclePoint.floquet_error` always has, and a
+    multiplier of 140 is not called wrong for being off by 1e-3.
+    """
+    gaps = np.abs(first[:, None] - second[None, :]) / np.maximum(
+        1.0,
+        np.abs(first)[:, None],
+    )
+    rows, columns = linear_sum_assignment(gaps)
+    return float(np.max(gaps[rows, columns]))
+
+
+def _jacobian_monodromy(block: np.ndarray, dimension: int) -> np.ndarray:
+    """The monodromy read off the collocation Jacobian (Fairgrieve and Jepson).
+
+    The state columns of each interval's block are the linearised collocation
+    system: ``A x_left + W (interior, x_right) = 0`` for any perturbation that
+    keeps the equations satisfied. Solving it for the interval's far end gives
+    the discrete transfer matrix ``-(W^-1 A)`` restricted to its last rows, and
+    the product round the mesh is the derivative of the discrete period map,
+    which inherits the scheme's order. Nothing is integrated and no field is
+    evaluated: the block is the one the last tangent solve assembled.
+
+    A block too singular to solve raises :class:`numpy.linalg.LinAlgError`;
+    the caller reports the point with an infinite error rather than lose the
+    trace.
+
+    The product is formed explicitly rather than by a periodic Schur
+    decomposition, which is what keeps this short. That loses accuracy only
+    when the multipliers span many orders of magnitude, far beyond the 1e2-1e3
+    the films see.
+    """
+    transfers = -np.linalg.solve(block[:, :, dimension:], block[:, :, :dimension])
+    monodromy = np.eye(dimension)
+    for transfer in transfers[:, -dimension:]:
+        monodromy = transfer @ monodromy
+    return monodromy
+
+
+class _DifferentiatedOrbit(PeriodicOrbit):
+    """The Hermite monodromy with ``df/dx`` by automatic differentiation.
+
+    Falls back to the parent's forward difference for a field that automatic
+    differentiation rejects, as :meth:`CycleContinuation._state_jacobian` does.
+    """
+
+    __slots__ = []
+
+    def _jacobian(self, state: np.ndarray) -> np.ndarray:
+        try:
+            return _AUTODIFF.jacobian(self._function, state, 0.0)
+        except (TypeError, ValueError, AttributeError):
+            return super()._jacobian(state)
 
 
 class CycleSeed:
@@ -289,19 +544,30 @@ class _Arc:
 
 
 class CyclePoint:
-    """A cycle on the branch: its parameter, orbit, and Floquet multipliers."""
+    """A cycle on the branch: its parameter, orbit, and Floquet multipliers.
 
-    __slots__ = ["_multipliers", "_parameter", "_solution"]
+    ``mesh`` is where the solution's states sit in rescaled time; ``None``, the
+    default, means uniformly spaced, which is where the one-wide schemes put
+    their nodes. A Gauss-Legendre point holds its interior points too and says
+    where they are. ``error`` is the multipliers' accuracy where the trivial
+    multiplier cannot say it (see :attr:`floquet_error`); ``None`` means it can.
+    """
+
+    __slots__ = ["_error", "_mesh", "_multipliers", "_parameter", "_solution"]
 
     def __init__(
         self,
         parameter: float,
         solution: PeriodicOrbitSolution,
         multipliers: np.ndarray,
+        mesh: np.ndarray | None = None,
+        error: float | None = None,
     ) -> None:
         self._parameter = parameter
         self._solution = solution
         self._multipliers = multipliers
+        self._mesh = mesh
+        self._error = error
 
     @property
     def parameter(self) -> float:
@@ -317,6 +583,13 @@ class CyclePoint:
     def multipliers(self) -> np.ndarray:
         """Floquet multipliers of the cycle."""
         return self._multipliers
+
+    @property
+    def mesh(self) -> np.ndarray:
+        """Positions of the solution's states on ``[0, 1]`` in rescaled time."""
+        if self._mesh is None:
+            return np.linspace(0.0, 1.0, self._solution.states.shape[0])
+        return self._mesh
 
     @property
     def floquet_error(self) -> float:
@@ -343,7 +616,68 @@ class CyclePoint:
         0.3-4% to 1e-5-1e-3 percent. Use :func:`resolved_branch` rather than a
         single sampled point to decide whether a branch's multipliers can be
         believed.
+
+        Under Gauss-Legendre collocation the trivial multiplier stops being a
+        measure, and the point carries its error explicitly instead. Those
+        multipliers are read off the collocation Jacobian, which is the
+        derivative of the discrete period map, and a one-step method's map is
+        the flow of a nearby modified field to all orders in ``h`` - so the map
+        keeps the trivial multiplier at one far beyond the scheme's order while
+        the others carry the full ``O(h^(2m))``. On van der Pol at ``mu = 1``
+        with ``m = 2`` the trivial drift fell 3.4e-4, 1.4e-9, 4e-16 from 20 to
+        80 intervals while the nontrivial multiplier's error was 2.0e-3, 9.8e-5,
+        6.0e-6. That is asymptotic, not a rule: on the Brusselator at ``b = 3``
+        the drift was the *larger* error, 2.9e-8 against 5.7e-12 with ``m = 4``
+        on 80 intervals. Neither can stand for the other, so for those points
+        this is the largest of three readings: the trivial drift; the relative
+        disagreement between the Jacobian's multipliers and the Hermite
+        monodromy's (see :func:`_multiplier_disagreement`); and twice the
+        disagreement with the same cycle re-solved on twice the intervals (see
+        ``_DOUBLING_SAFETY`` for why twice).
+
+        The Hermite reading alone did not bound the error. At ``m = 2`` it and
+        the Jacobian are both fourth order and their errors partly cancel: on
+        the fold-of-cycles normal form it read up to 2.5 times low on every mesh
+        from 4 to 24 intervals and on 4 intervals let two cycles with true
+        errors 3.1e-2 and 3.4e-2 under the default 2e-2; at ``m = 3`` on 3
+        intervals it read up to six times low. With the doubled-mesh reading,
+        against closed-form or DOP853 references on 1391 cycles - van der Pol
+        at ``mu`` from 0.5 to 10, the Brusselator at ``b`` from 2.5 to 4, that
+        fold branch; ``m`` from 1 to 4 on 3 to 160 intervals - the error never
+        exceeded the estimate (worst ratio 0.75 at ``m = 1``, 0.61 at 2, 0.54
+        at 3, 0.50 at 4) and no cycle above 2e-2 passed. That is a measurement,
+        not a proof: it holds wherever doubling the mesh at least halves the
+        error, which every resolved mesh measured did.
+
+        It over-reads by about two where the doubled-mesh term dominates
+        (median 2.3 at ``m = 2``) and by far more where the fourth-order
+        Hermite term does (median 5 at ``m = 3``, 140 at ``m = 4``): with
+        ``m = 4`` on 80 intervals 4.7e-9 against a true 9.6e-15 on van der Pol
+        at ``mu = 1``, and 1.87e-7 against 1.24e-10 on the Bogdanov-Takens orbit
+        at b1 = -0.4554 (8.1e-5 against 1.34e-5 on 20 intervals). That has a
+        cost: on van der Pol at ``mu = 6`` with ``m = 4`` on 80 intervals it
+        reads 4.65e-2 against a true 6.25e-3, so :meth:`resolved` refuses at
+        the default 2e-2 a cycle that Hermite-Simpson on 320 nodes (true
+        6.05e-3) is let through on. The Hermite term is kept anyway: without
+        it, one ``m = 1`` cycle on 3 intervals read eight times low. An
+        estimate that is tight at every ``m`` is the open follow-up.
+
+        A point whose states have collapsed onto one another reads infinite
+        under every scheme. Every collocation admits that degenerate solution -
+        all states equal at period zero, or an equilibrium at any period - and
+        an under-resolved seed can converge to it: van der Pol at ``mu = 2`` on
+        8 intervals reaches period -4e-20 under the one-wide schemes and the
+        origin at period -7.6e-4 under ``m = 4``. Its monodromy is the identity
+        or within ``|T|`` of it, so both measures above read about zero there
+        and would call it resolved.
         """
+        if not self.amplitude > _NOISE_FLOOR * max(
+            1.0,
+            float(np.max(np.abs(self._solution.states))),
+        ):
+            return float("inf")
+        if self._error is not None:
+            return self._error
         return float(np.min(np.abs(self._multipliers - 1.0)))
 
     def resolved(self, tolerance: float = _FLOQUET_TOLERANCE) -> bool:
@@ -353,7 +687,12 @@ class CyclePoint:
         cycle, and far cheaper for the same reason ``floquet_error`` is: the period
         has to be re-solved on a doubled mesh before anyone can say how wrong it is,
         whereas the trivial multiplier's exact value is known in advance, so this
-        measurement arrives with the point and costs nothing.
+        measurement arrives with the point. Under the one-wide schemes it costs
+        nothing more. Under Gauss-Legendre it costs the Hermite cross-check
+        monodromy and a re-solve on the doubled mesh for every point - a point
+        takes 1.3 to 1.5 times as long - and it is conservative: no cycle
+        measured passed with a true error above the tolerance, and it can refuse
+        a cycle whose multipliers are good enough (see :attr:`floquet_error`).
         """
         return self.floquet_error < tolerance
 
@@ -528,7 +867,11 @@ def resolved_branch(
     *discrete* collocation system was satisfied; an under-resolved mesh satisfies it
     perfectly well while reporting multipliers tens of percent out - far enough to
     move a crossing of the unit circle, which is the thing the branch was traced to
-    find. Nothing in the residual can catch that, and the trivial multiplier can.
+    find. Nothing in the residual can catch that, and the trivial multiplier can -
+    under the one-wide schemes. Under Gauss-Legendre the trivial multiplier can sit
+    at one however wrong the rest are, and what is gated on is the point's explicit
+    error, a conservative estimate that may refuse more of a branch than its
+    multipliers deserve (see :attr:`CyclePoint.floquet_error`).
 
     An unbroken run and not a filter, because :func:`classify_transition` compares
     *adjacent* points: a branch with holes punched in it would have it interpolating a
@@ -607,19 +950,64 @@ class CycleContinuation:
     is the default because a new caller should get the scheme whose multipliers
     can be believed without having to know this history. :func:`resolved_branch`
     remains the way a caller finds out whether the mesh it chose was enough.
+
+    ``"gauss_legendre"`` is AUTO's orthogonal collocation, order ``2m`` with
+    ``collocation_points`` (default 4) points to an interval - see
+    :class:`_GaussLegendre` for the measured orders. Only the collocation is
+    AUTO's: the phase condition stays the point condition ``x_0[phase_index] =
+    phase_value`` and the arclength the Euclidean norm of the whole unknown
+    vector, where AUTO uses an integral phase condition and a weighted ``L2``
+    norm. Its multipliers come off its
+    own Jacobian, and its points carry their error explicitly because the
+    trivial multiplier of that monodromy no longer measures it (see
+    :attr:`CyclePoint.floquet_error`). On 80 mesh intervals it takes the two
+    films the fourth-order schemes left at 0.09% far under 0.01%: worst error
+    bound over the branch 4.8e-7 on Bogdanov-Takens and 4.6e-5 on the ring,
+    against 8.9e-4 and 8.8e-4 under Hermite-Simpson on 80 nodes. Those are the
+    bound, the cross-check's fourth-order reading; on the worst
+    Bogdanov-Takens orbit the true error against an exact reference is 1.3e-10
+    where the bound says 1.9e-7. On Hermite-Simpson's own unknowns - 20
+    intervals of four points are 81 states - the Bogdanov-Takens bound is
+    8.0e-5 (true 1.3e-5 on that orbit) and the ring does not improve (2.4e-3,
+    which there is the trivial drift itself: its period-35 wave has
+    ``T h = 1.7`` per interval). These worst-error figures predate the
+    doubled-mesh reading in the estimate; on the worst Bogdanov-Takens orbit it
+    leaves them unchanged (1.87e-7 on 80 intervals, 8.06e-5 on 20), the
+    Hermite term being the larger at ``m = 4``. It is not the default: a step
+    costs about four times as much on 80 intervals, and the doubled-mesh
+    reading another 1.3 to 1.5 times per point, and with ``m`` times the unknowns one
+    arclength step covers about ``1/sqrt(m)`` of the parameter, so a caller
+    after the same span passes about ``sqrt(m)`` times the step - the figures
+    above doubled it, and then reached further along both branches.
+
+    Mesh equidistribution was built for it and measured, and is left out. The
+    Russell-Christiansen monitor ``|x^(m+1)|^(1/(m+1))``, re-applied every step
+    with the polynomial and the tangent carried onto the new mesh and the point
+    re-solved there, graded the Bogdanov-Takens mesh by a factor of six. Over
+    the stretch of each branch both runs covered, the worst error with ``m = 4``
+    on 80 intervals went from 1.44e-7 to 1.43e-7 on Bogdanov-Takens and from
+    3.7e-6 to 4.3e-6 on the ring; on 20 intervals from 5.7e-5 to 4.5e-5 on
+    Bogdanov-Takens, ending a little sooner, and from 2.4e-3 to 1.6e-2 on the
+    ring. Under trapezoidal the mesh could not help because the order was the
+    limit; under this scheme it does not need to. The blocks take a graded mesh
+    all the same, and the implementation is in the history (DEQ-34) for
+    whoever finds an orbit that needs it. (These comparisons are of the
+    bound too.)
     """
 
     __slots__ = [
+        "_assembled",
         "_collocation",
         "_dimension",
         "_equation",
         "_intervals",
+        "_mesh",
         "_parameter_index",
         "_phase_index",
         "_phase_value",
     ]
 
-    def __init__(  # noqa: PLR0913 (one scheme flag on the established signature)
+    def __init__(  # noqa: PLR0913 (scheme flags on the established signature)
         self,
         equation: DifferentialEquation,
         parameter_index: int,
@@ -628,25 +1016,62 @@ class CycleContinuation:
         phase_value: float = 0.0,
         *,
         collocation: str = "hermite_simpson",
+        collocation_points: int | None = None,
     ) -> None:
-        if collocation not in _COLLOCATIONS:
-            message = (
-                f"collocation must be one of {sorted(_COLLOCATIONS)}, "
-                f"got {collocation!r}"
-            )
+        if collocation not in _SCHEMES:
+            message = f"collocation must be one of {_SCHEMES}, got {collocation!r}"
             raise ValueError(message)
+        if collocation == _GaussLegendre.name:
+            points = _GAUSS_POINTS if collocation_points is None else collocation_points
+            if (
+                isinstance(points, bool)
+                or not isinstance(points, Integral)
+                or points < 1
+            ):
+                message = (
+                    f"collocation_points must be a positive integer, got {points!r}"
+                )
+                raise ValueError(message)
+            self._collocation: _Collocation = _GaussLegendre(int(points))
+        else:
+            if collocation_points is not None:
+                message = (
+                    f"collocation_points applies to {_GaussLegendre.name!r} only; "
+                    f"{collocation!r} has one point per interval"
+                )
+                raise ValueError(message)
+            self._collocation = _COLLOCATIONS[collocation]
         self._equation = equation
         self._parameter_index = parameter_index
         self._intervals = intervals
         self._phase_index = phase_index
         self._phase_value = phase_value
-        self._collocation = _COLLOCATIONS[collocation]
+        self._mesh = np.linspace(0.0, 1.0, intervals + 1)
         self._dimension = 0
+        # The last Jacobian blocks assembled and the unknowns they were taken
+        # at, so the multipliers of a point can reuse the tangent solve's.
+        self._assembled: tuple[np.ndarray, np.ndarray] | None = None
 
     @property
     def collocation(self) -> str:
-        """The collocation scheme: ``"hermite_simpson"`` or ``"trapezoidal"``."""
+        """The scheme: ``hermite_simpson``, ``trapezoidal`` or ``gauss_legendre``."""
         return self._collocation.name
+
+    @property
+    def collocation_points(self) -> int:
+        """Collocation points per interval: ``m`` for Gauss-Legendre, else one."""
+        return self._collocation.width
+
+    def _step(self) -> float | np.ndarray:
+        """The interval widths the scheme is handed.
+
+        A scalar for the one-wide schemes, exactly as before Gauss-Legendre
+        existed, so that their arithmetic - and every film built on them - is the
+        same to the last bit; the widths themselves for Gauss-Legendre.
+        """
+        if self._collocation.width == 1:
+            return 1.0 / self._intervals
+        return np.diff(self._mesh)
 
     def _field(self, state: np.ndarray, parameter: float) -> np.ndarray:
         self._equation.derivative.parameters[self._parameter_index].value = parameter
@@ -681,7 +1106,7 @@ class CycleContinuation:
             states,
             period,
             parameter,
-            1.0 / self._intervals,
+            self._step(),
         )
         return np.concatenate(
             [
@@ -752,14 +1177,17 @@ class CycleContinuation:
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """The cycle residual's Jacobian as sparse triplets.
 
-        Either collocation makes this bordered almost-block-diagonal: a band from
+        Every collocation makes this bordered almost-block-diagonal: a band from
         the interval blocks, one dense column for the period and another for the
         parameter, the periodicity rows coupling the first and last nodes, and the
         phase row. Under trapezoidal collocation interval ``i`` contributes
         ``-I - w Df(x_i)`` against node ``i`` and ``I - w Df(x_{i+1})`` against node
         ``i+1``; Hermite-Simpson adds the midpoint's chain-rule terms to the same
         four blocks (see :class:`_HermiteSimpson`), so the scheme supplies the
-        values and this method owns the pattern.
+        values and this method owns the pattern. Gauss-Legendre widens the block
+        to ``m`` rows of equations against ``m + 1`` points, of which only the
+        last is shared with the next interval; the index arithmetic is the same
+        with ``width`` points to an interval, and at one it is the old pattern.
 
         This is what DEQ-4 and DEQ-6 did for the periodic orbit solver, which the
         cycle *continuation* never got: it perturbed every unknown and re-evaluated
@@ -773,53 +1201,54 @@ class CycleContinuation:
         parameter = float(unknowns[-1])
         size = unknowns.size
 
-        left, right, period_values, parameter_values = self._collocation.blocks(
+        block, period_values, parameter_values = self._collocation.interval_blocks(
             self._vector_field(),
             states,
             period,
             parameter,
-            1.0 / intervals,
+            self._step(),
         )
+        self._assembled = (unknowns.copy(), block)
         span = np.arange(dimension)
-        starts = np.arange(intervals) * dimension
+        height = self._collocation.width * dimension
+        width = height + dimension
+        # Interval i's equations and its first point both start at i * height.
+        starts = np.arange(intervals) * height
         block_rows = np.broadcast_to(
-            (starts[:, None] + span)[:, :, None],
-            (intervals, dimension, dimension),
+            (starts[:, None] + np.arange(height))[:, :, None],
+            (intervals, height, width),
         )
-        left_columns = np.broadcast_to(
-            (starts[:, None] + span)[:, None, :],
-            (intervals, dimension, dimension),
+        block_columns = np.broadcast_to(
+            (starts[:, None] + np.arange(width))[:, None, :],
+            (intervals, height, width),
         )
-        right_columns = left_columns + dimension
-        border_rows = starts[:, None] + span
-        periodic = intervals * dimension + span
+        border_rows = starts[:, None] + np.arange(height)
+        collocation_rows = intervals * height
+        periodic = collocation_rows + span
 
         rows = np.concatenate(
             [
                 block_rows.ravel(),
-                block_rows.ravel(),
                 border_rows.ravel(),
                 border_rows.ravel(),
                 periodic,
                 periodic,
-                [intervals * dimension + dimension],
+                [collocation_rows + dimension],
             ],
         )
         columns = np.concatenate(
             [
-                left_columns.ravel(),
-                right_columns.ravel(),
-                np.full(intervals * dimension, size - 2),
-                np.full(intervals * dimension, size - 1),
-                intervals * dimension + span,
+                block_columns.ravel(),
+                np.full(collocation_rows, size - 2),
+                np.full(collocation_rows, size - 1),
+                collocation_rows + span,
                 span,
                 [self._phase_index],
             ],
         )
         values = np.concatenate(
             [
-                left.ravel(),
-                right.ravel(),
+                block.ravel(),
                 period_values.ravel(),
                 parameter_values.ravel(),
                 np.ones(dimension),
@@ -936,15 +1365,121 @@ class CycleContinuation:
         states: np.ndarray,
         period: float,
         parameter: float,
+        mesh: np.ndarray | None = None,
     ) -> np.ndarray:
+        """The Hermite monodromy's multipliers of the states (DEQ-29).
+
+        Under the one-wide schemes this is exactly the monodromy the films have
+        always used, forward-difference Jacobian and all. Under Gauss-Legendre it
+        is the cross-check, and takes ``df/dx`` analytically where the field
+        allows (:class:`_DifferentiatedOrbit`): the forward difference is a
+        floor there. On the Bogdanov-Takens orbit at b1 = -0.4554 under ``m = 4``
+        its trivial drift sat at 3.0e-5 on 80, 160 and 320 intervals alike, and
+        with the analytic Jacobian falls 1.9e-7, 1.1e-8, 7.1e-10 - sixteen per
+        doubling, the interpolant's own order.
+        """
         self._equation.derivative.parameters[self._parameter_index].value = parameter
-        orbit = PeriodicOrbit(
+        kind = (
+            _DifferentiatedOrbit
+            if self._collocation.jacobian_monodromy
+            else PeriodicOrbit
+        )
+        orbit = kind(
             self._equation.derivative,
-            self._intervals,
+            states.shape[0] - 1,
             self._phase_index,
             self._phase_value,
         )
+        if mesh is not None:
+            orbit.set_mesh(mesh)
         return orbit.floquet_multipliers(PeriodicOrbitSolution(states, period))
+
+    def hermite_multipliers(self, point: CyclePoint) -> np.ndarray:
+        """The Hermite monodromy's multipliers of a traced point: the cross-check.
+
+        For trapezoidal and Hermite-Simpson these are the multipliers the point
+        already carries. For Gauss-Legendre, whose points carry the multipliers of
+        its own Jacobian, this is the independent second opinion: the variational
+        equation integrated along the cubic Hermite interpolant through all the
+        point's states, interior ones included, fourth order whatever ``m`` is,
+        so the two agree to the Hermite monodromy's own error (3.86-3.99 per
+        doubling on the Hopf cycle) and no further: agreement to the
+        collocation order, which DEQ-34 asked for, is not something a
+        fourth-order cross-check can show.
+        """
+        return self._multipliers(
+            point.solution.states,
+            point.solution.period,
+            point.parameter,
+            point.mesh,
+        )
+
+    def _jacobian_multipliers(self, unknowns: np.ndarray, nodes: int) -> np.ndarray:
+        """Floquet multipliers off the collocation Jacobian at ``unknowns``.
+
+        The blocks are the ones the tangent solve just assembled at this very
+        point whenever :meth:`trace` asks, and are only rebuilt otherwise.
+        """
+        assembled = self._assembled
+        if assembled is None or not np.array_equal(assembled[0], unknowns):
+            self._blocks(unknowns, nodes)
+            assembled = self._assembled
+        if assembled is None:  # pragma: no cover (``_blocks`` always sets it)
+            message = "the collocation Jacobian was not assembled"
+            raise RuntimeError(message)
+        try:
+            monodromy = _jacobian_monodromy(assembled[1], self._dimension)
+        except np.linalg.LinAlgError:
+            return np.full(self._dimension, np.nan)
+        if not np.all(np.isfinite(monodromy)):
+            return np.full(self._dimension, np.nan)
+        return np.linalg.eigvals(monodromy)
+
+    def _doubled_multipliers(
+        self,
+        states: np.ndarray,
+        period: float,
+        parameter: float,
+    ) -> np.ndarray:
+        """The same cycle's multipliers re-solved on twice the intervals.
+
+        The Gauss-Legendre error estimate's second reading (see
+        :data:`_DOUBLING_SAFETY`). Each interval's polynomial is evaluated at
+        the doubled mesh's points, which puts the start within the coarse
+        solution's own error of the fine one, and the cycle is corrected there
+        with the parameter held fixed, as :meth:`_solve_seed` does. A fine
+        solve that fails returns ``nan``, which the caller's disagreement turns
+        into an infinite error, so the point is refused rather than believed.
+        """
+        width = self._collocation.width
+        if not isinstance(self._collocation, _GaussLegendre):
+            message = "the doubled-mesh reading is for Gauss-Legendre only"
+            raise TypeError(message)
+        basis = self._collocation.basis(np.arange(2 * width) / (2 * width))
+        pieces = [
+            basis @ states[i * width : (i + 1) * width + 1]
+            for i in range(self._intervals)
+        ]
+        fine = CycleContinuation(
+            self._equation,
+            self._parameter_index,
+            2 * self._intervals,
+            self._phase_index,
+            self._phase_value,
+            collocation=_GaussLegendre.name,
+            collocation_points=width,
+        )
+        fine._dimension = self._dimension
+        unknowns = np.concatenate(
+            [np.vstack([*pieces, states[-1:]]).ravel(), [period], [parameter]],
+        )
+        nodes = 2 * self._intervals * width + 1
+        fixed_parameter = np.zeros(unknowns.size)
+        fixed_parameter[-1] = 1.0
+        corrected = fine._correct(unknowns, nodes, _Arc(unknowns, fixed_parameter, 0.0))
+        if corrected is None:
+            return np.full(self._dimension, np.nan)
+        return fine._jacobian_multipliers(corrected, nodes)
 
     def _solve_seed(self, seed: CycleSeed, nodes: int) -> np.ndarray | None:
         """The first point on the branch: the seed, solved at its own parameter.
@@ -981,12 +1516,37 @@ class CycleContinuation:
         solved = orbit.solve(seed.states, seed.period)
         if solved is None:
             return None
+        states = self._filled(solved, seed.parameter)
         unknowns = np.concatenate(
-            [solved.states.flatten(), [solved.period], [seed.parameter]],
+            [states.flatten(), [solved.period], [seed.parameter]],
         )
         fixed_parameter = np.zeros(unknowns.size)
         fixed_parameter[-1] = 1.0
         return self._correct(unknowns, nodes, _Arc(unknowns, fixed_parameter, 0.0))
+
+    def _filled(self, solved: PeriodicOrbitSolution, parameter: float) -> np.ndarray:
+        """Mesh states with each interval's interior points put back in.
+
+        The trapezoidal seed has only the mesh points; a scheme wider than one
+        also needs the ``m - 1`` points between them, taken off the cubic Hermite
+        interpolant through the mesh states and their slopes ``T f(x)``, which is
+        within the trapezoidal cycle's own ``O(h^2)`` of the curve the wider
+        scheme will converge.
+        """
+        width = self._collocation.width
+        if width == 1:
+            return solved.states
+        states = solved.states
+        slopes = solved.period * np.array(
+            [self._field(state, parameter) for state in states],
+        )
+        fractions = np.arange(width) / width
+        step = 1.0 / self._intervals
+        pieces = [
+            _hermite_positions(states[i : i + 2], slopes[i : i + 2], step, fractions)
+            for i in range(self._intervals)
+        ]
+        return np.vstack([*pieces, states[-1:]])
 
     def trace(
         self,
@@ -1001,7 +1561,8 @@ class CycleContinuation:
         the branch then follows its own tangent and may round a turning point.
         """
         self._dimension = seed.states.shape[1]
-        nodes = self._intervals + 1
+        self._mesh = np.linspace(0.0, 1.0, self._intervals + 1)
+        nodes = self._intervals * self._collocation.width + 1
         unknowns = self._solve_seed(seed, nodes)
         if unknowns is None:
             return [], []
@@ -1030,9 +1591,38 @@ class CycleContinuation:
         states = unknowns[: nodes * dimension].reshape(nodes, dimension)
         period = float(unknowns[nodes * dimension])
         parameter = float(unknowns[-1])
-        multipliers = self._multipliers(states, period, parameter)
+        if not self._collocation.jacobian_monodromy:
+            multipliers = self._multipliers(states, period, parameter)
+            return CyclePoint(
+                parameter,
+                PeriodicOrbitSolution(states, period),
+                multipliers,
+            )
+        # The point keeps every point of the solution, interior ones included,
+        # with where each sits: the Hermite cross-check walks all of them.
+        positions = self._collocation.grid(self._mesh)
+        multipliers = self._jacobian_multipliers(unknowns, nodes)
+        if np.all(np.isfinite(multipliers)):
+            hermite = self._multipliers(states, period, parameter, positions)
+            doubled = self._doubled_multipliers(states, period, parameter)
+            refinement = (
+                _DOUBLING_SAFETY * _multiplier_disagreement(multipliers, doubled)
+                if np.all(np.isfinite(doubled))
+                else float("inf")
+            )
+            error = max(
+                float(np.min(np.abs(multipliers - 1.0))),
+                _multiplier_disagreement(multipliers, hermite),
+                refinement,
+            )
+        else:
+            # An interval block too singular to solve: no multipliers to read,
+            # so the point is reported and refused rather than the trace lost.
+            error = float("inf")
         return CyclePoint(
             parameter,
             PeriodicOrbitSolution(states, period),
             multipliers,
+            positions,
+            error,
         )
