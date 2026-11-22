@@ -55,11 +55,14 @@ class StochasticRungeKuttaSolver(Solver):
         self.solution.append([config.start_time, [0] * len(y), y.tolist()])
 
         dt = config.dt
-        for i in range(config.n_steps):
-            t_current = config.times[i]
+        # The time grid is read once: ``times`` builds it afresh on every read,
+        # so reading it per step made a path of K steps cost O(K^2) (DEQ-47).
+        times = config.times
+        for i in range(len(times) - 1):
+            t_current = times[i]
             increments = self._wiener.increments(t_current, dt, len(y))
             y = self._step(y, t_current, dt, coefficients, increments)
-            self.solution.append([config.times[i + 1], [0] * len(y), y.tolist()])
+            self.solution.append([times[i + 1], [0] * len(y), y.tolist()])
         return self.solution
 
     def _check_dimension(self, dimension: int) -> None:

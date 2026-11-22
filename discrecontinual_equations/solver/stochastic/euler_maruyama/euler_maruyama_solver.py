@@ -88,10 +88,14 @@ class EulerMaruyamaSolver(Solver):
         # Append initial point
         self.solution.append([t, [0] * len(initial_values), y.tolist()])
 
+        # The time grid is read once: ``times`` builds it afresh on every read,
+        # so reading it per step made a path of K steps cost O(K^2) (DEQ-47).
+        times = self.solver_config.times
+
         # Time stepping loop
-        for i in range(self.solver_config.n_steps):
+        for i in range(len(times) - 1):
             # Current time
-            t_current = self.solver_config.times[i]
+            t_current = times[i]
 
             # Evaluate drift and diffusion in the Ito sense. The step below is an Ito
             # scheme, so a Stratonovich equation is integrated as the Ito equation
@@ -115,7 +119,7 @@ class EulerMaruyamaSolver(Solver):
             y_new = y + drift * dt + coefficients.spread(diffusion, delta_w)
 
             # Update time and state
-            t_next = self.solver_config.times[i + 1]
+            t_next = times[i + 1]
             y = y_new
 
             # Append to solution
