@@ -238,3 +238,67 @@ def test_euler_maruyama_time_grows_linearly_in_the_steps():
     # Assert: the local slope between 16k and 128k steps (it was 1.85 before).
     slope = np.log(large / small) / np.log(_LARGE / _SMALL)
     assert slope <= _MOST_SLOPE, f"slope {slope:.2f}: {small:.3f} s -> {large:.3f} s"
+
+
+class _Recording(_Linear):
+    """:class:`_Linear`, recording the time of every drift evaluation."""
+
+    times: ClassVar[list[float]] = []
+
+    def eval(self, point: list[float], time: float | None = None) -> list[float]:
+        type(self).times.append(time)
+        return super().eval(point, time)
+
+
+# The grid nodes each solver evaluates its drift at, as recorded before DEQ-47:
+# the step's left node for the explicit schemes, both nodes for those that also
+# evaluate at the right one. Reading the grid once must not move a node.
+_LEFT = "left"
+_BOTH = "both"
+_DRIFT_NODES = [
+    ("euler_maruyama", _LEFT),
+    ("milstein", _LEFT),
+    ("gottwald_melbourne", _LEFT),
+    ("zhan_duan_li_li", _BOTH),
+    ("srk2", _LEFT),
+    ("srk3", _BOTH),
+    ("srk4", _BOTH),
+]
+
+
+@pytest.mark.parametrize(
+    ("solver_class", "config_class", "extra", "nodes"),
+    [
+        (entry[1], entry[2], entry[4], dict(_DRIFT_NODES)[entry[0]])
+        for entry in _FIXED_STEP
+        if entry[0] in dict(_DRIFT_NODES)
+    ],
+    ids=[entry[0] for entry in _FIXED_STEP if entry[0] in dict(_DRIFT_NODES)],
+)
+def test_the_drift_is_evaluated_at_the_grids_own_nodes(
+    solver_class,
+    config_class,
+    extra,
+    nodes,
+):
+    # Arrange: a grid of a few steps whose nodes are not all exact binary numbers.
+    grid = {"start_time": 0.0, "end_time": 0.05, "step_size": 0.01}
+    config = config_class(**grid, **extra)
+    time_variable = Variable(name="t")
+    variables = [Variable(name="X")]
+    equation = DifferentialEquation(
+        variables=variables,
+        time=time_variable,
+        parameters=[],
+        derivative=_Recording(variables, [], time_variable),
+    )
+    _Recording.times = []
+
+    # Act
+    solver_class(config).solve(equation, [1.0])
+
+    # Assert: the very values of the grid, the left nodes or all of them.
+    expected = config.times.tolist()
+    if nodes == _LEFT:
+        expected = expected[:-1]
+    assert sorted(set(_Recording.times)) == expected
