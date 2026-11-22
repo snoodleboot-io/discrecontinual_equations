@@ -18,6 +18,8 @@ Kuznetsov & Sandstede, IJBC 6, 1996) - so it is assembled sparse and factored wi
 a sparse LU, in time and memory linear in the nodes.
 """
 
+import warnings
+
 import numpy as np
 from scipy.sparse import csc_matrix, csr_matrix
 from scipy.sparse.linalg import splu
@@ -309,17 +311,31 @@ class HomoclinicCurve:
 
         Falls back to the dense least-squares solve the dense Newton used when the
         matrix is singular or not square, which happens only for a degenerate
-        saddle whose boundary-condition count does not match the unknowns.
+        saddle whose boundary-condition count does not match the unknowns. The
+        fallback is dense, so it announces itself with a ``RuntimeWarning``.
         """
-        if jacobian.shape[0] == jacobian.shape[1]:
+        if jacobian.shape[0] != jacobian.shape[1]:
+            reason = (
+                f"Newton matrix is {jacobian.shape[0]} x {jacobian.shape[1]}, not "
+                f"square (a non-hyperbolic saddle)"
+            )
+        else:
+            reason = "non-finite solution (near-singular factorisation)"
             try:
                 step = splu(csc_matrix(jacobian), permc_spec=_ORDERING).solve(
                     -residual,
                 )
-            except RuntimeError:  # exactly singular: use the dense fallback
+            except RuntimeError:
+                reason = "exactly singular factorisation"
                 step = np.full(residual.size, np.nan)
             if np.all(np.isfinite(step)):
                 return step
+        warnings.warn(
+            f"homoclinic-curve Newton step: {reason}; falling back to a dense "
+            f"least-squares solve",
+            RuntimeWarning,
+            stacklevel=2,
+        )
         fallback, *_ = np.linalg.lstsq(jacobian.toarray(), -residual, rcond=None)
         return fallback
 
