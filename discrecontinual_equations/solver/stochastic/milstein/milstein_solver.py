@@ -247,10 +247,12 @@ class MilsteinSolver(Solver):
         noise (Section 10.3) - and then ``P`` is diagonal. None for a matrix, and
         for a vector that does not commute: its Levy-area step stays general.
         An equation that declares diagonal noise gets ``P``'s diagonal alone, a
-        vector, from ``2`` evaluations instead of ``2 n``.
+        vector, from ``2`` evaluations instead of ``2 n``, once the declaration
+        has been checked at the first state (``2 n`` evaluations, once a solve).
         """
         if ItoCoefficients.is_matrix(diffusion):
             return None
+        coefficients.confirm_declaration(state, time)
         if coefficients.declared_diagonal:
             # P is diagonal by the declaration: its diagonal alone, from two
             # evaluations, in O(n).

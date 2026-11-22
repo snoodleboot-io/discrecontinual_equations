@@ -33,6 +33,8 @@ rather than ask the user for one more function; :meth:`ItoCoefficients.column_ja
 is the same differences arranged as the Milstein scheme needs them.
 """
 
+import warnings
+
 import numpy as np
 
 from discrecontinual_equations.differential_equation import DifferentialEquation
@@ -40,11 +42,36 @@ from discrecontinual_equations.function.stochastic import StochasticFunction
 
 _MATRIX = 2
 
+# Relative to the largest entry: how far a Milstein product may be from commuting,
+# and an off-diagonal slope of a declared diagonal diffusion from zero, before
+# either counts. Far above the central differences' error (about 1e-10 relative).
+COMMUTATIVITY_TOLERANCE = 1.0e-6
+
+
+def coupled(cross: float, scale: float) -> bool:
+    """Whether an off-diagonal ``cross`` is more than the tolerance of ``scale``.
+
+    NaN counts as coupled: a value that cannot be judged is not taken as zero.
+    """
+    return not (scale == 0.0 or cross <= COMMUTATIVITY_TOLERANCE * scale)
+
+
+def warn_wrong_declaration(function: object, cross: float, scale: float) -> None:
+    """Say that ``function``'s ``diagonal_noise`` declaration is being ignored."""
+    message = (
+        f"{type(function).__name__} declares diagonal_noise, but at the initial "
+        f"state some b_i depends on another component: an off-diagonal slope of "
+        f"{cross:.3g} against a largest slope of {scale:.3g}. The declaration is "
+        "ignored for this solve, which reads the slopes one component at a time "
+        "as for undeclared noise (DEQ-48)."
+    )
+    warnings.warn(message, UserWarning, stacklevel=4)
+
 
 class ItoCoefficients:
     """Evaluate ``a`` and ``b`` of the Ito form of an equation at a point."""
 
-    __slots__ = ["_declared", "_equation", "_slope_step", "_stratonovich"]
+    __slots__ = ["_checked", "_declared", "_equation", "_slope_step", "_stratonovich"]
 
     def __init__(
         self,
@@ -59,11 +86,37 @@ class ItoCoefficients:
         self._declared = (
             isinstance(derivative, StochasticFunction) and derivative.diagonal_noise
         )
+        self._checked = False
 
     @property
     def declared_diagonal(self) -> bool:
-        """Whether the equation promises ``b_i`` depends on ``x_i`` alone."""
+        """Whether the equation promises ``b_i`` depends on ``x_i`` alone.
+
+        False once :meth:`confirm_declaration` has found the promise broken.
+        """
         return self._declared
+
+    def confirm_declaration(self, point: np.ndarray, time: float) -> None:
+        """Check a ``diagonal_noise`` declaration once, at the first point it is used.
+
+        The full Jacobian of ``b`` at ``point``, ``1 + 2 n`` evaluations once per
+        solve: an off-diagonal entry beyond the commutativity tolerance of the
+        largest (or a NaN) withdraws the declaration with a warning, and the solve
+        goes on as for undeclared noise, bit for bit. Only ``point`` is looked at,
+        so a coupling that vanishes there is not caught (DEQ-48).
+        """
+        if not self._declared or self._checked:
+            return
+        self._checked = True
+        if self.is_matrix(self.diffusion(point, time)):
+            return
+        jacobian = np.abs(self.diffusion_jacobian(point, time))
+        scale = float(np.max(jacobian))
+        np.fill_diagonal(jacobian, 0.0)
+        cross = float(np.max(jacobian))
+        if coupled(cross, scale):
+            self._declared = False
+            warn_wrong_declaration(self._equation.derivative, cross, scale)
 
     def diffusion(self, point: np.ndarray, time: float) -> np.ndarray:
         """``b`` as a vector (diagonal noise) or ``G`` as an ``n x m`` matrix."""
@@ -159,8 +212,9 @@ class ItoCoefficients:
         ``2 n`` evaluations, moving one component at a time; two, moving all of
         them at once, when the equation declares diagonal noise, since then
         ``b_i`` reads only ``x_i`` and sees the same moved point either way
-        (DEQ-48).
+        (DEQ-48). The declaration is checked at the first point it is used.
         """
+        self.confirm_declaration(point, time)
         if self._declared:
             return (
                 self.diffusion(point + self._slope_step, time)

@@ -35,6 +35,10 @@ import numpy as np
 from discrecontinual_equations.differential_equation import DifferentialEquation
 from discrecontinual_equations.function.stochastic import StochasticFunction
 from discrecontinual_equations.solver.solver_config import StochasticConfig
+from discrecontinual_equations.solver.stochastic.coefficients import (
+    coupled,
+    warn_wrong_declaration,
+)
 from discrecontinual_equations.solver.stochastic.wiener import WienerSource
 
 _MATRIX_BATCH = 3
@@ -67,7 +71,7 @@ class BatchedCoefficients:
     when the equation's batch methods are arrays.
     """
 
-    __slots__ = ["_declared", "_equation", "_slope_step", "_stratonovich"]
+    __slots__ = ["_checked", "_declared", "_equation", "_slope_step", "_stratonovich"]
 
     def __init__(
         self,
@@ -82,11 +86,40 @@ class BatchedCoefficients:
         self._declared = (
             isinstance(derivative, StochasticFunction) and derivative.diagonal_noise
         )
+        self._checked = False
 
     @property
     def declared_diagonal(self) -> bool:
-        """Whether the equation promises ``b_i`` depends on ``x_i`` alone."""
+        """Whether the equation promises ``b_i`` depends on ``x_i`` alone.
+
+        False once :meth:`confirm_declaration` has found the promise broken.
+        """
         return self._declared
+
+    def confirm_declaration(self, points: np.ndarray, time: float) -> None:
+        """Check a ``diagonal_noise`` declaration once, at the first points used.
+
+        :meth:`~.coefficients.ItoCoefficients.confirm_declaration` over every
+        path at once: ``1 + 2 n`` batched evaluations once per solve, one
+        direction held at a time. A broken promise is withdrawn with a warning
+        and the solve goes on as for undeclared noise, bit for bit; a coupling
+        that vanishes at every starting point is not caught (DEQ-48).
+        """
+        if not self._declared or self._checked:
+            return
+        self._checked = True
+        if self.is_matrix(self.diffusion(points, time)):
+            return
+        scale = 0.0
+        cross = 0.0
+        for j, slope in self.diagonal_directions(points, time):
+            magnitude = np.abs(slope)
+            scale = float(np.max([scale, np.max(magnitude)]))
+            magnitude[:, j] = 0.0
+            cross = float(np.max([cross, np.max(magnitude)]))
+        if coupled(cross, scale):
+            self._declared = False
+            warn_wrong_declaration(self._equation.derivative, cross, scale)
 
     def diffusion(self, points: np.ndarray, time: float) -> np.ndarray:
         """``b`` at every point, ``(paths, n)``, or ``G``, ``(paths, n, m)``."""
@@ -145,8 +178,10 @@ class BatchedCoefficients:
         n^3)`` (DEQ-48). Still ``2 n`` batched evaluations, since ``b_i`` may
         depend on every component and only ``x_i`` may be moved to read
         ``d b_i / d x_i``; two when the equation declares diagonal noise, which
-        moves every component at once.
+        moves every component at once. The declaration is checked at the first
+        points it is used.
         """
+        self.confirm_declaration(points, time)
         if self._declared:
             return (
                 self.diffusion(points + self._slope_step, time)
@@ -392,8 +427,9 @@ class StochasticEnsemble:
         does not commute, so that the general step raises its refusal. Declared
         diagonal noise commutes by its declaration and needs only the slopes:
         ``P`` is diagonal, two batched evaluations make it, and the sum over
-        ``j`` has one term.
+        ``j`` has one term, once the declaration has been checked.
         """
+        coefficients.confirm_declaration(states, time)
         if coefficients.declared_diagonal:
             own = diffusion * coefficients.diagonal_slopes(states, time)
             correction = 0.5 * increments * (own * increments)

@@ -564,5 +564,6 @@ def test_declared_diagonal_noise_costs_a_fixed_number_of_evaluations_a_step():
         np.linspace(0.5, 1.5, dimension).tolist(),
     )
 
-    # Assert: one for the drivers, then b and its two moved copies a step.
-    assert DeclaredDiagonalNoise.evaluations == 1 + 3 * steps
+    # Assert: one for the drivers, the declaration's check once (1 + 2 n), then
+    # b and its two moved copies a step.
+    assert DeclaredDiagonalNoise.evaluations == 1 + (1 + 2 * dimension) + 3 * steps
