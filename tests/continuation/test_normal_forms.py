@@ -47,6 +47,7 @@ from discrecontinual_equations.continuation.codim2_normal_form import (
     zero_hopf_normal_form,
 )
 from discrecontinual_equations.continuation.connecting_orbit import MeshSpec
+from discrecontinual_equations.continuation.critical_forms import inner
 from discrecontinual_equations.continuation.derivative_provider import (
     AutomaticDifferentiation,
 )
@@ -141,15 +142,44 @@ class TestBogdanovTakensUnfoldingOrder(TestCase):
             return [*problem.evaluate(state, first, alpha[1]), condition(jacobian)]
 
         guess = np.concatenate([guess_state, [alpha[0]]])
-        solution = fsolve(residual, guess, xtol=1.0e-14)
+        with warnings.catch_warnings():
+            # fsolve cannot always beat xtol=1e-14; the residual check decides.
+            warnings.simplefilter("ignore", RuntimeWarning)
+            solution = fsolve(residual, guess, xtol=1.0e-14)
         assert np.linalg.norm(residual(solution)) < 1.0e-12
         return float(solution[4])
 
     def test_fold_and_hopf_errors_are_third_order(self):
+        # Every sign pattern of (a, b), so both sides of the unfolding are drawn.
+        for a, b, seed in [(-0.8, 1.6, 41), (0.8, 1.6, 43), (-0.8, -1.6, 47)]:
+            CurvedBogdanovTakens.a, CurvedBogdanovTakens.b = a, b
+            CurvedBogdanovTakens.transform = random_transform(4, seed)
+            self._check(_problem(build(CurvedBogdanovTakens, 4)))
+
+    def test_predicted_homoclinic_is_six_over_twenty_five(self):
+        CurvedBogdanovTakens.a, CurvedBogdanovTakens.b = -0.8, 1.6
         CurvedBogdanovTakens.transform = random_transform(4, 41)
         problem = _problem(build(CurvedBogdanovTakens, 4))
+        unfolding = bogdanov_takens_normal_form(
+            problem,
+            np.zeros(4),
+            0.0,
+            0.0,
+        ).unfolding
+        for beta2 in (0.03, 0.01):
+            alpha = unfolding.homoclinic(unfolding.side * beta2)
+            first, second = unfolding.kuznetsov_parameters(alpha)
+            assert _close(first / second**2, -6.0 / 25.0, 1.0e-10)
+            first, second = unfolding.kuznetsov_parameters(
+                unfolding.hopf(unfolding.side * beta2),
+            )
+            assert abs(first) < 1.0e-12 * second**2
+
+    def _check(self, problem: TwoParameterProblem) -> None:
         result = bogdanov_takens_normal_form(problem, np.zeros(4), 0.0, 0.0)
         unfolding = result.unfolding
+        # The Hopf and homoclinic lie on the side sign(beta2) = sign(ab).
+        assert unfolding.side == np.sign(result.a * result.b)
         conditions = {
             "fold": np.linalg.det,
             "hopf": _critical_real_part,
@@ -241,6 +271,22 @@ class TestEmbeddedCusp(TestCase):
             assert _close(result.c, scale**2 * (c + g))
 
 
+class TestEigenvectorNormalisation(TestCase):
+    """MatCont's unit length, with the phase fixed so repeated calls agree."""
+
+    def test_largest_component_is_real_and_positive(self):
+        EmbeddedZeroHopf.transform = random_transform(5, 5)
+        problem = _problem(build(EmbeddedZeroHopf, 5))
+        result = zero_hopf_normal_form(problem, np.zeros(5), 0.0, 0.0)
+        for vector in (result.q0, result.q1):
+            largest = vector[int(np.argmax(np.abs(vector)))]
+            assert abs(np.linalg.norm(vector) - 1.0) < 1.0e-12
+            assert largest.real > 0.0
+            assert abs(largest.imag) < 1.0e-12
+        assert abs(inner(result.p1, result.q1) - 1.0) < 1.0e-12
+        assert abs(inner(result.p0, result.q0) - 1.0) < 1.0e-12
+
+
 class TestEmbeddedZeroHopf(TestCase):
     """Oracle 1, zero-Hopf: every coefficient, and the scale-free invariants."""
 
@@ -282,6 +328,7 @@ class TestEmbeddedZeroHopf(TestCase):
             assert abs(terms["v|z|^2"]) < 1.0e-12
             assert abs(terms["z|z|^2"].real) < 1.0e-12
             assert _close(terms["v^2 z"].real, result.e, 1.0e-12)
+            assert _close(terms["v z"], result.d, 1.0e-12)
 
 
 class TestEmbeddedHopfHopf(TestCase):

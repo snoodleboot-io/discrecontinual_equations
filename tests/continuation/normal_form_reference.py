@@ -121,7 +121,8 @@ def fold_hopf_e(
     ``u = v + gamma v^2 + eta |zeta|^2``, ``z = zeta (1 + delta v)``, with
     ``kappa, gamma, delta`` chosen to remove ``v^3``, ``v |zeta|^2`` and
     ``Re zeta |zeta|^2``, and compute the transformed field as a polynomial. The
-    real ``v^2 zeta`` coefficient left over is ``e(0)``; it must not depend on the
+    real ``v^2 zeta`` coefficient left over is ``e(0)``, and the ``v zeta`` one,
+    after the time rescaling, is ``d(0)``; neither may depend on the
     free ``eta``. This is a derivation by computation, independent of the closed
     form for ``e(0)`` in the library.
     """
@@ -164,4 +165,5 @@ def fold_hopf_e(
         "v|z|^2": coefficient(velocity[0], (1, 1, 1)),
         "z|z|^2": coefficient(velocity[1], (0, 2, 1)),
         "v^2 z": coefficient(velocity[1], (2, 1, 0)),
+        "v z": coefficient(velocity[1], (1, 1, 0)),
     }

@@ -269,9 +269,10 @@ class CurvedBogdanovTakens(Embedded):
 
     ``mu1 = m1 + 0.7 m2^2 + 0.4 m1 m2 + 0.3 m1^2`` and
     ``mu2 = m2 + 0.3 m1 - 0.5 m2^2`` enter the BT block, and ``m2`` also pushes
-    the stable mode ``s1``, which feeds back through ``0.3 x s1``: the parameter
-    map has a ``beta2^2`` term and the center manifold moves with the parameters,
-    so ``K02``, ``delta1`` and ``gamma3`` all matter.
+    the stable mode ``s1``, which feeds back through ``0.3 x s1`` and
+    ``0.8 m2 s1``: the parameter map has a ``beta2^2`` term, the center manifold
+    moves with the parameters, and the mixed form ``A1(H0001, K01)`` is nonzero, so
+    every term of ``K02``, and ``delta1`` and ``gamma3``, matter.
     """
 
     a = -0.8
@@ -284,7 +285,12 @@ class CurvedBogdanovTakens(Embedded):
         second = mu2 + 0.3 * mu1 - 0.5 * mu2 * mu2
         return [
             y,
-            first + second * y + cls.a * x * x + cls.b * x * y + 0.3 * x * s1,
+            first
+            + second * y
+            + cls.a * x * x
+            + cls.b * x * y
+            + 0.3 * x * s1
+            + 0.8 * mu2 * s1,
             -s1 + x * x + 0.5 * x * y + 0.6 * mu2,
             -2.5 * s2 + 0.4 * s1 * x,
         ]
