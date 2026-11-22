@@ -7,6 +7,7 @@ import math
 
 import numpy as np
 
+from discrecontinual_equations.continuation.cycle_codim2 import CycleCurveContinuation
 from discrecontinual_equations.continuation.cycle_continuation import (
     CycleContinuation,
     CycleSeed,
@@ -29,6 +30,8 @@ try:  # python -m examples.continuation.pages_cycles
         FoldCycles,
         GridSystem,
         Hopf,
+        RotatedTakens,
+        Second,
         SnicSystem,
         VanDerPol,
         _equation,
@@ -39,6 +42,8 @@ except ImportError:  # run as a script path: only this directory is on sys.path
         FoldCycles,
         GridSystem,
         Hopf,
+        RotatedTakens,
+        Second,
         SnicSystem,
         VanDerPol,
         _equation,
@@ -58,6 +63,14 @@ _PERIOD_TOLERANCE = 1.0e-2
 BETA1, BETA2, BETA3 = "\u03b2\u2081", "\u03b2\u2082", "\u03b2\u2083"
 NORM = "\u2016x\u2016"
 _IMAGINARY_TOLERANCE = 1.0e-9
+_CODIM2_INTERVALS = 30
+_CODIM2_SEED = (-0.003, 0.05)
+_CODIM2_SHEAR = 0.3
+_STRONG_RESONANCES = {
+    "strong_resonance_1_1": "1:1 resonance",
+    "strong_resonance_1_3": "1:3 resonance",
+    "strong_resonance_1_4": "1:4 resonance",
+}
 
 MU = "\u03bc"
 _FOLD_WINDOW = 0.02
@@ -341,4 +354,80 @@ def _deflated_roots() -> Scene:
         "Deflation repels Newton from roots already found, so a handful of seeds "
         "uncover all nine equilibria of the decoupled quartic gradient - "
         "disconnected branches an ordinary solver would miss.",
+    )
+
+
+def _cycle_codim2() -> Scene:
+    """A fold of cycles and a torus curve in two parameters (DEQ-35)."""
+    b1, b2 = _CODIM2_SEED
+    intervals = _CODIM2_INTERVALS
+    equation = _equation(RotatedTakens, 3, [First(value=b1), Second(value=b2)])
+    u = -math.sqrt(-b1)
+    omega = 1.0 + _CODIM2_SHEAR * u
+    period = 2.0 * math.pi / omega
+    time = np.linspace(0.0, period, intervals + 1)
+    radius = math.sqrt(1.0 + u)
+    seed = CycleSeed(
+        np.column_stack(
+            [
+                radius * np.cos(omega * time),
+                radius * np.sin(omega * time),
+                np.zeros_like(time),
+            ],
+        ),
+        period,
+        b1,
+    )
+    branch = CycleContinuation(equation, 0, intervals, phase_index=1, phase_value=0.0)
+    points, crossings = branch.trace(seed, 0.002, 200, max_arclength=0.02)
+    curves = CycleCurveContinuation(
+        equation,
+        (0, 1),
+        intervals,
+        phase_index=1,
+        phase_value=0.0,
+        normal_forms=False,
+    )
+    lines: list[tuple[str, str, list[tuple[float, float]], str | None]] = []
+    markers: list[tuple[str, str, list[tuple[float, float]], str | None]] = []
+    for kind, label, extent in (
+        ("neimark_sacker", "torus (Neimark-Sacker)", ((-1.0, 8), (1.0, 1))),
+        ("fold_of_cycles", "fold of cycles", ((-1.0, 6), (1.0, 6))),
+    ):
+        crossing = next(c for c in crossings if c.kind == kind)
+        start = min(points, key=lambda p: abs(p.parameter - crossing.parameter))
+        traced: list[tuple[float, float]] = []
+        for direction, steps in extent:
+            curve = curves.trace(start, kind, 0.01, steps, direction)
+            # Past the 1:1 point the torus curve goes on as a neutral saddle,
+            # kappa > 1: not a torus, so not drawn as one.
+            part = [
+                (p.parameters[1], p.parameters[0])
+                for p in curve.points
+                if p.kappa is None or p.kappa <= 1.0
+            ]
+            if direction < 0:
+                traced = list(reversed(part)) + traced[1:]
+            else:
+                traced = traced + part[1:]
+            markers += [
+                (
+                    "special",
+                    _STRONG_RESONANCES[special.kind],
+                    [(special.parameters[1], special.parameters[0])],
+                    None,
+                )
+                for special in curve.special
+                if special.kind in _STRONG_RESONANCES
+            ]
+        lines.append((kind, label, traced, None))
+    return curve_scene(
+        lines,
+        markers,
+        (BETA2, BETA1),
+        "Cycle bifurcations in two parameters",
+        "A fold of cycles and a torus curve, each continued in both parameters "
+        "by its bordered defining system, meet at a 1:1 resonance; along the "
+        "torus curve the critical multipliers exp(+-i theta) pass the 1:4 and "
+        "1:3 resonances, theta = pi/2 and 2 pi/3.",
     )

@@ -457,6 +457,53 @@ frame's cycle up to four frames from it. The frames of the adaptive films show
 the same number of cycles as before, each within half a frame spacing of its
 frame (fold of cycles: within 0.78 of a spacing, against 0.38 before).
 
+### Cycle bifurcations in two parameters (DEQ-35)
+
+`CycleCurveContinuation(equation, (i, j), intervals, ...).trace(start, kind,
+arclength, steps)` continues a fold (`"fold_of_cycles"`), flip
+(`"period_doubling"`) or torus (`"neimark_sacker"`) bifurcation of a cycle in
+parameters `i` and `j`, from a point `start` of a one-parameter `CycleContinuation`
+branch near the crossing. The cycle keeps its collocation system; the
+bifurcation is added in minimally augmented form (Doedel, Govaerts and
+Kuznetsov, SIAM J. Numer. Anal. 41, 2003): a sparse operator built from the
+collocation blocks, singular exactly on the curve, is bordered to a nonsingular
+one and its corner is the test function. For the fold it is the cycle Jacobian
+in the states and the period; for the flip the blocks with `v_N + v_0 = 0`; for
+the torus the blocks on a doubled mesh with `v_2N - 2 kappa v_N + v_0 = 0`, two
+test functions and `kappa = cos theta` one more unknown. Its gradient comes from
+one more assembly of the blocks, displaced along the null vector.
+
+Along a curve the codimension-two points are located, by a secant on the curve
+itself: the cusp of cycles, the generalised flip and the Chenciner point (the
+curve's own normal form coefficient vanishing), fold-flip, fold-torus,
+flip-torus and double torus (a second critical multiplier), and the 1:1, 1:2,
+1:3 and 1:4 resonances (`kappa = 1, -1, -1/2, 0`). `CycleNormalForm` computes the
+periodic normal form coefficients `b`, `c` and `d` (Kuznetsov, Govaerts, Doedel
+and Dhooge, SIAM J. Numer. Anal. 43, 2005) from Hermite-Simpson solutions of
+the linear periodic boundary-value problems along the cycle, fourth order
+(relative errors `1.7e-3, 1.05e-4, 6.5e-6, 4.1e-7` from 10 to 80 intervals).
+
+| claim | reference | measured |
+|---|---|---|
+| fold `b` | closed form on `r' = r(m1 + m2 r^2 + r^4 - r^6)`, `theta' = 1 + r^2/2` | `6.5e-6` relative at 40 intervals |
+| flip `c` | DOP853 doubled cycles of MATCONT's `adaptx`, `-beta / xi^2` extrapolated: `-0.30512` | `-0.30513` |
+| torus `Re d` | closed form on a turned Bautin normal form; a DOP853 return map on a turned Takens unfolding (`1.0238`) | `8e-7` relative; `1.0236` |
+| fold curve and cusp | closed form, cusp at `(1/27, -1/3)` | `1e-9`; `1e-12` |
+| torus curve, `kappa` | `b1 = -b2^2`, `kappa = cos(omega T)` | `1e-8`, `1e-5` |
+| 1:3, 1:4 resonances | closed form | `2e-7` in `b2` |
+| 1:1 resonance | the origin | `(-1.7e-10, 1.2e-5)` |
+| Chenciner, fold-torus | the origin | `3.5e-7`, `2e-11` |
+| first flip of MATCONT's Rossler | tutorial III: `A = 0.27191773`, `T = 6.148967` | `0.27191774`, `6.148968`; DOP853 shooting reads `-1 +- 3e-6` along the curve |
+| flip-torus of the forced predator-prey model | De Witte et al. (SIADS 12, 2013): `(b2, eps) = (0.277, 0.530)` | `(0.27672, 0.53044)` |
+
+MATCONT prints a different normalisation of `c` and `d`: for `adaptx` and the
+Rossler tutorial it reports `-4.27e-2` and `-4.28e-3` where the formula above,
+confirmed by the doubled cycle, gives `-0.305` and `-9.12e-3`, a ratio that is
+not a power of the period; and its manual and its tutorial print `-1.406e-6`
+and `-4.912e-8` for the same Steinmetz-Larter torus. Signs agree throughout.
+The atlas page `cycle_codim2.html` draws the fold and torus curves of the turned
+Takens unfolding and their resonances.
+
 ## Trusting a computed connecting orbit
 
 A homoclinic or heteroclinic orbit has **two** independent resolutions, and either
