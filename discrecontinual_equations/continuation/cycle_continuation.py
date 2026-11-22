@@ -631,7 +631,19 @@ class CyclePoint:
         van der Pol at ``mu = 3`` on 10 intervals, 0.15 against 0.32, and
         ``m = 2`` on 20, 1.1 against 3.0 - both far outside any tolerance.
         An estimate that inherits the collocation order is the open follow-up.
+
+        A point whose states have collapsed onto one another reads infinite
+        under every scheme. Every collocation admits that degenerate solution -
+        all states equal at period zero, or an equilibrium at any period - and
+        an under-resolved seed can converge to it (van der Pol at ``mu = 2`` on
+        8 intervals does). Its monodromy is the identity, so both measures
+        above read zero there and would call it resolved.
         """
+        if self.amplitude <= _NOISE_FLOOR * max(
+            1.0,
+            float(np.max(np.abs(self._solution.states))),
+        ):
+            return float("inf")
         if self._error is not None:
             return self._error
         return float(np.min(np.abs(self._multipliers - 1.0)))
