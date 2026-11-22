@@ -24,7 +24,12 @@ dev = ["pytest-cov"]
 
 
 [tool.pytest.ini_options]
-addopts = "--cov=discrecontinual_equations --cov-report=term-missing"
+# Timing tests measure the clock, which other work on the machine moves; they run
+# only when asked for, with "pytest -m timing" (DEQ-47, DEQ-87).
+addopts = "--cov=discrecontinual_equations --cov-report=term-missing -m 'not timing'"
+markers = [
+    "timing: measures wall or CPU time; deselected unless run with -m timing",
+]
 
 [build-system]
 requires = ["hatchling"]
