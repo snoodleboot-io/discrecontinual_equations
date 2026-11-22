@@ -1,4 +1,6 @@
-"""SRK3 is Kloeden-Platen (11.2.1): strong order 1.5 for scalar noise, systems refused.
+"""SRK3 is Kloeden-Platen (11.2.1): strong order 1.5 for scalar noise.
+
+Systems are integrated since DEQ-66; see ``test_srk3_channels.py``.
 
 The convergence thresholds sit between the measured order (1.48 at 100000 paths)
 and the order the scheme would have if any of its terms were wrong (1.0 at best),
@@ -6,8 +8,6 @@ so they discriminate without being brittle at the small budget a unit test can
 afford. The weak slope is checked too, because the harness measured it at 1.98
 and the docstring reports that number.
 """
-
-import pytest
 
 from discrecontinual_equations.solver.stochastic.srk3.srk3_config import SRK3Config
 from discrecontinual_equations.solver.stochastic.srk3.srk3_solver import SRK3Solver
@@ -64,25 +64,3 @@ class TestSRK3Convergence:
             resolution=_RESOLUTION,
         )
         assert slope({h: e[0] for h, e in errors.items()}) > 1.3, errors
-
-
-class TestSRK3Refusals:
-    def test_systems_are_refused_with_a_pointer_to_srk2(self):
-        solver = SRK3Solver(SRK3Config(end_time=1.0, step_size=0.1, random_seed=1))
-        with pytest.raises(ValueError, match="SRK2Solver"):
-            solver.solve(
-                GeometricBrownianMotionCase(dimension=2).equation(),
-                [1.0, 1.0],
-            )
-
-    def test_refusal_names_what_is_still_missing(self):
-        # Levy areas are sampled now (DEQ-36); what the order 1.5 scheme still
-        # lacks for several channels are the triple integrals I_(j,k,l) and a
-        # multi-channel form of the supporting values.
-        solver = SRK3Solver(SRK3Config(end_time=1.0, step_size=0.1, random_seed=1))
-        with pytest.raises(ValueError, match=r"I_\(j,k,l\)") as refusal:
-            solver.solve(
-                GeometricBrownianMotionCase(dimension=2).equation(),
-                [1.0, 1.0],
-            )
-        assert "cannot be sampled" not in str(refusal.value)
