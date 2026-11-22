@@ -66,8 +66,8 @@ from tests.continuation.normal_form_reference import (
 from tests.continuation.normal_form_systems import (
     CurvedBogdanovTakens,
     EmbeddedBogdanovTakens,
-    EmbeddedHopfHopf,
     EmbeddedCusp,
+    EmbeddedHopfHopf,
     EmbeddedZeroHopf,
     StackedBautin,
     StackedHopfHopf,
