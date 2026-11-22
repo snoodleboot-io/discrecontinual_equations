@@ -620,6 +620,10 @@ def _flow(
     the view's own ranges for one seen in projection - and the branch is
     returned unprojected so the page can draw it in whichever plane it is
     showing.
+
+    The step is left to the error control alone. The dense output already
+    resamples the branch to a fixed count of points, so a step cap would only
+    make the solver take more steps than its tolerance asks for.
     """
     sense = 1.0 if forward else -1.0
 
@@ -642,7 +646,6 @@ def _flow(
         rtol=1.0e-8,
         atol=1.0e-10,
         events=leaving,
-        max_step=0.05,
         dense_output=True,
     )
     times = np.linspace(0.0, solution.t[-1], _MANIFOLD_SAMPLES)
