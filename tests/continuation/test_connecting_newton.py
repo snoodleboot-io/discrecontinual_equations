@@ -11,6 +11,7 @@ dense factorisation gives, and the work of one iteration grows linearly in N.
 
 import math
 import tracemalloc
+import warnings
 from unittest import TestCase, mock
 
 import numpy as np
@@ -578,7 +579,8 @@ class TestDirectSolvePath(TestCase):
             True,  # noqa: FBT003
         ).toarray()
         dense[:, 5] = dense[:, 0]
-        step = solver._least_squares(csr_matrix(dense), residual)  # noqa: SLF001
+        with self.assertWarns(RuntimeWarning):
+            step = solver._least_squares(csr_matrix(dense), residual)  # noqa: SLF001
         reference, *_ = np.linalg.lstsq(dense, -residual, rcond=None)
         assert np.max(np.abs(step - reference)) < 1.0e-6
 
@@ -605,3 +607,98 @@ class TestDirectSolvePath(TestCase):
             ratios.append((factor.L.nnz + factor.U.nnz) / augmented.nnz)
         assert max(ratios) < 4.0
         assert ratios[1] / ratios[0] < 1.1
+
+
+class TestAugmentedConditioning(TestCase):
+    """The augmented least-squares solve must be as accurate as a QR solve.
+
+    With an unscaled identity block and ``sigma_min < 1`` the augmented matrix is
+    conditioned like ``J^T J``, not ``J``: measured on these problems its forward
+    error was 5e-7 at ``cond(J) = 1e6`` and 2e-3 at ``1e8``, where QR gave 1e-9
+    and 2e-5. Scaling the block by ``sigma_min / sqrt(2)`` (Bjorck) brings it to
+    ``cond(J)`` and the error to QR's.
+    """
+
+    def test_ill_conditioned_step_matches_qr_accuracy(self):
+        solver, _, _ = _saddle_problem(20)
+        generator = np.random.default_rng(3)
+        rows, columns = 60, 40
+        left, _ = np.linalg.qr(generator.standard_normal((rows, rows)))
+        right, _ = np.linalg.qr(generator.standard_normal((columns, columns)))
+        for decades in (6, 8):
+            singular = np.logspace(0, -decades, columns)
+            dense = left[:, :columns] @ np.diag(singular) @ right.T
+            exact = generator.standard_normal(columns)
+            # The orthogonal complement of the range carries the least-squares
+            # residual, so ``exact`` is the least-squares solution.
+            target = dense @ exact + 1.0e-3 * left[:, columns:] @ (
+                generator.standard_normal(rows - columns)
+            )
+            step = solver._least_squares(  # noqa: SLF001
+                csr_matrix(dense),
+                -target,
+            )
+            factor_q, factor_r = np.linalg.qr(dense)
+            reference = np.linalg.solve(factor_r, factor_q.T @ target)
+
+            def error(candidate, exact=exact):
+                return np.linalg.norm(candidate - exact) / np.linalg.norm(exact)
+
+            with self.subTest(condition=f"1e{decades}"):
+                assert error(step) < 10.0 * error(reference)
+
+
+class TestFallbacksAreAnnounced(TestCase):
+    """A fallback changes the cost and the step, so it must not happen silently."""
+
+    def test_singular_connecting_step_warns_and_names_the_reason(self):
+        solver, times, seed = _saddle_problem(60)
+        unknowns = seed.flatten()
+        residual = solver._residual(unknowns, times, seed.shape)  # noqa: SLF001
+        dense = solver._jacobian(  # noqa: SLF001
+            unknowns,
+            times,
+            seed.shape,
+            residual,
+            True,  # noqa: FBT003
+        ).toarray()
+        dense[:, 5] = dense[:, 0]
+        with self.assertWarnsRegex(RuntimeWarning, "singular"):
+            solver._least_squares(csr_matrix(dense), residual)  # noqa: SLF001
+
+    def test_singular_curve_step_warns_and_names_the_reason(self):
+        curve, times, unknowns, sweep = _bogdanov_takens_problem(40)
+        residual = curve._residual(  # noqa: SLF001
+            unknowns,
+            times,
+            times.size,
+            2,
+            sweep,
+        )
+        dense = curve._jacobian(  # noqa: SLF001
+            unknowns,
+            times,
+            2,
+            sweep,
+            residual,
+        ).toarray()
+        dense[:, 5] = 0.0
+        with self.assertWarnsRegex(RuntimeWarning, "singular"):
+            step = curve._step(csr_matrix(dense), residual)  # noqa: SLF001
+        reference, *_ = np.linalg.lstsq(dense, -residual, rcond=None)
+        assert np.max(np.abs(step - reference)) < 1.0e-8 * np.max(np.abs(reference))
+
+    def test_well_posed_steps_do_not_warn(self):
+        solver, times, seed = _saddle_problem(200)
+        unknowns = seed.flatten()
+        residual = solver._residual(unknowns, times, seed.shape)  # noqa: SLF001
+        jacobian = solver._jacobian(  # noqa: SLF001
+            unknowns,
+            times,
+            seed.shape,
+            residual,
+            True,  # noqa: FBT003
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", RuntimeWarning)
+            solver._least_squares(jacobian, residual)  # noqa: SLF001
