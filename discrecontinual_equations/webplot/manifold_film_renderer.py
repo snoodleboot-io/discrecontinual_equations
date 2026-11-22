@@ -102,6 +102,7 @@ _BODY_FILM = """  <div class="mast">
   <div class="scrub">
     <button class="btn play" id="play" aria-pressed="false">Grow
       <kbd>space</kbd></button>
+    <span class="group"><kbd>&larr;</kbd><kbd>&rarr;</kbd> a ring</span>
     <input id="r" type="range" min="0" step="1" aria-label="geodesic distance">
     <span class="mono" id="readout"></span>
     <label class="toggle"><input id="l-front" type="checkbox" checked>
@@ -361,9 +362,19 @@ function start(){
   }, Math.max(16, 8000 / NR));
 }
 play.addEventListener("click", () => (timer ? stop() : start()));
+// As on the stage: Space plays and pauses unless a control has the focus
+// (Space is how a checkbox or a button is pressed), and the arrows step one
+// ring - except on the scrub bar itself, which steps on its own.
 document.addEventListener("keydown", ev => {
-  if (ev.target.tagName === "INPUT" && ev.target.type === "range") return;
-  if (ev.code === "Space"){ ev.preventDefault(); timer ? stop() : start(); }
+  const control = ev.target.tagName === "INPUT" || ev.target.tagName === "BUTTON";
+  if (ev.code === "Space" && !control){
+    ev.preventDefault(); timer ? stop() : start(); }
+  if (ev.target === range) return;
+  if (ev.key === "ArrowRight" || ev.key === "ArrowLeft"){
+    stop();
+    ring = Math.max(0, Math.min(NR - 1, ring + (ev.key === "ArrowRight" ? 1 : -1)));
+    range.value = String(ring); redraw();
+  }
 });
 draw();
 })();

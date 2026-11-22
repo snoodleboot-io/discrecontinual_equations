@@ -143,8 +143,11 @@ def lorenz_manifold_film() -> ManifoldFilm:
             f"apart; the red curves are the origin's one-dimensional unstable "
             f"manifold, which leaves towards the two wings. Krauskopf and "
             f"Osinga computed this surface much further out and crocheted it "
-            f"(Nonlinearity 17, 2004; Math. Intelligencer 26, 2004); this "
-            f"film stops where an SVG page can still turn it smoothly."
+            f"(Nonlinearity 17, 2004; Math. Intelligencer 26, 2004). This "
+            f"growth stops at 100 so the page turns smoothly; the same settings "
+            f"grow it, strictly, to about 143, where the flow runs along the "
+            f"level set and some boundary-value problems have no nearby "
+            f"solution. By then the scrolls around C+ and C- have formed."
         ),
     )
     film.curves.extend(_unstable_branches(function, jacobian))

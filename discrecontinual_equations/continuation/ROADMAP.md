@@ -20,14 +20,18 @@ homoclinic loop, and the chart lies on the exact level set ``H = 0`` to 1e-6.
 
 Global growth of a two-dimensional manifold beyond the chart is
 `geodesic_level_sets.py` (DEQ-30): Krauskopf and Osinga's geodesic level sets,
-seeded on the chart, each new point an orbit-segment BVP. Exact on a plane (rings
-are circles of their radius to 1e-8), second order on the tilted homoclinic
-cylinder, and the Lorenz manifold to geodesic distance 100 in about 5 s.
+seeded on the chart, each new point an orbit-segment BVP solved from its landing
+end. Exact on a plane for every linear saddle tried (rings are circles of their
+radius to 1e-11, stable-rate ratios up to 20, near-parallel eigenvectors),
+second order on the tilted homoclinic cylinder, and the Lorenz manifold to
+geodesic distance 100 in 1.5 s with no point lost.
 
 Remaining: complex (spiral) manifolds need the conjugate-coordinate variant (the
-level-set grower seeds a spiral manifold on its tangent plane meanwhile); the
-Lorenz growth beyond distance ~105, where the flow runs along the level sets and
-some BVPs have no nearby solution.
+level-set grower seeds a spiral manifold on its tangent plane meanwhile). The
+strict Lorenz growth stops at distance 142.9 (step 1.5, spacing 1.5 to 4.5) and
+says so in `GeodesicMesh.stopped`: there the flow runs along the level set and
+some BVPs have no nearby solution at any step. With `loss` it goes on, with
+holes; Krauskopf and Osinga went to about 170.
 
 ## 2. Connecting orbits - ORBIT SOLVER IMPLEMENTED, continuation pending
 

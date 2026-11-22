@@ -110,6 +110,11 @@ class TestManifoldFilm(TestCase):
         assert 'id="r" type="range"' in self.html
         assert 'aria-label="geodesic distance"' in self.html
 
+    def test_space_on_a_focused_control_does_not_play(self):
+        # Space presses a checkbox or a button; only elsewhere does it play.
+        assert 'ev.target.tagName === "BUTTON"' in self.html
+        assert 'ev.key === "ArrowRight"' in self.html
+
     def test_the_page_is_one_file(self):
         assert "<script src" not in self.html
         assert "A plane" in self.html
