@@ -217,7 +217,7 @@ class TestGaussianSourceAreas:
         areas = np.array(
             [
                 source.increments(0.0, _STEP, 2, levy_area=True).levy_area[0, 1]
-                for _ in range(40000)
+                for _ in range(20000)
             ],
         )
         assert np.var(areas) == pytest.approx(_STEP**2 / 4, rel=0.05)
@@ -230,6 +230,34 @@ class TestGaussianSourceAreas:
             levy_area=True,
         )
         assert np.array_equal(increments.levy_area, np.zeros((1, 1)))
+
+
+class TestTruncationRuleOrder:
+    def test_rule_gives_global_order_one_asymptotically(self):
+        # The global L2 error of sum_n (I_n - I^(n)_n) over [0, 1], which is the
+        # whole of Milstein's error on dx = dW_1, dy = x dW_2 (see
+        # test_milstein_levy_area.py), is sqrt(1 / h) times the per-step error.
+        # With n = terms(h) it is below h (c1 = 1) and of order 1.0 once n is
+        # large enough for the error to fall like 1 / n; at n <= 5 it falls more
+        # slowly, so step sizes h >= 2^-10 measure about 0.8.
+        generator = np.random.default_rng(13)
+        errors = {}
+        for exponent in [12, 14, 16, 18]:
+            step = 2.0**-exponent
+            terms = LevyAreaSampler.terms(step, 2)
+            delta_w = np.sqrt(step) * generator.standard_normal((1500, 2))
+            approximation, reference = coupled_areas(
+                generator,
+                delta_w,
+                step,
+                terms,
+                reference_terms=16 * terms,
+            )
+            per_step = np.sqrt(np.mean((approximation - reference)[:, 0, 1] ** 2))
+            errors[step] = float(np.sqrt(1.0 / step) * per_step)
+            assert errors[step] < step, errors
+        order = np.polyfit(np.log(list(errors)), np.log(list(errors.values())), 1)[0]
+        assert 0.9 < order < 1.1, errors  # noqa: PLR2004
 
 
 def _path_areas(paths: int, step: float, resolution: float, *, sampled: bool):

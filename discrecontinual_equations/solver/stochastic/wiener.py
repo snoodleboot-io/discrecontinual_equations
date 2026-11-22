@@ -25,18 +25,40 @@ Both are per noise channel, and the channels are independent. How many there are
 is the equation's business: a vector diffusion has one channel per state
 component (diagonal noise, component ``i`` driven by its own ``W_i``), a matrix
 diffusion ``n x m`` has ``m`` (DEQ-28), and a solver asks for the count
-:meth:`~.coefficients.ItoCoefficients.drivers` reports. What no source here
-provides are the Levy areas ``I_(j,k)`` between channels, which have no
-closed-form sampler; that is why every order claim in this package is stated for
-scalar noise and lowered for systems, and why the Milstein scheme accepts matrix
-noise only when it commutes.
+:meth:`~.coefficients.ItoCoefficients.drivers` reports.
+
+A third functional couples the channels: the Levy areas (DEQ-36),
+
+* ``A_(j,k) = (1/2) (I_(j,k) - I_(k,j))`` with ``I_(j,k) = int_t^{t+h}
+  int_t^s dW_j(u) dW_k(s)``, an antisymmetric ``m x m`` matrix, from which every
+  twofold iterated Ito integral follows as ``I_(j,k) = (1/2) (dW_j dW_k -
+  delta_jk h) + A_(j,k)``. This is what a Milstein step needs for noise that does
+  not commute. ``A`` has mean zero, variance ``h^2 / 4`` for each pair, is
+  uncorrelated with every increment and with the area of every other pair, and
+  given the increments has variance ``h^2 / 12 + h (dW_j^2 + dW_k^2) / 12``
+  (Levy's formula); its law is not Gaussian and has no closed-form sampler.
+
+:class:`LevyAreaSampler` draws it by the algorithm of Mrongowius and Rossler
+(2022): the truncated Fourier series of the Brownian bridge (Milstein; Kloeden,
+Platen and Wright), with the part of the remainder that is linear in ``dW``
+simulated exactly and the rest replaced by a Gaussian of the right (diagonal,
+``dW``-independent) covariance. Its first two moments are exact at any truncation
+and its pathwise L2 error falls like ``h / n`` in the number ``n`` of terms;
+:meth:`LevyAreaSampler.terms` picks ``n`` so that the error per step is at most
+``h^(3/2)``, which is what a scheme of strong order 1.0 needs (Kastner and
+Rossler 2022, (64)-(67)). Areas are drawn only when a scheme asks
+(``levy_area=True``), and from a stream of their own, so asking for them never
+changes the increments a seeded source gives.
+
+The triple integrals ``I_(j,k,l)`` between channels, which a strong order 1.5
+scheme for several drivers would need, are still not sampled.
 
 Why the increments come from a source object rather than from a generator inside
 each solver: a strong-order measurement is the expected pathwise distance
 between the scheme and the exact solution, driven by the same Brownian path. It
 is only meaningful if every step size sees the same path, which means the path
 has to exist before the solver runs. :class:`BrownianPath` is that pre-generated
-path, reading each step's ``delta_w`` and ``delta_z`` off a fine grid;
+path, reading each step's ``delta_w``, ``delta_z`` and Levy areas off a fine grid;
 :class:`GaussianWienerSource` is the ordinary case, drawing fresh increments from
 a generator the solver owns - never ``np.random.seed``, which seeds the
 process-wide stream and lets one solver alter another's results.
@@ -58,36 +80,191 @@ class WienerIncrements:
     delta_z: np.ndarray
     """``integral_t^{t+h} (W(s) - W(t)) ds``, Kloeden and Platen's ``I_(1,0)``."""
 
+    levy_area: np.ndarray | None = None
+    """``A_(j,k)``, ``m x m`` and antisymmetric; ``None`` unless a scheme asked."""
+
+    def iterated_integrals(self, step: float) -> np.ndarray:
+        """``I_(j,k) = (1/2) (dW_j dW_k - delta_jk h) + A_(j,k)``, inner index ``j``.
+
+        ``I_(j,k) = int_t^{t+h} int_t^s dW_j(u) dW_k(s)``: the twofold Ito
+        integrals, with the convention of Kloeden and Platen and of Mrongowius and
+        Rossler (their (7)) that the first index is the inner integral. The
+        Stratonovich ``J_(j,k)`` is this plus ``(1/2) delta_jk h``.
+        """
+        if self.levy_area is None:
+            message = (
+                "these increments carry no Levy area; ask the source for "
+                "increments(..., levy_area=True)"
+            )
+            raise ValueError(message)
+        dimension = self.delta_w.size
+        return (
+            0.5 * (np.outer(self.delta_w, self.delta_w) - step * np.eye(dimension))
+            + self.levy_area
+        )
+
+
+class LevyAreaSampler:
+    """Levy areas given the increments, by Mrongowius and Rossler's algorithm.
+
+    With ``dW`` the increments over a step ``h`` of ``m`` independent Brownian
+    motions and ``X_k, Y_k ~ N(0, I_m)``, ``k = 1..n``, ``Psi_1 ~ N(0, I_m)`` and
+    ``Psi_2`` one standard normal per pair, all independent, the area of the pair
+    ``j < l`` is (Mrongowius and Rossler 2022, Section 5.1, steps 2-4)::
+
+        A_(j,l) = h / (2 pi) sum_{k=1}^n (1/k) [X_jk (Y_lk - sqrt(2/h) dW_l)
+                                              - X_lk (Y_jk - sqrt(2/h) dW_j)]
+                + sqrt(h) / (sqrt(2) pi) sqrt(tail) (dW_j Psi_1l - dW_l Psi_1j)
+                + h / (sqrt(2) pi) sqrt(tail) Psi_2,(j,l)
+
+    with ``tail = pi^2 / 6 - sum_{k=1}^n 1 / k^2 = sum_{k>n} 1 / k^2``. The first
+    line is the truncated Fourier series of the Brownian bridge (Kloeden,
+    Platen and Wright 1992, Milstein 1995), with ``X_k`` and ``Y_k`` the scaled
+    cosine and sine coefficients; the second is its remainder's part linear in
+    ``dW``, which is exactly Gaussian given ``dW`` and so simulated exactly; the
+    third replaces the rest of the remainder, conditionally Gaussian with a
+    covariance depending on the discarded ``X_k``, by a Gaussian with that
+    covariance's mean, ``h^2 tail / (2 pi^2)`` times the identity. The
+    approximation is unbiased, its variance is exactly ``h^2 / 4``, and its L2
+    error is at most ``h sqrt(m) / (sqrt(12) pi n)`` (their Corollary 4.5).
+
+    The sampler is scale-free in the sense that ``A(h) = h A(1)`` given ``dW /
+    sqrt(h)``; it takes ``dW`` with any leading batch axes, so that a fine path's
+    every cell can be drawn at once.
+    """
+
+    __slots__ = ["_generator"]
+
+    def __init__(self, generator: np.random.Generator) -> None:
+        self._generator = generator
+
+    @staticmethod
+    def terms(step: float, dimension: int) -> int:
+        """The truncation ``n`` that keeps the L2 error per step below ``h^(3/2)``.
+
+        From Mrongowius and Rossler's (36), ``max E|I^(n) - I|^2 <= m h^2 / (12
+        pi^2 n^2)``; asking for ``h^(3/2)`` (Kastner and Rossler 2022, (64) with
+        ``gamma = 1``, ``c1 = 1``) gives ``n >= sqrt(m / (12 pi^2)) / sqrt(h)``
+        (their (67)), which is ``O(h^(-1/2))`` - against ``O(h^(-1))`` for the
+        Fourier series without the remainder terms.
+        """
+        bound = np.sqrt(dimension / (12.0 * np.pi**2)) / np.sqrt(step)
+        return max(1, int(np.ceil(bound)))
+
+    @staticmethod
+    def assemble(
+        delta_w: np.ndarray,
+        step: float,
+        x: np.ndarray,
+        y: np.ndarray,
+        psi1: np.ndarray,
+        psi2: np.ndarray,
+    ) -> np.ndarray:
+        """The areas from given standard normals, as ``(..., m, m)``.
+
+        ``delta_w`` is ``(..., m)``; ``x`` and ``y`` are ``(..., n, m)``; ``psi1``
+        is ``(..., m)``; ``psi2`` is ``(..., m, m)`` of which only the entries
+        above the diagonal are read. Public so that a pathwise error can be
+        measured against a reference coupled to the same normals.
+        """
+        count = x.shape[-2]
+        k = np.arange(1, count + 1, dtype=float)
+        tail = np.pi**2 / 6.0 - float(np.sum(1.0 / k**2))
+        shifted = y - np.sqrt(2.0 / step) * delta_w[..., np.newaxis, :]
+        # series[j, l] = sum_k X_jk (Y_lk - sqrt(2/h) dW_l) / k
+        series = np.einsum("...kj,...kl->...jl", x / k[:, np.newaxis], shifted)
+        fourier = step / (2.0 * np.pi) * (series - np.swapaxes(series, -1, -2))
+        linear = delta_w[..., :, np.newaxis] * psi1[..., np.newaxis, :]
+        first = (
+            np.sqrt(step * tail)
+            / (np.sqrt(2.0) * np.pi)
+            * (linear - np.swapaxes(linear, -1, -2))
+        )
+        upper = np.triu(psi2, 1)
+        second = (
+            step
+            * np.sqrt(tail)
+            / (np.sqrt(2.0) * np.pi)
+            * (upper - np.swapaxes(upper, -1, -2))
+        )
+        return fourier + first + second
+
+    def sample(
+        self,
+        delta_w: np.ndarray,
+        step: float,
+        terms: int | None = None,
+    ) -> np.ndarray:
+        """Draw the areas for increments ``delta_w`` of shape ``(..., m)``.
+
+        ``terms`` defaults to :meth:`terms` for the step; the normals are drawn in
+        the order ``X``, ``Y``, ``Psi_1``, ``Psi_2``.
+        """
+        batch = delta_w.shape[:-1]
+        dimension = delta_w.shape[-1]
+        count = self.terms(step, dimension) if terms is None else terms
+        x = self._generator.standard_normal((*batch, count, dimension))
+        y = self._generator.standard_normal((*batch, count, dimension))
+        psi1 = self._generator.standard_normal((*batch, dimension))
+        psi2 = self._generator.standard_normal((*batch, dimension, dimension))
+        return self.assemble(delta_w, step, x, y, psi1, psi2)
+
+
+def _area_stream(sequence: np.random.SeedSequence) -> LevyAreaSampler:
+    """A sampler on a stream spawned from ``sequence``, independent of its draws."""
+    return LevyAreaSampler(np.random.default_rng(sequence.spawn(1)[0]))
+
 
 class WienerSource(ABC):
     """Supplies the Wiener functionals for one step of a scheme."""
 
     @abstractmethod
-    def increments(self, time: float, step: float, dimension: int) -> WienerIncrements:
-        """The increments over ``[time, time + step]`` for ``dimension`` channels."""
+    def increments(
+        self,
+        time: float,
+        step: float,
+        dimension: int,
+        *,
+        levy_area: bool = False,
+    ) -> WienerIncrements:
+        """The increments over ``[time, time + step]`` for ``dimension`` channels.
+
+        With ``levy_area`` the result carries the Levy areas between channels too.
+        """
         raise NotImplementedError
 
 
 class GaussianWienerSource(WienerSource):
     """Fresh increments from a generator this source owns.
 
-    ``seed=None`` means fresh entropy, as ``np.random.default_rng`` does.
+    ``seed=None`` means fresh entropy, as ``np.random.default_rng`` does. The
+    Levy areas come from a second stream spawned from the same seed, so a seeded
+    source gives the same increments whether or not areas are asked for.
     """
 
-    __slots__ = ["_generator"]
+    __slots__ = ["_areas", "_generator"]
 
     def __init__(self, seed: int | None = None) -> None:
-        self._generator = np.random.default_rng(seed)
+        sequence = np.random.SeedSequence(seed)
+        # default_rng(SeedSequence(seed)) is the stream default_rng(seed) gives.
+        self._generator = np.random.default_rng(sequence)
+        self._areas = _area_stream(sequence)
 
     def increments(
-        self, time: float, step: float, dimension: int  # noqa: ARG002
+        self,
+        time: float,  # noqa: ARG002
+        step: float,
+        dimension: int,
+        *,
+        levy_area: bool = False,
     ) -> WienerIncrements:
         u1 = self._generator.standard_normal(dimension)
         u2 = self._generator.standard_normal(dimension)
         root = np.sqrt(step)
         delta_w = root * u1
         delta_z = 0.5 * step * root * (u1 + u2 / np.sqrt(3.0))
-        return WienerIncrements(delta_w=delta_w, delta_z=delta_z)
+        area = self._areas.sample(delta_w, step) if levy_area else None
+        return WienerIncrements(delta_w=delta_w, delta_z=delta_z, levy_area=area)
 
 
 class BrownianPath(WienerSource):
@@ -100,17 +277,42 @@ class BrownianPath(WienerSource):
     over the cells inside the step, whose error is of order ``resolution^2`` per
     step and so well below any scheme error at the step sizes a convergence
     study uses.
+
+    The Levy area over a step is the trapezoidal double integral of the path -
+    the area of the polygon through the grid nodes, ``(1/2) sum (W_j(s) - W_j(t))
+    dW_l(s) - (W_l(s) - W_l(t)) dW_j(s)`` over the cells - plus the areas inside
+    the cells, which a polygon cannot see. That sum is Chen's relation, so the
+    reading is consistent between step sizes: the areas of two adjacent steps and
+    the cross term of their increments add up to the area of their union. A path
+    from :meth:`sample` draws the cell areas with :class:`LevyAreaSampler`, on a
+    stream of its own and only when first asked, and its reading has the law of
+    the Levy area at any resolution. A path built from ``values`` alone has no
+    cell areas unless given ``areas``; its reading then lacks variance ``h
+    resolution / 4`` of the ``h^2 / 4`` and converges to the law as the grid is
+    refined.
     """
 
-    __slots__ = ["_resolution", "_start", "_values"]
+    __slots__ = ["_area_sampler", "_areas", "_resolution", "_start", "_values"]
 
-    def __init__(self, start: float, resolution: float, values: np.ndarray) -> None:
+    def __init__(
+        self,
+        start: float,
+        resolution: float,
+        values: np.ndarray,
+        areas: np.ndarray | None = None,
+    ) -> None:
         if values.ndim != 2:  # noqa: PLR2004 (a matrix: grid nodes by channels)
             message = "values must have shape (nodes, channels)"
             raise ValueError(message)
         self._start = float(start)
         self._resolution = float(resolution)
         self._values = np.asarray(values, dtype=float)
+        cells, dimension = len(self._values) - 1, self._values.shape[1]
+        if areas is not None and areas.shape != (cells, dimension, dimension):
+            message = "areas must have shape (cells, channels, channels)"
+            raise ValueError(message)
+        self._areas = areas
+        self._area_sampler: LevyAreaSampler | None = None
 
     @classmethod
     def sample(
@@ -122,14 +324,17 @@ class BrownianPath(WienerSource):
         seed: int | None = None,
     ) -> "BrownianPath":
         """Draw a path on ``[start, end]`` with ``W(start) = 0`` on every channel."""
-        generator = np.random.default_rng(seed)
+        sequence = np.random.SeedSequence(seed)
+        generator = np.random.default_rng(sequence)
         cells = round((end - start) / resolution)
         if cells < 1 or not np.isclose(start + cells * resolution, end):
             message = "the horizon must be a whole number of resolution cells"
             raise ValueError(message)
         increments = generator.standard_normal((cells, dimension)) * np.sqrt(resolution)
         values = np.vstack([np.zeros((1, dimension)), np.cumsum(increments, axis=0)])
-        return cls(start=start, resolution=resolution, values=values)
+        path = cls(start=start, resolution=resolution, values=values)
+        path._area_sampler = _area_stream(sequence)  # noqa: SLF001
+        return path
 
     @property
     def dimension(self) -> int:
@@ -138,6 +343,11 @@ class BrownianPath(WienerSource):
     @property
     def end(self) -> float:
         return self._start + (self._values.shape[0] - 1) * self._resolution
+
+    @property
+    def values(self) -> np.ndarray:
+        """``W`` at the grid nodes, ``(nodes, channels)``; a copy."""
+        return self._values.copy()
 
     def _node(self, time: float) -> int:
         offset = (time - self._start) / self._resolution
@@ -155,7 +365,21 @@ class BrownianPath(WienerSource):
         """``W(time)`` on every channel; ``time`` must be a grid node."""
         return self._values[self._node(time)]
 
-    def increments(self, time: float, step: float, dimension: int) -> WienerIncrements:
+    def _cell_areas(self) -> np.ndarray | None:
+        """The areas inside the grid cells, drawn on first use for a sampled path."""
+        if self._areas is None and self._area_sampler is not None:
+            cells = np.diff(self._values, axis=0)
+            self._areas = self._area_sampler.sample(cells, self._resolution)
+        return self._areas
+
+    def increments(
+        self,
+        time: float,
+        step: float,
+        dimension: int,
+        *,
+        levy_area: bool = False,
+    ) -> WienerIncrements:
         if dimension != self.dimension:
             message = (
                 f"path has {self.dimension} channels, scheme asked for {dimension}"
@@ -166,4 +390,14 @@ class BrownianPath(WienerSource):
         segment = self._values[first : last + 1] - self._values[first]
         delta_w = segment[-1].copy()
         delta_z = np.trapezoid(segment, dx=self._resolution, axis=0)
-        return WienerIncrements(delta_w=delta_w, delta_z=delta_z)
+        area = None
+        if levy_area:
+            # (1/2) sum over cells of (W(s) - W(t)) dW^T - its transpose: the
+            # polygon's area; the trapezoid's extra (1/2) dW dW^T is symmetric and
+            # cancels in the antisymmetric part.
+            products = segment[:-1].T @ np.diff(segment, axis=0)
+            area = 0.5 * (products - products.T)
+            cell_areas = self._cell_areas()
+            if cell_areas is not None:
+                area = area + np.sum(cell_areas[first:last], axis=0)
+        return WienerIncrements(delta_w=delta_w, delta_z=delta_z, levy_area=area)
