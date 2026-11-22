@@ -26,15 +26,23 @@ radius to 1e-11, stable-rate ratios up to 20, near-parallel eigenvectors),
 second order on the tilted homoclinic cylinder, and the Lorenz manifold to
 geodesic distance 100 in 1.5 s with no point lost.
 
+Step control is the paper's (DEQ-61): Delta halves where any point turns by
+alpha_max or Delta * alpha_max, doubles where every point is below both lower
+bounds, and a ring is accepted at the smallest step with a warning
+(`GeodesicMesh.warnings`). A landing Newton misses is retried alone by the
+paper's continuation in the flight time, so a ring is recomputed only when
+retries fail. At the SIADS / IJBC settings the band distances are the papers'
+exactly (25, 40, 55 bands at 62.75, 92.75, 122.75) and the last circle has
+2,330 points against the published 2,300.
+
 Remaining: complex (spiral) manifolds need the conjugate-coordinate variant (the
 level-set grower seeds a spiral manifold on its tangent plane meanwhile). The
-strict Lorenz growth stops at distance 157.2 (step 1.5, spacing 1.5 to 4.5) and
-says so in `GeodesicMesh.stopped`: there the flow runs along the level set and
-the front is 0.04 to 0.05 off W^s(0) (measured independently), so the radial
-steps turn by 0.38 rad at every Delta and four landings fail. With `loss` it
-goes on, with holes. Krauskopf and Osinga reached 151.75 (SIADS 2003, Sec. 4.5)
-and 154.75 (IJBC 2005 survey, Sec. 2.3). Their step control also bounds
-Delta * alpha, which this grower does not.
+strict Lorenz growth stops at distance 157.4 (step 1.5, spacing 1.5 to 4.5) and
+says so in `GeodesicMesh.stopped`: at two symmetric points the flow runs along
+the level set and the landings continued from the ring turn back inside it
+before reaching the smallest step, 0.094. With `loss` it goes on, with holes.
+Krauskopf and Osinga reached 151.75 (SIADS 2003, Sec. 4.5) and 154.75 (IJBC
+2005 survey, Sec. 2.3).
 
 ## 2. Connecting orbits - ORBIT SOLVER IMPLEMENTED, continuation pending
 
