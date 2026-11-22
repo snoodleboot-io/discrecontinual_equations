@@ -7,17 +7,20 @@ the same tolerance.
 """
 
 import math
-from unittest import TestCase
+from unittest import TestCase, mock
 
 import numpy as np
 from scipy.integrate import solve_ivp
 
+from discrecontinual_equations.continuation import cycle_continuation
 from discrecontinual_equations.continuation.cycle_continuation import (
     CycleContinuation,
     CycleSeed,
     _jacobian_monodromy,
     _multiplier_disagreement,
+    _product_multipliers,
 )
+from discrecontinual_equations.continuation.periodic_schur import PeriodicSchurError
 from discrecontinual_equations.differential_equation import DifferentialEquation
 from tests.continuation.fields import Alpha, State, Time, VanDerPolField
 
@@ -150,3 +153,91 @@ class TestEstimateIsTight(TestCase):
         true = _multiplier_disagreement(point.multipliers, exact)
         assert true <= point.floquet_error < 100.0 * true
         assert point.resolved()
+
+
+class TestEstimateReadings(TestCase):
+    """Each reading in the estimate counts on its own, and a failed one refuses.
+
+    The doubled-mesh solve is replaced here, so the other reading is the only
+    one left to see: with the doubled solve agreeing exactly, the estimate is
+    the trivial multiplier's drift alone (the Brusselator at ``b = 3``, ``m =
+    4`` on 80 intervals is a real case where the drift is the larger); with it
+    failing, the point reads infinite and is refused.
+    """
+
+    def _trace(self, doubled):
+        period, orbit, _ = _reference(0.5)
+        continuation = CycleContinuation(
+            _equation(0.5),
+            0,
+            16,
+            phase_index=1,
+            collocation="gauss_legendre",
+            collocation_points=2,
+        )
+        seed = CycleSeed(orbit(np.linspace(0.0, 1.0, 17)), period, 0.5)
+        with mock.patch.object(CycleContinuation, "_doubled_multipliers", doubled):
+            trace, _ = continuation.trace(seed, 0.05, 0)
+        return continuation, trace[0]
+
+    def test_the_drift_alone_when_the_doubled_mesh_agrees(self):
+        def agreeing(continuation, states, period, parameter):
+            dimension = continuation._dimension  # noqa: SLF001
+            unknowns = np.concatenate([states.ravel(), [period], [parameter]])
+            nodes = unknowns.size // dimension - 1
+            return continuation._jacobian_multipliers(unknowns, nodes)  # noqa: SLF001
+
+        _, point = self._trace(agreeing)
+        drift = float(np.min(np.abs(point.multipliers - 1.0)))
+        assert drift > 0.0
+        assert point.floquet_error == drift
+
+    def test_a_failed_doubled_solve_reads_infinite_and_is_refused(self):
+        def failing(continuation, states, period, parameter):  # noqa: ARG001
+            return np.full(2, np.nan)
+
+        _, point = self._trace(failing)
+        assert np.all(np.isfinite(point.multipliers))
+        assert point.floquet_error == float("inf")
+        assert not point.resolved()
+
+
+class TestProductMultipliers(TestCase):
+    def test_falls_back_to_the_explicit_product_when_periodic_qr_fails(self):
+        rng = np.random.default_rng(5)
+        transfers = np.eye(3) + 0.2 * rng.standard_normal((6, 3, 3))
+        product = np.eye(3)
+        for transfer in transfers:
+            product = transfer @ product
+
+        def failing(_factors):
+            message = "forced"
+            raise PeriodicSchurError(message)
+
+        with mock.patch.object(
+            cycle_continuation,
+            "periodic_eigenvalues",
+            failing,
+        ):
+            computed = _product_multipliers(transfers)
+        np.testing.assert_array_equal(computed, np.linalg.eigvals(product))
+
+    def test_a_real_spectrum_comes_back_real_and_a_pair_stays_complex(self):
+        rng = np.random.default_rng(6)
+        frames = [np.linalg.qr(rng.standard_normal((2, 2)))[0] for _ in range(5)]
+        real = np.array(
+            [frames[(k + 1) % 5] @ np.diag([1.1, 0.5]) @ frames[k].T for k in range(5)],
+        )
+        computed = _product_multipliers(real)
+        assert computed.dtype == float
+        assert _multiplier_disagreement(computed, np.array([1.1**5, 0.5**5])) < 1e-12
+        angle = 0.3
+        rotation = np.array(
+            [[np.cos(angle), -np.sin(angle)], [np.sin(angle), np.cos(angle)]],
+        )
+        pair = _product_multipliers(np.array([rotation] * 5))
+        assert np.iscomplexobj(pair)
+        expected = np.exp(1j * 5 * angle) * np.array([1.0, 0.0]) + np.exp(
+            -1j * 5 * angle,
+        ) * np.array([0.0, 1.0])
+        assert _multiplier_disagreement(pair, expected) < 1e-12
