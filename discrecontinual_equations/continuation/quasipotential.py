@@ -702,8 +702,15 @@ class GeometricMinimumAction:
 
         ``z_tau = lambda^2 z'' - lambda (J - J^T) z' - J^T b``
 
-    up to a tangential part, which the reparametrisation to equal arc length after
-    every step removes anyway. The ``z''`` term is taken implicitly - a tridiagonal
+    up to a tangential part. Only the component of the explicit terms normal to the
+    path is applied, and the reparametrisation to equal arc length after every step
+    redistributes the nodes; see the comment in ``_relax`` for why the tangential
+    part cannot simply be left to the reparametrisation. On the rotating
+    Ornstein-Uhlenbeck process from the origin to ``(0.8, -0.3)`` the action is
+    0.34%, 0.16% and 0.11% above ``(1/2) x^T S^{-1} x`` with 41, 81 and 161
+    nodes, the same at steps 0.05 and 0.01; what remains is the infinitely many
+    turns the exact path makes as it spirals out of the origin, which a chain of
+    nodes cannot follow. The ``z''`` term is taken implicitly - a tridiagonal
     solve per component - so the step is not limited by the node spacing. The
     action reported is ``integral |b| |z'| - <b, z'> d alpha`` by the midpoint rule.
 
@@ -783,6 +790,15 @@ class GeometricMinimumAction:
             jacobians,
             velocity,
         )
+        # Only the normal part moves the curve; the tangential part only slides
+        # nodes along it, and the reparametrisation's linear interpolation then
+        # cuts the corners it slid them round. Left in, that bias balanced the
+        # flow at a fixed point that depended on the step size: 0.63% and 1.02%
+        # above the exact action at steps 0.05 and 0.01, and growing with the
+        # node count. Projected out, the answer is the same at both steps and
+        # converges as nodes are added.
+        unit = tangent / np.where(speed > 0.0, speed, 1.0)[:, None]
+        force -= np.sum(force * unit, axis=1)[:, None] * unit
         explicit = chain + self._step * force
         weight = self._step * scale * scale / (spacing * spacing)
         nodes = chain.shape[0]

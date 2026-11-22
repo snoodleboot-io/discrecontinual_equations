@@ -195,7 +195,24 @@ class TestMinimumActionPath(TestCase):
         initial = np.linspace([0.0, 0.0], target, 81)
         path = gmam.path(initial)
         exact = float(rotating_quasipotential(target[None, :])[0])
-        assert abs(path.action - exact) / exact < 1.0e-2
+        assert abs(path.action - exact) / exact < 3.0e-3
+
+    def test_gmam_lands_on_the_same_path_whatever_its_step(self):
+        # The step is how fast the chain relaxes, not where it ends; a fixed point
+        # that moved with it was the tangential force fighting the
+        # reparametrisation.
+        target = np.array([0.8, -0.3])
+        actions = [
+            GeometricMinimumAction(
+                rotating_drift(),
+                constant_noise(rotating_noise_matrix()),
+                step=step,
+            )
+            .path(np.linspace([0.0, 0.0], target, 41))
+            .action
+            for step in (0.05, 0.01)
+        ]
+        assert abs(actions[0] - actions[1]) < 1.0e-6
 
     def test_gmam_refuses_a_state_dependent_diffusion(self):
         parameters = [Alpha(value=1.0), Sigma(value=0.7)]
