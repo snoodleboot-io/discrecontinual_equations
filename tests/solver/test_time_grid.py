@@ -246,6 +246,7 @@ class _Recording(_Linear):
     times: ClassVar[list[float]] = []
 
     def eval(self, point: list[float], time: float | None = None) -> list[float]:
+        assert time is not None, "a fixed-step solver passes the drift its time"
         type(self).times.append(time)
         return super().eval(point, time)
 
