@@ -75,7 +75,11 @@ class FerroelectricRing(UnidirectionalRing):
     * ``a < 0`` (monostable cells): the trivial state is stable for
       ``a < lambda < -2a`` and the crossing at ``-2a`` is a genuine Hopf onset of
       the rotating wave, born with the linear period ``4 pi / (lambda sqrt 3)``
-      (measured 11.16 at ``a = -0.3``, ``lambda = 0.65``, against 11.16).
+      (measured 11.16 at ``a = -0.3``, ``lambda = 0.65``, against 11.16). The
+      Hopf is supercritical: the wave's amplitude squared grows as
+      ``(2/3)(lambda + 2a)``. The symmetric states exist only for ``lambda < a``
+      and have no Hopf there, so neither ``4a/7`` nor ``0.34a`` below is a
+      threshold for ``a < 0``.
     * ``a > 0`` (double-well cells, the sensor's regime): the trivial state is
       never stable - its ``k = 0`` eigenvalue is positive for all ``lambda < a`` -
       so the Hopf at ``-2a`` creates a cycle nobody sees, and for
@@ -87,6 +91,12 @@ class FerroelectricRing(UnidirectionalRing):
       ``1/T^2`` is linear in ``lambda``; ``T = 75`` at ``0.36 a``, ``44`` at
       ``0.40 a``, ``7.0`` at ``1.2 a`` - and coexists with the symmetric states up
       to ``4a/7`` (DEQ-14).
+
+    Both regimes are drawn on one picture, ``a`` in ``[-0.6, 1.4]``, by the
+    electric-field operating map (``efield_operating_map.html``, built by
+    ``_efield_operating_map`` in ``examples/continuation/pages_exploration.py``):
+    every threshold meets at the origin, and the ``-2a`` line is the trivial
+    state's unobservable crossing above ``a = 0`` and the wave's onset below it.
 
     A target field sweeps the double well, whose fold thresholds the coupling
     tunes. The cell is polynomial, so it is fully compatible with the

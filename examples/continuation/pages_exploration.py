@@ -149,13 +149,15 @@ def _newton_symmetric(effective_gain: float, field: float) -> float:
 _WAVE_ONSET = 0.34
 
 
-def _efield_operating_map() -> Scene:
-    equation = _equation(
-        FerroelectricRing,
-        3,
-        [First(value=0.0), Second(value=1.0), Third(value=0.0)],
-    )
-    values = [round(float(v), 3) for v in np.linspace(0.4, 1.4, 11)]
+def _efield_thresholds(
+    equation,
+    values: list[float],
+) -> tuple[list, list, list]:
+    """The ring's continued thresholds over ``values`` of the gain.
+
+    Returns the symmetry-breaking points and the trivial state's Hopf points, both
+    from the trivial branch, and the symmetric states' Hopf points.
+    """
     config = FamilyConfig(
         continuation_parameter_index=0,
         family_parameter_index=1,
@@ -184,7 +186,9 @@ def _efield_operating_map() -> Scene:
     # The symmetric states +-s(1, 1, 1), continued upward from lambda = -1 where
     # s = sqrt(a + 1) sits near the guess for every a in the family. The branch
     # folds through the pitchfork at lambda = a and returns as its mirror, so each
-    # Hopf is met twice; one copy per slice is kept.
+    # Hopf is met twice; one copy per slice is kept. For a < 0 the branch has no
+    # Hopf at all - the k = 1 pair's real part 3.5 lambda - 2a is below 1.5a < 0
+    # wherever the states exist (lambda < a) - so the line ends at a = 0.
     symmetric = FamilyDriver.run(
         FamilyConfig(
             continuation_parameter_index=0,
@@ -208,17 +212,42 @@ def _efield_operating_map() -> Scene:
         hopfs = [p.parameter for p in item.branch.special_points if p.kind == "hopf"]
         if hopfs:
             symmetric_hopf.append((min(hopfs), item.value))
+    return breaking, crossing, symmetric_hopf
+
+
+def _efield_operating_map() -> Scene:
+    equation = _equation(
+        FerroelectricRing,
+        3,
+        [First(value=0.0), Second(value=1.0), Third(value=0.0)],
+    )
+    values = [round(float(v), 3) for v in np.linspace(0.4, 1.4, 11)]
+    breaking, crossing, symmetric_hopf = _efield_thresholds(equation, values)
+    # The family down to a = -0.6 (DEQ-44), traced separately so the slices above
+    # - each seeded by the one before - are the ones every earlier build drew. The
+    # gap 0 < a < 0.4 is filled so the a > 0 lines run to the origin; a = 0 itself
+    # is left out, since there every threshold meets at lambda = 0 at once.
+    extra = [round(float(v), 3) for v in np.linspace(-0.6, 0.3, 10)]
+    extra = [value for value in extra if value != 0.0]
+    more_breaking, more_crossing, more_symmetric = _efield_thresholds(equation, extra)
+    breaking = sorted(more_breaking + breaking, key=lambda point: point[1])
+    symmetric_hopf = sorted(more_symmetric + symmetric_hopf, key=lambda p: p[1])
+    positive = [p for p in more_crossing if p[1] > 0.0] + crossing
+    # With a < 0 the same k = 1 crossing is the wave's onset: the trivial state is
+    # stable for a < lambda < -2a and loses that stability here (DEQ-14).
+    negative = [p for p in more_crossing if p[1] < 0.0]
     # The wave's onset is not a local bifurcation the continuer can detect: the
     # period diverges there (1/T^2 linear in lambda; DEQ-14). Measured by
     # integration at a = 1 as lambda_c = 0.34, and exactly proportional to a since
     # rescaling x by sqrt(a) and t by 1/a leaves the ring depending on lambda/a.
-    onset = [(_WAVE_ONSET * value, value) for value in values]
+    gains = [value for value in extra if value > 0.0] + values
+    onset = [(_WAVE_ONSET * value, value) for value in gains]
     lines = [
         ("branch_point", "symmetry breaking (\u03bb=a)", breaking, "#a3e635"),
         (
             "hopf",
             "trivial state: k=1 pair crosses (\u03bb=-2a); unstable throughout",
-            crossing,
+            positive,
             "#fbbf24",
         ),
         (
@@ -233,18 +262,28 @@ def _efield_operating_map() -> Scene:
             onset,
             "#f472b6",
         ),
+        (
+            "hopf",
+            "a<0: rotating wave onset, Hopf of the trivial state (\u03bb=-2a)",
+            negative,
+            "#f472b6",
+        ),
     ]
     return curve_scene(
         lines,
         [],
         ("\u03bb", "a"),
         "Electric-field sensor: operating map",
-        "Ferroelectric ring at zero field, a>0. The symmetric states are the "
-        "attractors for weak coupling; the rotating wave appears at \u03bb\u22480.34a "
-        "with infinite period and coexists with them until their Hopf at \u03bb=4a/7; "
-        "they merge with the trivial state at \u03bb=a. The trivial state is unstable "
-        "throughout, so its k=1 crossing at \u03bb=-2a is not an onset here (it is "
-        "one for a<0, where the cells are monostable).",
+        "Ferroelectric ring at zero field; every threshold meets at the origin and "
+        "the k=1 crossing at \u03bb=-2a changes meaning there. a>0 (double-well "
+        "cells): the symmetric states are the attractors for weak coupling; the "
+        "rotating wave appears at \u03bb\u22480.34a with infinite period and "
+        "coexists with them until their Hopf at \u03bb=4a/7; they merge with the "
+        "trivial state at \u03bb=a, and the trivial state is unstable throughout, so "
+        "its crossing at -2a is not an onset. a<0 (monostable cells): the trivial "
+        "state is stable for a<\u03bb<-2a, and its Hopf at \u03bb=-2a is the "
+        "wave's onset; the symmetric states exist only for \u03bb<a, are stable "
+        "there, and have no Hopf, so the 4a/7 and 0.34a lines end at a=0.",
     )
 
 
