@@ -719,7 +719,8 @@ class ResidenceTracker:
         Dropping the residences still open at the end of a run biases the mean
         short - a long residence is more likely to be the one cut off - by a
         fraction of the order of ``tau / horizon``: on the three-cell ring, 131
-        against 144 at ``tau / horizon = 0.07``, and 416 against 589 at 0.3.
+        against the grid's 144 at ``tau / horizon = 0.07``, and 416 against 589
+        at 0.3; letting them finish gives 140 +- 2.4 and 571 +- 14.
         Every residence that *began* before the horizon is an unbiased draw, by
         the strong Markov property at its entry time, so after the horizon the
         run continues until those have closed, and no others are counted.
