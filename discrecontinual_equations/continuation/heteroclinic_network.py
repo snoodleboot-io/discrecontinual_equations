@@ -359,7 +359,20 @@ class HeteroclinicNetwork:
         ``L^-(u(tau_-) - xi) = 0`` of Doedel et al. 2008, eq. 5). The subspace is not
         imposed, so ``subspace_defect`` measures whether the solver found the
         connection where the symmetry puts it.
+
+        A connection whose :meth:`persistence_margin` is not positive does not exist
+        in its subspace, and is refused: the least-squares solve would otherwise
+        return its best non-trajectory, which can sit on both saddles, in the
+        plane, with a small ``resolution`` estimate.
         """
+        margin = self.persistence_margin(connection)
+        if margin <= 0.0:
+            message = (
+                f"no connection {connection.source} -> {connection.target} in its "
+                f"subspace: persistence margin {margin:.6g} is not positive (the "
+                f"source must expand into it and the target attract within it)"
+            )
+            raise ValueError(message)
         source = self.saddle(connection.source)
         target = self.saddle(connection.target)
         orbit = HeteroclinicOrbit(
