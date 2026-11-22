@@ -24,6 +24,9 @@ import pytest
 
 from discrecontinual_equations.continuation.branch import Branch
 from discrecontinual_equations.continuation.continuation_point import ContinuationPoint
+from discrecontinual_equations.continuation.covariant_lyapunov import (
+    FiniteTimeExponents,
+)
 from discrecontinual_equations.continuation.fokker_planck import (
     DensityGrid,
     GridDensity,
@@ -469,7 +472,15 @@ class TestCheckNoise(TestCase):
         )
 
 
-def _build(frames=(-0.25, 0.25, 1.0)):
+def _fake_finite_time(mu, window=5.0):
+    # Eleven windows spread evenly about mu: the quantiles are known exactly.
+    return FiniteTimeExponents(
+        np.column_stack([mu + np.linspace(-0.5, 0.5, 11), np.full(11, -2.0)]),
+        window,
+    )
+
+
+def _build(frames=(-0.25, 0.25, 1.0), finite_time_at=None):
     continued, scene = _viewed(list(frames))
     parameters = continued.equation.derivative.parameters
     noise = NoiseModel(
@@ -488,6 +499,7 @@ def _build(frames=(-0.25, 0.25, 1.0)):
                 exponent=lambda mu: mu,
                 crest=lambda mu: math.sqrt(mu - _SIGMA**2) if mu > _SIGMA**2 else None,
             ),
+            finite_time_at,
         ),
         _thresholds(RadialCrater([0.0, 0.0], axis=0, offset=2)),
         _even_grid(40),
@@ -547,6 +559,28 @@ class TestStochasticStage(TestCase):
         assert block["exact_exponent"] == [[-0.25, -0.25], [0.25, 0.25], [1.0, 1.0]]
         assert [p for p, _r in block["exact_crest"]] == [1.0]
 
+    def test_without_finite_time_exponents_there_is_no_band(self):
+        assert stage_payload(_build())["stochastic"]["finite_time"] is None
+
+    def test_the_finite_time_band_is_the_top_exponents_quantiles(self):
+        scene = _build(finite_time_at=_fake_finite_time)
+        block = stage_payload(scene)["stochastic"]["finite_time"]
+        assert block["window"] == 5.0
+        # One row per exponent sample value, the top column's quantiles only.
+        assert [row[0] for row in block["rows"]] == [-0.25, 1.0]
+        for row in block["rows"]:
+            mu = row[0]
+            assert row[1:] == pytest.approx(
+                [mu - 0.4, mu - 0.25, mu, mu + 0.25, mu + 0.4],
+            )
+
+    def test_finite_time_windows_that_differ_are_refused(self):
+        def uneven(mu):
+            return _fake_finite_time(mu, window=5.0 if mu < 0.0 else 10.0)
+
+        with pytest.raises(ValueError, match="windows differ"):
+            _build(finite_time_at=uneven)
+
     def test_a_scene_without_a_view_is_refused(self):
         continued, scene = _deterministic()
         with pytest.raises(ValueError, match="View"):
@@ -569,7 +603,9 @@ class TestStochasticStage(TestCase):
 class TestStochasticRenderer(TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.html = StochasticStageRenderer(library="/*d3*/").render(_build())
+        cls.html = StochasticStageRenderer(library="/*d3*/").render(
+            _build(finite_time_at=_fake_finite_time),
+        )
 
     def test_the_page_has_its_panels_and_no_placeholder_left(self):
         html = self.html
@@ -581,6 +617,8 @@ class TestStochasticRenderer(TestCase):
         assert "Ito" in html
         assert 'id="l-cycle"' in html  # the shared skeleton reads these two
         assert 'id="l-manifolds"' in html
+        assert 'id="ft-legend"' in html
+        assert '"finite_time": {"window": 5.0' in html
 
     @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
     def test_every_script_block_parses(self):

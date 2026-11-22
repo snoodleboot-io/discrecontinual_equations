@@ -21,7 +21,11 @@ measure the wrong thing once there is noise:
   spectrum to show; what the dynamical bifurcation changes is the sign of one
   real number, the top Lyapunov exponent. The panel in the clock's place
   draws that exponent as a function of the parameter, with its zero marked
-  and the closed form beside it where one is known.
+  and the closed form beside it where one is known. Behind it, when the scene
+  carries one, is the distribution of the top *finite-time* exponent - its
+  median and its 25-75 and 10-90 percent bands - because the limit is not
+  what a path of finite length sees, and below the threshold a visible share
+  of windows still expand.
 * The *timeline* draws both thresholds as vertical rules at their own
   parameter values, across the whole diagram, because the fact that they do
   not coincide is the film's one claim and must be impossible to miss.
@@ -129,6 +133,9 @@ __QUASIPOTENTIAL_PANEL__\
           <span><i style="border-color:var(--hopf)"></i>estimate (Benettin, common
             random numbers)</span>
           <span><i class="dash" style="border-color:var(--faint)"></i>closed form</span>
+          <span id="ft-legend" hidden><i style="border-color:var(--hopf);opacity:.4"></i>finite-time
+            exponent: median, 25-75% and 10-90% over windows of
+            <span id="ft-window"></span></span>
         </div>
       </section>
     </div>
@@ -407,7 +414,9 @@ function drawDensity(){
 
 // ---------- exponent panel: lambda against the parameter ----------
 const exp = d3.select("#exp");
-const EXP = S.exponent, EXACT = S.exact_exponent;
+const EXP = S.exponent, EXACT = S.exact_exponent, FT = S.finite_time;
+// The finite-time band: rows of [p, q10, q25, median, q75, q90].
+const FT_ROWS = FT && FT.rows.length ? FT.rows : null;
 function interpolate(pairs, p){
   if (!pairs || !pairs.length) return null;
   if (p <= pairs[0][0]) return pairs[0][1];
@@ -421,6 +430,9 @@ function interpolate(pairs, p){
 }
 function exponentAt(p){ return interpolate(EXP, p); }
 function exactExponentAt(p){ return interpolate(EXACT, p); }
+function finiteMedianAt(p){
+  return FT_ROWS ? interpolate(FT_ROWS.map(r => [r[0], r[3]]), p) : null;
+}
 const THRESHOLDS = D.branch.special.filter(s =>
   s.kind === "d_bifurcation" || s.kind === "p_bifurcation");
 const ruleColour = s => css(s.kind === "p_bifurcation" ? "--fold" : "--hopf");
@@ -429,7 +441,8 @@ function drawExponent(){
   exp.attr("viewBox",`0 0 ${w} ${h}`).selectAll("*").remove();
   const m = {l:46, r:16, t:14, b:30}; const iw = w-m.l-m.r, ih = h-m.t-m.b;
   const px = d3.scaleLinear().domain([F[0].p, F[LAST].p]).range([m.l, m.l+iw]);
-  const ys = EXP.map(d=>d[1]).concat(EXACT ? EXACT.map(d=>d[1]) : []).concat([0]);
+  const ys = EXP.map(d=>d[1]).concat(EXACT ? EXACT.map(d=>d[1]) : []).concat([0])
+    .concat(FT_ROWS ? FT_ROWS.flatMap(r => [r[1], r[5]]) : []);
   const lo = d3.min(ys), hi = d3.max(ys), pad = Math.max(1e-6, (hi-lo)*0.1);
   const py = d3.scaleLinear().domain([lo-pad, hi+pad]).range([m.t+ih, m.t]);
   const g = exp.append("g");
@@ -452,6 +465,17 @@ function drawExponent(){
   label(g, m.l+6, py(0)+13, `${LAMBDA} < 0 ${DOT} stable`, css("--stable"))
     .attr("opacity",.8);
   const line = d3.line().x(d=>px(d[0])).y(d=>py(d[1]));
+  if (FT_ROWS){
+    // Behind everything else: what a window of finite length actually sees.
+    const band = (lo, hi) => d3.area().x(r=>px(r[0])).y0(r=>py(r[lo])).y1(r=>py(r[hi]));
+    g.append("path").attr("d", band(1, 5)(FT_ROWS)).attr("fill",css("--hopf"))
+      .attr("opacity",.10);
+    g.append("path").attr("d", band(2, 4)(FT_ROWS)).attr("fill",css("--hopf"))
+      .attr("opacity",.18);
+    g.append("path").attr("d", line(FT_ROWS.map(r => [r[0], r[3]]))).attr("fill","none")
+      .attr("stroke",css("--hopf")).attr("stroke-width",1.4)
+      .attr("stroke-dasharray","1 3").attr("opacity",.9);
+  }
   if (EXACT && document.getElementById("l-exact").checked){
     g.append("path").attr("d", line(EXACT)).attr("fill","none")
       .attr("stroke",css("--faint")).attr("stroke-width",1.3)
@@ -479,8 +503,11 @@ function drawExponent(){
   g.append("circle").attr("cx",px(p)).attr("cy",py(v)).attr("r",6)
     .attr("fill",css(v > 0 ? "--unstable" : "--stable")).attr("stroke",css("--panel"))
     .attr("stroke-width",1.5);
+  const fm = finiteMedianAt(p);
   document.getElementById("exp-value").textContent =
-    `${LAMBDA} = ${v >= 0 ? "+" : MINUS}${Math.abs(v).toFixed(3)}`;
+    `${LAMBDA} = ${v >= 0 ? "+" : MINUS}${Math.abs(v).toFixed(3)}`
+    + (fm == null ? "" : ` ${DOT} FTLE median ${fm >= 0 ? "+" : MINUS}`
+      + `${Math.abs(fm).toFixed(3)}`);
 }
 
 """
@@ -774,6 +801,10 @@ document.getElementById("l-exact").addEventListener("change",
   () => { drawExponent(); drawTimeline(); });
 setKicker(document.getElementById("ro-p-kicker"), "", PARAM);
 setKicker(document.getElementById("ro-exp-kicker"), "top exponent", LAMBDA);
+if (FT_ROWS){
+  document.getElementById("ft-legend").hidden = false;
+  document.getElementById("ft-window").textContent = `T = ${FT.window}`;
+}
 document.getElementById("tl-hint").textContent =
   `drag the playhead ${DOT} ${D.system.x_label} against ${PARAM} ${DOT} `
   + `${S.convention} reading`;

@@ -39,6 +39,9 @@ from collections.abc import Callable, Sequence
 
 import numpy as np
 
+from discrecontinual_equations.continuation.covariant_lyapunov import (
+    FiniteTimeExponents,
+)
 from discrecontinual_equations.continuation.fokker_planck import (
     DensityGrid,
     GridDensity,
@@ -63,6 +66,7 @@ from discrecontinual_equations.webplot.stage import (
     Density,
     DensityWindow,
     ExponentCurve,
+    FiniteTimeBand,
     Frame,
     Pairs,
     PathModel,
@@ -85,6 +89,9 @@ _AGREEMENT = 1.0e-9
 # still sitting on it, not a ring around it.
 _AT_CENTRE_CELLS = 1.5
 _DEFAULT_SEED = 0
+# The quantiles of the finite-time band: an outer 10-90 and an inner
+# interquartile band around the median.
+_BAND_LEVELS = (0.1, 0.25, 0.5, 0.75, 0.9)
 _DEFAULT_STEP = 0.02
 
 DensityFamily = Callable[[float, DensityGrid], StationaryFokkerPlanck | None]
@@ -157,9 +164,18 @@ class Measurements:
     gives the top Lyapunov exponent. ``exponent_samples`` are the parameter
     values the exponent is drawn at - each is a simulated path and costs
     seconds, so they are chosen rather than taken at every frame.
+    ``finite_time_at``, when given, returns the finite-time exponents at a
+    parameter value; their top exponent's quantiles are drawn as a band behind
+    the exponent at the same sample values.
     """
 
-    __slots__ = ["closed", "density_at", "exponent_at", "exponent_samples"]
+    __slots__ = [
+        "closed",
+        "density_at",
+        "exponent_at",
+        "exponent_samples",
+        "finite_time_at",
+    ]
 
     def __init__(
         self,
@@ -167,11 +183,13 @@ class Measurements:
         exponent_at: Callable[[float], float],
         exponent_samples: Sequence[float],
         closed: ClosedForms | None = None,
+        finite_time_at: Callable[[float], FiniteTimeExponents] | None = None,
     ) -> None:
         self.density_at = density_at
         self.exponent_at = exponent_at
         self.exponent_samples = list(exponent_samples)
         self.closed = closed or ClosedForms()
+        self.finite_time_at = finite_time_at
 
 
 class Thresholds:
@@ -495,9 +513,36 @@ def stochastic_stage(
             (diagnostics.centre[0], diagnostics.centre[1]),
             _sampled(closed.crest, parameters),
         ),
-        ExponentCurve(located.exponents, _sampled(closed.exponent, parameters)),
+        ExponentCurve(
+            located.exponents,
+            _sampled(closed.exponent, parameters),
+            finite_time_band(measurements),
+        ),
     )
     return scene
+
+
+def finite_time_band(measurements: Measurements) -> FiniteTimeBand | None:
+    """Quantiles of the top finite-time exponent at every exponent sample value.
+
+    The top exponent is the first column; every sample value must report the
+    same window, or the band would mix distributions of different widths.
+    """
+    if measurements.finite_time_at is None:
+        return None
+    rows: list[tuple[float, float, float, float, float, float]] = []
+    windows = set()
+    for value in measurements.exponent_samples:
+        exponents = measurements.finite_time_at(float(value))
+        windows.add(exponents.window)
+        low, lower, median, upper, high = (
+            float(q) for q in np.quantile(exponents.values[:, 0], _BAND_LEVELS)
+        )
+        rows.append((float(value), low, lower, median, upper, high))
+    if len(windows) > 1:
+        message = f"the finite-time windows differ across the parameter: {windows}"
+        raise ValueError(message)
+    return FiniteTimeBand(windows.pop(), rows) if rows else None
 
 
 def _sampled(

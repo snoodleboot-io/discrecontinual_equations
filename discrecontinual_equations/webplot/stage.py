@@ -420,19 +420,46 @@ class DensityWindow:
         self.exact_crest = exact_crest
 
 
+class FiniteTimeBand:
+    """The top finite-time exponent's distribution across the parameter.
+
+    ``rows`` are ``(parameter, q10, q25, median, q75, q90)``: the quantiles of
+    the top exponent over windows of ``window`` time units. The exponent is the
+    limit; this is what a path of that length actually sees, and its median
+    crosses zero at the same dynamical threshold.
+    """
+
+    __slots__ = ["rows", "window"]
+
+    def __init__(
+        self,
+        window: float,
+        rows: list[tuple[float, float, float, float, float, float]],
+    ) -> None:
+        self.window = window
+        self.rows = rows
+
+
 class ExponentCurve:
     """The top Lyapunov exponent across the parameter, which replaces the clock.
 
     For a stochastic system the dynamical bifurcation changes the sign of this
-    one real number, not of a spectrum. ``samples`` are the computed values
-    and ``exact`` an optional closed form drawn beside them.
+    one real number, not of a spectrum. ``samples`` are the computed values,
+    ``exact`` an optional closed form drawn beside them, and ``finite_time`` an
+    optional :class:`FiniteTimeBand` drawn behind them.
     """
 
-    __slots__ = ["exact", "samples"]
+    __slots__ = ["exact", "finite_time", "samples"]
 
-    def __init__(self, samples: Pairs, exact: Pairs | None = None) -> None:
+    def __init__(
+        self,
+        samples: Pairs,
+        exact: Pairs | None = None,
+        finite_time: FiniteTimeBand | None = None,
+    ) -> None:
         self.samples = samples
         self.exact = exact
+        self.finite_time = finite_time
 
 
 class QuasipotentialFrame:
@@ -641,6 +668,15 @@ def _density_payload(density: Density) -> dict:
     }
 
 
+def _finite_time_payload(band: FiniteTimeBand | None) -> dict | None:
+    if band is None:
+        return None
+    return {
+        "window": _num(band.window),
+        "rows": [[_num(value) for value in row] for row in band.rows],
+    }
+
+
 def _stochastic_payload(stochastic: StochasticStage) -> dict:
     paths, window, exponent = stochastic.paths, stochastic.window, stochastic.exponent
     payload = {
@@ -656,6 +692,7 @@ def _stochastic_payload(stochastic: StochasticStage) -> dict:
         },
         "exponent": _pairs(exponent.samples),
         "exact_exponent": _pairs(exponent.exact) if exponent.exact else None,
+        "finite_time": _finite_time_payload(exponent.finite_time),
         "exact_crest": _pairs(window.exact_crest) if window.exact_crest else None,
     }
     if stochastic.quasipotential is not None:
