@@ -61,10 +61,13 @@ class ZhanDuanLiLiSolver(Solver):
         # Time stepping loop
         dt = self.solver_config.dt
 
-        for i in range(self.solver_config.n_steps):
+        # The time grid is read once: ``times`` builds it afresh on every read,
+        # so reading it per step made a path of K steps cost O(K^2) (DEQ-47).
+        times = self.solver_config.times
+        for i in range(len(times) - 1):
             # Current time
-            t_current = self.solver_config.times[i]
-            t_next = self.solver_config.times[i + 1]
+            t_current = times[i]
+            t_next = times[i + 1]
 
             # Generate Wiener increment: ΔW ~ N(0, dt)
             dW = self._generator.normal(0, np.sqrt(dt), size=len(y))

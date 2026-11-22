@@ -134,9 +134,12 @@ class GottwaldMelbourneSolver(Solver):
         epsilon = self.solver_config.epsilon
         n_steps_per_time_step = max(1, int(dt / epsilon))
 
-        for i in range(self.solver_config.n_steps):
+        # The time grid is read once: ``times`` builds it afresh on every read,
+        # so reading it per step made a path of K steps cost O(K^2) (DEQ-47).
+        times = self.solver_config.times
+        for i in range(len(times) - 1):
             # Current time
-            t_current = self.solver_config.times[i]
+            t_current = times[i]
 
             # Evolve fast dynamics for n_steps_per_time_step steps
             for _ in range(n_steps_per_time_step):
@@ -167,7 +170,7 @@ class GottwaldMelbourneSolver(Solver):
                     )
 
             # Update time
-            t_next = self.solver_config.times[i + 1]
+            t_next = times[i + 1]
 
             # Append to solution
             self.solution.append([t_next, [0] * len(initial_values), z.tolist()])
