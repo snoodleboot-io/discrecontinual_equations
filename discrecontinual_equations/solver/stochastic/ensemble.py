@@ -42,9 +42,9 @@ from discrecontinual_equations.solver.stochastic.coefficients import (
 from discrecontinual_equations.solver.stochastic.wiener import WienerSource
 
 _MATRIX_BATCH = 3
-# The same tolerance as the per-path Milstein solver: how far (dG_k/dx) G_j may
-# differ from (dG_j/dx) G_k, relative to the largest product over the ensemble.
-_COMMUTATIVITY_TOLERANCE = 1.0e-6
+# Commutativity is judged by coefficients.coupled, with the per-path solver's
+# tolerance, relative to the largest product over the ensemble.
+_NOT_FINITE = " (a product is not finite: a path has reached NaN or infinity)"
 
 
 @dataclass(frozen=True)
@@ -389,11 +389,15 @@ class StochasticEnsemble:
         asymmetry = float(
             np.max(np.abs(products - np.transpose(products, (0, 2, 1, 3)))),
         )
-        if scale > 0.0 and asymmetry > _COMMUTATIVITY_TOLERANCE * scale:
+        # NaN is non-commuting, as in the per-path check: a product that cannot
+        # be judged is not taken as commuting, and one path gone to NaN or
+        # infinity would otherwise make the whole ensemble pass (DEQ-48).
+        if coupled(asymmetry, scale):
             message = (
                 "the Milstein ensemble needs commuting noise: (dG_k/dx) G_j must "
                 f"equal (dG_j/dx) G_k for every driver pair; they differ by "
-                f"{asymmetry:.3g} against a scale of {scale:.3g}. Use the "
+                f"{asymmetry:.3g} against a scale of {scale:.3g}"
+                f"{_NOT_FINITE if np.isnan(asymmetry) else ''}. Use the "
                 "euler_maruyama scheme (DEQ-28)."
             )
             raise ValueError(message)
@@ -443,12 +447,14 @@ class StochasticEnsemble:
         for j, slope in coefficients.diagonal_directions(states, time):
             products = diffusion[:, j, None] * slope
             magnitude = np.abs(products)
-            scale = max(scale, float(np.max(magnitude)))
+            # np.max, not max: max(0.0, nan) is 0.0, which let a NaN path hide the
+            # coupling of every other path in its direction.
+            scale = float(np.max([scale, np.max(magnitude)]))
             own[:, j] = products[:, j]
             magnitude[:, j] = 0.0
-            asymmetry = max(asymmetry, float(np.max(magnitude)))
+            asymmetry = float(np.max([asymmetry, np.max(magnitude)]))
             pushed += products * increments[:, j, None]
-        if scale > 0.0 and asymmetry > _COMMUTATIVITY_TOLERANCE * scale:
+        if coupled(asymmetry, scale):
             return None
         correction = 0.5 * increments * pushed
         if self._config.calculus == "ito":
