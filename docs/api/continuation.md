@@ -286,8 +286,13 @@ here by DOP853 at `rtol = 1e-12` - with `m = 4`:
 The last row is a false refusal: `resolved()` at the default 2e-2 refuses that
 cycle, where Hermite–Simpson on 320 nodes, true error 6.05e-3, is let through. The
 bound under-read only where the mesh was far from resolving the orbit (van der Pol
-at `mu = 3` on 10 intervals, 0.15 against 0.32), well outside any tolerance. An
-estimate that inherits the collocation order is open.
+at `mu = 3` on 10 intervals, 0.15 against 0.32; the fold-of-cycles normal form on 3
+intervals with `m = 3`, up to six times low). At `m = 2` the Jacobian's multipliers
+and the cross-check are both fourth order and their errors can partly cancel, so
+`floquet_error` is an estimate, not a bound: on the fold-of-cycles normal form it
+read up to 2.5 times low on every mesh from 4 to 24 intervals, and on 4 intervals
+passed two cycles whose true errors were 3.1e-2 and 3.4e-2 under the default 2e-2.
+An estimate that inherits the collocation order is open.
 
 On the two films the fourth-order schemes could not take below 0.01%, worst
 `floquet_error` over the branch - for Gauss–Legendre that is the bound above, so the

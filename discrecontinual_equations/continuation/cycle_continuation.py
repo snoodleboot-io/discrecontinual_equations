@@ -610,27 +610,36 @@ class CyclePoint:
         the others carry the full ``O(h^(2m))``. On van der Pol at ``mu = 1``
         with ``m = 2`` the trivial drift fell 3.4e-4, 1.4e-9, 4e-16 from 20 to
         80 intervals while the nontrivial multiplier's error was 2.0e-3, 9.8e-5,
-        6.0e-6. So for those points this is the larger of the trivial drift and
-        the relative disagreement between the Jacobian's multipliers and the
-        Hermite monodromy's - two independent readings of one cycle (see
-        :func:`_multiplier_disagreement`).
+        6.0e-6. That is asymptotic, not a rule: on the Brusselator at ``b = 3``
+        the drift was the *larger* error, 2.9e-8 against 5.7e-12 with ``m = 4``
+        on 80 intervals. Neither can stand for the other, so for those points
+        this is the larger of the trivial drift and the relative disagreement
+        between the Jacobian's multipliers and the Hermite monodromy's - two
+        independent readings of one cycle (see :func:`_multiplier_disagreement`).
 
-        That makes it a *bound*, and a loose one, not the error: the cross-check
-        is fourth order whatever ``m`` is, so once resolved the reading is the
-        cross-check's own error, and the multipliers are far better than it
-        says. Against an exact reference - the planar nontrivial multiplier is
-        ``exp`` of the divergence integrated over the period, here by DOP853 at
-        ``rtol = 1e-12`` - with ``m = 4`` on 80 intervals it read 4.7e-9 against
-        a true 9.6e-15 on van der Pol at ``mu = 1``, and 1.87e-7 against
-        1.28e-10 on the Bogdanov-Takens orbit at b1 = -0.4554 (8.1e-5 against
-        1.34e-5 on 20 intervals). Over-reading has a cost: on van der Pol at
-        ``mu = 6`` with ``m = 4`` on 80 intervals it reads 4.65e-2 against a
-        true 6.25e-3, so :meth:`resolved` refuses at the default 2e-2 a cycle
-        that Hermite-Simpson on 320 nodes (true 6.05e-3) is let through on.
-        It under-reads only where the mesh is far from resolving the orbit -
-        van der Pol at ``mu = 3`` on 10 intervals, 0.15 against 0.32, and
-        ``m = 2`` on 20, 1.1 against 3.0 - both far outside any tolerance.
-        An estimate that inherits the collocation order is the open follow-up.
+        For ``m >= 3`` that makes it a *bound*, and a loose one, not the error:
+        the cross-check is fourth order whatever ``m`` is, so once resolved the
+        reading is the cross-check's own error, and the multipliers are far
+        better than it says. Against an exact reference - the planar nontrivial
+        multiplier is ``exp`` of the divergence integrated over the period, here
+        by DOP853 at ``rtol = 1e-12`` - with ``m = 4`` on 80 intervals it read
+        4.7e-9 against a true 9.6e-15 on van der Pol at ``mu = 1``, and 1.87e-7
+        against 1.28e-10 on the Bogdanov-Takens orbit at b1 = -0.4554 (8.1e-5
+        against 1.34e-5 on 20 intervals). Over-reading has a cost: on van der
+        Pol at ``mu = 6`` with ``m = 4`` on 80 intervals it reads 4.65e-2
+        against a true 6.25e-3, so :meth:`resolved` refuses at the default 2e-2
+        a cycle that Hermite-Simpson on 320 nodes (true 6.05e-3) is let through
+        on. For ``m >= 3`` it under-read only where the mesh was far from
+        resolving the orbit - van der Pol at ``mu = 3`` on 10 intervals, 0.15
+        against 0.32; the fold-of-cycles normal form on 3 intervals with ``m =
+        3``, up to six times low, letting one cycle with a true 3.4e-2 under the
+        default 2e-2. At ``m = 2`` it is not a bound at all: both readings are
+        fourth order and can partly cancel. On that fold branch it read up to
+        2.5 times low on every mesh from 4 to 24 intervals (true 1.4e-4 against
+        5.5e-5 on 16), and on 4 intervals let two cycles with true errors 3.1e-2
+        and 3.4e-2 under the default 2e-2; van der Pol at ``mu = 3`` on 20
+        intervals read 1.1 against 3.0. An estimate that inherits the
+        collocation order is the open follow-up.
 
         A point whose states have collapsed onto one another reads infinite
         under every scheme. Every collocation admits that degenerate solution -
@@ -657,9 +666,10 @@ class CyclePoint:
         whereas the trivial multiplier's exact value is known in advance, so this
         measurement arrives with the point. Under the one-wide schemes it costs
         nothing more. Under Gauss-Legendre it costs the Hermite cross-check
-        monodromy for every point, and it is conservative: the error it compares
-        is a fourth-order bound, so it can refuse a cycle whose multipliers are
-        good enough (see :attr:`floquet_error`).
+        monodromy for every point, and for ``m >= 3`` it is conservative: the
+        error it compares is a fourth-order bound, so it can refuse a cycle
+        whose multipliers are good enough. At ``m = 2`` it is an estimate that
+        can read low (see :attr:`floquet_error`).
         """
         return self.floquet_error < tolerance
 
@@ -835,10 +845,11 @@ def resolved_branch(
     perfectly well while reporting multipliers tens of percent out - far enough to
     move a crossing of the unit circle, which is the thing the branch was traced to
     find. Nothing in the residual can catch that, and the trivial multiplier can -
-    under the one-wide schemes. Under Gauss-Legendre the trivial multiplier stays at
-    one however wrong the rest are, and what is gated on is the point's explicit
-    error, a conservative fourth-order bound that may refuse more of a branch than
-    its multipliers deserve (see :attr:`CyclePoint.floquet_error`).
+    under the one-wide schemes. Under Gauss-Legendre the trivial multiplier can sit
+    at one however wrong the rest are, and what is gated on is the point's explicit
+    error - for ``m >= 3`` a conservative fourth-order bound that may refuse more of
+    a branch than its multipliers deserve, for ``m = 2`` an estimate that can read
+    low (see :attr:`CyclePoint.floquet_error`).
 
     An unbroken run and not a filter, because :func:`classify_transition` compares
     *adjacent* points: a branch with holes punched in it would have it interpolating a
