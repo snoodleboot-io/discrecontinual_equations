@@ -74,7 +74,14 @@ class SRK3Solver(StochasticRungeKuttaSolver):
     (:class:`~.wiener.LevyAreaSampler`), and ``I_(j,0)`` is each channel's
     ``delta_z``; what is still missing is a sampler for ``I_(j,k,l)`` with ``j, k,
     l`` not all equal, and the several-channel form of the step, with one pair of
-    supporting values per channel, that would consume them. Applying the scalar
+    supporting values per channel, that would consume them. Nor would the area
+    sampler serve as it stands: its default truncation is tuned for strong order
+    1.0 (an L2 error of ``h^(3/2)`` per step); order 1.5 needs ``h^2``, so ``n ~
+    h^-1`` terms (Kastner and Rossler, arXiv:2201.08424, (67) with ``gamma =
+    3/2``), and the areas would have to be drawn jointly with the ``I_(j,k,l)``,
+    not independently of them. Diagonal noise whose ``b_i`` depends only on
+    ``x_i`` is the exception: every mixed term vanishes and only ``I_(j,j,j)`` is
+    needed, which the scalar formula already has per channel. Applying the scalar
     formula component-wise would be a scheme of unknown order, which is the
     defect this file is being cured of. ``solve`` therefore raises for more than
     one variable and points at :class:`SRK2Solver`, whose order 1.0 for commuting

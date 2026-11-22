@@ -223,8 +223,12 @@ On `dx = dW_1, dy = x dW_2`, where `y(T)` is the iterated integral itself, the
 scheme is exact on a path that carries its areas (largest difference 3.8e-11, the
 central-difference Jacobians' error) and Euler-Maruyama measures 0.49. Driven by the
 sampler the error there is the sampler's alone, below `0.44 dt` for
-`dt = 2^-3 ... 2^-10`; its slope is 0.78 on that range, where `n <= 5` and the
-sampler's error falls more slowly than `1 / n`, and 0.98 for `dt = 2^-14 ... 2^-20`.
+`dt = 2^-3 ... 2^-10`; its slope is 0.78 on that range, and 0.98 for
+`dt = 2^-14 ... 2^-20`. The main cause is the rule's `max(1, ceil(.))`: `n` stays
+at 1 for `dt >= 2^-5`, and with `n` fixed the global error goes like `dt^(1/2)`
+(while staying far below the bound, `0.07` to `0.21 dt`); order 1.0 needs `n` to grow
+like `dt^(-1/2)`, which the ceiling does only in steps. The rest is that for
+`n <= 5` the sampler's error falls more slowly than `1 / n`.
 
 ## Algorithm Details
 

@@ -82,9 +82,13 @@ class MilsteinSolver(Solver):
     while Euler-Maruyama measures 0.49. Driven by the sampler, that equation's
     error is the sampler's alone: below ``0.44 Δt`` for ``Δt = 2^-3 ... 2^-10``
     (60 paths, against a reference coupled to 64 times as many Fourier terms),
-    with slope 0.78 there because ``n`` is at most 5 and the sampler's error falls
-    more slowly than ``1 / n`` for so few terms; for ``Δt = 2^-14 ... 2^-20`` the
-    slope is 0.98.
+    with slope 0.78 there. Mostly that is the truncation rule's ``max(1,
+    ceil(.))``: ``n`` stays at 1 for ``Δt >= 2^-5``, and with ``n`` fixed the
+    per-step error is of order ``Δt`` and the global one of order ``Δt^(1/2)``
+    (still far below the bound: ``0.07`` to ``0.21 Δt`` there); order 1.0 needs ``n``
+    to grow like ``Δt^(-1/2)``, which the ceiling only does in steps. The rest is
+    that for ``n <= 5`` the sampler's error falls more slowly than ``1 / n``. For
+    ``Δt = 2^-14 ... 2^-20`` the slope is 0.98.
 
     References:
     - Milstein, Grigori N. "Numerical Integration of Stochastic Differential Equations"
