@@ -8,7 +8,6 @@ from discrecontinual_equations.solver.stochastic.euler_maruyama.euler_maruyama_c
     EulerMaruyamaConfig,
 )
 from discrecontinual_equations.solver.stochastic.wiener import WienerSource
-from discrecontinual_equations.variable import Variable
 
 
 class EulerMaruyamaSolver(Solver):
@@ -69,16 +68,12 @@ class EulerMaruyamaSolver(Solver):
         # gives the same numbers it always has.
         self._wiener = wiener
 
-    def solve(self, equation: DifferentialEquation, initial_values: list[float]):
-        results = [
-            Variable(name=f"Integral of {variable.name}")
-            for variable in equation.derivative.variables
-        ]
-        self.solution = Curve(
-            time=equation.derivative.time,
-            variables=equation.derivative.variables,
-            results=results,
-        )
+    def solve(
+        self,
+        equation: DifferentialEquation,
+        initial_values: list[float],
+    ) -> Curve:
+        self.solution = self._new_solution(equation)
 
         coefficients = ItoCoefficients(equation, self.solver_config.calculus)
 
@@ -125,3 +120,4 @@ class EulerMaruyamaSolver(Solver):
 
             # Append to solution
             self.solution.append([t_next, [0] * len(initial_values), y.tolist()])
+        return self.solution

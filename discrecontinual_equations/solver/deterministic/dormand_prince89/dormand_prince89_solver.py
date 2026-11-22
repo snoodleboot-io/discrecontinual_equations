@@ -6,7 +6,6 @@ from discrecontinual_equations.solver.deterministic.dormand_prince89.dormand_pri
     DormandPrince89Config,
 )
 from discrecontinual_equations.solver.solver import Solver
-from discrecontinual_equations.variable import Variable
 
 
 class DormandPrince89Solver(Solver):
@@ -202,16 +201,12 @@ class DormandPrince89Solver(Solver):
             ],
         )
 
-    def solve(self, equation: DifferentialEquation, initial_values: list[float]):
-        results = [
-            Variable(name=f"Integral of {variable.name}")
-            for variable in equation.derivative.variables
-        ]
-        self.solution = Curve(
-            time=equation.derivative.time,
-            variables=equation.derivative.variables,
-            results=results,
-        )
+    def solve(
+        self,
+        equation: DifferentialEquation,
+        initial_values: list[float],
+    ) -> Curve:
+        self.solution = self._new_solution(equation)
 
         # Initialize
         t = self.solver_config.start_time
@@ -241,6 +236,7 @@ class DormandPrince89Solver(Solver):
                 h = max(h_new, self.solver_config.min_step_size)
                 if h < self.solver_config.min_step_size:
                     raise RuntimeError("Step size became too small")
+        return self.solution
 
     def _step(self, equation: DifferentialEquation, t: float, y: np.ndarray, h: float):
         """Perform one Dormand-Prince (8,9) step."""

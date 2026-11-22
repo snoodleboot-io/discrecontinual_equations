@@ -8,7 +8,6 @@ from discrecontinual_equations.solver.solver import Solver
 from discrecontinual_equations.solver.stochastic.gottwald_melbourne.gottwald_melbourne_config import (
     GottwaldMelbourneConfig,
 )
-from discrecontinual_equations.variable import Variable
 
 
 class GottwaldMelbourneSolver(Solver):
@@ -105,7 +104,11 @@ class GottwaldMelbourneSolver(Solver):
         v = eta * (d_alpha ** (-gamma)) * v_tilde
         return v
 
-    def solve(self, equation: DifferentialEquation, initial_values: list[float]):
+    def solve(
+        self,
+        equation: DifferentialEquation,
+        initial_values: list[float],
+    ) -> Curve:
         """
         Solve the SDE using the Thaler homogenisation method.
 
@@ -113,15 +116,7 @@ class GottwaldMelbourneSolver(Solver):
             equation: The SDE to solve (must have stochastic derivative function)
             initial_values: Initial values for all variables
         """
-        results = [
-            Variable(name=f"Integral of {variable.name}")
-            for variable in equation.derivative.variables
-        ]
-        self.solution = Curve(
-            time=equation.derivative.time,
-            variables=equation.derivative.variables,
-            results=results,
-        )
+        self.solution = self._new_solution(equation)
 
         # Initialize
         t = self.solver_config.start_time
@@ -176,3 +171,4 @@ class GottwaldMelbourneSolver(Solver):
 
             # Append to solution
             self.solution.append([t_next, [0] * len(initial_values), z.tolist()])
+        return self.solution

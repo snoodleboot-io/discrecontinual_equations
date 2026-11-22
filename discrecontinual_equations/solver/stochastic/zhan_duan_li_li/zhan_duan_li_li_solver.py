@@ -6,7 +6,6 @@ from discrecontinual_equations.solver.solver import Solver
 from discrecontinual_equations.solver.stochastic.zhan_duan_li_li.zhan_duan_li_li_config import (
     ZhanDuanLiLiConfig,
 )
-from discrecontinual_equations.variable import Variable
 
 
 class ZhanDuanLiLiSolver(Solver):
@@ -38,7 +37,11 @@ class ZhanDuanLiLiSolver(Solver):
         # Theta parameter from config (controls implicit/explicit balance)
         self.theta = self.solver_config.method_parameter
 
-    def solve(self, equation: DifferentialEquation, initial_values: list[float]):
+    def solve(
+        self,
+        equation: DifferentialEquation,
+        initial_values: list[float],
+    ) -> Curve:
         """
         Solve the SDE using the Zhan-Duan-Li-Li stochastic theta method.
 
@@ -46,15 +49,7 @@ class ZhanDuanLiLiSolver(Solver):
             equation: The SDE to solve (must have stochastic derivative function)
             initial_values: Initial values for all variables
         """
-        results = [
-            Variable(name=f"Integral of {variable.name}")
-            for variable in equation.derivative.variables
-        ]
-        self.solution = Curve(
-            time=equation.derivative.time,
-            variables=equation.derivative.variables,
-            results=results,
-        )
+        self.solution = self._new_solution(equation)
 
         # Initialize
         t = self.solver_config.start_time
@@ -82,6 +77,7 @@ class ZhanDuanLiLiSolver(Solver):
 
             # Append to solution
             self.solution.append([t_next, [0] * len(initial_values), y.tolist()])
+        return self.solution
 
     def _stochastic_theta_step(self, y, t_current, t_next, dt, dW, equation):
         """

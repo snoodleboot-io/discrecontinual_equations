@@ -4,7 +4,6 @@ from discrecontinual_equations.solver.deterministic.euler.euler_config import (
     EulerConfig,
 )
 from discrecontinual_equations.solver.solver import Solver
-from discrecontinual_equations.variable import Variable
 
 
 class EulerSolver(Solver):
@@ -21,16 +20,12 @@ class EulerSolver(Solver):
     def __init__(self, solver_config: EulerConfig):
         super().__init__(solver_config=solver_config)
 
-    def solve(self, equation: DifferentialEquation, initial_values: list[float]):
-        results = [
-            Variable(name=f"Integral of {variable.name}")
-            for variable in equation.derivative.variables
-        ]
-        self.solution = Curve(
-            time=equation.derivative.time,
-            variables=equation.derivative.variables,
-            results=results,
-        )
+    def solve(
+        self,
+        equation: DifferentialEquation,
+        initial_values: list[float],
+    ) -> Curve:
+        self.solution = self._new_solution(equation)
         increment = 0
         for time in self.solver_config.times:
             if increment > 0:
@@ -48,3 +43,4 @@ class EulerSolver(Solver):
                 equation.derivative.eval(point=initial_values, time=time)
                 self.solution.append([time, [0] * len(initial_values), initial_values])
             increment += 1
+        return self.solution

@@ -13,7 +13,6 @@ from discrecontinual_equations.solver.stochastic.wiener import (
     LevyAreaSampler,
     WienerSource,
 )
-from discrecontinual_equations.variable import Variable
 
 # How far (dG_k/dx) G_j may differ from (dG_j/dx) G_k, relative to the largest
 # such product, before the noise is called non-commuting and the Levy areas drawn.
@@ -128,16 +127,12 @@ class MilsteinSolver(Solver):
         sequence = np.random.SeedSequence(solver_config.random_seed)
         self._areas = LevyAreaSampler(np.random.default_rng(sequence.spawn(1)[0]))
 
-    def solve(self, equation: DifferentialEquation, initial_values: list[float]):
-        results = [
-            Variable(name=f"Integral of {variable.name}")
-            for variable in equation.derivative.variables
-        ]
-        self.solution = Curve(
-            time=equation.derivative.time,
-            variables=equation.derivative.variables,
-            results=results,
-        )
+    def solve(
+        self,
+        equation: DifferentialEquation,
+        initial_values: list[float],
+    ) -> Curve:
+        self.solution = self._new_solution(equation)
 
         coefficients = ItoCoefficients(equation, self.solver_config.calculus)
         ito = self.solver_config.calculus == "ito"
@@ -205,6 +200,7 @@ class MilsteinSolver(Solver):
 
             # Append to solution
             self.solution.append([t_next, [0] * len(initial_values), y.tolist()])
+        return self.solution
 
     @staticmethod
     def _products(

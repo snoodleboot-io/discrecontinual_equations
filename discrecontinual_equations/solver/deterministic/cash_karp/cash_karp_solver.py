@@ -6,7 +6,6 @@ from discrecontinual_equations.solver.deterministic.cash_karp.cash_karp_config i
     CashKarpConfig,
 )
 from discrecontinual_equations.solver.solver import Solver
-from discrecontinual_equations.variable import Variable
 
 
 class CashKarpSolver(Solver):
@@ -48,16 +47,12 @@ class CashKarpSolver(Solver):
 
         self.c = np.array([0, 1 / 5, 3 / 10, 3 / 5, 1, 7 / 8])
 
-    def solve(self, equation: DifferentialEquation, initial_values: list[float]):
-        results = [
-            Variable(name=f"Integral of {variable.name}")
-            for variable in equation.derivative.variables
-        ]
-        self.solution = Curve(
-            time=equation.derivative.time,
-            variables=equation.derivative.variables,
-            results=results,
-        )
+    def solve(
+        self,
+        equation: DifferentialEquation,
+        initial_values: list[float],
+    ) -> Curve:
+        self.solution = self._new_solution(equation)
 
         # Initialize
         t = self.solver_config.start_time
@@ -87,6 +82,7 @@ class CashKarpSolver(Solver):
                 h = max(h_new, self.solver_config.min_step_size)
                 if h < self.solver_config.min_step_size:
                     raise RuntimeError("Step size became too small")
+        return self.solution
 
     def _step(self, equation: DifferentialEquation, t: float, y: np.ndarray, h: float):
         """Perform one Cash-Karp step."""
