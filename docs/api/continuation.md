@@ -389,6 +389,68 @@ intervals spans:
 
 The defaults are unchanged, and reproduce every film to the last bit.
 
+### Batched fields, the corrector's tangent and AUTO's step (DEQ-75)
+
+Three changes took cycle continuation from three quarters of a cycle film's
+build to a few percent of it.
+
+**One evaluation for every state.** The collocation blocks and the monodromy ask
+for `f`, `df/dx` and `df/dp` at every node, midpoint and Runge–Kutta stage, and
+used to ask one state at a time, the Jacobian through Taylor jets one direction
+at a time. `batched_field` hands the field every coordinate as an array of all the
+states, and for the Jacobian first-order dual numbers that carry every direction
+at once. Each dual operation repeats the jet's arithmetic term for term, so the
+Jacobians are the jets' to the last bit and every traced orbit is unchanged bit
+for bit. A field that branches on its state (the SNIC film's `if radius <`),
+calls `math`, or takes a fractional power raises on arrays and is evaluated a
+state at a time as before; a field that silently mis-evaluates is caught by an
+exact comparison at the first and last states. The monodromy builds all its RK4
+substep propagators at once and multiplies them, which moves the multipliers by
+rounding only (`6.7e-16` on the Hopf cycle).
+
+**The tangent off the corrector's LU.** The tangent system is the corrector's
+last matrix with the Jacobian one Newton update later. MATCONT's Moore–Penrose
+corrector takes its tangent off the corrector's factorisation; AUTO-07p takes the
+secant (`CONTBV`). Reusing the LU saves an assembly and a factorisation per step,
+but tilts the tangent by the order of that last update, which moves the next
+point along the branch by up to `1e-4` in the parameter: it changes the spacing,
+not the branch. So only the adaptive step reuses it, and the fixed step stays bit
+for bit.
+
+**AUTO's step.** `trace(..., max_arclength=...)` adapts the step by AUTO-07p's
+`ADPTDS` with `ITNW = 5`: doubled after one Newton iteration, half again after
+two, halved at five, capped at `max_arclength`; a failed step is halved down to
+`min_arclength` (by default the step asked for, so a branch ends where it always
+ended). `steps * arclength` is the arclength budget. A step longer than the base
+across which a multiplier crosses the circle is retaken at the base step, so the
+crossing is bracketed as before.
+
+The films opt in where their frames allow it. Measured, interleaved with the
+pre-DEQ-75 build (CPU seconds of `trace`, then of the whole film build):
+
+| film | traced points | trace CPU | film CPU |
+|---|---|---|---|
+| Bogdanov–Takens (step x4) | 802 → 206 | 54.6 → 1.8 | 74.5 → 22.2 |
+| ferroelectric ring (x4) | 762 → 196 | 114.6 → 2.4 | 288.0 → 168.4 |
+| van der Pol (x4) | 401 → 103 | 28.9 → 1.0 | 29.4 → 1.4 |
+| fold of cycles (x2) | 602 → 305 | 42.0 → 2.1 | 42.4 → 2.5 |
+| SNIC (x2; field branches) | 442 → 224 | 36.9 → 12.9 | 62.2 → 37.1 |
+| Hopf (fixed) | 87 | 7.8 → 0.9 | 8.2 → 1.3 |
+| extended Bautin (fixed) | 167 | 17.6 → 1.7 | 18.1 → 2.2 |
+| Hopf–Hopf (fixed) | 102 | 21.7 → 2.3 | 243.3 → 222.0 |
+| zero-Hopf (fixed) | 184 | 20.5 → 2.0 | 189.8 → 176.6 |
+
+On the fixed-step films every traced orbit is bit for bit the old one and every
+located bifurcation the same to `2e-14`. On the adaptive ones every point is a
+converged cycle of the same discrete system, within `2e-4` (scaled) of the old
+dense branch's polyline, with multipliers within `7e-14` of the old monodromy's
+for that cycle; the fold of cycles moved by `1.1e-9` (both `6.1e-7` from the
+exact `-1/4`). Hopf, extended Bautin, Hopf–Hopf and zero-Hopf keep the fixed step:
+they already step at about their frame spacing, and a larger step would show a
+frame's cycle up to four frames from it. The frames of the adaptive films show
+the same number of cycles as before, each within half a frame spacing of its
+frame (fold of cycles: within 0.78 of a spacing, against 0.38 before).
+
 ## Trusting a computed connecting orbit
 
 A homoclinic or heteroclinic orbit has **two** independent resolutions, and either
