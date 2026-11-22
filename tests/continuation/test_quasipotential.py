@@ -27,10 +27,13 @@ from discrecontinual_equations.continuation.fokker_planck import (
     DensityGrid,
     StationaryFokkerPlanck,
 )
-from discrecontinual_equations.continuation.noise import NoiseMatrix
+from discrecontinual_equations.continuation.noise import NoiseMatrix, fields_at
 from discrecontinual_equations.continuation.quasipotential import (
+    _ACCEPTED,
     CHECKED,
     GRID,
+    MIDPOINT,
+    QUADRATIC,
     REFINED,
     CycleAttractor,
     EquilibriumAttractor,
@@ -39,11 +42,16 @@ from discrecontinual_equations.continuation.quasipotential import (
     OrderedLineIntegral,
     _action,
     _cubic_coefficients,
+    _curved_triangle,
     _guide,
+    _HalfLattice,
+    _March,
     _relax_from,
     _stationary_fraction,
+    default_radius,
 )
 from discrecontinual_equations.continuation.stochastic import Ito
+from discrecontinual_equations.function.function import Function
 from tests.continuation.fields import (
     Alpha,
     ConformalColumn,
@@ -62,6 +70,7 @@ from tests.continuation.quasipotential_systems import (
     SADDLE,
     WELL,
     AnisotropicGradientField,
+    DoubleWellField,
     MaierSteinField,
     NonNormalField,
     PaperCycleField,
@@ -84,11 +93,17 @@ _COUNTS = (41, 81, 161)
 _GRADIENT_LEVEL = 2.0
 # The largest sublevel set of (1/2) x^T S^-1 x inside [-1.5, 1.5]^2 with a margin.
 _ROTATING_LEVEL = 1.5
-# Observed orders sit at 1.87, 1.89 and 1.23, 0.95 (module docstring): the
-# double well is dominated by a second-order quadrature term, the rotating case
-# by the method's first-order interpolation.
+# Observed orders sit at 1.87, 1.89 and 2.00, 1.87 (module docstring): the
+# double well is dominated by a second-order quadrature term; the rotating case
+# was dominated by first-order linear interpolation along the front (orders
+# 1.23, 0.95) until the base became a parabola.
 _GRADIENT_ORDER = 1.7
-_ROTATING_ORDER = 0.9
+_ROTATING_ORDER = 1.8
+# The convergence tests hold the radius at 8 cells as the grid is refined, so
+# that they measure the update itself; the default radius grows with the grid
+# (Dahiya and Cameron's Eq. (28)), which trades the two error terms differently
+# for each problem (see TestDefaultRadius and the module docstring).
+_FIXED_RADIUS = 8
 
 
 def _orders(errors):
@@ -98,7 +113,12 @@ def _orders(errors):
 @functools.cache
 def _double_well_field(count):
     grid = DensityGrid.box([-2.0, -1.5], [1.0, 1.5], [count, count])
-    solver = OrderedLineIntegral(double_well(), constant_noise(_IDENTITY), grid)
+    solver = OrderedLineIntegral(
+        double_well(),
+        constant_noise(_IDENTITY),
+        grid,
+        _FIXED_RADIUS,
+    )
     return grid, solver, solver.solve(EquilibriumAttractor(WELL))
 
 
@@ -118,6 +138,7 @@ def _rotating_error(count):
         rotating_drift(),
         constant_noise(rotating_noise_matrix()),
         grid,
+        _FIXED_RADIUS,
     )
     field = solver.solve(EquilibriumAttractor([0.0, 0.0]))
     points = grid.points()
@@ -151,9 +172,13 @@ class TestRotatingOrnsteinUhlenbeck(TestCase):
     """Oracle 2: ``U = (1/2) x^T S^{-1} x``, ``A S + S A^T + G G^T = 0``."""
 
     def test_u_is_the_lyapunov_quadratic_form(self):
-        assert _rotating_error(81) < 1.2e-3
+        # 4.25e-5 at 81 points with the parabolic base (9.68e-4 with the
+        # straight one of OLIM-MID).
+        assert _rotating_error(81) < 6.0e-5
 
     def test_u_converges_on_doubling_the_grid(self):
+        # Measured 1.70e-4, 4.25e-5, 1.16e-5: orders 2.00, 1.87 (OLIM-MID:
+        # 2.27e-3, 9.68e-4, 5.00e-4, orders 1.23, 0.95).
         errors = [_rotating_error(count) for count in _COUNTS]
         orders = _orders(errors)
         assert errors[0] > errors[1] > errors[2]
@@ -381,7 +406,12 @@ def _hopf_cycle_field(mu):
     grid = DensityGrid.box([-2.2, -2.2], [2.2, 2.2], [88, 88])
     angle = np.linspace(0.0, 2.0 * math.pi, 400, endpoint=False)
     cycle = math.sqrt(mu) * np.column_stack([np.cos(angle), np.sin(angle)])
-    solver = OrderedLineIntegral(drift, _conformal(parameters), grid)
+    solver = OrderedLineIntegral(
+        drift,
+        _conformal(parameters),
+        grid,
+        update_order=MIDPOINT,
+    )
     return grid, solver, solver.solve(CycleAttractor(cycle))
 
 
@@ -482,6 +512,7 @@ def _paper_cycle_field(count):
         system(PaperCycleField),
         constant_noise(_IDENTITY),
         grid,
+        _FIXED_RADIUS,
     ).solve(_paper_cycle())
     points = grid.points()
     squared = np.sum(points * points, axis=1)
@@ -505,6 +536,7 @@ def _anisotropic_gradient_error(count):
         system(AnisotropicGradientField),
         constant_noise(ANISOTROPIC_AMPLITUDE),
         grid,
+        _FIXED_RADIUS,
     ).solve(EquilibriumAttractor(WELL))
     points = grid.points()
     exact = 2.0 * (potential(points[:, 0], points[:, 1]) - potential(*WELL))
@@ -701,6 +733,8 @@ def _checked(name):
             system(NonNormalField),
             constant_noise(NON_NORMAL_AMPLITUDE),
             grid,
+            _FIXED_RADIUS,
+            update_order=MIDPOINT,
         )
         attractor, exact = EquilibriumAttractor([0.0, 0.0]), _nonnormal_exact
         targets = [(0.4, 0.3), (-0.375, 0.1875), (0.225, -0.3), (-0.6, 0.0)]
@@ -710,6 +744,8 @@ def _checked(name):
             system(AnisotropicGradientField),
             constant_noise(ANISOTROPIC_AMPLITUDE),
             grid,
+            _FIXED_RADIUS,
+            update_order=MIDPOINT,
         )
         attractor, exact = EquilibriumAttractor(WELL), _gradient_exact
         targets = [(-0.7, 0.6), (-1.5, -0.8), (-0.6, -0.3), (-1.2, 0.9)]
@@ -719,6 +755,8 @@ def _checked(name):
             system(PaperCycleField),
             constant_noise(_IDENTITY),
             grid,
+            _FIXED_RADIUS,
+            update_order=MIDPOINT,
         )
         attractor, exact = _paper_cycle(), _cycle_exact
         targets = [(0.5, 0.0), (1.0, 1.0), (-1.2, -1.2), (0.0, -0.6)]
@@ -790,6 +828,7 @@ class TestErrorEstimate(TestCase):
             rotating_drift(),
             constant_noise(rotating_noise_matrix()),
             grid,
+            update_order=MIDPOINT,
         )
         field = solver.solve(EquilibriumAttractor([0.0, 0.0]))
         target = np.array([0.8, -0.3])
@@ -959,3 +998,173 @@ class TestArrival(TestCase):
         off = abs(np.linalg.norm(path.states[-1]) - math.sqrt(0.2))
         assert off > 1.5 * grid.spacings[0]
         assert not path.arrived
+
+
+# --- The update radius, the order of the update, batched fields (DEQ-58) -----
+
+
+class TestDefaultRadius(TestCase):
+    """Dahiya and Cameron's Eq. (28), held at 8 below 128 points a side."""
+
+    def test_the_radius_follows_the_paper_rule_on_larger_grids(self):
+        expected = {41: 8, 88: 8, 90: 8, 128: 10, 161: 10, 256: 14, 321: 14, 513: 18}
+        for count, radius in expected.items():
+            grid = DensityGrid.box([-1.0, -1.0], [1.0, 1.0], [count, count])
+            assert default_radius(grid) == radius, count
+
+    def test_a_rectangular_grid_takes_its_longer_side(self):
+        grid = DensityGrid.box([-1.0, -1.0], [1.0, 1.0], [41, 300])
+        assert default_radius(grid) == 14
+
+    def test_the_solver_uses_it_unless_told_otherwise(self):
+        grid = DensityGrid.box([-1.0, -1.0], [1.0, 1.0], [161, 161])
+        drift, noise = rotating_drift(), constant_noise(rotating_noise_matrix())
+        assert OrderedLineIntegral(drift, noise, grid).update_radius == 10
+        assert OrderedLineIntegral(drift, noise, grid, 4).update_radius == 4
+
+
+def _rotating_error_by_order(count, order):
+    grid = DensityGrid.box([-1.5, -1.5], [1.5, 1.5], [count, count])
+    field = OrderedLineIntegral(
+        rotating_drift(),
+        constant_noise(rotating_noise_matrix()),
+        grid,
+        update_order=order,
+    ).solve(EquilibriumAttractor([0.0, 0.0]))
+    exact = rotating_quasipotential(grid.points())
+    inside = exact <= _ROTATING_LEVEL
+    return float(np.max(np.abs(field.values.ravel()[inside] - exact[inside])))
+
+
+class TestQuadraticUpdate(TestCase):
+    """``U`` a parabola along the triangle's base, through a third front point."""
+
+    def test_the_rotating_case_converges_at_second_order(self):
+        # Measured 1.70e-4, 4.25e-5, 1.06e-5 at 41, 81, 161 (radius 8, 8, 10):
+        # orders 2.00, 2.00. The midpoint update: 2.27e-3, 9.68e-4, 3.12e-4.
+        errors = [_rotating_error_by_order(count, QUADRATIC) for count in _COUNTS]
+        assert errors[2] < 2.0e-5
+        assert min(_orders(errors)) > 1.8
+
+    def test_it_is_ten_times_closer_than_the_midpoint_update(self):
+        quadratic = _rotating_error_by_order(81, QUADRATIC)
+        midpoint = _rotating_error_by_order(81, MIDPOINT)
+        assert 10.0 * quadratic < midpoint
+
+    def test_the_parabola_is_the_minimum_over_the_base(self):
+        # As for the straight base: against brute force over s in [0, 1].
+        rng = np.random.default_rng(1)
+        count = 2000
+        factor = rng.normal(size=(count, 2, 2))
+        metric = factor @ factor.transpose(0, 2, 1) + 0.1 * np.eye(2)
+        drift = rng.normal(size=(count, 2)) * rng.choice([1.0, 3.0], (count, 1))
+        rows = np.column_stack(
+            [drift, metric[:, 0, 0], metric[:, 0, 1], metric[:, 1, 1]],
+        )
+        edge = tuple(rng.integers(-1, 2, count).astype(float) for _ in range(2))
+        reach = tuple(rng.integers(-8, 9, count).astype(float) for _ in range(2))
+        rise = 0.5 * rng.normal(size=count)
+        # A parabola bending up, so that F is convex along the base. One that
+        # bends down makes F concave there and its minimum an end of the base,
+        # which the one-point updates from x0 and from x1 already offer.
+        bend = 0.05 * np.abs(rng.normal(size=count))
+        value = _curved_triangle(0.0, rise, bend, edge, reach, (rows, rows))
+
+        def cost(s):
+            return (
+                s * rise
+                + bend * s * (s - 1.0)
+                + _action(
+                    reach[0] - s * edge[0],
+                    reach[1] - s * edge[1],
+                    rows,
+                )
+            )
+
+        brute = np.min([cost(np.full(count, s)) for s in np.linspace(0, 1, 2001)], 0)
+        moving = (edge[0] != 0.0) | (edge[1] != 0.0)
+        degenerate = ((reach[0] == 0.0) & (reach[1] == 0.0)) | (
+            (reach[0] == edge[0]) & (reach[1] == edge[1])
+        )
+        kept = moving & ~degenerate
+        assert kept.sum() > count // 2
+        assert np.max(value[kept] - brute[kept]) < 1.0e-8
+
+    def test_the_bend_is_the_parabola_through_the_third_point(self):
+        # U = x^2 along a row: U(x0 + s h) = U0 + s dU + h^2 s (s - 1), so the
+        # bend is h^2 whichever third point it is fitted through.
+        grid = DensityGrid.box([0.0, 0.0], [1.0, 1.0], [5, 5])
+        lattice = _HalfLattice(grid, double_well(), constant_noise(_IDENTITY))
+        march = _March(grid, lattice, (np.array([1]), np.array([0])), quadratic=True)
+        first = grid.axis(0)
+        march.values[:] = (first**2)[:, None]
+        spacing = first[1] - first[0]
+        status, bends = march._status, march._bends  # noqa: SLF001 (the fit itself)
+        status[1:4, 2] = _ACCEPTED  # x0 - e, x0, x1 accepted: fit behind x0
+        assert bends(2, 2, [(3, 2)])[0] == pytest.approx(spacing**2)
+        status[1, 2] = 0
+        status[4, 2] = _ACCEPTED  # x0, x1, x1 + e accepted: fit beyond x1
+        assert bends(2, 2, [(3, 2)])[0] == pytest.approx(spacing**2)
+        status[4, 2] = 0  # neither: the straight base
+        assert bends(2, 2, [(3, 2)])[0] == 0.0
+
+    def test_an_unknown_order_is_refused(self):
+        grid = DensityGrid.box([-1.0, -1.0], [1.0, 1.0], [11, 11])
+        with pytest.raises(ValueError, match="order"):
+            OrderedLineIntegral(
+                double_well(),
+                constant_noise(_IDENTITY),
+                grid,
+                update_order="simpson",
+            )
+
+
+class _Unbatched(DoubleWellField):
+    """The double well with ``eval`` only, as a user's function might be.
+
+    It keeps the base class's ``eval_batch``, which calls ``eval`` per point.
+    """
+
+    eval_batch = Function.eval_batch
+
+
+class TestBatchedFields(TestCase):
+    def test_a_batch_is_the_field_point_by_point(self):
+        points = np.random.default_rng(2).normal(size=(50, 2))
+        field = system(MaierSteinField)
+        batch = fields_at(field, points)
+        single = np.array([field.eval(list(p)) for p in points])
+        assert np.array_equal(batch, single)
+
+    def test_a_function_without_a_batch_is_evaluated_point_by_point(self):
+        points = np.random.default_rng(3).normal(size=(20, 2))
+        assert np.array_equal(
+            fields_at(system(_Unbatched), points),
+            fields_at(double_well(), points),
+        )
+
+    def test_a_batch_of_the_wrong_shape_is_refused(self):
+        class Flat(DoubleWellField):
+            def eval_batch(self, points, time=None):  # noqa: ARG002
+                return np.zeros(np.asarray(points).size)
+
+        with pytest.raises(ValueError, match="one row per state"):
+            fields_at(system(Flat), np.zeros((4, 2)))
+
+    def test_the_noise_columns_come_as_one_batch(self):
+        amplitude = np.array([[1.0, 0.5], [0.0, 0.8]])
+        points = np.zeros((3, 2))
+        batch = constant_noise(amplitude).columns_along(points)
+        assert batch.shape == (3, 2, 2)
+        assert np.array_equal(batch[1], amplitude.T)
+
+    def test_the_march_is_the_same_with_and_without_batches(self):
+        grid = DensityGrid.box([-2.0, -1.5], [1.0, 1.5], [41, 41])
+        noise = constant_noise(_IDENTITY)
+        batched = OrderedLineIntegral(double_well(), noise, grid).solve(
+            EquilibriumAttractor(WELL),
+        )
+        single = OrderedLineIntegral(system(_Unbatched), noise, grid).solve(
+            EquilibriumAttractor(WELL),
+        )
+        assert np.array_equal(batched.values, single.values)

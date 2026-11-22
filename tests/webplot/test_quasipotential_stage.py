@@ -189,9 +189,11 @@ class TestNoisyHopfFilmQuasipotential(TestCase):
     quotes them - and a copy of those here would let the page drift from them.
 
     Measured on the built page, within ``U <= 4`` on the drawn box and beyond four
-    cells of the origin: 0.031 to 0.054 on every frame, 0.032 at ``mu = 0.025``,
+    cells of the origin: 0.024 to 0.056 on every frame, 0.039 at ``mu = 0.025``,
     where the cycle is three cells from the singular origin (0.19 there before the
-    cycle start was the paper's Simpson-rule one).
+    cycle start was the paper's Simpson-rule one). With the straight base of
+    OLIM-MID, before the update became a parabola (DEQ-58): 0.031 to 0.054, and
+    0.032 at ``mu = 0.025``. The radius on this 88-point grid is 8 either way.
     """
 
     def test_the_marched_u_follows_the_closed_form_the_page_quotes(self):

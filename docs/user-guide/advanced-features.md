@@ -92,7 +92,8 @@ How a planar system gets from one attractor to another under small noise is
 answered by the Freidlin-Wentzell quasipotential `U`: escapes cost
 `exp(-U / eps)`, and the minimiser of the action is the most probable path.
 `OrderedLineIntegral` computes `U` on a `DensityGrid` by the ordered line
-integral method (OLIM-MID), for a drift `Function` and a `NoiseMatrix`, from a
+integral method (midpoint quadrature, with `U` a parabola along the accepted
+front by default), for a drift `Function` and a `NoiseMatrix`, from a
 stable equilibrium or a limit cycle:
 
 ```python
@@ -122,8 +123,11 @@ minimum action method from a small surface about the attractor, and with a
 `D = G G^T`, so a gradient drift `-grad V` with `G = I` has `U = 2 V`, and the
 grid density of `StationaryFokkerPlanck` is `exp(-U)` to leading order. The
 method is planar and time-independent and needs `D` non-singular at every grid
-point; it is first order in the spacing (measured, and the bound the method's
-authors give). `GeometricMinimumAction` needs a constant `D`. The module
+point. With the straight base of OLIM-MID (`update_order="midpoint"`) it is
+first order in the spacing, the bound the method's authors give; the default
+parabolic base measured second order on the rotating test problems. The update
+radius defaults to the authors' rule of thumb, growing with the grid.
+`GeometricMinimumAction` needs a constant `D`. The module
 docstring of `continuation/quasipotential.py` has the measured errors.
 
 ## Custom Solvers

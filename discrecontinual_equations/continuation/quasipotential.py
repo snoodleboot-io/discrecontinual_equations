@@ -27,23 +27,29 @@ by ``M = S^{-1} / 2``.) The Ito-Stratonovich correction to the drift is of order
 
 *Method.* ``U`` is computed on the grid of :class:`~.fokker_planck.DensityGrid` by
 the ordered line integral method of Dahiya and Cameron (J. Sci. Comput. 2018,
-arXiv 1706.07509), the midpoint-quadrature variant OLIM-MID. Grid points are
+arXiv 1706.07509), with the midpoint quadrature of their OLIM-MID and, by
+default, ``U`` interpolated along the front by a parabola rather than a straight
+line (see *Order* below). Grid points are
 accepted in increasing order of ``U``, as in Dijkstra's method; when a point ``x0``
 is accepted every unaccepted point ``x`` within ``update_radius`` cells of it is
 offered
 
 * a one-point update ``U(x0) + Q(x0, x)``, and
 * a triangle update for every accepted neighbour ``x1`` of ``x0``: the minimum over
-  ``x_s = x0 + s (x1 - x0)``, ``s`` in ``[0, 1]``, of the linearly interpolated
-  ``U(x_s)`` plus ``Q(x_s, x)``,
+  ``x_s = x0 + s (x1 - x0)``, ``s`` in ``[0, 1]``, of the interpolated ``U(x_s)``
+  plus ``Q(x_s, x)``,
 
 where ``Q(a, x) = |x - a|_A |f_m|_A - <x - a, f_m>_A`` is the geometric action of the
 straight segment by the midpoint rule, in the metric ``A = D^{-1}`` taken at the
 midpoint. Midpoints of two grid points always lie on the grid of half the spacing,
 so ``f`` and ``A`` are evaluated once there and looked up; along a triangle's
 segment they are interpolated linearly between its two end midpoints, which makes
-the one-dimensional minimisation over ``s`` a quadratic with a closed-form root,
-refined twice from the midpoint of the segment. The update radius is what lets the
+the one-dimensional minimisation over ``s`` for a straight ``U(x_s)`` a quadratic
+with a closed-form root, refined twice from the midpoint of the segment. This
+matches Dahiya and Cameron's handling of a variable anisotropic ``D`` (Physica D
+2018, arXiv 1806.05321, their Eqs. (19), (21), (22)): ``A`` is ``D^{-1}`` at each
+midpoint, not the inverse of an averaged ``D``, and ``f`` and ``A`` are linear
+along the base. The update radius is what lets the
 method see around an anisotropic or rotating drift: a minimum action path can meet
 the accepted front at a shallow angle, and only a stencil wide enough to reach back
 along it finds the right predecessor. Every triangle is tried rather than the
@@ -60,7 +66,7 @@ Simpson-rule start from the nearest point of the cycle (see
 gradient and a rotational part.
 
 *Measured.* The error in ``U`` against the closed forms, by doubling the grid on a
-fixed box (the tests repeat these):
+fixed box, at a radius held at 8 cells (the tests repeat these):
 
   - double well ``V = x^4/4 - x^2/2 + y^2/2``, ``D = I``, max error of ``U - 2 (V -
     V_min)`` on the basin of ``(-1, 0)`` within ``{U <= 2}``, box ``[-2, 1] x
@@ -68,22 +74,56 @@ fixed box (the tests repeat these):
     orders 1.87 and 1.89;
   - rotating Ornstein-Uhlenbeck, ``A = [[-1, -2], [2, -1]]``, ``G = [[1, 0.5],
     [0, 0.8]]``, max error against ``(1/2) x^T S^{-1} x`` on ``{U <= 1.5}``, box
-    ``[-1.5, 1.5]^2``: 2.27e-3, 9.68e-4, 5.00e-4, observed orders 1.23 and 0.95.
+    ``[-1.5, 1.5]^2``: 1.70e-4, 4.25e-5, 1.16e-5, observed orders 2.00 and 1.87
+    (2.27e-3, 9.68e-4, 5.00e-4 with the straight base, orders 1.23 and 0.95).
 
-Both at the default update radius of 8 cells, held fixed as the grid is refined.
 The error is two terms of different order. Linear interpolation of ``U`` along the
 base of a triangle costs ``O(h^2)`` per update over ``O(1 / (K h))`` updates along a
 path, which is first order, and is the bound Dahiya and Cameron state for every
-OLIM; the rotating case shows it. The midpoint rule on a one-point update of length
-up to ``K h`` costs ``O((K h)^3 |f''|)`` per update, second order overall but with a
-constant growing like ``K^2``, and since the march keeps the minimum and the rule
-underestimates a convex integrand, it is the long updates that are picked. The
-double well's ``x - x^3`` is steep enough on this box for that term to dominate:
-at 81 points the error is 0.0107, 0.0112 and 0.0420 for radii 2, 4 and 8, while
-the rotating case at radius 4 is four times worse than at 8 (4.1e-3). A radius
-that grows slowly with the grid, as the paper recommends (its Eq. (28),
-``K = 10 + 4 (log2 N - 7)`` for ``2^7 <= N <= 2^12``), trades the two; here it is
-left to the caller.
+OLIM; the rotating case showed it, and the parabolic base below removes it. The
+midpoint rule on a one-point update of length up to ``K h`` costs
+``O((K h)^3 |f''|)`` per update, second order overall but with a constant growing
+like ``K^2``, and since the march keeps the minimum and the rule underestimates a
+convex integrand, it is the long updates that are picked. The double well's
+``x - x^3`` is steep enough on this box for that term to dominate: at 81 points
+the error is 0.0107, 0.0112 and 0.0420 for radii 2, 4 and 8.
+
+*Order.* By default (``update_order="quadratic"``) ``U(x_s)`` along a triangle's
+base is the parabola through ``x0``, ``x1 = x0 + e`` and a third accepted point on
+the same line, ``x0 - e`` or else ``x0 + 2 e`` - straight only where neither is
+accepted - so its error is ``O(h^3)`` rather than ``O(h^2)``. ``F(s)`` is then
+minimised by Newton steps from the straight base's closed-form root, keeping the
+lower of the two. The ticket proposed a Hermite cubic with ``grad U`` from the
+march; it was built first and failed: ``grad U`` at a point can only come from
+the update that set it, by the momentum ``|f|_A A t / |t|_A - A f`` along the
+segment's direction ``t``, which is first order (the chord), or second order if
+the start's own ``grad U`` fixes the curvature (the chord's reflection) - and
+then each point's error feeds the next. On the rotating case at 41 points the
+median ``grad U`` was off by 25% from the chord and 80% by reflection, and ``U``
+by 0.32. Dahiya and Cameron also warn that ``U`` need not be smooth across the
+front (arXiv 1806.05321, Sec. 3.3.2); the parabola uses accepted values only.
+At 321 points, radius 14 by the rule below, the max errors on the sets above:
+rotating Ornstein-Uhlenbeck 9.30e-5 straight, 2.15e-6 parabolic (orders 2.00,
+2.00, 2.30 from 41 points); their SDE (21) 2.55e-4 and 1.16e-5; the non-normal
+linear system 1.04e-4 and 9.26e-5 (3.33e-4 and 1.17e-4 at 161); Maier-Stein's
+barrier at 161 x 129 points 5.6e-4 and 2.0e-5. Where the quadrature term
+dominates - the double well, the anisotropic gradient, SDE (24) - it changes
+little (9.05e-3, 7.44e-3 and 1.84e-2 straight; 9.05e-3, 7.52e-3 and 1.85e-2
+parabolic), and on the noisy Hopf film's grid, near its singular origin,
+the worst frame moves from 0.054 to 0.056. It costs about 1.8 times the march's
+time. ``update_order="midpoint"`` is OLIM-MID as published.
+
+*Radius.* The default radius follows the grid: Dahiya and Cameron's rule of thumb
+``K = 10 + 4 (round(log2 N) - 7)`` (their Eq. (28), for ``2^7 <= N <= 2^12``), ``N``
+the longer side, held at 8 below 128 points (:func:`default_radius`). It trades
+the two terms above, and the trade is not the same everywhere. At 321 points
+against a radius held at 8, the straight base: rotating Ornstein-Uhlenbeck 3.34e-4
+to 9.30e-5, SDE (21) 1.34e-3 to 2.55e-4, non-normal 2.36e-4 to 1.04e-4 - but the
+double well 2.85e-3 to 9.05e-3, the anisotropic gradient 2.09e-3 to 7.44e-3 and
+SDE (24) 4.66e-3 to 1.84e-2, where the longer updates' quadrature error grows
+like ``K^2`` and nothing is gained from reaching further. A radius chosen from
+the drift's rotation-to-gradient ratio (below) would serve both; for a field that
+is nearly a gradient, pass ``update_radius=8``.
 
 *What the radius must cover.* Below a threshold the radius does not merely cost
 accuracy: the error stops converging. Near the attractor the drift is a gradient
@@ -96,9 +136,10 @@ place, at every spacing. On the paper's SDE (21), where ``a = 10`` everywhere
 (``U = 2 x^2 + y^2`` on ``[-1, 1]^2``, max error on ``{U <= 0.9}``): radius 2
 gives 0.381, 0.370 and 0.371 at 129, 257 and 513 points, and radius 4 gives
 0.048 and 0.051 at 129 and 257 - neither converges - against 1.6e-3 at radius 8
-and 3.1e-4 at the paper's 14 on 257 points. The default 8 converges there, if
-slowly (2.28e-3 and 1.34e-3 at 161 and 321 points, order 0.76), and comfortably
-on the rotating Ornstein-Uhlenbeck process below (``a = 2.36``). So the radius
+and 3.1e-4 at the paper's 14 on 257 points (all with the straight base). A
+radius of 8 converges there, if slowly (2.28e-3 and 1.34e-3 at 161 and 321
+points, order 0.76), and comfortably on the rotating Ornstein-Uhlenbeck process
+(``a = 2.36``). So the radius
 should be comparable to the largest rotation-to-gradient ratio on the region
 asked about, and a field that does not settle on refining the grid is the
 symptom of one that is too small.
@@ -175,6 +216,7 @@ from discrecontinual_equations.continuation.noise import (
     NoiseMatrix,
     diffusion_matrix,
     field_at,
+    fields_at,
     jacobian_at,
 )
 from discrecontinual_equations.function.function import Function
@@ -182,12 +224,16 @@ from discrecontinual_equations.function.function import Function
 _PLANE = 2
 # f_x, f_y, A_xx, A_xy, A_yy per half-lattice point.
 _COLUMNS = 5
+# The least default radius, and Dahiya and Cameron's rule above it (Eq. (28)).
 _DEFAULT_RADIUS = 8
+_RULE_BASE, _RULE_SLOPE, _RULE_START = 10, 4, 7
+MIDPOINT, QUADRATIC = "midpoint", "quadratic"
 _EQUILIBRIUM_CELLS = 2.0
 _CYCLE_CELLS = 1.5
 _CYCLE_SAMPLES_PER_CELL = 4
 _ELLIPTICITY_FLOOR = 1.0e-10
 _REFINEMENTS = 2
+_NEWTON_STEPS = 3
 _HALF = 0.5
 _NEIGHBOURS = ((-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1))
 _UNKNOWN, _ACCEPTED = 0, 2
@@ -213,6 +259,20 @@ _JUMP_SHARE = 0.25
 _REFERENCE_SETTLED = 1.0e-8
 _BAND_SAMPLES_PER_CELL = 16
 GRID, CHECKED, REFINED = 0, 1, 2
+
+
+def default_radius(grid: DensityGrid) -> int:
+    """The update radius for a grid: ``max(8, 10 + 4 (round(log2 N) - 7))``.
+
+    Dahiya and Cameron's rule of thumb (their Eq. (28)) for ``N`` points per
+    side, ``2^7 <= N <= 2^12``, with ``N`` the larger side here. Below 128
+    points it would fall under 8, the fixed radius the method used before, and
+    the radius must stay comparable to the drift's rotation-to-gradient ratio
+    (see the module docstring), so it is held there.
+    """
+    sides = max(grid.shape)
+    rule = _RULE_BASE + _RULE_SLOPE * (round(np.log2(sides)) - _RULE_START)
+    return max(_DEFAULT_RADIUS, int(rule))
 
 
 class EquilibriumAttractor:
@@ -847,7 +907,11 @@ class _HalfLattice:
     """``f`` and ``A = D^{-1}`` on the grid of half the spacing.
 
     The midpoint of any two grid points ``i`` and ``j`` is the half-lattice point
-    ``i + j``, so every quadrature node the method ever needs is a lookup. The five
+    ``i + j``, so every quadrature node the method ever needs is a lookup. ``f``
+    and ``G`` are evaluated at all of them through ``eval_batch`` (see
+    :func:`~.noise.fields_at` and :meth:`~.noise.NoiseMatrix.columns_along`): one
+    call each for a function written with array arithmetic, one per point for
+    one that keeps the base class's ``eval_batch``. The five
     numbers per point - ``f_x, f_y, A_xx, A_xy, A_yy`` - are kept side by side in one
     table so that one gather fetches all of them, and the march does its algebra on
     their columns: the einsum over ``2 x 2`` blocks it replaces cost four times as
@@ -863,10 +927,9 @@ class _HalfLattice:
         ]
         mesh = np.meshgrid(*axes, indexing="ij")
         points = np.stack([block.ravel() for block in mesh], axis=1)
-        velocity = np.array([field_at(drift, state) for state in points])
-        cells = np.array(
-            [diffusion_matrix(noise.columns_at(state)) for state in points],
-        )
+        velocity = fields_at(drift, points)
+        amplitude = noise.columns_along(points)
+        cells = np.einsum("pki,pkj->pij", amplitude, amplitude)
         _check_nodes(cells.reshape((*mesh[0].shape, _PLANE, _PLANE))[::2, ::2])
         inverse = _inverse(cells)
         self.table = np.column_stack(
@@ -921,22 +984,26 @@ def _action(step_x, step_y, coefficients):
 
 
 class OrderedLineIntegral:
-    """The quasipotential of a planar ``dx = f dt + G dW`` by OLIM-MID.
+    """The quasipotential of a planar ``dx = f dt + G dW`` by ordered line integrals.
 
-    ``update_radius`` is the stencil radius in cells (``K`` in the paper). It must
-    be comparable to the drift's rotation-to-gradient ratio on the region asked
-    about, or the error does not converge as the grid is refined; see the module
-    docstring for that, the method, the normalisation, and its limits.
+    ``update_radius`` is the stencil radius in cells (``K`` in the paper), by
+    default :func:`default_radius` of the grid. It must be comparable to the
+    drift's rotation-to-gradient ratio on the region asked about, or the error
+    does not converge as the grid is refined. ``update_order`` is
+    :data:`QUADRATIC` (``U`` a parabola along the front, the default) or
+    :data:`MIDPOINT` (a straight line, OLIM-MID as published). See the module
+    docstring for both, the method, the normalisation, and its limits.
     """
 
-    __slots__ = ["_drift", "_grid", "_noise", "_offsets"]
+    __slots__ = ["_drift", "_grid", "_noise", "_offsets", "_quadratic", "update_radius"]
 
     def __init__(
         self,
         drift: Function,
         noise: NoiseMatrix,
         grid: DensityGrid,
-        update_radius: int = _DEFAULT_RADIUS,
+        update_radius: int | None = None,
+        update_order: str = QUADRATIC,
     ) -> None:
         if grid.dimension != _PLANE:
             message = (
@@ -944,9 +1011,19 @@ class OrderedLineIntegral:
                 f"{grid.dimension} axes"
             )
             raise ValueError(message)
+        if update_order not in (MIDPOINT, QUADRATIC):
+            message = (
+                f"the update order is {MIDPOINT!r} or {QUADRATIC!r}, "
+                f"not {update_order!r}"
+            )
+            raise ValueError(message)
         self._drift = drift
         self._noise = noise
         self._grid = grid
+        self._quadratic = update_order == QUADRATIC
+        if update_radius is None:
+            update_radius = default_radius(grid)
+        self.update_radius = update_radius
         reach = np.arange(-update_radius, update_radius + 1)
         first, second = np.meshgrid(reach, reach, indexing="ij")
         keep = (first * first + second * second <= update_radius * update_radius) & (
@@ -960,7 +1037,7 @@ class OrderedLineIntegral:
     ) -> GridQuasipotential:
         """March ``U`` out from ``attractor`` over the whole grid."""
         lattice = _HalfLattice(self._grid, self._drift, self._noise)
-        march = _March(self._grid, lattice, self._offsets)
+        march = _March(self._grid, lattice, self._offsets, quadratic=self._quadratic)
         indices, values = attractor.initial(self._grid, self._drift, self._noise)
         march.run(indices, values)
         # The floor is read after the march, not from what the attractor wrote.
@@ -1177,6 +1254,7 @@ class _March:
     __slots__ = [
         "_coordinates",
         "_offsets",
+        "_quadratic",
         "_shape",
         "_status",
         "_table",
@@ -1188,10 +1266,13 @@ class _March:
         grid: DensityGrid,
         lattice: _HalfLattice,
         offsets: tuple[np.ndarray, np.ndarray],
+        *,
+        quadratic: bool = False,
     ) -> None:
         self._shape = grid.shape
         self._table = lattice.table
         self._offsets = offsets
+        self._quadratic = quadratic
         self._coordinates = (grid.axis(0), grid.axis(1))
         self._status = np.full(self._shape, _UNKNOWN, dtype=np.int8)
         self.values = np.full(self._shape, np.inf)
@@ -1228,19 +1309,18 @@ class _March:
             pairs = np.tile(np.arange(count), len(neighbours))
             others_x = np.repeat([x for x, _ in neighbours], count)
             others_y = np.repeat([y for _, y in neighbours], count)
-            triangle = _triangle(
-                own,
-                self.values[others_x, others_y],
-                (first[others_x] - first[row], second[others_y] - second[column]),
-                (reach_x[pairs], reach_y[pairs]),
-                (
-                    near[pairs],
-                    self._table[
-                        others_x + targets_x[pairs],
-                        others_y + targets_y[pairs],
-                    ],
-                ),
+            edge = (first[others_x] - first[row], second[others_y] - second[column])
+            reach = (reach_x[pairs], reach_y[pairs])
+            midpoints = (
+                near[pairs],
+                self._table[others_x + targets_x[pairs], others_y + targets_y[pairs]],
             )
+            other = self.values[others_x, others_y]
+            if self._quadratic:
+                bends = np.repeat(self._bends(row, column, neighbours), count)
+                triangle = _curved_triangle(own, other, bends, edge, reach, midpoints)
+            else:
+                triangle = _triangle(own, other, edge, reach, midpoints)
             nearest = triangle.reshape(len(neighbours), count).min(axis=0)
             best = np.minimum(best, nearest)
         better = best < self.values[targets_x, targets_y]
@@ -1252,6 +1332,36 @@ class _March:
         ):
             self.values[x, y] = value
             heapq.heappush(heap, (value, x, y))
+
+    def _bends(self, row: int, column: int, neighbours) -> np.ndarray:
+        """``c`` in ``U(x_s) = U0 + s dU + c s (s - 1)`` for each base ``x0``-``x1``.
+
+        The parabola through ``x0``, ``x1 = x0 + e`` and a third accepted point
+        on the same line, ``x0 - e`` if it is accepted, else ``x0 + 2 e``; with
+        neither, ``c = 0`` and the base is the straight line of OLIM-MID.
+        """
+        size_x, size_y = self._shape
+        own = self.values[row, column]
+        steps = np.asarray(neighbours) - np.array([row, column])
+        rise = self.values[row + steps[:, 0], column + steps[:, 1]] - own
+        bends = np.zeros(len(neighbours))
+        found = np.zeros(len(neighbours), dtype=bool)
+        # The point behind x0 first, then the one beyond x1.
+        for reach, weight in ((-1, 1.0), (2, -2.0)):
+            third_x, third_y = row + reach * steps[:, 0], column + reach * steps[:, 1]
+            inside = (
+                (third_x >= 0)
+                & (third_x < size_x)
+                & (third_y >= 0)
+                & (third_y < size_y)
+            )
+            open_x, open_y = np.where(inside, third_x, 0), np.where(inside, third_y, 0)
+            usable = inside & (self._status[open_x, open_y] == _ACCEPTED)
+            usable &= ~found
+            fitted = _HALF * (self.values[open_x, open_y] - own + weight * rise)
+            bends = np.where(usable, fitted, bends)
+            found |= usable
+        return bends
 
     def _open_targets(self, row: int, column: int) -> tuple[np.ndarray, np.ndarray]:
         """Every unaccepted point within the update radius of ``(row, column)``."""
@@ -1301,6 +1411,73 @@ def _triangle(own, other, edge, reach, midpoints):
     step_x = reach[0] - fraction * edge[0]
     step_y = reach[1] - fraction * edge[1]
     return own + fraction * rise + _action(step_x, step_y, coefficients)
+
+
+def _curved_triangle(own, other, bend, edge, reach, midpoints):  # noqa: PLR0913
+    """The triangle update with ``U`` a parabola along the base.
+
+    ``U(x_s) = U0 + s dU + c s (s - 1)`` in place of the straight line, so
+    ``F(s) = U(x_s) + Q(x_s, x)`` is no longer minimised in closed form. It
+    starts from the straight line's root, takes Newton steps on
+    ``F'(s) = dU + c (2 s - 1) + Q'(s)`` with ``f`` and ``A`` frozen at the
+    current ``s``, and keeps whichever of the two values is lower.
+    """
+    near, far = midpoints
+    rise = other - own
+    fraction = np.full(rise.shape[0], _HALF)
+    for _ in range(_REFINEMENTS):
+        coefficients = near + fraction[:, None] * (far - near)
+        fraction = _stationary_fraction(edge, reach, rise, coefficients)
+    linear = fraction
+    for _ in range(_NEWTON_STEPS):
+        coefficients = near + fraction[:, None] * (far - near)
+        reach_slope, reach_curvature = _action_derivatives(
+            edge,
+            reach,
+            fraction,
+            coefficients,
+        )
+        total = 2.0 * bend + reach_curvature
+        with np.errstate(divide="ignore", invalid="ignore"):
+            step = (rise + bend * (2.0 * fraction - 1.0) + reach_slope) / total
+        step = np.where(np.isfinite(step) & (total > 0.0), step, 0.0)
+        fraction = np.clip(fraction - step, 0.0, 1.0)
+    value = _curved_cost(own, rise, bend, edge, reach, fraction, midpoints)
+    fallback = _curved_cost(own, rise, bend, edge, reach, linear, midpoints)
+    return np.minimum(value, fallback)
+
+
+def _action_derivatives(edge, reach, fraction, coefficients):
+    """``dQ/ds`` and ``d2Q/ds2`` along the base, ``f`` and ``A`` frozen.
+
+    With ``d = reach - s edge``: ``Q' = <edge, f>_A - |f|_A <edge, d>_A / |d|_A``
+    and ``Q'' = |f|_A (|edge|_A^2 |d|_A^2 - <edge, d>_A^2) / |d|_A^3``.
+    """
+    edge_x, edge_y = edge
+    step_x = reach[0] - fraction * edge_x
+    step_y = reach[1] - fraction * edge_y
+    velocity_x, velocity_y = coefficients[:, 0], coefficients[:, 1]
+    speed = np.sqrt(_form(velocity_x, velocity_y, coefficients, velocity_x, velocity_y))
+    squared = _form(step_x, step_y, coefficients, step_x, step_y)
+    length = np.sqrt(squared)
+    along = _form(edge_x, edge_y, coefficients, step_x, step_y)
+    edge_squared = _form(edge_x, edge_y, coefficients, edge_x, edge_y)
+    drift = _form(edge_x, edge_y, coefficients, velocity_x, velocity_y)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        slope = drift - speed * along / length
+        curvature = (
+            speed * (edge_squared * squared - along * along) / (squared * length)
+        )
+    return slope, curvature
+
+
+def _curved_cost(own, rise, bend, edge, reach, fraction, midpoints):  # noqa: PLR0913
+    near, far = midpoints
+    coefficients = near + fraction[:, None] * (far - near)
+    step_x = reach[0] - fraction * edge[0]
+    step_y = reach[1] - fraction * edge[1]
+    curve = own + fraction * rise + bend * fraction * (fraction - 1.0)
+    return curve + _action(step_x, step_y, coefficients)
 
 
 def _stationary_fraction(edge, reach, rise, coefficients):
