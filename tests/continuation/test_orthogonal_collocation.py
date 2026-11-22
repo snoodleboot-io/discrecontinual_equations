@@ -754,10 +754,25 @@ class TestCollapsedCycle(TestCase):
             assert not point.resolved()
 
     def test_the_collapse_an_under_resolved_seed_reaches_is_refused(self):
-        _, point, _, _ = _van_der_pol_point(4, 8, mu=2.0)
-        if np.ptp(point.solution.states) > 1.0e-6:  # pragma: no cover
-            pytest.skip("the seed did not collapse here")
-        assert not point.resolved()
+        """Since DEQ-54 the seed path refuses the collapse before it is a point.
+
+        Whatever comes back is a cycle with extent and a positive period, and
+        if the collapse came back anyway the gate would still refuse it.
+        """
+        period, orbit = _van_der_pol_reference(2.0)
+        continuation = CycleContinuation(
+            _equation(VanDerPolField, 2, 2.0),
+            0,
+            8,
+            phase_index=1,
+            collocation="gauss_legendre",
+            collocation_points=4,
+        )
+        seed = CycleSeed(orbit(np.linspace(0.0, 1.0, 9)), period, 2.0)
+        points, _ = continuation.trace(seed, 0.05, 0)
+        for point in points:
+            assert point.solution.period > 0.0
+            assert np.ptp(point.solution.states) > 1.0e-6
 
 
 class TestGateIsSound(TestCase):

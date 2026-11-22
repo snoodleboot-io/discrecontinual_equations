@@ -78,6 +78,25 @@ _FLOQUET_TOLERANCE = 2.0e-2
 # 4^-m) ~ 2.1 times high at m = 2). The Hermite cross-check alone could not
 # bound the error at m = 2, where both readings are fourth order and cancel.
 _DOUBLING_SAFETY = 2.0
+# How far a solved seed's period may stray from the seed's own, either way,
+# before it is refused as another cycle or none (see
+# :meth:`CycleContinuation._plausible`).
+_SEED_PERIOD_RATIO = 2.0
+# The damped seed correction: as many iterations as the adaptive orbit solver
+# allows, halving each step at most thirty times, the period kept above a tenth
+# of the seed's - the floor :class:`RobustPeriodicOrbit` uses.
+_DAMPED_ITERATIONS = 80
+_BACKTRACK_STEPS = 30
+_BACKTRACK_FACTOR = 0.5
+_PERIOD_FLOOR_FRACTION = 0.1
+
+
+def _near(period: float, expected: float) -> bool:
+    """A finite, positive period within ``_SEED_PERIOD_RATIO`` of ``expected``."""
+    return bool(
+        np.isfinite(period)
+        and expected / _SEED_PERIOD_RATIO <= period <= expected * _SEED_PERIOD_RATIO,
+    )
 
 
 class _VectorField:
@@ -1323,6 +1342,12 @@ class CycleContinuation:
             residual = self._augmented(unknowns, nodes, arc)
             if np.linalg.norm(residual) < _TOLERANCE:
                 return unknowns
+            if not np.all(np.isfinite(residual)):
+                # Diverged past the floating-point range. Nothing converges
+                # from here, and the dense fallback would spend a
+                # finite-difference Jacobian - seconds at 160 intervals -
+                # finding that out, or raise.
+                return None
             update = self._solve_bordered(
                 unknowns,
                 nodes,
@@ -1482,7 +1507,139 @@ class CycleContinuation:
         return fine._jacobian_multipliers(corrected, nodes)
 
     def _solve_seed(self, seed: CycleSeed, nodes: int) -> np.ndarray | None:
-        """The first point on the branch: the seed, solved at its own parameter.
+        """The first point on the branch, or ``None`` if no believable one is found.
+
+        The staged solve (:meth:`_staged_seed`) is tried first, exactly as it
+        always ran, so every seed it already started is started the same way to
+        the last bit. Its answer is kept only if it is a cycle: a positive
+        period within a factor of two of the seed's, and states that have not
+        collapsed onto one point (see :meth:`_plausible`). Otherwise the target
+        scheme is corrected directly from the seed with a damped Newton
+        (:meth:`_direct_seed`), and that answer faces the same test.
+
+        A stiff cycle is what needs the second path. On van der Pol at
+        ``mu = 5`` and ``10``, seeded from an accurate integration, the
+        trapezoidal stage lands on cycles of period -1328 or 13.8 against the
+        true 11.6, or fails, and Gauss-Legendre Newton cannot recover from
+        those; started from the integration itself it converges. A seed path
+        that finds nothing believable returns ``None`` rather than hand a
+        negative period, or a point, to the continuation.
+        """
+        if not (np.isfinite(seed.period) and seed.period > 0.0):
+            return None
+        try:
+            staged = self._staged_seed(seed, nodes)
+        except np.linalg.LinAlgError:
+            # The trapezoidal stage handed on an iterate so far off that the
+            # dense fallback could not factor it: no cycle there either.
+            staged = None
+        if staged is not None and self._plausible(staged, nodes, seed.period):
+            return staged
+        direct = self._direct_seed(seed, nodes)
+        if direct is not None and self._plausible(direct, nodes, seed.period):
+            return direct
+        return None
+
+    def _plausible(self, unknowns: np.ndarray, nodes: int, expected: float) -> bool:
+        """Whether a solved seed is a cycle near the one the seed described.
+
+        The period must be finite, positive and within ``_SEED_PERIOD_RATIO``
+        of the seed's, either way: a seed's period comes from an integration or
+        a normal form and is never that far out, while every collocation
+        admits the collapsed solution at period zero or below. The states must
+        also span more than :data:`_NOISE_FLOOR` of their size, which an
+        equilibrium at a sensible period does not.
+        """
+        dimension = self._dimension
+        states = unknowns[: nodes * dimension].reshape(nodes, dimension)
+        if not _near(float(unknowns[nodes * dimension]), expected):
+            return False
+        extent = float(np.max(np.linalg.norm(states - states.mean(axis=0), axis=1)))
+        return extent > _NOISE_FLOOR * max(1.0, float(np.max(np.abs(states))))
+
+    def _direct_seed(self, seed: CycleSeed, nodes: int) -> np.ndarray | None:
+        """The seed corrected on the target scheme itself, with a damped Newton.
+
+        The first of the approaches DEQ-54 lists: when the seed is already
+        accurate - an integrated orbit - nothing is gained by detouring through
+        a coarser scheme whose own cycle may be far from it. The interior
+        points a wider scheme needs come off the seed's cubic Hermite
+        interpolant, as in :meth:`_filled`; the parameter is held fixed.
+        """
+        self._equation.derivative.parameters[self._parameter_index].value = (
+            seed.parameter
+        )
+        states = self._filled(
+            PeriodicOrbitSolution(np.asarray(seed.states, dtype=float), seed.period),
+            seed.parameter,
+        )
+        unknowns = np.concatenate(
+            [states.flatten(), [float(seed.period)], [seed.parameter]],
+        )
+        fixed_parameter = np.zeros(unknowns.size)
+        fixed_parameter[-1] = 1.0
+        return self._damped_correct(
+            unknowns,
+            nodes,
+            _Arc(unknowns, fixed_parameter, 0.0),
+            _PERIOD_FLOOR_FRACTION * float(seed.period),
+        )
+
+    def _damped_correct(
+        self,
+        prediction: np.ndarray,
+        nodes: int,
+        arc: _Arc,
+        floor: float,
+    ) -> np.ndarray | None:
+        """Newton with backtracking on the residual norm and a floor on the period.
+
+        The same globalisation :class:`AdaptivePeriodicOrbit` uses: a step is
+        halved until it lowers the residual norm without taking the period
+        under the floor, and the iteration stops if no halving does.
+        """
+        unknowns = prediction
+        period_index = nodes * self._dimension
+        for _ in range(_DAMPED_ITERATIONS):
+            residual = self._augmented(unknowns, nodes, arc)
+            norm = float(np.linalg.norm(residual))
+            if norm < _TOLERANCE:
+                return unknowns
+            try:
+                update = self._solve_bordered(
+                    unknowns,
+                    nodes,
+                    arc.tangent,
+                    -residual,
+                    lambda u=unknowns, r=residual: self._numerical_jacobian(  # type: ignore[misc]
+                        u,
+                        nodes,
+                        arc,
+                        r,
+                    ),
+                )
+            except np.linalg.LinAlgError:
+                # The dense fallback met a matrix with no finite solution: an
+                # iterate the field cannot be evaluated near. Not a cycle.
+                return None
+            if not np.all(np.isfinite(update)):
+                return None
+            scale = 1.0
+            for _ in range(_BACKTRACK_STEPS):
+                candidate = unknowns + scale * update
+                if candidate[period_index] > floor and (
+                    float(np.linalg.norm(self._augmented(candidate, nodes, arc))) < norm
+                ):
+                    break
+                scale *= _BACKTRACK_FACTOR
+            else:
+                return None
+            unknowns = candidate
+        residual = self._augmented(unknowns, nodes, arc)
+        return unknowns if np.linalg.norm(residual) < _TOLERANCE else None
+
+    def _staged_seed(self, seed: CycleSeed, nodes: int) -> np.ndarray | None:
+        """The seed solved at its own parameter, trapezoidal first.
 
         Two stages whatever the scheme. First the trapezoidal orbit solver every
         film has always seeded from; then the continuation's own sparse Newton,
@@ -1516,7 +1673,9 @@ class CycleContinuation:
             seed.parameter
         )
         solved = orbit.solve(seed.states, seed.period)
-        if solved is None:
+        if solved is None or not _near(solved.period, seed.period):
+            # Not handed on: the wider scheme's Newton cannot recover from
+            # another cycle, and spends its dense fallback finding that out.
             return None
         states = self._filled(solved, seed.parameter)
         unknowns = np.concatenate(
