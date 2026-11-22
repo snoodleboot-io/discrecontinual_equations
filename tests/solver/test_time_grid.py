@@ -70,7 +70,7 @@ from discrecontinual_equations.variable import Variable
 _MOST_READS = 3
 _STEPS = 200
 _SMALL, _LARGE = 16_000, 128_000
-_REPEATS = 3
+_REPEATS = 5
 _MOST_SLOPE = 1.1
 
 
@@ -228,7 +228,7 @@ def _cpu_seconds(steps: int) -> float:
 
 
 def test_euler_maruyama_time_grows_linearly_in_the_steps():
-    # Arrange / Act: the best of three of each size, the sizes interleaved so a
+    # Arrange / Act: the best of five of each size, the sizes interleaved so a
     # spell of contention from other work on the machine hits both alike.
     small, large = float("inf"), float("inf")
     for _ in range(_REPEATS):
