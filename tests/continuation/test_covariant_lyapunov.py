@@ -46,6 +46,7 @@ from discrecontinual_equations.continuation.stochastic_threshold import (
 from tests.continuation.clv_fields import (
     HenonMap,
     KuptsovParlitzField,
+    LogisticMap,
     LoziMap,
     MatrixField,
 )
@@ -300,6 +301,23 @@ class TestPlanarMaps(TestCase):
         result, angles = self._angles(LoziMap)
         assert abs(result.exponents.sum() - math.log(0.3)) < 1.0e-6
         assert angles.minimum > 0.3
+
+
+class TestOneDimensionalMap(TestCase):
+    """The logistic map: growth and exponent are ``log |F'|`` at the sampled states."""
+
+    def test_growth_and_exponent_are_the_derivative_along_the_samples(self):
+        result = covariant_lyapunov_vectors(
+            MapTangent(_function(LogisticMap, 1)),
+            np.array([0.3]),
+            settings=CovariantLyapunovSettings(100, 60, 40),
+        )
+        # The Jacobian is a forward difference, good to about 4e-7 in F'
+        # itself, so the factors are compared before taking logarithms.
+        derivative = np.abs(3.9 * (1.0 - 2.0 * result.states[:, 0]))
+        assert np.allclose(np.exp(result.growth[:, 0]), derivative, atol=1.0e-6)
+        assert abs(result.exponents[0] - np.mean(np.log(derivative))) < 1.0e-4
+        assert np.allclose(np.abs(result.vectors), 1.0)
 
 
 class TestNoisyPitchfork(TestCase):

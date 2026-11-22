@@ -68,3 +68,19 @@ class MatrixField(DeterministicFunction):
             sum(entry * value for entry, value in zip(row, point, strict=True))
             for row in self._matrix
         ]
+
+
+class LogisticMap(DeterministicFunction):
+    """``x -> 3.9 x (1 - x)``: one dimension, so every quantity has a closed form.
+
+    The only Lyapunov vector is the tangent line, and its growth factor over
+    one step is ``|F'(x_n)| = |3.9 (1 - 2 x_n)|``, so the exponent over any
+    stretch is the mean of ``log |F'|`` over the states the stretch visits.
+    """
+
+    def eval(
+        self,
+        point: list[float],
+        time: float | None = None,  # noqa: ARG002 (base signature)
+    ) -> list[float]:
+        return [3.9 * point[0] * (1.0 - point[0])]
