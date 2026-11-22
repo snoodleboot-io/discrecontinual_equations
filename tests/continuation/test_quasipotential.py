@@ -270,6 +270,24 @@ class TestMinimumActionPath(TestCase):
         ]
         assert abs(actions[0] - actions[1]) < 1.0e-6
 
+    def test_gmam_on_a_strongly_rotating_drift_settles_at_the_default_step(self):
+        # Dahiya and Cameron's SDE (21), rotation ten times the gradient: the
+        # explicit part of the flow is stiff there, and at the default step
+        # the chain once blew up to nan and scipy's banded solve raised. The
+        # answer must not depend on the step it took to get there.
+        target = np.array([0.5, 0.3])
+        paths = [
+            GeometricMinimumAction(
+                system(PaperLinearField),
+                constant_noise(_IDENTITY),
+                **options,
+            ).path(np.linspace([0.0, 0.0], target, 41))
+            for options in ({}, {"step": 0.01})
+        ]
+        assert all(path.converged for path in paths)
+        assert np.all(np.isfinite(paths[0].states))
+        assert abs(paths[0].action - paths[1].action) < 1.0e-6
+
     def test_gmam_refuses_a_state_dependent_diffusion(self):
         parameters = [Alpha(value=1.0), Sigma(value=0.7)]
         gmam = GeometricMinimumAction(
@@ -779,6 +797,21 @@ class TestErrorEstimate(TestCase):
         assert abs(value - exact) < 3.0e-5
         assert abs(value - exact) <= own
         assert abs(field.at(target) - exact) > 10.0 * abs(value - exact)
+
+    def test_a_strongly_rotating_drift_can_be_checked(self):
+        # SDE (21), rotation ten times the gradient: the chain's flow is stiff
+        # at the default step, and checking a point once raised from scipy.
+        grid = DensityGrid.box([-1.0, -1.0], [1.0, 1.0], [41, 41])
+        solver = OrderedLineIntegral(
+            system(PaperLinearField),
+            constant_noise(_IDENTITY),
+            grid,
+        )
+        field = solver.solve(EquilibriumAttractor([0.0, 0.0]))
+        target = np.array([0.5, 0.3])
+        value, own = solver.reference(field, target)
+        exact = 2.0 * target[0] ** 2 + target[1] ** 2
+        assert abs(value - exact) <= own < 1.0e-3
 
     def test_the_references_own_estimate_bounds_its_error(self):
         # About a nonlinear well, where the chain's error goes at second order
