@@ -1,6 +1,9 @@
 """Jacobian abstraction, decoupled from how derivatives are obtained."""
 
 from abc import ABC, abstractmethod
+from collections import OrderedDict
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 
 import numpy as np
 
@@ -30,6 +33,16 @@ class JacobianProvider(ABC):
         state_part = self.state_jacobian(state, parameter)
         parameter_part = self.parameter_derivative(state, parameter).reshape(-1, 1)
         return np.hstack([state_part, parameter_part])
+
+    @contextmanager
+    def retained(self) -> Iterator[None]:
+        """Scope within which a repeated request at one point may be remembered.
+
+        The base provider remembers nothing. :class:`MemoizedJacobian` overrides this
+        so that, inside the scope, the converged point's Jacobian is built once and
+        shared by the tangent, the detectors and the point's stability.
+        """
+        yield
 
 
 class FiniteDifferenceJacobian(JacobianProvider):
@@ -86,3 +99,81 @@ class AnalyticJacobian(JacobianProvider):
 
     def parameter_derivative(self, state: np.ndarray, parameter: float) -> np.ndarray:
         return self.extended_jacobian(state, parameter)[:, -1]
+
+
+class MemoizedJacobian(JacobianProvider):
+    """Remember the last few points' derivatives, but only inside :meth:`retained`.
+
+    One accepted continuation point asks for the Jacobian at the converged state
+    four times - the tangent, the branch-point determinant, the Hopf test and the
+    stability - and the localizer asks again at the bracket's lower end. Inside a
+    retained scope each of those after the first is a copy of the remembered array,
+    so a point costs ``I + 1`` Jacobians instead of ``I + 4`` and every value is
+    bit-identical to recomputing it. Points are keyed by the exact bytes of the
+    state and the parameter.
+
+    The memory lives only for the scope (one :meth:`Continuer.solve`): the residual
+    reads the equation's other parameters live, so a Jacobian remembered across
+    solves could be stale after the caller changes one of them.
+    """
+
+    __slots__ = ["_active", "_memory", "_provider"]
+
+    capacity = 4
+
+    def __init__(self, provider: JacobianProvider) -> None:
+        self._provider = provider
+        self._active = False
+        self._memory: OrderedDict[tuple[bytes, bytes], dict[str, np.ndarray]] = (
+            OrderedDict()
+        )
+
+    def state_jacobian(self, state: np.ndarray, parameter: float) -> np.ndarray:
+        return self._remembered(
+            "state",
+            state,
+            parameter,
+            self._provider.state_jacobian,
+        )
+
+    def parameter_derivative(self, state: np.ndarray, parameter: float) -> np.ndarray:
+        return self._remembered(
+            "parameter",
+            state,
+            parameter,
+            self._provider.parameter_derivative,
+        )
+
+    @contextmanager
+    def retained(self) -> Iterator[None]:
+        self._active = True
+        try:
+            yield
+        finally:
+            self._active = False
+            self._memory.clear()
+
+    def _remembered(
+        self,
+        part: str,
+        state: np.ndarray,
+        parameter: float,
+        compute: Callable[[np.ndarray, float], np.ndarray],
+    ) -> np.ndarray:
+        if not self._active:
+            return compute(state, parameter)
+        key = (
+            np.ascontiguousarray(state, dtype=float).tobytes(),
+            np.float64(parameter).tobytes(),
+        )
+        parts = self._memory.get(key)
+        if parts is None:
+            parts = {}
+            self._memory[key] = parts
+            if len(self._memory) > self.capacity:
+                self._memory.popitem(last=False)
+        else:
+            self._memory.move_to_end(key)
+        if part not in parts:
+            parts[part] = np.array(compute(state, parameter), dtype=float)
+        return parts[part].copy()

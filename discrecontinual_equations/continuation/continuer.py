@@ -43,6 +43,10 @@ class Continuer(Solver):
         seed dimension, keeping the :class:`Solver` contract.
         """
         self._check_dimension(equation, initial_values)
+        with self._components.jacobian.retained():
+            return self._trace(initial_values)
+
+    def _trace(self, initial_values: list[float]) -> Branch:
         config = self._configuration()
         components = self._components
 

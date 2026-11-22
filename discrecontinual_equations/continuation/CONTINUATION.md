@@ -29,7 +29,7 @@ Continuer(Solver)                            # thin orchestrator
         ▼
 ContinuationComponents
 ├── ResidualFunction        (EquationResidual)          # sole domain coupling
-├── JacobianProvider        (FiniteDifferenceJacobian)
+├── JacobianProvider        (MemoizedJacobian over FiniteDifferenceJacobian)
 ├── LinearSolver            (LeastSquaresFallbackSolver)
 ├── SeedRefiner             (NewtonSeedRefiner)
 ├── Predictor               (TangentPredictor)
@@ -171,6 +171,11 @@ bifurcation, which is then localized by bisection:
   eigenvalues at the point tell the two apart.
 
 Stability at each point is read from the eigenvalues of the state Jacobian.
+The converged point's Jacobian is built once and shared: inside `Continuer.solve`
+the `MemoizedJacobian` the builder wraps around the configured provider hands the
+tangent, the branch-point and Hopf tests and the stability the same array, so a
+point costs `I + 1` Jacobians (`I` Newton iterations) rather than `I + 4`, with
+every stored number bit-identical to building each one afresh.
 
 ## Requirements on the derivative function
 

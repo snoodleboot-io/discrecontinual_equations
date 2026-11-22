@@ -66,11 +66,18 @@ class ContinuerBuilder:
         bifurcation-curve system rather than the plain equation residual.
         """
         linear_solver = AbstractFactory[LinearSolver].create(config.linear_solver)
+        # Every collaborator shares one memoizing wrapper, so the Jacobian at a
+        # converged point is built once per point inside ``Continuer.solve``.
         jacobian = AbstractFactory[JacobianProvider].create(
-            config.jacobian,
+            "memoized_jacobian",
             configuration={
-                "residual": residual,
-                "epsilon": config.finite_difference_epsilon,
+                "provider": AbstractFactory[JacobianProvider].create(
+                    config.jacobian,
+                    configuration={
+                        "residual": residual,
+                        "epsilon": config.finite_difference_epsilon,
+                    },
+                ),
             },
         )
         corrector = AbstractFactory[Corrector].create(
