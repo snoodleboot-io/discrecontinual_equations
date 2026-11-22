@@ -65,7 +65,9 @@ def _gh_network(field, guesses=None) -> HeteroclinicNetwork:
 
 def _log_flow(field):
     def rhs(_time: float, logs: np.ndarray) -> np.ndarray:
-        state = np.exp(logs)
+        # Below e^-300 a coordinate contributes nothing to x^2 terms, and clamping
+        # keeps f(x) / x a ratio of two nonzero numbers instead of 0 / 0.
+        state = np.exp(np.maximum(logs, -300.0))
         return np.array(field.eval(list(state))) / state
 
     return rhs
@@ -118,9 +120,12 @@ class TestGuckenheimerHolmesCycle(TestCase):
         the source and end at the target.
         """
         network = _gh_network(guckenheimer_holmes(_LAMBDA, _A1, _A2, _A3))
-        mesh = MeshSpec(half_length=20.0, intervals=400)
-        for connection in network.connections:
-            orbit = network.solve(connection, mesh, off_plane_bump=1.0e-2)
+        for index, connection in enumerate(network.connections):
+            mesh = network.mesh(connection, half_length=20.0, intervals=400)
+            seed = network.seed(connection, mesh)
+            times = np.linspace(-20.0, 20.0, 401)
+            seed[:, (index + 2) % 3] += 1.0e-2 * np.exp(-(times**2))
+            orbit = network.solve(connection, mesh, seed)
             source = network.saddle(connection.source).equilibrium
             target = network.saddle(connection.target).equilibrium
             assert orbit.subspace_defect < 1.0e-10
@@ -158,8 +163,8 @@ class TestGuckenheimerHolmesCycle(TestCase):
                 [np.sqrt(u), np.sqrt(radius_squared - u), np.zeros_like(u)],
             )
             errors.append(float(np.max(np.abs(orbit.solution.states - exact))))
-        assert errors[0] < 2.0e-3
-        assert 3.5 < errors[0] / errors[1] < 4.5
+        assert errors[0] < 1.5e-4
+        assert 3.9 < errors[0] / errors[1] < 4.1
 
     def test_stability_inequality_matches_the_parameter_condition(self):
         """``prod c_j > prod e_j`` from computed spectra iff ``2 a1 > a2 + a3``."""
@@ -197,9 +202,11 @@ class TestResidenceTimeGrowth(TestCase):
             [network.saddle(name).equilibrium for name in _NAMES],
             radius=0.1,
         )
-        assert itinerary.order[-9:] == [0, 1, 2, 0, 1, 2, 0, 1, 2]
+        order = itinerary.order
+        assert len(order) > 12
+        assert all(b == (a + 1) % 3 for a, b in itertools.pairwise(order))
         growth = itinerary.growth_ratios()
-        assert abs(growth[-1] / predicted[0] - 1.0) < 5.0e-3
+        assert abs(growth[-1] / predicted[0] - 1.0) < 1.0e-4
 
     def test_broken_cycle_residence_ratios_follow_each_saddle_pair(self):
         """With Z3 broken, each step grows by its own ``c_j / e_{j+1}``.
@@ -220,7 +227,7 @@ class TestResidenceTimeGrowth(TestCase):
             radius=0.1,
         )
         measured = itinerary.step_ratios(3)
-        assert np.max(np.abs(measured / predicted - 1.0)) < 1.0e-2
+        assert np.max(np.abs(measured / predicted - 1.0)) < 1.0e-4
 
     def test_may_leonard_cycle_grows_by_the_same_ratio(self):
         """The squared GH system is May-Leonard with alpha = a2/a1, beta = a3/a1.
@@ -252,7 +259,7 @@ class TestResidenceTimeGrowth(TestCase):
         times = np.linspace(0.0, 1500.0, 300001)
         states = np.exp(solution.sol(times).T)
         itinerary = Itinerary.measure(times, states, list(np.eye(3)), radius=0.1)
-        assert abs(itinerary.growth_ratios()[-1] / predicted - 1.0) < 5.0e-3
+        assert abs(itinerary.growth_ratios()[-1] / predicted - 1.0) < 1.0e-4
 
 
 class TestSymmetryBrokenNetwork(TestCase):
@@ -275,10 +282,7 @@ class TestSymmetryBrokenNetwork(TestCase):
         field = guckenheimer_holmes(_LAMBDA, _A1, _A2, _A3)
         continuation = NetworkContinuation(_gh_network(field), parameter_index=1)
         values = [1.0, 0.95, 0.9, 0.85, 0.8, 0.75]
-        points = continuation.trace(
-            values,
-            mesh=MeshSpec(half_length=24.0, intervals=480),
-        )
+        points = continuation.trace(values, half_length=24.0, intervals=480)
         assert [point.parameter for point in points] == values
         for point in points:
             exact = math.sqrt(point.parameter)
@@ -288,9 +292,24 @@ class TestSymmetryBrokenNetwork(TestCase):
             for orbit in point.orbits.values():
                 assert orbit.subspace_defect < 1.0e-10
                 assert orbit.resolution.estimate < 5.0e-3
-        stable = [point.stability_ratios[_NAMES] > 1.0 for point in points]
-        assert stable[0]
-        assert not stable[-1]
+
+    def test_cycle_loses_stability_before_its_connection_breaks(self):
+        """``rho`` falls through one near ``lam_2 = 0.71``, ahead of the break at 2/3.
+
+        Closed form: ``rho(0.72) = 1.144`` and ``rho(0.70) = 0.862``. No orbits are
+        solved here - only the saddles and spectra are continued - because near the
+        break the target's contraction ``c_2`` is small and the orbit's approach to
+        it slow, which is a resolution question rather than a stability one.
+        """
+        field = guckenheimer_holmes(_LAMBDA, _A1, _A2, _A3)
+        continuation = NetworkContinuation(_gh_network(field), parameter_index=1)
+        values = [1.0, 0.9, 0.8, 0.72, 0.70, 0.68]
+        points = continuation.trace(values)
+        ratios = [point.stability_ratios[_NAMES] for point in points]
+        for point, ratio in zip(points, ratios, strict=True):
+            assert abs(ratio - self._ratio(point.parameter)) < 1.0e-9 * ratio
+            assert min(min(pair) for pair in point.margins.values()) > 0.0
+        assert [ratio > 1.0 for ratio in ratios] == [True] * 4 + [False] * 2
 
     def test_continuation_locates_the_first_break(self):
         field = guckenheimer_holmes(_LAMBDA, _A1, _A2, _A3)
