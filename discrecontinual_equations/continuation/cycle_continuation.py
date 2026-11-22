@@ -82,6 +82,11 @@ _DOUBLING_SAFETY = 2.0
 # before it is refused as another cycle or none (see
 # :meth:`CycleContinuation._plausible`).
 _SEED_PERIOD_RATIO = 2.0
+# The same for its size: the largest distance of a state from the mean state.
+# A seed's size comes from the same integration or normal form as its period;
+# a cycle many times smaller is a spurious one round an equilibrium (see
+# :meth:`CycleContinuation._plausible`).
+_SEED_EXTENT_RATIO = 2.0
 # The damped seed correction: as many iterations as the adaptive orbit solver
 # allows, halving each step at most thirty times, the period kept above a tenth
 # of the seed's - the floor :class:`RobustPeriodicOrbit` uses.
@@ -97,6 +102,11 @@ def _near(period: float, expected: float) -> bool:
         np.isfinite(period)
         and expected / _SEED_PERIOD_RATIO <= period <= expected * _SEED_PERIOD_RATIO,
     )
+
+
+def _extent(states: np.ndarray) -> float:
+    """The largest distance of a state from the mean state."""
+    return float(np.max(np.linalg.norm(states - states.mean(axis=0), axis=1)))
 
 
 class _VectorField:
@@ -1533,14 +1543,32 @@ class CycleContinuation:
             # The trapezoidal stage handed on an iterate so far off that the
             # dense fallback could not factor it: no cycle there either.
             staged = None
-        if staged is not None and self._plausible(staged, nodes, seed.period):
+        size = _extent(np.asarray(seed.states, dtype=float))
+        if staged is not None and self._plausible(
+            staged,
+            nodes,
+            seed.period,
+            extent=size,
+        ):
             return staged
         direct = self._direct_seed(seed, nodes)
-        if direct is not None and self._plausible(direct, nodes, seed.period):
+        if direct is not None and self._plausible(
+            direct,
+            nodes,
+            seed.period,
+            extent=size,
+        ):
             return direct
         return None
 
-    def _plausible(self, unknowns: np.ndarray, nodes: int, expected: float) -> bool:
+    def _plausible(
+        self,
+        unknowns: np.ndarray,
+        nodes: int,
+        expected: float,
+        *,
+        extent: float | None = None,
+    ) -> bool:
         """Whether a solved seed is a cycle near the one the seed described.
 
         The period must be finite, positive and within ``_SEED_PERIOD_RATIO``
@@ -1548,14 +1576,23 @@ class CycleContinuation:
         a normal form and is never that far out, while every collocation
         admits the collapsed solution at period zero or below. The states must
         also span more than :data:`_NOISE_FLOOR` of their size, which an
-        equilibrium at a sensible period does not.
+        equilibrium at a sensible period does not, and - given the seed's own
+        ``extent`` - be within ``_SEED_EXTENT_RATIO`` of it either way. A
+        coarse mesh round a degenerate equilibrium has spurious small cycles
+        at a sensible period: the fold of cycles at ``mu = 0`` on 3 intervals
+        with ``m = 1`` took one of radius 4e-4 for a seed of radius 1, and its
+        multipliers, both about one, let it pass :meth:`CyclePoint.resolved`.
         """
         dimension = self._dimension
         states = unknowns[: nodes * dimension].reshape(nodes, dimension)
         if not _near(float(unknowns[nodes * dimension]), expected):
             return False
-        extent = float(np.max(np.linalg.norm(states - states.mean(axis=0), axis=1)))
-        return extent > _NOISE_FLOOR * max(1.0, float(np.max(np.abs(states))))
+        size = _extent(states)
+        if size <= _NOISE_FLOOR * max(1.0, float(np.max(np.abs(states)))):
+            return False
+        return extent is None or (
+            extent / _SEED_EXTENT_RATIO <= size <= extent * _SEED_EXTENT_RATIO
+        )
 
     def _direct_seed(self, seed: CycleSeed, nodes: int) -> np.ndarray | None:
         """The seed corrected on the target scheme itself, with a damped Newton.
