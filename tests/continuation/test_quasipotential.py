@@ -32,6 +32,8 @@ from discrecontinual_equations.continuation.quasipotential import (
     EquilibriumAttractor,
     GeometricMinimumAction,
     OrderedLineIntegral,
+    _action,
+    _stationary_fraction,
 )
 from discrecontinual_equations.continuation.stochastic import Ito
 from tests.continuation.fields import (
@@ -56,6 +58,15 @@ from tests.continuation.quasipotential_systems import (
 _IDENTITY = np.eye(2)
 # Each refinement halves the spacing on the same box: 2^k * 20 intervals.
 _COUNTS = (41, 81, 161)
+# U = 2 reaches x = -sqrt(3) and |y| = sqrt(2), inside [-2, 1] x [-1.5, 1.5].
+_GRADIENT_LEVEL = 2.0
+# The largest sublevel set of (1/2) x^T S^-1 x inside [-1.5, 1.5]^2 with a margin.
+_ROTATING_LEVEL = 1.5
+# Observed orders sit at 1.87, 1.89 and 1.23, 0.95 (module docstring): the
+# double well is dominated by a second-order quadrature term, the rotating case
+# by the method's first-order interpolation.
+_GRADIENT_ORDER = 1.7
+_ROTATING_ORDER = 0.9
 
 
 def _orders(errors):
@@ -93,12 +104,6 @@ def _rotating_error(count):
     # the box contains, the answer does not depend on the boundary at all.
     inside = exact <= _ROTATING_LEVEL
     return float(np.max(np.abs(field.values.ravel()[inside] - exact[inside])))
-
-
-# U = 2 reaches x = -sqrt(3) and |y| = sqrt(2), inside [-2, 1] x [-1.5, 1.5].
-_GRADIENT_LEVEL = 2.0
-# The largest sublevel set of (1/2) x^T S^-1 x inside [-1.5, 1.5]^2 with a margin.
-_ROTATING_LEVEL = 1.5
 
 
 class TestGradientQuasipotential(TestCase):
@@ -172,6 +177,24 @@ class TestMinimumActionPath(TestCase):
             1.0e-2
         )
 
+    def test_tracing_from_the_other_basin_stalls_at_the_saddle_and_says_so(self):
+        # Through a saddle -(f + D grad U) vanishes and U stops falling, so the
+        # trace stops beside it. It must say so and must not jump to the well.
+        grid, solver, field = _double_well_field(161)
+        path = solver.minimum_action_path(field, [0.5, 0.3], end=WELL)
+        assert not path.arrived
+        last = path.states[-1]
+        assert np.linalg.norm(last - np.array(SADDLE)) < 0.15
+        assert np.linalg.norm(last - np.array(WELL)) > 0.8
+        steps = np.linalg.norm(np.diff(path.states, axis=0), axis=1)
+        assert np.max(steps) <= grid.spacings[0]
+
+    def test_a_trace_that_arrives_ends_on_the_equilibrium(self):
+        _grid, solver, field = _double_well_field(161)
+        path = solver.minimum_action_path(field, [-0.3, 0.6], end=WELL)
+        assert path.arrived
+        assert np.allclose(path.states[-1], WELL)
+
     def test_gmam_between_the_wells_crosses_the_saddle(self):
         # The initial guess bows far off the axis; the method has to find it.
         gmam = GeometricMinimumAction(double_well(), constant_noise(_IDENTITY))
@@ -196,6 +219,19 @@ class TestMinimumActionPath(TestCase):
         path = gmam.path(initial)
         exact = float(rotating_quasipotential(target[None, :])[0])
         assert abs(path.action - exact) / exact < 3.0e-3
+
+    def test_gmam_reports_whether_it_converged(self):
+        gmam = GeometricMinimumAction(double_well(), constant_noise(_IDENTITY))
+        angle = np.linspace(0.0, math.pi, 41)
+        initial = np.column_stack([-np.cos(angle), 0.8 * np.sin(angle)])
+        assert gmam.path(initial).converged
+        cut = GeometricMinimumAction(
+            double_well(),
+            constant_noise(_IDENTITY),
+            iterations=5,
+        ).path(initial)
+        assert not cut.converged
+        assert cut.iterations == 5
 
     def test_gmam_lands_on_the_same_path_whatever_its_step(self):
         # The step is how fast the chain relaxes, not where it ends; a fixed point
@@ -283,6 +319,41 @@ class TestRefusals(TestCase):
             solver.solve(EquilibriumAttractor([3.0, 0.0]))
 
 
-# Filled in from the measured orders once the method exists; see the module.
-_GRADIENT_ORDER = 1.7
-_ROTATING_ORDER = 0.9
+class TestTriangleUpdate(TestCase):
+    """The closed-form minimiser over a triangle's base, against brute force.
+
+    The double well never needs the triangle update - with it switched off its
+    errors agree to five digits - so this checks the root directly: for random
+    metrics, drifts, base edges, targets and rises, ``F`` at the closed-form
+    ``s`` must be the minimum of ``F`` over a fine grid of ``s`` in ``[0, 1]``.
+    """
+
+    def test_the_closed_form_root_is_the_minimum_over_the_base(self):
+        rng = np.random.default_rng(0)
+        count = 4000
+        factor = rng.normal(size=(count, 2, 2))
+        metric = factor @ factor.transpose(0, 2, 1) + 0.1 * np.eye(2)
+        drift = rng.normal(size=(count, 2)) * rng.choice([0.0, 1.0, 3.0], (count, 1))
+        coefficients = np.column_stack(
+            [drift, metric[:, 0, 0], metric[:, 0, 1], metric[:, 1, 1]],
+        )
+        edge = tuple(rng.integers(-1, 2, count).astype(float) for _ in range(2))
+        reach = tuple(rng.integers(-8, 9, count).astype(float) for _ in range(2))
+        rise = 0.5 * rng.normal(size=count)
+        fraction = _stationary_fraction(edge, reach, rise, coefficients)
+
+        def cost(s):
+            return s * rise + _action(
+                reach[0] - s * edge[0],
+                reach[1] - s * edge[1],
+                coefficients,
+            )
+
+        brute = np.min([cost(np.full(count, s)) for s in np.linspace(0, 1, 2001)], 0)
+        moving = (edge[0] != 0.0) | (edge[1] != 0.0)
+        degenerate = ((reach[0] == 0.0) & (reach[1] == 0.0)) | (
+            (reach[0] == edge[0]) & (reach[1] == edge[1])
+        )
+        kept = moving & ~degenerate
+        assert kept.sum() > count // 2
+        assert np.max(cost(fraction)[kept] - brute[kept]) < 1.0e-9

@@ -403,7 +403,11 @@ def _system() -> StageSystem:
             "the origin the noise vanishes, U diverges logarithmically, and the "
             "cells there are not claimed. The curves are minimum action paths, "
             "traced back along -(f + D grad U) from (0.3, 0) and (1.35, 0.85) "
-            "until U stops falling, which is within a cell or two of the cycle."
+            "until U stops falling. For mu of 0.2 and above that is within two "
+            "and a half cells of the cycle, mostly under two; below it, where the "
+            "cycle is a few cells from the origin, the paths stall up to three "
+            "cells short, and at the smallest mu the one from (0.3, 0) barely "
+            "moves."
         ),
     )
 

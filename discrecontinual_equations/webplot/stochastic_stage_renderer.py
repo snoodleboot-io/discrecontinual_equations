@@ -64,14 +64,17 @@ class StochasticStageRenderer(StageRenderer):
         panel = _QUASIPOTENTIAL_PANEL if optional else ""
         toggle = _QUASIPOTENTIAL_TOGGLE if optional else ""
         return (
-            _TEMPLATE.replace("__TITLE__", _escape(system.title))
+            # The template's own placeholders first, so no text substituted
+            # into it - a title, the library, the payload - can be mistaken
+            # for one.
+            _TEMPLATE.replace("__QUASIPOTENTIAL_PANEL__", panel)
+            .replace("__QUASIPOTENTIAL_TOGGLE__", toggle)
+            .replace("__TITLE__", _escape(system.title))
             .replace("__SUBTITLE__", _escape(system.subtitle))
             .replace("__NOTE__", _escape(system.note or ""))
             .replace("__EQUATION__", equation)
             .replace("__D3_SOURCE__", self._library)
             .replace("__STAGE_JSON__", json.dumps(stage_payload(scene)))
-            .replace("__QUASIPOTENTIAL_PANEL__", panel)
-            .replace("__QUASIPOTENTIAL_TOGGLE__", toggle)
         )
 
 

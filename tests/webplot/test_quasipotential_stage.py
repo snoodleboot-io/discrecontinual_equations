@@ -27,9 +27,11 @@ from discrecontinual_equations.webplot.quasipotential_stage import (
     with_quasipotential,
 )
 from discrecontinual_equations.webplot.stage import stage_payload
+from discrecontinual_equations.webplot.stochastic_stage_builder import density_window
 from discrecontinual_equations.webplot.stochastic_stage_renderer import (
     StochasticStageRenderer,
 )
+from examples.continuation import stage_noisy_hopf as film
 from tests.continuation.fields import ConformalColumn
 from tests.webplot.test_stochastic_stage import (
     _SIGMA,
@@ -148,3 +150,27 @@ class TestQuasipotentialRenderer(TestCase):
             path = Path(f"/tmp/quasipotential_stage_block_{index}.js")  # noqa: S108
             path.write_text(block)
             subprocess.run([node, "--check", str(path)], check=True)  # noqa: S603
+
+
+class TestNoisyHopfFilmQuasipotential(TestCase):
+    """The film's own marches, on its own grid, against its own closed form.
+
+    Measured on the built page, within ``U <= 4`` on the drawn box and beyond four
+    cells of the origin: 0.03 to 0.08 for every frame with ``mu >= 0.1``, and 0.19
+    at ``mu = 0.025``, where the cycle is three cells from the singular origin.
+    """
+
+    def test_the_marched_u_follows_the_closed_form_the_page_quotes(self):
+        grid = film.quasipotential_grid()
+        xs, ys, _extent = density_window(grid, film.BOX)
+        points = grid.points().reshape(*grid.shape, 2)[xs, ys].reshape(-1, 2)
+        radius = np.linalg.norm(points, axis=1)
+        for mu, bar in ((0.025, 0.25), (1.0, 0.08)):
+            problem = film.quasipotential_at(mu, grid)
+            assert problem is not None
+            solver, attractor = problem
+            values = solver.solve(attractor).values[xs, ys].ravel()
+            exact = film.exact_quasipotential(mu, points)
+            kept = (exact <= film.QUASIPOTENTIAL_CAP) & (radius > 4 * grid.spacings[0])
+            assert np.max(np.abs(values[kept] - exact[kept])) < bar
+        assert film.quasipotential_at(0.0, grid) is None

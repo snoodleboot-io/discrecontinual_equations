@@ -141,6 +141,7 @@ _UNKNOWN, _ACCEPTED = 0, 2
 _CONSTANT_TOLERANCE = 1.0e-9
 _DESCENT_STEP = 0.5
 _DESCENT_MAX_STEPS = 20000
+_ARRIVAL_CELLS = 2.0
 
 
 class EquilibriumAttractor:
@@ -282,12 +283,20 @@ class GridQuasipotential:
     below it ``U`` is the initialisation's, not the march's.
     """
 
-    __slots__ = ["_floor", "_grid", "_values"]
+    __slots__ = ["_floor", "_grid", "_interpolator", "_values"]
 
     def __init__(self, grid: DensityGrid, values: np.ndarray, floor: float) -> None:
         self._grid = grid
         self._values = np.asarray(values, dtype=float).reshape(grid.shape)
         self._floor = float(floor)
+        # Built once: a traced path asks for U at every step, and building the
+        # interpolator per call was most of what tracing a path cost.
+        self._interpolator = RegularGridInterpolator(
+            (grid.axis(0), grid.axis(1)),
+            self._values,
+            bounds_error=False,
+            fill_value=np.inf,
+        )
 
     @property
     def grid(self) -> DensityGrid:
@@ -304,17 +313,10 @@ class GridQuasipotential:
         """The largest initialised value."""
         return self._floor
 
-    def at(self, state: Sequence[float]) -> float:
-        """``U`` at a state, bilinearly interpolated."""
-        return float(self._interpolator()(np.asarray(state, dtype=float)[None, :])[0])
-
-    def _interpolator(self) -> RegularGridInterpolator:
-        return RegularGridInterpolator(
-            (self._grid.axis(0), self._grid.axis(1)),
-            self._values,
-            bounds_error=False,
-            fill_value=np.inf,
-        )
+    def at(self, state: Sequence[float] | np.ndarray) -> float:
+        """``U`` at a state, bilinearly interpolated; ``inf`` off the grid."""
+        point = np.asarray(state, dtype=float)[None, :]
+        return float(self._interpolator(point)[0])
 
     def gradient(self) -> tuple[RegularGridInterpolator, RegularGridInterpolator]:
         """Interpolators for the two components of ``grad U``, central differences."""
@@ -323,14 +325,20 @@ class GridQuasipotential:
             self._grid.axis(0),
             self._grid.axis(1),
         )
-        return tuple(
+        axes = (self._grid.axis(0), self._grid.axis(1))
+        return (
             RegularGridInterpolator(
-                (self._grid.axis(0), self._grid.axis(1)),
-                component,
+                axes,
+                first,
                 bounds_error=False,
                 fill_value=np.nan,
-            )
-            for component in (first, second)
+            ),
+            RegularGridInterpolator(
+                axes,
+                second,
+                bounds_error=False,
+                fill_value=np.nan,
+            ),
         )
 
 
@@ -340,13 +348,32 @@ class MinimumActionPath:
     ``states`` runs as the path was produced: from the chosen point back to the
     attractor for a traced path, from the first end to the second for a relaxed
     one. ``action`` is the action of going the uphill way, attractor to point.
+
+    The two flags say whether to believe it, each for the method it belongs to,
+    in the way :class:`~.corrector.CorrectionResult` reports a corrector that ran
+    out of iterations: ``arrived`` is whether a traced path reached its attractor
+    rather than stalling short of it - at a saddle, say - and ``converged`` is
+    whether a relaxed chain stopped moving before its iteration limit, with
+    ``iterations`` the number it took. Each is ``True`` for the method that does
+    not set it.
     """
 
-    __slots__ = ["action", "states"]
+    __slots__ = ["action", "arrived", "converged", "iterations", "states"]
 
-    def __init__(self, states: np.ndarray, action: float) -> None:
+    def __init__(
+        self,
+        states: np.ndarray,
+        action: float,
+        *,
+        arrived: bool = True,
+        converged: bool = True,
+        iterations: int = 0,
+    ) -> None:
         self.states = np.asarray(states, dtype=float)
         self.action = float(action)
+        self.arrived = arrived
+        self.converged = converged
+        self.iterations = iterations
 
 
 class _HalfLattice:
@@ -458,7 +485,10 @@ class OrderedLineIntegral:
         )
         self._offsets = (first[keep], second[keep])
 
-    def solve(self, attractor: EquilibriumAttractor | CycleAttractor):
+    def solve(
+        self,
+        attractor: EquilibriumAttractor | CycleAttractor,
+    ) -> GridQuasipotential:
         """March ``U`` out from ``attractor`` over the whole grid."""
         lattice = _HalfLattice(self._grid, self._drift, self._noise)
         march = _March(self._grid, lattice, self._offsets)
@@ -469,20 +499,32 @@ class OrderedLineIntegral:
     def minimum_action_path(
         self,
         field: GridQuasipotential,
-        start: Sequence[float],
-        end: Sequence[float] | None = None,
+        start: Sequence[float] | np.ndarray,
+        end: Sequence[float] | np.ndarray | None = None,
         step: float | None = None,
     ) -> MinimumActionPath:
         """Trace the minimum action path from ``start`` back to the attractor.
 
         The path is followed along ``-(f + D grad U)`` in steps of ``step`` in arc
         length (half a cell by default) by the midpoint rule, and stops when a step
-        would raise ``U``, which on the way down happens only on arrival; ``end``,
-        when given, is
-        appended as the last state (an equilibrium's own state, say). The action is
-        accumulated along the way by the same midpoint quadrature the march uses,
-        plus ``U`` where the path stopped, so it is an independent estimate of
-        ``U(start)``.
+        would raise ``U``. That happens at the attractor, where ``U`` is least, but
+        not only there: from a state in another basin the path runs down to the
+        saddle between the basins and stalls beside it, since ``-(f + D grad U)``
+        vanishes there and the grid cannot say which way to fall; it also stalls
+        where the grid does not resolve ``U``, as beside a point where the noise
+        vanishes. ``arrived`` on the result says which. A path is counted as
+        arrived when it stopped within two cells of ``end`` - an equilibrium's own
+        state, which is then appended as the last state - or, with no ``end``, when
+        ``U`` where it stopped is no more than the attractor's initialised values.
+        Around a cycle that band is a cell and a half wide in ``U``'s terms, so on
+        a coarse grid or about a small cycle "arrived" can mean a few cells out.
+        A path that has not arrived is returned as far as it got, without ``end``.
+        Paths that must cross a saddle are what :class:`GeometricMinimumAction` is
+        for.
+
+        The action is accumulated along the way by the same midpoint quadrature the
+        march uses, plus ``U`` where the path stopped, so for an arrived path it is
+        an independent estimate of ``U(start)``.
         """
         spacing = float(np.min(self._grid.spacings))
         length = step or _DESCENT_STEP * spacing
@@ -511,9 +553,16 @@ class OrderedLineIntegral:
             current = following
             states.append(current)
         remaining = field.at(current)
-        if end is not None:
-            states.append(np.asarray(end, dtype=float))
-        return MinimumActionPath(np.array(states), action + remaining)
+        if end is None:
+            arrived = remaining <= field.floor
+        else:
+            target = np.asarray(end, dtype=float)
+            arrived = bool(
+                np.linalg.norm(current - target) <= _ARRIVAL_CELLS * spacing,
+            )
+            if arrived:
+                states.append(target)
+        return MinimumActionPath(np.array(states), action + remaining, arrived=arrived)
 
     def _backward(self, state: np.ndarray, gradient) -> np.ndarray:
         slope = np.array([component(state[None, :])[0] for component in gradient])
@@ -735,22 +784,35 @@ class GeometricMinimumAction:
         self._tolerance = tolerance
 
     def path(self, initial: Sequence[Sequence[float]]) -> MinimumActionPath:
-        """Relax ``initial`` (states from one end to the other) to the minimiser."""
+        """Relax ``initial`` (states from one end to the other) to the minimiser.
+
+        The chain is relaxed until no node moves by more than ``tolerance`` in a
+        step, or for ``iterations`` steps; the result's ``converged`` says which,
+        and a chain still moving is returned as it stands rather than refused.
+        """
         states = np.asarray(initial, dtype=float)
         factor = self._constant_factor(states)
         inverse = np.linalg.inv(factor)
         chain = states @ inverse.T
         nodes = chain.shape[0]
         spacing = 1.0 / (nodes - 1)
-        for _ in range(self._iterations):
+        converged = False
+        taken = 0
+        for taken in range(1, self._iterations + 1):  # noqa: B007 (read after)
             following = self._relax(chain, factor, inverse, spacing)
             following = _equal_arc_length(following)
             change = float(np.max(np.abs(following - chain)))
             chain = following
             if change < self._tolerance:
+                converged = True
                 break
         result = chain @ factor.T
-        return MinimumActionPath(result, self._action(chain, factor, inverse))
+        return MinimumActionPath(
+            result,
+            self._action(chain, factor, inverse),
+            converged=converged,
+            iterations=taken,
+        )
 
     def _constant_factor(self, states: np.ndarray) -> np.ndarray:
         cells = np.array(

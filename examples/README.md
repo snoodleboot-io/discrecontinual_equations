@@ -112,9 +112,10 @@ by Euler-Maruyama from a generator seeded in the page; a density panel shows
 the stationary density solved on a grid at every frame, with its interior
 maxima; an optional quasipotential panel beside it shows the Freidlin-Wentzell
 quasipotential measured from the cycle, marched by ordered line integrals,
-with two minimum action paths drawn over it; and the spectral clock is replaced by the top Lyapunov exponent drawn
-against the parameter, since for a stochastic system that one number's sign is
-what the dynamical bifurcation changes. The timeline marks both thresholds as
+with two minimum action paths drawn over it; and the spectral clock is
+replaced by the top Lyapunov exponent drawn against the parameter, since for a
+stochastic system that one number's sign is what the dynamical bifurcation
+changes. The timeline marks both thresholds as
 rules at their own parameter values. Its time goes on the exponent, a
 simulated path at each of about seven parameter values, on sixty sparse
 solves of the stationary Fokker-Planck equation, one per frame with a density,
