@@ -73,10 +73,10 @@ class ContinuerBuilder:
             configuration={
                 "provider": AbstractFactory[JacobianProvider].create(
                     config.jacobian,
-                    configuration={
-                        "residual": residual,
-                        "epsilon": config.finite_difference_epsilon,
-                    },
+                    configuration=ContinuerBuilder._jacobian_configuration(
+                        config,
+                        residual,
+                    ),
                 ),
             },
         )
@@ -153,6 +153,21 @@ class ContinuerBuilder:
             ),
         )
         return Continuer(solver_config=config, components=components)
+
+    @staticmethod
+    def _jacobian_configuration(
+        config: ContinuationConfig,
+        residual: ResidualFunction,
+    ) -> dict[str, Any]:
+        # The sparsity is passed only when declared, so a provider that knows
+        # nothing of it is still built from the plain residual and step.
+        configuration: dict[str, Any] = {
+            "residual": residual,
+            "epsilon": config.finite_difference_epsilon,
+        }
+        if config.jacobian_sparsity != "dense":
+            configuration["sparsity"] = config.jacobian_sparsity
+        return configuration
 
     @staticmethod
     def _root_finder(config: ContinuationConfig) -> ScalarRootFinder:

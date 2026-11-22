@@ -17,6 +17,7 @@ from math import factorial
 import numpy as np
 
 from discrecontinual_equations.continuation.jet import Jet
+from discrecontinual_equations.continuation.sparsity import SparsityPattern
 from discrecontinual_equations.function.function import Function
 
 _DEFAULT_EPSILON = 1e-6
@@ -46,8 +47,24 @@ class DerivativeProvider(ABC):
         function: Function,
         point: np.ndarray,
         time: float,
+        sparsity: SparsityPattern | None = None,
     ) -> np.ndarray:
-        """Return the state Jacobian, column by column from unit directions."""
+        """Return the state Jacobian, column by column from unit directions.
+
+        With a ``sparsity`` pattern, one first-order pass along each group's 0/1
+        direction gives that group's compressed column (Curtis-Powell-Reid
+        seeding), so the Jacobian costs one pass per group instead of one per
+        column; each entry reads only the states its row depends on, so the
+        result equals the column-by-column one.
+        """
+        if sparsity is not None:
+            compressed = np.column_stack(
+                [
+                    self.taylor(function, point, direction, 1, time)[1].real
+                    for direction in sparsity.directions()
+                ],
+            )
+            return sparsity.expand(compressed)
         dimension = point.size
         columns = []
         for index in range(dimension):

@@ -4,6 +4,7 @@ from abc import ABC, abstractmethod
 from collections import OrderedDict
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from typing import Literal
 
 import numpy as np
 
@@ -11,6 +12,7 @@ from discrecontinual_equations.continuation.residual import (
     DifferentiableResidual,
     ResidualFunction,
 )
+from discrecontinual_equations.continuation.sparsity import SparsityPattern
 
 _CENTRAL_DIFFERENCE_POINTS = 2.0
 
@@ -46,15 +48,72 @@ class JacobianProvider(ABC):
 
 
 class FiniteDifferenceJacobian(JacobianProvider):
-    """Central finite-difference Jacobian; needs no analytic derivatives."""
+    """Central finite-difference Jacobian; needs no analytic derivatives.
 
-    __slots__ = ["_epsilon", "_residual"]
+    Dense by default: ``2n`` residual evaluations, one pair per column. Given a
+    ``sparsity`` - a :class:`~.sparsity.SparsityPattern`, for each equation the
+    list of state indices it depends on, or ``"detect"`` to find the pattern from
+    dense Jacobians at the first point it is asked about - it differences each
+    group of structurally orthogonal columns in one pair instead (Curtis, Powell
+    and Reid), ``2g`` evaluations for ``g`` groups, and every entry is
+    bit-identical to the dense one as long as the pattern covers the field's.
+    """
 
-    def __init__(self, residual: ResidualFunction, epsilon: float) -> None:
+    __slots__ = ["_epsilon", "_pattern", "_residual", "_sparsity"]
+
+    def __init__(
+        self,
+        residual: ResidualFunction,
+        epsilon: float,
+        sparsity: SparsityPattern | list[list[int]] | Literal["detect"] | None = None,
+    ) -> None:
         self._residual = residual
         self._epsilon = epsilon
+        self._sparsity = sparsity
+        self._pattern: SparsityPattern | None = (
+            sparsity if isinstance(sparsity, SparsityPattern) else None
+        )
 
     def state_jacobian(self, state: np.ndarray, parameter: float) -> np.ndarray:
+        pattern = self._resolved_pattern(state, parameter)
+        if pattern is None:
+            return self._dense(state, parameter)
+        return self._grouped(state, parameter, pattern)
+
+    def _resolved_pattern(
+        self,
+        state: np.ndarray,
+        parameter: float,
+    ) -> SparsityPattern | None:
+        if self._pattern is not None or self._sparsity is None:
+            return self._pattern
+        if self._sparsity == "detect":
+            self._pattern = SparsityPattern.detect(
+                lambda point: self._dense(point, parameter),
+                np.asarray(state, dtype=float),
+            )
+        elif isinstance(self._sparsity, list):
+            self._pattern = SparsityPattern.from_rows(self._sparsity, state.size)
+        return self._pattern
+
+    def _grouped(
+        self,
+        state: np.ndarray,
+        parameter: float,
+        pattern: SparsityPattern,
+    ) -> np.ndarray:
+        directions = pattern.directions()
+        compressed = np.zeros((pattern.mask.shape[0], directions.shape[0]))
+        for group, direction in enumerate(directions):
+            step = self._epsilon * direction
+            forward = self._residual.evaluate(state + step, parameter)
+            backward = self._residual.evaluate(state - step, parameter)
+            compressed[:, group] = (forward - backward) / (
+                _CENTRAL_DIFFERENCE_POINTS * self._epsilon
+            )
+        return pattern.expand(compressed)
+
+    def _dense(self, state: np.ndarray, parameter: float) -> np.ndarray:
         dimension = state.size
         jacobian = np.zeros((dimension, dimension))
         for column in range(dimension):
