@@ -7,10 +7,15 @@ field), and no other stable state - the mixed states of weaker coupling have
 gone. With independent noise ``sigma dW_i`` on every cell (``sigma^2 = 1/2``) the
 state hops between the two, and a target field ``eps`` lengthens the stay in the
 well it favours and shortens the other: the difference of the mean residence times
-is the sensor's response. The two wells are separated not by a saddle point but by
-the saddle *cycle* of the rotating wave born at ``lambda = -2a``, so no Kramers or
-Eyring-Kramers formula holds (the prefactor of an escape through a saddle cycle
-oscillates with ``log sigma``); the times here come only from the two routes of
+is the sensor's response. The two wells are not separated by a saddle point: at
+``lambda = -0.5`` the only equilibria are the two attractors and the origin, which
+repels in all three directions (found by Newton from a ``5^3`` lattice of starts),
+so no equilibrium can attract orbits on the basin boundary and, by
+Poincare-Bendixson on that surface, it carries a periodic orbit of saddle type.
+The Eyring-Kramers formula is for a point saddle and does not apply; for escape
+through an unstable periodic orbit the prefactor need not even converge as the
+noise falls (cycling; Berglund, arXiv 1106.5799, Section 4.3). The times here come
+only from the two routes of
 :mod:`~discrecontinual_equations.continuation.first_passage`.
 
 *Grid.* The backward Kolmogorov problem on a ``41^3`` grid on ``[-2.2, 2.2]^3``,
@@ -308,9 +313,8 @@ def _efield_residence_response() -> Scene:
         "quantity the ensemble estimates, within 0.2% of the attractors' time "
         "here. Zero field: 0.6 +- 6.7; 0.05: 193 +- 11 against the grid's 197; "
         "0.1: 522 +- 28 against 539. The response is odd in the field and zero "
-        "at zero field to Monte-Carlo error. The wells are separated by a saddle "
-        "cycle, "
-        "so no Kramers formula applies.",
+        "at zero field to Monte-Carlo error. The basins meet at a saddle-type "
+        "periodic orbit, not a saddle point, so no Kramers formula applies.",
     )
 
 

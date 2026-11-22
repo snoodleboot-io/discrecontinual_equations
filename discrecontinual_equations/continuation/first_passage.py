@@ -67,11 +67,12 @@ three assumptions that the grid does not need, and the names say which:
 * *overdamped*: the state is the position of a first-order (Smoluchowski)
   equation - no inertia, no velocity variable - and ``D`` is non-singular; and
 * *a single non-degenerate saddle between two point attractors*, with the
-  quasipotential smooth along the most probable path. Where the basins are
-  separated by a saddle *cycle* instead - the three-cell ring's rotating wave is
-  one - there is no such formula: the prefactor oscillates with ``log eps``
-  (Day's cycling; Berglund, Section 4.3) and only the grid and the ensemble
-  give the time.
+  quasipotential smooth along the most probable path. Where the basins meet at
+  a periodic orbit of saddle type instead - as on the three-cell ring of the
+  residence pages, whose only other equilibrium is a repeller -
+  the formula does not apply: for escape through an unstable periodic orbit the
+  prefactor need not converge at all (Day's cycling; Berglund, Section 4.3),
+  and only the grid and the ensemble give the time.
 
 In one dimension, for ``dx = -V'(x) dt + sigma dW`` started at ``x`` with a
 reflecting wall at ``a`` and the target ``[b, inf)``, the exact time is the double
