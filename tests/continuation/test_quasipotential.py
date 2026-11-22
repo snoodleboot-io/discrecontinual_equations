@@ -427,20 +427,34 @@ def _maier_stein_field(scale):
     return grid, solver, solver.solve(EquilibriumAttractor(WELL))
 
 
-def _paper_cycle_error(count):
-    grid = DensityGrid.box([-2.0, -2.0], [2.0, 2.0], [count, count])
+def _paper_cycle():
     angle = np.linspace(0.0, 2.0 * math.pi, 400, endpoint=False)
+    return CycleAttractor(np.column_stack([np.cos(angle), np.sin(angle)]))
+
+
+@functools.cache
+def _paper_cycle_field(count):
+    """SDE (24) about the unit circle, and ``(r^2, U - exact)`` per grid point."""
+    grid = DensityGrid.box([-2.0, -2.0], [2.0, 2.0], [count, count])
     field = OrderedLineIntegral(
         system(PaperCycleField),
         constant_noise(_IDENTITY),
         grid,
-    ).solve(CycleAttractor(np.column_stack([np.cos(angle), np.sin(angle)])))
+    ).solve(_paper_cycle())
     points = grid.points()
     squared = np.sum(points * points, axis=1)
-    exact = 0.5 * (squared - 1.0) ** 2
+    return grid, squared, field.values.ravel() - 0.5 * (squared - 1.0) ** 2
+
+
+def _paper_cycle_error(count):
+    _grid, squared, error = _paper_cycle_field(count)
     # {U <= 4.5} is the disc r <= 2, which the box contains; 1.9 keeps a margin.
-    inside = squared <= 1.9**2
-    return float(np.max(np.abs(field.values.ravel()[inside] - exact[inside])))
+    return float(np.max(np.abs(error[squared <= 1.9**2])))
+
+
+def _paper_cycle_band_error(count):
+    _grid, squared, error = _paper_cycle_field(count)
+    return float(np.max(np.abs(error[np.abs(np.sqrt(squared) - 1.0) < 0.1])))
 
 
 def _anisotropic_gradient_error(count):
@@ -482,6 +496,31 @@ class TestPublishedCases(TestCase):
         # Measured 0.0899, 0.0221 (and 0.00453 at 321): orders 2.02, 2.29.
         errors = [_paper_cycle_error(count) for count in (81, 161)]
         assert errors[1] < 3.0e-2
+        assert min(_orders(errors)) > 1.8
+
+    def test_the_cycle_starts_from_the_quasipotential_not_a_straight_climb(self):
+        # Dahiya and Cameron's start (their Eqs. (9)-(12)): grad U from the
+        # split b = -(1/2) D grad U + l with l along b at the foot, integrated
+        # from the foot by Simpson's rule. A straight one-point climb from the
+        # foot pays |l| per unit of distance across the flow - O(h) - and
+        # overestimated these values by 0.0396 at 161 points.
+        grid = DensityGrid.box([-2.0, -2.0], [2.0, 2.0], [161, 161])
+        indices, values = _paper_cycle().initial(
+            grid,
+            system(PaperCycleField),
+            constant_noise(_IDENTITY),
+        )
+        points = grid.points()[indices]
+        exact = 0.5 * (np.sum(points * points, axis=1) - 1.0) ** 2
+        assert indices.size > 100
+        assert np.max(np.abs(values - exact)) < 1.0e-4
+
+    def test_u_next_to_the_cycle_converges_at_second_order(self):
+        # On |r - 1| < 0.1. With the straight-climb start the march could not
+        # repair the values it accepted first: 5.45e-3 and 3.27e-3 at 161 and
+        # 321 points, order 0.74, ten times the error once the start is right.
+        errors = [_paper_cycle_band_error(count) for count in (161, 321)]
+        assert errors[1] < 1.0e-3
         assert min(_orders(errors)) > 1.8
 
     def test_the_stencil_reaches_its_full_radius(self):
