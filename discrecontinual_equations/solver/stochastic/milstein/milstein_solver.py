@@ -1,3 +1,5 @@
+import warnings
+
 import numpy as np
 
 from discrecontinual_equations.curve import Curve
@@ -7,11 +9,14 @@ from discrecontinual_equations.solver.stochastic.coefficients import ItoCoeffici
 from discrecontinual_equations.solver.stochastic.milstein.milstein_config import (
     MilsteinConfig,
 )
-from discrecontinual_equations.solver.stochastic.wiener import WienerSource
+from discrecontinual_equations.solver.stochastic.wiener import (
+    LevyAreaSampler,
+    WienerSource,
+)
 from discrecontinual_equations.variable import Variable
 
 # How far (dG_k/dx) G_j may differ from (dG_j/dx) G_k, relative to the largest
-# such product, before the noise is called non-commuting and refused.
+# such product, before the noise is called non-commuting and the Levy areas drawn.
 _COMMUTATIVITY_TOLERANCE = 1.0e-6
 
 
@@ -37,27 +42,49 @@ class MilsteinSolver(Solver):
 
     This method achieves strong order 1.0 and weak order 1.0 convergence.
 
-    **Systems and matrix noise (DEQ-28).** For ``dX = a dt + G dW`` with ``m``
-    drivers the Milstein term is ``(1/2) Σ_{j,k} (∂G_k/∂x) G_j I_(j,k)`` over
-    pairs of channels, with ``I_(j,k)`` the iterated Ito integrals. Only the
-    diagonal ones, ``I_(k,k) = (ΔW_k² - Δt) / 2``, have a closed form; the
-    off-diagonal ones are the Levy areas, which have no exact sampler. When the
-    noise *commutes* - ``(∂G_k/∂x) G_j = (∂G_j/∂x) G_k`` for every pair - the
-    Levy areas drop out and the term is ``(1/2) Σ_{j,k} (∂G_k/∂x) G_j (ΔW_j ΔW_k -
-    δ_jk Δt)``, which is what this solver steps, with ``δ_jk Δt`` left off in the
-    Stratonovich form as above. The identity is checked at every step from the
-    column Jacobians the step computes anyway (central differences, the estimate
-    every stochastic solver shares through ``ItoCoefficients``), and a violation
-    raises ``ValueError`` naming Euler-Maruyama rather than dropping the cross
-    terms silently. A vector diffusion is ``G = diag(b)``: with each ``b_i``
-    depending only on ``x_i`` the noise commutes and the term is the familiar
-    per-component ``(1/2) b_i b_i' (ΔW_i² - Δt)``; with some ``b_i`` depending on
-    another component it does not, and the equation is refused. (Before DEQ-28 a
-    system of any kind was stepped by Euler-Maruyama with a printed warning.)
+    **Systems and matrix noise (DEQ-28, DEQ-36).** For ``dX = a dt + G dW`` with
+    ``m`` drivers the Milstein term is ``Σ_{j,k} (∂G_k/∂x) G_j I_(j,k)`` over pairs
+    of channels (Kloeden-Platen (10.3.3): ``L^j G_k I_(j,k)``), with ``I_(j,k) =
+    ∫∫ dW_j dW_k`` the iterated Ito integrals, ``j`` the inner one. Each is
+    ``(1/2)(ΔW_j ΔW_k - δ_jk Δt) + A_(j,k)`` with ``A`` the antisymmetric matrix of
+    Levy areas, which :class:`~.wiener.LevyAreaSampler` draws.
+
+    When the noise *commutes* - ``(∂G_k/∂x) G_j = (∂G_j/∂x) G_k`` for every pair -
+    the areas cancel between ``(j, k)`` and ``(k, j)`` and the term is ``(1/2)
+    Σ_{j,k} (∂G_k/∂x) G_j (ΔW_j ΔW_k - δ_jk Δt)``; the step is then exactly the
+    commuting step of DEQ-28, bit for bit, and no area is drawn. The identity is
+    checked at every step from the column Jacobians the step computes anyway
+    (central differences, the estimate every stochastic solver shares through
+    ``ItoCoefficients``). When it fails the step adds ``Σ_{j,k} (∂G_k/∂x) G_j
+    A_(j,k)``, with the areas from the Wiener source if one was given (a
+    :class:`~.wiener.BrownianPath` reads them off its grid) and otherwise from a
+    sampler on a stream spawned from ``random_seed``, so the increments a seeded
+    run draws are the ones Euler-Maruyama draws with that seed. That costs about
+    ``4 m n`` extra normals a step with ``n ≈ 0.09 sqrt(m / Δt)`` Fourier terms
+    (``LevyAreaSampler.terms``), which is why a warning says so once per solve;
+    before DEQ-36 such noise was refused. A vector diffusion is ``G = diag(b)``:
+    with each ``b_i`` depending only on ``x_i`` the noise commutes and the term is
+    the familiar per-component ``(1/2) b_i b_i' (ΔW_i² - Δt)``.
+
+    **Order with non-commuting noise.** Strong order 1.0, with the truncation
+    keeping the areas' L2 error at ``Δt^{3/2}`` per step. Measured on ``dx =
+    -x/2 dt + cos(y) dW_1``, ``dy = -y/2 dt + cos(x) dW_2`` against the scheme on
+    the path's own grid (``2^-10``, with exact-in-law cell areas), 30 paths: the
+    slope is about 1.0 against Euler-Maruyama's 0.5 (see
+    ``tests/solver/milstein/test_milstein_levy_area.py`` for the numbers). On
+    ``dx = dW_1, dy = x dW_2``, whose ``y(T)`` is the iterated integral itself, the
+    scheme reproduces a path's own ``I_(1,2)(0, T)`` to rounding at every step
+    size; driven by the sampler its error is the sampler's, below ``sqrt(T) Δt``.
 
     References:
     - Milstein, Grigori N. "Numerical Integration of Stochastic Differential Equations"
       Kluwer Academic Publishers, 1995
+    - Kloeden, P. E. and Platen, E. "Numerical Solution of Stochastic Differential
+      Equations", Springer, 1992, Section 10.3.
+    - Mrongowius, J. and Rossler, A. "On the approximation and simulation of
+      iterated stochastic integrals and the corresponding Levy areas in terms of a
+      multidimensional Brownian motion", Stoch. Anal. Appl. 40 (2022);
+      arXiv:2101.09542.
     """
 
     def __init__(
@@ -83,6 +110,11 @@ class MilsteinSolver(Solver):
         # gives the same numbers it always has.
         self._wiener = wiener
 
+        # Levy areas for non-commuting noise when no source is given, on a stream of
+        # their own so that drawing them leaves the increment stream untouched.
+        sequence = np.random.SeedSequence(self.solver_config.random_seed)
+        self._areas = LevyAreaSampler(np.random.default_rng(sequence.spawn(1)[0]))
+
     def solve(self, equation: DifferentialEquation, initial_values: list[float]):
         results = [
             Variable(name=f"Integral of {variable.name}")
@@ -106,6 +138,7 @@ class MilsteinSolver(Solver):
         self.solution.append([t, [0] * len(initial_values), y.tolist()])
 
         # Time stepping loop
+        warned = False
         for i in range(self.solver_config.n_steps):
             # Current time
             t_current = self.solver_config.times[i]
@@ -115,21 +148,38 @@ class MilsteinSolver(Solver):
             # here in either calculus.
             drift = coefficients.written_drift(y, t_current)
             diffusion = coefficients.diffusion(y, t_current)
-            products = self._commuting_products(coefficients, y, t_current, diffusion)
+            products = self._products(coefficients, y, t_current, diffusion)
+            commuting = self._commute(products)
+            if not commuting and not warned:
+                self._warn_cost(drivers)
+                warned = True
 
-            # Generate Wiener increment: delta_w ~ N(0, dt), one per driver
+            # Generate Wiener increment: delta_w ~ N(0, dt), one per driver, and
+            # the Levy areas when the noise does not commute.
             dt = self.solver_config.dt
-            delta_w = (
-                self._generator.normal(0, np.sqrt(dt), size=drivers)
-                if self._wiener is None
-                else self._wiener.increments(t_current, dt, drivers).delta_w
-            )
+            area = None
+            if self._wiener is None:
+                delta_w = self._generator.normal(0, np.sqrt(dt), size=drivers)
+                if not commuting:
+                    area = self._areas.sample(delta_w, dt)
+            else:
+                increments = self._wiener.increments(
+                    t_current,
+                    dt,
+                    drivers,
+                    levy_area=not commuting,
+                )
+                delta_w = increments.delta_w
+                area = increments.levy_area
 
             # Milstein term: (1/2) sum_{j,k} (dG_k/dx) G_j (dW_j dW_k - delta_jk dt),
-            # the delta_jk dt only in the Ito form (see the class docstring).
+            # the delta_jk dt only in the Ito form (see the class docstring), plus
+            # sum_{j,k} (dG_k/dx) G_j A_(j,k) when the noise does not commute.
             correction = 0.5 * np.einsum("jki,j,k->i", products, delta_w, delta_w)
             if ito:
                 correction -= 0.5 * dt * np.einsum("kki->i", products)
+            if area is not None:
+                correction += np.einsum("jki,jk->i", products, area)
 
             # Milstein step: y_{n+1} = y_n + a dt + b dW + correction
             y_new = (
@@ -144,34 +194,42 @@ class MilsteinSolver(Solver):
             self.solution.append([t_next, [0] * len(initial_values), y.tolist()])
 
     @staticmethod
-    def _commuting_products(
+    def _products(
         coefficients: ItoCoefficients,
         state: np.ndarray,
         time: float,
         diffusion: np.ndarray,
     ) -> np.ndarray:
-        """``(dG_k/dx) G_j`` for every pair as ``products[j, k, :]``, or refuse.
+        """``(dG_k/dx) G_j`` for every pair as ``products[j, k, :]``."""
+        jacobians = coefficients.column_jacobians(state, time)
+        columns = (
+            diffusion.T if ItoCoefficients.is_matrix(diffusion) else np.diag(diffusion)
+        )
+        return np.einsum("kil,jl->jki", jacobians, columns)
+
+    @staticmethod
+    def _commute(products: np.ndarray) -> bool:
+        """Whether ``(dG_k/dx) G_j = (dG_j/dx) G_k`` for every pair.
 
         The check is relative to the largest product, so additive noise (every
         Jacobian zero) passes trivially and a coupling that is small in absolute
         terms is still caught when it is the whole of what the Jacobians see. The
         tolerance sits far above the central differences' own error (about 1e-10
-        relative) and far below any coupling worth the name.
+        relative) and far below any coupling worth the name; below it the area
+        terms it leaves out are at most that fraction of the products times an
+        area.
         """
-        jacobians = coefficients.column_jacobians(state, time)
-        columns = (
-            diffusion.T if ItoCoefficients.is_matrix(diffusion) else np.diag(diffusion)
-        )
-        products = np.einsum("kil,jl->jki", jacobians, columns)
         scale = float(np.max(np.abs(products)))
         asymmetry = float(np.max(np.abs(products - products.transpose(1, 0, 2))))
-        if scale > 0.0 and asymmetry > _COMMUTATIVITY_TOLERANCE * scale:
-            message = (
-                "MilsteinSolver needs commuting noise: (dG_k/dx) G_j must equal "
-                f"(dG_j/dx) G_k for every driver pair; they differ by {asymmetry:.3g} "
-                f"against a scale of {scale:.3g}. The cross terms of a non-commuting "
-                "noise need Levy areas, which no Wiener source here samples; use "
-                "EulerMaruyamaSolver, which needs none (DEQ-28)."
-            )
-            raise ValueError(message)
-        return products
+        return scale == 0.0 or asymmetry <= _COMMUTATIVITY_TOLERANCE * scale
+
+    @staticmethod
+    def _warn_cost(drivers: int) -> None:
+        message = (
+            "MilsteinSolver: the noise does not commute ((dG_k/dx) G_j differs from "
+            "(dG_j/dx) G_k), so every such step draws the Levy areas between its "
+            f"{drivers} drivers, about 4 m n extra normals with n ~ 0.09 sqrt(m / dt) "
+            "Fourier terms (DEQ-36). EulerMaruyamaSolver needs none, at strong "
+            "order 0.5."
+        )
+        warnings.warn(message, UserWarning, stacklevel=3)

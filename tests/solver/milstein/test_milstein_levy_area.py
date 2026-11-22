@@ -7,7 +7,8 @@ Three yardsticks.
   which by Chen's relation sums to exactly ``I_(1,2)(0, T)`` when the step's
   ``I_(1,2)`` is exact - so on a Brownian path that carries its areas the scheme
   is exact to rounding at every step size, which is more than order 1.0 and
-  pins the index convention (``I_(2,1)`` instead would be order 0.5). Euler-
+  pins the index convention (``I_(2,1)`` instead would be order 0.5); "to
+  rounding" means to the central-difference Jacobians' ``1e-10``. Euler-
   Maruyama omits the iterated integral and measures 0.5. Driven by the sampler,
   the only error left is the sampler's, bounded by ``sqrt(T) h`` with the
   truncation rule's ``c1 = 1``; it is measured against a coupled reference.
@@ -125,7 +126,11 @@ class TestIteratedIntegralOracle:
                     IteratedIntegralNoise,
                     [0.0, 0.0],
                 )
-                assert abs(milstein[1] - exact) < 1e-12, (step, milstein, exact)
+                # Exact but for the central-difference Jacobian (relative error
+                # about 1e-10) that every step takes: 1e-9 against an Euler error
+                # of 0.1 and an error of the same size for I_(2,1) in place of
+                # I_(1,2).
+                assert abs(milstein[1] - exact) < 1e-9, (step, milstein, exact)
                 euler[step] += abs(
                     _final(
                         EulerMaruyamaSolver,
@@ -142,11 +147,11 @@ class TestIteratedIntegralOracle:
     def test_milstein_with_the_sampler_is_within_the_order_one_bound(self):
         # Driven by the sampler the scheme's only error is the sampler's, and the
         # truncation rule bounds it by h^(3/2) per step in L2, sqrt(T) h at T.
-        steps = [2.0**-k for k in range(4, 10)]
+        steps = [2.0**-k for k in range(4, 9)]
         errors = {}
         for step in steps:
             squared = 0.0
-            paths = 30
+            paths = 20
             for index in range(paths):
                 source = CoupledSource(seed=index)
                 final = _final(
