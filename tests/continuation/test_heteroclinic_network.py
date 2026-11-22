@@ -30,6 +30,7 @@ from scipy.integrate import solve_ivp
 
 from discrecontinual_equations.continuation.connecting_orbit import MeshSpec
 from discrecontinual_equations.continuation.heteroclinic_network import (
+    CycleSpectrum,
     HeteroclinicNetwork,
     coordinate_plane,
 )
@@ -169,7 +170,10 @@ class TestGuckenheimerHolmesCycle(TestCase):
     def test_stability_inequality_matches_the_parameter_condition(self):
         """``prod c_j > prod e_j`` from computed spectra iff ``2 a1 > a2 + a3``."""
         verdicts = []
-        for a2, a3 in itertools.product((-1.9, -1.5, -1.2), (-0.9, -0.6, -0.2)):
+        grid = list(itertools.product((-1.9, -1.5, -1.2), (-0.9, -0.6, -0.2)))
+        # Either side of the resonance a2 + a3 = 2 a1: rho = 1.077 and 0.927.
+        grid += [(-1.41, -0.6), (-1.39, -0.6)]
+        for a2, a3 in grid:
             network = _gh_network(guckenheimer_holmes(_LAMBDA, _A1, a2, a3))
             spectrum = network.spectrum(_NAMES)
             ratio = ((a2 - _A1) / (_A1 - a3)) ** 3
@@ -179,6 +183,17 @@ class TestGuckenheimerHolmesCycle(TestCase):
             verdicts.append(closed_form)
         assert any(verdicts)
         assert not all(verdicts)
+
+    def test_contracting_rate_is_not_confused_with_a_weaker_radial_one(self):
+        """With ``a2 = -4`` the contraction ``c = 3`` is faster than the radial 2.
+
+        ``-c_j`` is the largest eigenvalue on ``P_{j-1}`` *after* removing the radial
+        line; taking the largest on the whole plane would return the radial -2.
+        """
+        network = _gh_network(guckenheimer_holmes(_LAMBDA, _A1, -4.0, _A3))
+        spectrum = network.spectrum(_NAMES)
+        assert np.allclose(spectrum.contracting, 3.0, atol=1.0e-10)
+        assert np.allclose(spectrum.radial, 2.0, atol=1.0e-10)
 
     def test_no_cycle_when_the_existence_condition_fails(self):
         """Krupa (2.3): with ``a3 < a1`` xi1 is a sink in the x1x2 plane."""
@@ -311,6 +326,18 @@ class TestSymmetryBrokenNetwork(TestCase):
             assert min(min(pair) for pair in point.margins.values()) > 0.0
         assert [ratio > 1.0 for ratio in ratios] == [True] * 4 + [False] * 2
 
+    def test_coarse_march_still_returns_the_first_of_two_breaks(self):
+        """One step from 1.0 to 0.75 to 0.5 crosses both 2/3 and 0.6 at once.
+
+        Both margins change sign inside the same step; the break nearer the start
+        - the target side at 2/3 - is the one the connection actually meets.
+        """
+        field = guckenheimer_holmes(_LAMBDA, _A1, _A2, _A3)
+        continuation = NetworkContinuation(_gh_network(field), parameter_index=1)
+        located = continuation.locate_break(1.0, 0.5, steps=2, tolerance=1.0e-10)
+        assert located.side == "target"
+        assert abs(located.parameter - 2.0 / 3.0) < 1.0e-8
+
     def test_continuation_locates_the_first_break(self):
         field = guckenheimer_holmes(_LAMBDA, _A1, _A2, _A3)
         continuation = NetworkContinuation(_gh_network(field), parameter_index=1)
@@ -442,8 +469,45 @@ class TestKirkSilberCompetition(TestCase):
         return b1 * a2 * a3 + b3 * a2 + b2
 
 
+class TestCycleSpectrumVerdict(TestCase):
+    """Krupa-Melbourne's condition needs every transverse eigenvalue negative."""
+
+    def test_a_positive_transverse_eigenvalue_rules_out_asymptotic_stability(self):
+        """``prod min(c, e - t) > prod e`` holds here, but ``t_2 > 0``.
+
+        A positive transverse eigenvalue puts part of the node's unstable
+        manifold outside the cycle, so no neighbourhood can be attracted to it
+        (Krupa and Melbourne 1995, section 2.3 and Remark 2.6).
+        """
+        roles = {
+            "radial": np.full(3, 2.0),
+            "contracting": np.full(3, 2.0),
+            "expanding": np.full(3, 1.0),
+            "transverse": np.array([-np.inf, -np.inf, -np.inf]),
+        }
+        assert CycleSpectrum(_NAMES, roles).is_asymptotically_stable
+        roles["transverse"] = np.array([-np.inf, -np.inf, 0.01])
+        spectrum = CycleSpectrum(_NAMES, roles)
+        assert spectrum.stability_ratio > 1.0
+        assert not spectrum.is_asymptotically_stable
+
+
 class TestItinerary(TestCase):
     """The visit measurement on a trajectory whose dwell times are known."""
+
+    def test_crossings_are_interpolated_between_samples(self):
+        """A straight pass at unit speed through a saddle, sampled every 0.1.
+
+        Distance to the saddle is piecewise linear in time, so linear interpolation
+        recovers entry at ``t = 4.5`` and exit at ``t = 5.5`` to rounding; snapping
+        to a sample or interpolating from the wrong end is off by a whole step.
+        """
+        times = np.linspace(0.0, 10.0, 101) + 0.03
+        states = np.column_stack([times - 5.0, np.zeros_like(times)])
+        itinerary = Itinerary.measure(times, states, [np.zeros(2)], radius=0.5)
+        visit = itinerary.visits[0]
+        assert abs(visit.entry - 4.5) < 1.0e-12
+        assert abs(visit.exit - 5.5) < 1.0e-12
 
     def test_measures_known_dwell_times_and_order(self):
         saddles = [np.array([1.0, 0.0]), np.array([0.0, 1.0])]
