@@ -192,6 +192,11 @@ def _shifted_slice(step: int) -> slice:
     return slice(2, None)
 
 
+# Fraction of the peak below which a solved density is not resolved; see
+# GridDensity.interior_maxima.
+_ROUND_OFF_FLOOR = float(np.sqrt(np.finfo(float).eps))
+
+
 class GridDensity:
     """A density sampled on a :class:`DensityGrid`, with its shape descriptors.
 
@@ -273,10 +278,13 @@ class GridDensity:
         multi-index reading of the one-dimensional rule in
         :class:`~.stochastic.DensityModes` and keeps a flat plateau from reporting
         every one of its cells.
+
+        Cells below ``sqrt(eps)`` of the peak are not candidates: there the solved
+        density is round-off of either sign, and its pattern depends on the BLAS.
         """
         dimension = self._grid.dimension
         centre = self._values[tuple(slice(1, -1) for _ in range(dimension))]
-        winner = np.ones(centre.shape, dtype=bool)
+        winner = centre > _ROUND_OFF_FLOOR * float(np.max(self._values))
         origin = tuple(0 for _ in range(dimension))
         for offset in itertools.product((-1, 0, 1), repeat=dimension):
             if offset == origin:

@@ -40,6 +40,7 @@ import pytest
 
 from discrecontinual_equations.continuation.fokker_planck import (
     DensityGrid,
+    GridDensity,
     StationaryFokkerPlanck,
 )
 from discrecontinual_equations.continuation.lyapunov import (
@@ -242,6 +243,22 @@ class TestPlanarStationaryDensity(TestCase):
         assert len(maxima) > 8
         radii = [float(np.linalg.norm(position)) for position in maxima]
         assert max(radii) - min(radii) < 2.0 * grid.spacings[0]
+        assert all(
+            abs(radius - math.sqrt(0.5)) < 2.0 * grid.spacings[0] for radius in radii
+        )
+
+    def test_round_off_in_the_tail_is_not_a_maximum(self):
+        # Far from the ring the density is exp(-60) of its peak, below what the
+        # linear solve resolves, so the solved values there are round-off of either
+        # sign and their pattern depends on the machine's BLAS. CI's 3.13 runner
+        # found a "maximum" at r = 2.46 that way. Noise of 1e-14 of the peak, about
+        # what the solve leaves, must not add maxima off the ring.
+        grid = DensityGrid.box([-2.5, -2.5], [2.5, 2.5], [81, 81])
+        solved = _hopf_density(0.5, 0.5, 0.0, Ito(), grid).solve().values
+        noise = np.random.default_rng(0).standard_normal(solved.shape)
+        density = GridDensity(grid, solved + 1.0e-14 * solved.max() * noise)
+        radii = [float(np.linalg.norm(m)) for m in density.interior_maxima()]
+        assert len(radii) > 8
         assert all(
             abs(radius - math.sqrt(0.5)) < 2.0 * grid.spacings[0] for radius in radii
         )
