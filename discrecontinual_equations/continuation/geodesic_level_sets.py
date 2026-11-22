@@ -41,6 +41,7 @@ Chaos 15 (2005).
 
 import math
 from collections.abc import Callable
+from typing import cast
 
 import numpy as np
 from scipy.spatial import cKDTree
@@ -438,7 +439,9 @@ def _batched(
         )
 
     def columns(states: np.ndarray) -> np.ndarray:
-        values = function.eval(point=states.T, time=None)
+        # The columns go in where the interface says a list of numbers: a field
+        # written component by component indexes them the same way.
+        values = function.eval(point=cast("list[float]", states.T), time=None)
         return np.stack(
             [
                 np.broadcast_to(np.asarray(v, dtype=float), states.shape[:1])
