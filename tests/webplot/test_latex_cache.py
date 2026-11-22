@@ -82,3 +82,10 @@ def test_different_expressions_have_different_files(fresh):
     latex_to_svg(r"\dot y = y")
     assert len(list(fresh.glob("*.svg"))) == 2
     assert not list(fresh.glob("*.tmp"))  # every write was completed by a rename
+
+
+def test_the_font_size_is_part_of_the_disk_key(fresh):
+    use_disk_cache(fresh)
+    large = latex_to_svg(_EXPRESSION, 20.0)
+    latex_to_svg.cache_clear()
+    assert latex_to_svg(_EXPRESSION, 12.0) != large

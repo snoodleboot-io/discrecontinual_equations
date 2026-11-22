@@ -15,7 +15,9 @@ import ast
 import hashlib
 import os
 import re
+from concurrent.futures import Future
 from pathlib import Path
+from typing import Self
 
 import pytest
 
@@ -122,3 +124,45 @@ def test_the_index_is_in_registry_order(tmp_path):
     index = (tmp_path / "index.html").read_text(encoding="utf-8")
     links = re.findall(r'href="([^"]+)\.html"', index)
     assert links == ["saddle_node", "pitchfork", "hysteresis"]
+
+
+_SEEN: dict = {}
+
+
+class _Pool:
+    """Stands in for the process pool: records how it was made, builds nothing."""
+
+    def __init__(self, **options) -> None:
+        _SEEN["made"] = {
+            **options,
+            "blas": {n: os.environ.get(n) for n in atlas._BLAS_THREADS},
+        }
+        _SEEN["submitted"] = []
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, *_) -> None:
+        return None
+
+    def submit(self, _function, kind: str, index: int, _output_dir: str) -> Future:
+        _SEEN["submitted"].append((kind, index))
+        future: Future = Future()
+        card = (f"{kind}{index}.html", f"{kind} {index}", "", "plot")
+        future.set_result(atlas._Built((card,), 0.0, 0.0))
+        return future
+
+
+def test_workers_are_fresh_spawned_single_threaded_processes(tmp_path, monkeypatch):
+    monkeypatch.setattr(atlas, "ProcessPoolExecutor", _Pool)
+    # Hand results back last-submitted first, as a slow first unit would.
+    monkeypatch.setattr(atlas, "as_completed", lambda futures: list(futures)[::-1])
+    atlas.main(str(tmp_path), jobs=4)
+    assert _SEEN["made"]["max_tasks_per_child"] == 1
+    assert _SEEN["made"]["mp_context"].get_start_method() == "spawn"
+    assert set(_SEEN["made"]["blas"].values()) == {"1"}
+    units = atlas._units()
+    assert _SEEN["submitted"] == [(u.kind, u.index) for u in atlas._schedule(units)]
+    index = (tmp_path / "index.html").read_text(encoding="utf-8")
+    links = re.findall(r'href="([^"]+)\.html"', index)
+    assert links == [f"{unit.kind}{unit.index}" for unit in units]
