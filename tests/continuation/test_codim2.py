@@ -6,9 +6,11 @@ coefficients use derivatives from the automatic-differentiation provider, so the
 are exact; the residual location tolerance reflects the continuation step size.
 """
 
+import warnings
 from unittest import TestCase
 
 import numpy as np
+from scipy.optimize import fsolve
 
 from discrecontinual_equations.continuation.codim2_builder import (
     Codim2Driver,
@@ -308,6 +310,83 @@ class TestNormalFormCoefficients(TestCase):
         assert first_lyapunov(supercritical, origin, 0.0, 0.0, 1.0) < 0.0
         assert first_lyapunov(subcritical, origin, 0.0, 0.0, 1.0) > 0.0
 
+    def test_first_lyapunov_van_der_pol_by_hand(self):
+        # x' = y - x^3/3 + x, y' = eps (a - x) has a Hopf at a = 1, (1, -2/3), with
+        # omega = sqrt(eps). In u = x - 1, Y = -(y + 2/3)/omega it is
+        # u' = -omega Y - u^2 - u^3/3, Y' = omega u, so Guckenheimer-Holmes gives
+        # a = -1/8; with the unit eigenvector (1, i sqrt(eps)) / sqrt(1 + eps) that
+        # is l1 = -1 / (2 omega (1 + eps)). The Jacobian is normal only at eps = 1.
+        state = np.array([1.0, -2.0 / 3.0])
+        for epsilon in (0.05, 0.2, 1.0, 4.0):
+            problem = self._problem(VanDerPolFastSlow, 2, 1.0, epsilon)
+            omega = np.sqrt(epsilon)
+            expected = -1.0 / (2.0 * omega * (1.0 + epsilon))
+            l1 = first_lyapunov(problem, state, 1.0, epsilon, omega)
+            assert abs(l1 - expected) < 1.0e-10 * abs(expected)
+
+    def test_first_lyapunov_under_non_normal_similarity(self):
+        # F(x) = S^-1 N(S x), with N the Hopf normal form y' = J y + b |y|^2 y. Its
+        # l1 is 2 b / omega for the unit eigenvector (1, -i, 0...) / sqrt(2) of N,
+        # and l1 scales with |q|^2, so with |q| = 1 in x it is
+        # 2 b / (omega |S^-1 q_N|^2). The phase of <p, q> before normalisation
+        # varies with S; the sign and size of l1 must not.
+        generator = np.random.default_rng(96)
+        checked = 0
+        for dimension in (2, 2, 2, 2, 3, 3, 3, 3, 3, 3):
+            matrix = generator.normal(size=(dimension, dimension))
+            if abs(np.linalg.det(matrix)) < 0.2:
+                continue
+            SimilarHopf.matrix = matrix
+            SimilarHopf.inverse = np.linalg.inv(matrix)
+            problem = self._problem(SimilarHopf, dimension, 0.0, 0.0)
+            normal_vector = np.zeros(dimension, dtype=complex)
+            normal_vector[:2] = np.array([1.0, -1.0j]) / np.sqrt(2.0)
+            scale = np.linalg.norm(np.linalg.solve(matrix, normal_vector)) ** 2
+            expected = 2.0 * SimilarHopf.cubic / (SimilarHopf.frequency * scale)
+            l1 = first_lyapunov(
+                problem,
+                np.zeros(dimension),
+                0.0,
+                0.0,
+                SimilarHopf.frequency,
+            )
+            assert abs(l1 - expected) < 1.0e-9 * abs(expected)
+            checked += 1
+        assert checked >= 8
+
+    def test_first_lyapunov_bykov_matches_matcont(self):
+        # Kuznetsov and Neirynck, MatCont tutorial IV (2021): the Hopf of the
+        # Bykov-Yablonskii-Kim model at K = 0.4 has first Lyapunov coefficient
+        # 1.070259e01 as MatCont prints it, Re G21 / 2; the library's l1 is
+        # Re G21 / (2 omega), so omega * l1 is compared. MatCont's printed Hopf
+        # (Q2 = 1.051558) sits 5e-7 from the exact one and dl1/dQ2 is about 3.3e3
+        # in that convention, hence the 2e-3 tolerance.
+        problem = self._problem(Bykov, 3, 1.05, 0.4)
+
+        def residual(unknowns):
+            state, q2 = unknowns[:3], unknowns[3]
+            jacobian = problem.state_jacobian(state, q2, 0.4)
+            minors = sum(
+                np.linalg.det(np.delete(np.delete(jacobian, i, 0), i, 1))
+                for i in range(3)
+            )
+            hopf = np.trace(jacobian) * minors - np.linalg.det(jacobian)
+            return [*problem.evaluate(state, q2, 0.4), hopf]
+
+        with warnings.catch_warnings():
+            # fsolve reports that it cannot beat xtol=1e-14; the residual decides.
+            warnings.simplefilter("ignore", RuntimeWarning)
+            point = fsolve(
+                residual,
+                [0.016357, 0.523973, 0.328336, 1.051558],
+                xtol=1.0e-14,
+            )
+        assert np.linalg.norm(residual(point)) < 1.0e-13
+        jacobian = problem.state_jacobian(point[:3], point[3], 0.4)
+        omega = float(np.max(np.linalg.eigvals(jacobian).imag))
+        l1 = first_lyapunov(problem, point[:3], point[3], 0.4, omega)
+        assert abs(omega * l1 - 1.070259e01) < 2.0e-3
+
     def test_cusp_and_cubic_coefficients(self):
         problem = self._problem(CuspNormalForm, 1, 0.0, 0.0)
         # a = (1/2) f_xx = -3x: zero at the cusp, -0.9 at x = 0.3.
@@ -346,3 +425,71 @@ class SubcriticalHopf(DeterministicFunction):
         x, y = point[0], point[1]
         radius = x * x + y * y
         return [mu * x - y + x * radius, x + mu * y + y * radius]
+
+
+class VanDerPolFastSlow(DeterministicFunction):
+    """x' = y - x^3/3 + x, y' = eps (a - x); a supercritical Hopf at a = 1."""
+
+    def eval(
+        self,
+        point: list[float],
+        time: float | None = None,  # noqa: ARG002 (base signature)
+    ) -> list[float]:
+        a = self.parameters[0].value
+        epsilon = self.parameters[1].value
+        x, y = point[0], point[1]
+        return [y - x * x * x * (1.0 / 3.0) + x, epsilon * (a - x)]
+
+
+class SimilarHopf(DeterministicFunction):
+    """x' = S^-1 N(S x): a supercritical Hopf normal form in skewed coordinates.
+
+    ``N`` rotates the first two coordinates at ``frequency`` with the cubic
+    ``cubic |y|^2 y`` on them, and contracts any further coordinate linearly.
+    """
+
+    frequency = 1.3
+    cubic = -1.0
+    matrix = np.eye(2)
+    inverse = np.eye(2)
+
+    def eval(
+        self,
+        point: list[float],
+        time: float | None = None,  # noqa: ARG002 (base signature)
+    ) -> list[float]:
+        dimension = len(point)
+        image = [
+            sum(float(self.matrix[i, j]) * point[j] for j in range(dimension))
+            for i in range(dimension)
+        ]
+        radius = image[0] * image[0] + image[1] * image[1]
+        flow = [
+            -self.frequency * image[1] + self.cubic * radius * image[0],
+            self.frequency * image[0] + self.cubic * radius * image[1],
+        ]
+        flow += [-2.0 * image[k] for k in range(2, dimension)]
+        return [
+            sum(float(self.inverse[i, j]) * flow[j] for j in range(dimension))
+            for i in range(dimension)
+        ]
+
+
+class Bykov(DeterministicFunction):
+    """Bykov-Yablonskii-Kim CO-oxidation model (MatCont tutorial IV); (Q2, K)."""
+
+    def eval(
+        self,
+        point: list[float],
+        time: float | None = None,  # noqa: ARG002 (base signature)
+    ) -> list[float]:
+        q2 = self.parameters[0].value
+        k = self.parameters[1].value
+        q1, q3, q4, q5, q6 = 2.5, 10.0, 0.0675, 1.0, 0.1
+        x, y, s = point[0], point[1], point[2]
+        z = 1.0 - x - y - s
+        return [
+            2.0 * q1 * z * z - 2.0 * q5 * x * x - q3 * x * y,
+            q2 * z - q6 * y - q3 * x * y,
+            q4 * z - k * q4 * s,
+        ]
