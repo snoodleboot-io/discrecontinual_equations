@@ -34,6 +34,8 @@ from discrecontinual_equations.continuation.geodesic_level_sets import (
     GeodesicLevelSets,
     GeodesicSettings,
     _advance,
+    _Front,
+    _trace_back,
 )
 from discrecontinual_equations.continuation.manifold import (
     StableManifold,
@@ -305,6 +307,54 @@ def test_the_plane_oracle_holds_for_every_saddle(name):
 
 
 _ADVANCE = "discrecontinual_equations.continuation.geodesic_level_sets._advance"
+
+
+class TestTraceBack(TestCase):
+    """The first guess's back-trace counts only crossings of the ring itself."""
+
+    def test_a_sign_change_far_from_the_ring_is_not_a_crossing(self):
+        # The unit circle in z = 0 with outward radial directions, and a
+        # field that carries (1.5, 0, 0) up and over the ring's centre without
+        # ever meeting the ring: it passes (1, 0, 3.3) and (0, 0, 10). Past
+        # x = 1 the point is "inside" by the nearest ring point's outward
+        # direction while 3.3 or more from the ring. On the Lorenz manifold
+        # such a false crossing 28 to 37 from the ring (spacing 4.5) sent
+        # Newton to a start 37 ring points from the true one, and the strict
+        # growth stopped at 142.87 with "landings failed".
+        angles = np.linspace(0.0, 2.0 * math.pi, 40, endpoint=False)
+        ring = np.column_stack([np.cos(angles), np.sin(angles), np.zeros(40)])
+        front = _Front(ring, ring.copy(), np.arange(40))
+
+        def drift(states):
+            return np.tile([-0.15, 0.0, 1.0], (len(states), 1))
+
+        crossed, _, _ = _trace_back(
+            drift,
+            -1.0,
+            front,
+            np.array([[1.5, 0.0, 0.0]]),
+            0.5,
+        )
+        assert not crossed[0]
+
+    def test_a_crossing_of_the_ring_is_found(self):
+        angles = np.linspace(0.0, 2.0 * math.pi, 40, endpoint=False)
+        ring = np.column_stack([np.cos(angles), np.sin(angles), np.zeros(40)])
+        front = _Front(ring, ring.copy(), np.arange(40))
+
+        def inward(states):
+            return np.tile([-1.0, 0.0, 0.0], (len(states), 1))
+
+        crossed, place, flight = _trace_back(
+            inward,
+            -1.0,
+            front,
+            np.array([[1.5, 0.0, 0.0]]),
+            0.5,
+        )
+        assert crossed[0]
+        assert min(place[0], 40.0 - place[0]) < 1.0e-6
+        assert flight[0] == pytest.approx(0.5, rel=1.0e-6)
 
 
 class TestStopping(TestCase):

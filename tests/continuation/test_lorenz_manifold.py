@@ -178,8 +178,9 @@ class TestLorenzManifoldAsFarAsItGoes(TestCase):
         assert self.mesh.stopped is not None
         assert "landings failed" in self.mesh.stopped
         assert self.mesh.lost == 0
-        # Measured: 142.87, short of the 170 asked for.
-        assert 130.0 < self.mesh.ring_distances[-1] < 170.0
+        # Krauskopf and Osinga grew it to 151.75 (SIAM J. Appl. Dyn. Syst.
+        # 2003, Sec. 4.5) and 154.75 (the IJBC 2005 survey, Sec. 2.3).
+        assert 151.75 < self.mesh.ring_distances[-1] < 170.0
 
     def test_the_scrolls_have_formed_around_the_secondary_equilibria(self):
         offset = math.sqrt(_BETA * (_RHO - 1.0))
