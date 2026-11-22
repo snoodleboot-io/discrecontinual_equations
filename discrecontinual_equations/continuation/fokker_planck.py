@@ -62,9 +62,7 @@ from scipy.sparse.linalg import spsolve
 
 from discrecontinual_equations.continuation.noise import (
     NoiseMatrix,
-    diffusion_matrix,
-    field_at,
-    state_drift_shift,
+    fields_at,
     stratonovich_factor,
 )
 from discrecontinual_equations.continuation.stochastic import NoiseConvention
@@ -334,9 +332,8 @@ class StationaryFokkerPlanck:
         return GridDensity(grid, _stationary_solution(builder.triplets(), grid))
 
     def _diffusion(self, points: np.ndarray) -> np.ndarray:
-        return np.array(
-            [diffusion_matrix(self._noise.columns_at(state)) for state in points],
-        )
+        columns = self._noise.columns_along(points)
+        return np.matmul(np.swapaxes(columns, 1, 2), columns)
 
     def _face_coefficients(
         self,
@@ -348,20 +345,28 @@ class StationaryFokkerPlanck:
         The two are gathered together because both need the noise columns at the same
         points, and the Stratonovich shift needs their Jacobians as well; evaluating
         each field once per face rather than once per quantity is the difference
-        between a solve of a second and a solve of several.
+        between a solve of a second and a solve of several. Every field is evaluated
+        on all the faces of the family at once (:meth:`Function.eval_batch`), and the
+        algebra after it is array arithmetic, so no Python runs per face beyond what
+        a field's own ``eval_batch`` does.
         """
         factor = stratonovich_factor(self._convention)
-        drift = np.empty(faces.shape[0])
-        diffusion = np.empty(faces.shape[0])
-        for row, state in enumerate(faces):
-            columns = self._noise.columns_at(state)
-            value = field_at(self._drift, state)[axis]
-            if factor != 0.0:
-                jacobians = self._noise.jacobians_at(state)
-                value += state_drift_shift(jacobians, columns, factor)[axis]
-            drift[row] = value
-            diffusion[row] = diffusion_matrix(columns)[axis, axis]
+        columns = self._noise.columns_along(faces)
+        drift = fields_at(self._drift, faces)[:, axis]
+        if factor != 0.0:
+            jacobians = self._noise.jacobians_along(faces, columns)
+            drift = drift + _drift_shifts(jacobians, columns, factor)[:, axis]
+        diffusion = np.matmul(np.swapaxes(columns, 1, 2), columns)[:, axis, axis]
         return drift, diffusion
+
+
+def _drift_shifts(
+    jacobians: np.ndarray,
+    columns: np.ndarray,
+    factor: float,
+) -> np.ndarray:
+    """:func:`~.noise.state_drift_shift` at every face at once, ``(count, N)``."""
+    return factor * np.einsum("pkij,pkj->pi", jacobians, columns)
 
 
 def _check_elliptic(cells: np.ndarray) -> None:

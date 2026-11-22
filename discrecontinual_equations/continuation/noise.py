@@ -54,6 +54,37 @@ def field_at(function: Function, state: np.ndarray) -> np.ndarray:
     return np.array(function.eval(point=list(state), time=None), dtype=float)
 
 
+def fields_at(function: Function, states: np.ndarray) -> np.ndarray:
+    """Evaluate a vector field at every row of ``states``, as ``(count, n)``.
+
+    Row ``p`` equals :func:`field_at` at ``states[p]`` exactly; the evaluation goes
+    through :meth:`Function.eval_batch`, so a field with array arithmetic does it in
+    one call.
+    """
+    return function.eval_batch(states)
+
+
+def jacobians_along(
+    function: Function,
+    states: np.ndarray,
+    base: np.ndarray,
+) -> np.ndarray:
+    """:func:`jacobian_at` at every row of ``states``, as ``(count, out, n)``.
+
+    ``base`` is the field at ``states`` (``fields_at``), already in hand wherever this
+    is called. Each column is one batched evaluation with the same relative step and
+    the same arithmetic as :func:`jacobian_at`, so every entry matches it exactly.
+    """
+    count, dimension = states.shape
+    steps = _JACOBIAN_STEP * np.maximum(np.abs(states), 1.0)
+    jacobians = np.empty((count, base.shape[1], dimension))
+    for j in range(dimension):
+        shifted = states.copy()
+        shifted[:, j] += steps[:, j]
+        jacobians[:, :, j] = (fields_at(function, shifted) - base) / steps[:, j, None]
+    return jacobians
+
+
 def jacobian_at(function: Function, state: np.ndarray) -> np.ndarray:
     """Forward-difference Jacobian of a vector field, stepped relative to the state.
 
@@ -110,6 +141,27 @@ class NoiseMatrix:
     def jacobians_at(self, state: np.ndarray) -> np.ndarray:
         """The Jacobian of each column, as a ``(K, N, N)`` array."""
         return np.array([jacobian_at(column, state) for column in self._columns])
+
+    def columns_along(self, states: np.ndarray) -> np.ndarray:
+        """:meth:`columns_at` at every row of ``states``, as ``(count, K, N)``."""
+        return np.stack(
+            [fields_at(column, states) for column in self._columns],
+            axis=1,
+        )
+
+    def jacobians_along(self, states: np.ndarray, columns: np.ndarray) -> np.ndarray:
+        """:meth:`jacobians_at` at every row, as ``(count, K, N, N)``.
+
+        ``columns`` is :meth:`columns_along` at the same states, reused as the base
+        of the forward differences.
+        """
+        return np.stack(
+            [
+                jacobians_along(column, states, columns[:, index])
+                for index, column in enumerate(self._columns)
+            ],
+            axis=1,
+        )
 
 
 class NoiseMatrixFunction(StochasticFunction):
