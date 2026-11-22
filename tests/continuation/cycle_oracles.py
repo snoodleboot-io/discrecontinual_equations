@@ -175,3 +175,43 @@ class PredatorPrey(DeterministicFunction):
             -v2 + v1 * (1.0 - size),
             v1 + v2 * (1.0 - size),
         ]
+
+
+class ShearedBautin(DeterministicFunction):
+    """:class:`ExtendedBautin` in the coordinates ``(X, Y) = (x + S y^2, y)``.
+
+    A nonlinear change of coordinates leaves every cycle, multiplier and normal
+    form coefficient as it was, and breaks the rotation symmetry under which
+    terms of ``b`` such as ``int <phi*, A v>`` vanish identically.
+    """
+
+    S = 0.5
+
+    def eval(self, point, time=None):  # noqa: ARG002 (base signature)
+        m1 = self.parameters[0].value
+        m2 = self.parameters[1].value
+        x, y = point[0] - self.S * point[1] * point[1], point[1]
+        rho = x * x + y * y
+        growth = m1 + m2 * rho + ExtendedBautin.C * rho * rho - rho * rho * rho
+        omega = 1.0 + ExtendedBautin.E * rho
+        dx, dy = growth * x - omega * y, growth * y + omega * x
+        return [dx + 2.0 * self.S * y * dy, dy]
+
+
+class ShearedTakens(DeterministicFunction):
+    """:class:`RotatedTakens` in the coordinates ``(x + S y^2, y, z)``.
+
+    The same cycles and normal form coefficients without the rotation
+    symmetry, under which terms of ``d`` multiplied by ``a`` vanish.
+    """
+
+    S = 0.5
+
+    def eval(self, point, time=None):  # noqa: ARG002 (base signature)
+        b1 = self.parameters[0].value
+        b2 = self.parameters[1].value
+        x, y, z = point[0] - self.S * point[1] * point[1], point[1], point[2]
+        u = x * x + y * y - 1.0
+        omega = 1.0 + RotatedTakens.E * u
+        dx, dy = z * x - omega * y, z * y + omega * x
+        return [dx + 2.0 * self.S * y * dy, dy, b1 + u * u + b2 * z + u * z]

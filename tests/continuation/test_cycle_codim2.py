@@ -279,6 +279,13 @@ class TestFlipCurve(TestCase):
         first = curve.points[0]
         assert abs(first.parameters[0] - 0.27191773) < 2e-7
         assert abs(first.period - 6.148967) < 2e-6
+        # The flip curve's own tests read the multiplier that is neither the
+        # trivial one nor the flip's: 1:2 resonance is mu + 1, fold-flip mu - 1.
+        for point in curve.points:
+            ordered = sorted(point.multipliers, key=lambda m: abs(m - 1.0))
+            other = min(ordered[1:], key=lambda m: -abs(m + 1.0)).real
+            assert point.tests["strong_resonance_1_2"] == pytest.approx(other + 1.0)
+            assert point.tests["fold_flip"] == pytest.approx(other - 1.0)
         # Every point has the multiplier -1 for an independent DOP853 shooting.
         for point in curve.points[1:]:
             a, b = point.parameters

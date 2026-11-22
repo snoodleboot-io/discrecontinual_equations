@@ -422,6 +422,9 @@ class CycleNormalForm:
         quadratic = self._form(eigen, eigen)
         a = self.integral(periodic, quadratic).real
         second = self.solve(source=quadratic - field.scaled(2.0 * a), singular=True)
+        # The normalisation the formulas state. c does not depend on it: adding
+        # beta f to h2 adds 3 beta int <v*, B(v, f)>, and B(f, v) = v'' - A v',
+        # which integrates against v* to zero since v*' = -A^T v*.
         second = self._orthogonal(second, periodic)
         cubic = self._cubic(eigen, eigen)
         mixed = self._form(eigen, second)

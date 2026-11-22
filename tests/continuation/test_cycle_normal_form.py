@@ -14,6 +14,8 @@ from tests.continuation.cycle_oracles import (
     RotatedBautin,
     RotatedTakens,
     Second,
+    ShearedBautin,
+    ShearedTakens,
 )
 
 
@@ -49,6 +51,18 @@ class TestFold(TestCase):
         # Both signs: outside the cusp (rho > c/3) and inside it.
         for rho in (0.6, 0.45, 0.2):
             b, exact = _bautin_fold(rho, 40)
+            assert abs(b - exact) < 2e-5 * abs(exact), (rho, b, exact)
+
+    def test_b_is_the_same_in_sheared_coordinates(self) -> None:
+        c, e, shear = ExtendedBautin.C, ExtendedBautin.E, ShearedBautin.S
+        for rho in (0.6, 0.2):
+            m2 = 3.0 * rho * rho - 2.0 * c * rho
+            m1 = -2.0 * rho**3 + c * rho * rho
+            states, period = _circle(math.sqrt(rho), 1.0 + e * rho, 40, 0)
+            states[:, 0] += shear * states[:, 1] ** 2
+            field = _field(ShearedBautin, [m1, m2], 2)
+            b = CycleNormalForm(field, states, period).fold()
+            exact = -rho * (2.0 * c - 6.0 * rho) * (1.0 + e * rho) / e
             assert abs(b - exact) < 2e-5 * abs(exact), (rho, b, exact)
 
     def test_b_converges_at_fourth_order(self) -> None:
@@ -98,3 +112,14 @@ class TestTorus(TestCase):
         )
         d = normal.torus(omega * period)
         assert abs(d.real - 1.0238) < 2e-3
+        # The same cycle in sheared coordinates. d is normalised by
+        # int |v|^2 = 1, which the shear changes: Re d scales by 1 / N^2 with
+        # N^2 = int |D phi v|^2 = 1.19220 for the oracle's analytic eigenvector
+        # (lifted (du, dz, dtheta), quadrature on 2e5 points), so 1.0238 / N^2.
+        states[:, 0] += ShearedTakens.S * states[:, 1] ** 2
+        sheared = CycleNormalForm(
+            _field(ShearedTakens, [-u * u, -u], 3),
+            states,
+            period,
+        ).torus(omega * period)
+        assert abs(sheared.real - 1.0238 / 1.19220) < 2e-3
