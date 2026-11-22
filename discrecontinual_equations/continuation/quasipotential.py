@@ -313,9 +313,6 @@ class _EllipseStart:
         self._root = vectors @ np.diag(values**-_HALF) @ vectors.T
         self._unroot = vectors @ np.diag(values**_HALF) @ vectors.T
 
-    # U on the surface is wrong at fourth order in its size.
-    order = 4
-
     def shrunk(self) -> "_EllipseStart":
         """The same surface at half the distance from the equilibrium."""
         return _EllipseStart(self._centre, self._form, self._cubic, self._level / 4.0)
@@ -550,11 +547,6 @@ class _BandStart:
         if float((np.asarray(target) - samples[nearest]) @ normals[nearest]) < 0.0:
             normals = -normals
         self._normals = normals
-
-    # The Simpson-rule start is wrong at about second order in the distance
-    # (measured on Dahiya and Cameron's SDE (24): 1.8e-6, 9.0e-6 and 4.1e-5 at
-    # 0.02, 0.04 and 0.08 from the cycle).
-    order = 2
 
     def shrunk(self) -> "_BandStart":
         """The same curve at half the distance from the cycle."""
@@ -1128,10 +1120,10 @@ class OrderedLineIntegral:
         winds round it infinitely often, which a chain of nodes cannot follow,
         while from the surface it does not.
 
-        The error estimate is the sum of two differences: the value from a
-        surface at twice the distance, which measures the expansion's error
-        (and is used to extrapolate it away), and the value on a chain of half
-        the nodes, which measures the chain's.
+        The error estimate is the sum of two differences: from the value
+        from a surface at twice the distance, which measures the expansion's
+        error, and from the value on a chain of half the nodes, which measures
+        the chain's.
         """
         attractor = field.attractor
         if attractor is None:
@@ -1152,16 +1144,12 @@ class OrderedLineIntegral:
         coarse = _equal_arc_length(_resample(chain, nodes // 2 + 1))
         coarse[0] = start
         rough = inner.value(start) + gmam.path(coarse).action
-        # Each difference divided as the error it measures shrinks: the start's
-        # at the surface's order, the chain's at second order, the least the
-        # scheme guarantees (measured: fourth, 1.04e-3, 8.4e-5 and 5.9e-6 at
-        # 41, 81 and 161 nodes on the non-normal linear system).
-        # The start's error is removed as well as measured: with the error
-        # going as the surface's size to its order, the two surfaces give it by
-        # Richardson's extrapolation. The estimate is kept for the value before
-        # it, so that it bounds what is left.
-        shift = (far - near) / (2.0**inner.order - 1.0)
-        return near - shift, abs(shift) + abs(rough - near) / 3.0
+        # Each difference is taken whole, not divided by 2^p - 1 as a Richardson
+        # estimate would: the chain's error goes at fourth order on the linear
+        # systems (1.04e-3, 8.4e-5, 5.9e-6 at 41, 81, 161 nodes, non-normal)
+        # but at second order on the anisotropic gradient (-4.9e-5, -1.3e-5 at
+        # 81, 161 at (-1.5, -0.8)), and the whole difference bounds both.
+        return near, abs(far - near) + abs(rough - near)
 
     def _backward(self, state: np.ndarray, gradient) -> np.ndarray:
         slope = np.array([component(state[None, :])[0] for component in gradient])

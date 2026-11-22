@@ -39,6 +39,8 @@ from discrecontinual_equations.continuation.quasipotential import (
     OrderedLineIntegral,
     _action,
     _cubic_coefficients,
+    _guide,
+    _relax_from,
     _stationary_fraction,
 )
 from discrecontinual_equations.continuation.stochastic import Ito
@@ -778,6 +780,53 @@ class TestErrorEstimate(TestCase):
         assert abs(value - exact) <= own
         assert abs(field.at(target) - exact) > 10.0 * abs(value - exact)
 
+    def test_the_references_own_estimate_bounds_its_error(self):
+        # About a nonlinear well, where the chain's error goes at second order
+        # in the nodes rather than the fourth of the linear systems: measured
+        # -4.9e-5 at 81 nodes and -1.3e-5 at 161 at (-1.5, -0.8).
+        solver, field, _checked_field, _indices, _true = _checked("gradient")
+        target = np.array([[-1.5, -0.8]])
+        value, own = solver.reference(field, target[0])
+        error = abs(value - float(_gradient_exact(target)[0]))
+        assert error < 1.0e-4
+        assert error <= own <= 10.0 * error
+
+    def test_the_reference_beside_a_cycle_starts_on_the_targets_side(self):
+        # From the band's edge on the side of the target, with the march's
+        # Simpson-rule start there: at r = sqrt(2), U = 1/2 exactly.
+        solver, field, _checked_field, _indices, _true = _checked("cycle")
+        value, own = solver.reference(field, [1.0, 1.0])
+        # Measured 5.5e-5 below; the grid at 81 points is 3.3e-2 below here.
+        assert abs(value - 0.5) < 1.0e-4
+        assert abs(value - 0.5) <= own
+
+    def test_the_estimate_is_the_distance_to_the_reference_plus_its_error(self):
+        solver, field, checked, indices, _true = _checked("nonnormal")
+        target = field.grid.points()[indices[0]]
+        value, own = solver.reference(field, target)
+        estimate = abs(field.values.ravel()[indices[0]] - value) + own
+        assert checked.errors.ravel()[indices[0]] == pytest.approx(estimate, rel=1e-9)
+
+    def test_the_start_slides_to_where_u_plus_the_action_is_least(self):
+        # Started half a radian round the surface from the traced crossing, the
+        # secant must still bring the start to the stationary point: anywhere
+        # else U + S is larger, by the square of the distance.
+        grid = DensityGrid.box([-1.5, -1.5], [1.5, 1.5], [81, 81])
+        drift, noise = rotating_drift(), constant_noise(rotating_noise_matrix())
+        solver = OrderedLineIntegral(drift, noise, grid)
+        field = solver.solve(EquilibriumAttractor([0.0, 0.0]))
+        target = np.array([0.8, -0.3])
+        surface = field.attractor.start(grid, drift, noise, target)
+        chain, parameter = _guide(
+            surface,
+            solver.minimum_action_path(field, target).states,
+            81,
+        )
+        gmam = GeometricMinimumAction(drift, noise, tolerance=1.0e-8)
+        value, _chain, _place = _relax_from(gmam, surface, (chain, parameter + 0.5))
+        exact = float(rotating_quasipotential(target[None, :])[0])
+        assert abs(value - exact) < 3.0e-5
+
     def test_a_field_without_its_attractor_cannot_be_checked(self):
         _solver, field, _checked_field, _indices, _true = _checked("gradient")
         bare = GridQuasipotential(field.grid, field.values, field.floor)
@@ -802,6 +851,14 @@ class TestRefinement(TestCase):
         # A point refined was one whose grid value was off by more than that.
         grid_error = np.abs(field.values.ravel()[indices] - _gradient_exact(points))
         assert np.all(grid_error[status == REFINED] > error[status == REFINED])
+
+    def test_a_reference_not_good_to_the_tolerance_only_flags(self):
+        # No reference here is good to 1e-7, so nothing may be replaced, however
+        # far off the grid value is; each point is flagged by its error instead.
+        solver, field, _checked_field, indices, _true = _checked("gradient")
+        flagged = solver.check(field, indices[:2], tolerance=1.0e-7)
+        assert np.all(flagged.status.ravel()[indices[:2]] == CHECKED)
+        assert np.array_equal(flagged.values, field.values)
 
 
 class TestCubicTerm(TestCase):

@@ -225,6 +225,12 @@ def system(field_class) -> DeterministicFunction:
 
 
 # U from the left well at grid points of the Maier-Stein box, by the same
-# independent minimisation as MAIER_STEIN_BARRIER (chains of 200, 400 and 800
-# nodes from (-1, 0), Richardson-extrapolated in the node count).
-MAIER_STEIN_VALUES: dict[tuple[float, float], float] = {}
+# independent L-BFGS minimisation as MAIER_STEIN_BARRIER: chains of 100, 200
+# and 400 nodes from (-1, 0), the last two extrapolated at second order (the
+# 200-to-400 change is 1.4e-5 at (-1.3, 0.4) and at most 5e-6 elsewhere).
+MAIER_STEIN_VALUES = {
+    (-0.4, 0.3): 0.2587345,
+    (-0.7, -0.2): 0.1280867,
+    (-1.3, 0.4): 1.0204491,
+    (-0.2, 0.5): 0.4192326,
+}
