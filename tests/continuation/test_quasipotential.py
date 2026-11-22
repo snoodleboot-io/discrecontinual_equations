@@ -1004,7 +1004,12 @@ class TestArrival(TestCase):
 
 
 class TestDefaultRadius(TestCase):
-    """Dahiya and Cameron's Eq. (28), held at 8 below 128 points a side."""
+    """The solver's radius is 8 at every size; Eq. (28) is there to opt into.
+
+    ``default_radius`` is Dahiya and Cameron's Eq. (28), held at 8 below 128
+    points a side. It is not the solver's default: at 321 points it made the
+    gradient-dominated problems three to four times worse (module docstring).
+    """
 
     def test_the_radius_follows_the_paper_rule_on_larger_grids(self):
         expected = {41: 8, 88: 8, 90: 8, 128: 10, 161: 10, 256: 14, 321: 14, 513: 18}
@@ -1016,10 +1021,17 @@ class TestDefaultRadius(TestCase):
         grid = DensityGrid.box([-1.0, -1.0], [1.0, 1.0], [41, 300])
         assert default_radius(grid) == 14
 
-    def test_the_solver_uses_it_unless_told_otherwise(self):
-        grid = DensityGrid.box([-1.0, -1.0], [1.0, 1.0], [161, 161])
+    def test_the_solver_holds_the_radius_at_8_on_every_grid(self):
         drift, noise = rotating_drift(), constant_noise(rotating_noise_matrix())
-        assert OrderedLineIntegral(drift, noise, grid).update_radius == 10
+        for count in (41, 161, 321):
+            grid = DensityGrid.box([-1.0, -1.0], [1.0, 1.0], [count, count])
+            assert OrderedLineIntegral(drift, noise, grid).update_radius == 8, count
+
+    def test_the_paper_rule_and_any_other_radius_are_taken_when_asked(self):
+        grid = DensityGrid.box([-1.0, -1.0], [1.0, 1.0], [321, 321])
+        drift, noise = rotating_drift(), constant_noise(rotating_noise_matrix())
+        chosen = OrderedLineIntegral(drift, noise, grid, default_radius(grid))
+        assert chosen.update_radius == 14
         assert OrderedLineIntegral(drift, noise, grid, 4).update_radius == 4
 
 
