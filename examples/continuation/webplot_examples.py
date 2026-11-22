@@ -710,6 +710,11 @@ def _films() -> tuple[tuple, ...]:
     )
 
 
+def film_count() -> int:
+    """How many films the atlas plays: every film of every kind it registers."""
+    return sum(len(listing()) for listing, _ in _film_kinds().values())
+
+
 if __name__ == "__main__":
     arguments = _arguments()
     main(arguments.output_dir, arguments.jobs, arguments.only)

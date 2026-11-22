@@ -41,6 +41,15 @@ CLOCK_SLACK = 2.0
 SECONDS_PER_MINUTE = 60.0
 
 
+def _film_count() -> int:
+    """How many films the continuation atlas plays: its stages and its manifolds."""
+    if str(ROOT) not in sys.path:
+        sys.path.insert(0, str(ROOT))
+    from examples.continuation.webplot_examples import film_count  # noqa: PLC0415
+
+    return film_count()
+
+
 class Kind(Enum):
     """How an example delivers what it makes."""
 
@@ -63,6 +72,17 @@ class Example:
     blurb: str
     minutes: float
 
+    @property
+    def description(self) -> str:
+        """The blurb, with ``{films}`` the atlas's film count, from its catalogue.
+
+        It used to say "ten" while the atlas had thirteen; counting the
+        catalogue keeps it true as films are added.
+        """
+        if "{films}" not in self.blurb:
+            return self.blurb
+        return self.blurb.format(films=_film_count())
+
 
 EXAMPLES: tuple[Example, ...] = (
     Example(
@@ -72,7 +92,7 @@ EXAMPLES: tuple[Example, ...] = (
         "Continuation and bifurcation atlas",
         "Self-contained pages for equilibrium branches, codimension-1, -2 and "
         "-3 bifurcations, parameter-family surfaces, exploration trees and "
-        "connecting orbits, plus ten scrubbable stage films.",
+        "connecting orbits, plus {films} scrubbable films.",
         19.0,
     ),
     Example(
@@ -321,7 +341,7 @@ def _write_console(example: Example, target: Path, stdout: str) -> Path:
     target.mkdir(parents=True, exist_ok=True)
     body = f"<pre>{html.escape(stdout.strip() or '(no output)')}</pre>"
     page = target / "index.html"
-    page.write_text(_shell(example.title, example.blurb, body), encoding="utf-8")
+    page.write_text(_shell(example.title, example.description, body), encoding="utf-8")
     return page
 
 
@@ -342,7 +362,7 @@ def _write_gallery(example: Example, target: Path, pictures: list[Path]) -> Path
         )
     body = f'<div class="figures">{"".join(figures)}</div>'
     page = target / "index.html"
-    page.write_text(_shell(example.title, example.blurb, body), encoding="utf-8")
+    page.write_text(_shell(example.title, example.description, body), encoding="utf-8")
     return page
 
 
@@ -356,7 +376,7 @@ def write_index(results: list[Result], site: Path) -> Path:
         cards.append(
             f'<a class="card" href="{result.href}">{picture}'
             f"<h2>{html.escape(result.example.title)}</h2>"
-            f"<p>{html.escape(result.example.blurb)}</p>"
+            f"<p>{html.escape(result.example.description)}</p>"
             f'<span class="meta">{result.detail} &middot; '
             f"{result.seconds:.0f}s</span></a>",
         )
