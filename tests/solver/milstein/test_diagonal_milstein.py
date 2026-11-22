@@ -384,14 +384,26 @@ def test_vector_noise_that_does_not_commute_still_warns_and_draws_areas():
         MilsteinSolver(config).solve(_equation(CrossVectorNoise, 2), [0.3, -0.2])
 
 
-def test_the_ensemble_still_refuses_vector_noise_that_does_not_commute():
-    config = MilsteinConfig(start_time=0.0, end_time=0.25, step_size=_STEP)
-    with pytest.raises(ValueError, match="commuting noise"):
-        StochasticEnsemble(config, scheme="milstein").solve(
+def test_the_ensemble_steps_vector_noise_that_does_not_commute_with_areas():
+    # Arrange: refused before DEQ-65. One member, one seed: the per-path
+    # solver's increments and areas (see tests/solver/test_ensemble_levy_area.py).
+    config = MilsteinConfig(
+        start_time=0.0,
+        end_time=0.25,
+        step_size=_STEP,
+        random_seed=4,
+    )
+
+    # Act
+    with pytest.warns(UserWarning, match="Levy areas"):
+        found = StochasticEnsemble(config, scheme="milstein").solve(
             _equation(CrossVectorNoise, 2),
             np.array([0.3, -0.2]),
-            paths=3,
         )
+    expected = _final(CrossVectorNoise, [0.3, -0.2], "ito", seed=4, end=0.25)
+
+    # Assert
+    np.testing.assert_allclose(found.final[0], expected, rtol=_ROUNDING)
 
 
 def test_batched_diagonal_slopes_are_the_jacobians_diagonal():

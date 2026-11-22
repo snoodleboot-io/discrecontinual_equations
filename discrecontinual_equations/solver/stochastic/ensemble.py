@@ -13,7 +13,9 @@ arrays too (``eval_batch`` and ``diffusion_batch`` on
 defaults loop, which still works, only slowly).
 
 Two schemes are offered, the same two that take matrix noise: Euler-Maruyama,
-and Milstein for commuting noise with the same refusal as the per-path solver.
+and Milstein, which for noise that does not commute adds the per-path solver's
+Levy-area term ``sum_{j,k} (dG_k/dx) G_j A_(j,k)`` with the areas of every path
+drawn at once (DEQ-65; before, such noise was refused).
 The step formulas are the per-path solvers' with one leading axis, and the
 algebra is shared in spirit rather than in code so that each solver file stays
 readable against its derivation; the test suite pins the two to each other
@@ -27,6 +29,7 @@ unless a source is handed in, in which case the source is asked once per path
 and step and the ensemble is only as fast as that source.
 """
 
+import warnings
 from collections.abc import Iterator
 from dataclasses import dataclass
 
@@ -39,12 +42,14 @@ from discrecontinual_equations.solver.stochastic.coefficients import (
     coupled,
     warn_wrong_declaration,
 )
-from discrecontinual_equations.solver.stochastic.wiener import WienerSource
+from discrecontinual_equations.solver.stochastic.wiener import (
+    LevyAreaSampler,
+    WienerSource,
+)
 
 _MATRIX_BATCH = 3
 # Commutativity is judged by coefficients.coupled, with the per-path solver's
 # tolerance, relative to the largest product over the ensemble.
-_NOT_FINITE = " (a product is not finite: a path has reached NaN or infinity)"
 
 
 @dataclass(frozen=True)
@@ -251,9 +256,19 @@ class StochasticEnsemble:
     :class:`~.wiener.WienerSource` is given, which is then asked once per path
     and step - the route by which one member of an ensemble is driven by the
     same Brownian path as a per-path solver.
+
+    Milstein with noise that does not commute needs the Levy areas ``A_(j,k)``
+    between the drivers of every path (DEQ-65). Without a source they are drawn
+    for all paths in one call of :class:`~.wiener.LevyAreaSampler`, given the
+    ``(paths, m)`` increments, on a stream spawned from ``random_seed`` as the
+    per-path solver spawns its own, so that the increments a seeded ensemble
+    draws do not change; they take ``O(paths m^2)`` memory, besides the
+    sampler's ``2 paths m n`` Fourier normals. With a source, each path asks it
+    for its areas with its increments, and the step decides beforehand whether
+    to ask, as the per-path solver does.
     """
 
-    __slots__ = ["_config", "_generator", "_scheme", "_wiener"]
+    __slots__ = ["_areas", "_config", "_generator", "_scheme", "_warned", "_wiener"]
 
     def __init__(
         self,
@@ -268,6 +283,11 @@ class StochasticEnsemble:
         self._scheme = scheme
         self._wiener = wiener
         self._generator = np.random.default_rng(config.random_seed)
+        # The Levy areas on a stream of their own, spawned from the seed as
+        # MilsteinSolver spawns its, so drawing them leaves the increments alone.
+        sequence = np.random.SeedSequence(config.random_seed)
+        self._areas = LevyAreaSampler(np.random.default_rng(sequence.spawn(1)[0]))
+        self._warned = False
 
     def solve(
         self,
@@ -298,10 +318,11 @@ class StochasticEnsemble:
         if keep_every:
             kept_times.append(time)
             kept.append(states.copy())
+        self._warned = False
         for i in range(self._config.n_steps):
             time = float(times[i])
-            increments = self._increments(time, dt, count, drivers)
             if self._scheme == "euler_maruyama":
+                increments, _ = self._increments(time, dt, count, drivers)
                 states = self._euler_maruyama(
                     coefficients,
                     states,
@@ -310,7 +331,7 @@ class StochasticEnsemble:
                     increments,
                 )
             else:
-                states = self._milstein(coefficients, states, time, dt, increments)
+                states = self._milstein(coefficients, states, time, dt, drivers)
             if keep_every and (i + 1) % keep_every == 0:
                 kept_times.append(float(times[i + 1]))
                 kept.append(states.copy())
@@ -326,15 +347,27 @@ class StochasticEnsemble:
         dt: float,
         paths: int,
         drivers: int,
-    ) -> np.ndarray:
+        *,
+        levy_area: bool = False,
+    ) -> tuple[np.ndarray, np.ndarray | None]:
+        """``(paths, m)`` increments, and ``(paths, m, m)`` areas if asked for."""
         if self._wiener is None:
             # standard_normal scaled afterwards: the same law as normal(0, sqrt(dt))
             # at about half the cost, which is most of a step at this size.
-            return self._generator.standard_normal((paths, drivers)) * np.sqrt(dt)
-        return np.array(
-            [self._wiener.increments(time, dt, drivers).delta_w for _ in range(paths)],
-            dtype=float,
-        )
+            increments = self._generator.standard_normal((paths, drivers)) * np.sqrt(
+                dt,
+            )
+            if not levy_area:
+                return increments, None
+            return increments, self._areas.sample(increments, dt)
+        draws = [
+            self._wiener.increments(time, dt, drivers, levy_area=levy_area)
+            for _ in range(paths)
+        ]
+        increments = np.array([draw.delta_w for draw in draws], dtype=float)
+        if not levy_area:
+            return increments, None
+        return increments, np.array([draw.levy_area for draw in draws], dtype=float)
 
     @staticmethod
     def _euler_maruyama(
@@ -356,14 +389,25 @@ class StochasticEnsemble:
         states: np.ndarray,
         time: float,
         dt: float,
-        increments: np.ndarray,
+        drivers: int,
     ) -> np.ndarray:
-        # The per-path Milstein step for commuting noise, with the drift as written
-        # (the dW dW form absorbs the Stratonovich correction) and the delta_jk dt
-        # term in the Ito form only; see MilsteinSolver for the derivation.
+        # The per-path Milstein step, with the drift as written (the dW dW form
+        # absorbs the Stratonovich correction), the delta_jk dt term in the Ito
+        # form only, and the Levy-area term when the noise does not commute; see
+        # MilsteinSolver for the derivation.
         drift = coefficients.written_drift(states, time)
         diffusion = coefficients.diffusion(states, time)
-        if not BatchedCoefficients.is_matrix(diffusion):
+        count = states.shape[0]
+        increments = None
+        # Vector noise tries the O(paths n) form first, which needs the
+        # increments as it goes. A source is asked for areas with the increments
+        # or not at all, so with one the verdict is taken first; the generator's
+        # areas can be drawn afterwards, given the increments.
+        if not BatchedCoefficients.is_matrix(diffusion) and (
+            self._wiener is None
+            or self._vector_commutes(coefficients, states, time, diffusion)
+        ):
+            increments, _ = self._increments(time, dt, count, drivers)
             correction = self._diagonal_correction(
                 coefficients,
                 states,
@@ -391,25 +435,71 @@ class StochasticEnsemble:
         )
         # NaN is non-commuting, as in the per-path check: a product that cannot
         # be judged is not taken as commuting, and one path gone to NaN or
-        # infinity would otherwise make the whole ensemble pass (DEQ-48).
-        if coupled(asymmetry, scale):
-            message = (
-                "the Milstein ensemble needs commuting noise: (dG_k/dx) G_j must "
-                f"equal (dG_j/dx) G_k for every driver pair; they differ by "
-                f"{asymmetry:.3g} against a scale of {scale:.3g}"
-                f"{_NOT_FINITE if np.isnan(asymmetry) else ''}. Use the "
-                "euler_maruyama scheme (DEQ-28)."
+        # infinity would otherwise strip every other path of its areas (DEQ-48).
+        commuting = not coupled(asymmetry, scale)
+        if increments is None:
+            increments, areas = self._increments(
+                time,
+                dt,
+                count,
+                drivers,
+                levy_area=not commuting,
             )
-            raise ValueError(message)
+        else:
+            # Drawn already, without a source (or, should a source's verdict
+            # above disagree with this one, from this ensemble's own stream).
+            areas = None if commuting else self._areas.sample(increments, dt)
         correction = 0.5 * np.einsum("pjki,pj,pk->pi", products, increments, increments)
         if self._config.calculus == "ito":
             correction -= 0.5 * dt * np.einsum("pkki->pi", products)
+        if areas is not None:
+            # sum_{j,k} (dG_k/dx) G_j A_(j,k), the per-path solver's indices.
+            self._warn_cost(drivers)
+            correction += np.einsum("pjki,pjk->pi", products, areas)
         return (
             states
             + drift * dt
             + coefficients.spread(diffusion, increments)
             + correction
         )
+
+    @staticmethod
+    def _vector_commutes(
+        coefficients: BatchedCoefficients,
+        states: np.ndarray,
+        time: float,
+        diffusion: np.ndarray,
+    ) -> bool:
+        """The verdict :meth:`_diagonal_correction` reaches, before any increment.
+
+        The same products, one direction at a time, and the same two numbers
+        compared; asked only when a source must be told whether to give areas.
+        """
+        coefficients.confirm_declaration(states, time)
+        if coefficients.declared_diagonal:
+            return True
+        scale = 0.0
+        asymmetry = 0.0
+        for j, slope in coefficients.diagonal_directions(states, time):
+            magnitude = np.abs(diffusion[:, j, None] * slope)
+            scale = float(np.max([scale, np.max(magnitude)]))
+            magnitude[:, j] = 0.0
+            asymmetry = float(np.max([asymmetry, np.max(magnitude)]))
+        return not coupled(asymmetry, scale)
+
+    def _warn_cost(self, drivers: int) -> None:
+        if self._warned:
+            return
+        self._warned = True
+        message = (
+            "StochasticEnsemble: the noise does not commute ((dG_k/dx) G_j differs "
+            "from (dG_j/dx) G_k), so every such step draws the Levy areas between "
+            f"its {drivers} drivers for every path: 2 m n + m (m + 1) / 2 extra "
+            "normals a path and step with n = ceil(0.092 sqrt(m / dt)) Fourier "
+            "terms (DEQ-65). The euler_maruyama scheme needs none, at strong "
+            "order 0.5."
+        )
+        warnings.warn(message, UserWarning, stacklevel=4)
 
     def _diagonal_correction(  # noqa: PLR0913 (the step's own arguments)
         self,
@@ -428,7 +518,7 @@ class StochasticEnsemble:
         Jacobians nor the products are ever held (DEQ-48). The commutativity
         verdict is the general one's: the largest off-diagonal ``|P[j, k]|``
         against the largest ``|P[j, k]|`` over the ensemble. None when the noise
-        does not commute, so that the general step raises its refusal. Declared
+        does not commute, so that the general step adds the Levy areas. Declared
         diagonal noise commutes by its declaration and needs only the slopes:
         ``P`` is diagonal, two batched evaluations make it, and the sum over
         ``j`` has one term, once the declaration has been checked.

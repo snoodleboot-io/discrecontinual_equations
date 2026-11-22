@@ -256,14 +256,30 @@ class TestEnsembleMechanics:
                 paths=3,
             )
 
-    def test_milstein_refuses_non_commuting_noise(self):
-        config = MilsteinConfig(start_time=0.0, end_time=1.0, step_size=0.01)
-        with pytest.raises(ValueError, match="commuting noise"):
-            StochasticEnsemble(config, scheme="milstein").solve(
+    def test_milstein_steps_non_commuting_noise_as_the_seeded_per_path_solver(self):
+        # Arrange: refused before DEQ-65. One member and one seed: the per-path
+        # solver's normal(0, sqrt(dt)) is the ensemble's standard_normal times
+        # sqrt(dt), and both draw the areas from the stream spawned from the seed.
+        config = MilsteinConfig(
+            start_time=0.0,
+            end_time=1.0,
+            step_size=0.01,
+            random_seed=8,
+        )
+        solver = MilsteinSolver(config)
+
+        # Act
+        with pytest.warns(UserWarning, match="Levy areas"):
+            found = StochasticEnsemble(config, scheme="milstein").solve(
                 _shear_equation(),
                 [1.0, 0.0],
-                paths=3,
             )
+        with pytest.warns(UserWarning, match="Levy areas"):
+            solver.solve(_shear_equation(), [1.0, 0.0])
+
+        # Assert
+        expected = [result.discretization[-1] for result in solver.solution.results]
+        np.testing.assert_allclose(found.final[0], expected, rtol=1e-12)
 
     def test_unknown_scheme_is_refused(self):
         config = EulerMaruyamaConfig(start_time=0.0, end_time=1.0, step_size=0.01)
