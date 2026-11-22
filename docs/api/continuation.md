@@ -253,8 +253,10 @@ their product round the mesh is the derivative of the discrete period map. Nothi
 is integrated; the blocks are the ones the tangent solve just assembled. The
 nontrivial multiplier on the Hopf cycle converges at 4.00, 5.96 and 7.95 for
 `m = 2, 3, 4`. `CycleContinuation.hermite_multipliers(point)` is the Hermite
-monodromy above, walked through every point of the solution, as a cross-check; it
-agrees to its own fourth order.
+monodromy above, walked through every point of the solution, as a cross-check. It is
+fourth order whatever `m` is, so the two agree only to that order (3.86-3.99 per
+doubling), not to `2m`: the ticket's oracle of agreement "to the collocation order"
+cannot be met by this cross-check.
 
 **The trivial multiplier of that monodromy is not an error measure.** The discrete
 map of a one-step method is the flow of a modified vector field to all orders, so
@@ -268,8 +270,29 @@ cross-check takes `df/dx` by automatic differentiation, because the forward
 difference floors it at 3e-5 on the Bogdanov–Takens orbit nearest the homoclinic
 however fine the mesh.
 
+**That `floquet_error` is a conservative bound, not the `2m`-order error.** Once the
+mesh resolves the orbit it reads the fourth-order cross-check's own error, and the
+multipliers are far better than it says. Against an exact reference - a planar
+cycle's nontrivial multiplier is `exp` of the divergence integrated over the period,
+here by DOP853 at `rtol = 1e-12` - with `m = 4`:
+
+| cycle | intervals | `floquet_error` (bound) | true error |
+|---|---|---|---|
+| van der Pol, `mu = 1` | 80 | 4.7e-9 | 9.6e-15 |
+| Bogdanov–Takens, b1 = -0.4554 | 80 | 1.9e-7 | 1.3e-10 |
+| Bogdanov–Takens, b1 = -0.4554 | 20 | 8.1e-5 | 1.3e-5 |
+| van der Pol, `mu = 6` | 80 | 4.65e-2 | 6.25e-3 |
+
+The last row is a false refusal: `resolved()` at the default 2e-2 refuses that
+cycle, where Hermite–Simpson on 320 nodes, true error 6.05e-3, is let through. The
+bound under-read only where the mesh was far from resolving the orbit (van der Pol
+at `mu = 3` on 10 intervals, 0.15 against 0.32), well outside any tolerance. An
+estimate that inherits the collocation order is open.
+
 On the two films the fourth-order schemes could not take below 0.01%, worst
-`floquet_error` over the branch (Hermite–Simpson as shipped, against
+`floquet_error` over the branch - for Gauss–Legendre that is the bound above, so the
+true errors are smaller still (on the worst Bogdanov–Takens orbit, 1.3e-10 at 80
+intervals and 1.3e-5 at 20) (Hermite–Simpson as shipped, against
 Gauss–Legendre with `m = 4`; "80 intervals" has four times the unknowns, "20
 intervals" the same 81 states as 80 nodes):
 
@@ -279,7 +302,8 @@ intervals" the same 81 states as 80 nodes):
 | Gauss–Legendre, 80 intervals | 4.8e-5% (604) | 4.6e-3% (761) |
 | Gauss–Legendre, 20 intervals | 8.0e-3% (605) | 0.24% (761) |
 
-On 80 intervals both films are under the 0.01% bar by orders of magnitude. On
+On 80 intervals both films are under the 0.01% bar by orders of magnitude, bound
+and all. On
 Hermite–Simpson's own unknowns Bogdanov–Takens is under it and the ring is not: its
 period-35 wave has `T h = 1.7` per interval at 20 intervals, and four points to an
 interval do not make up for it.

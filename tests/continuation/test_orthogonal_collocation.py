@@ -110,6 +110,17 @@ class TestSelection(TestCase):
                 collocation_points=3,
             )
 
+    def test_refuses_a_point_count_that_is_not_a_positive_integer(self):
+        for points in (0, -1, 2.0, True, "4"):
+            with pytest.raises(ValueError, match="positive integer"):
+                CycleContinuation(
+                    _equation(HopfField, 2, 0.5),
+                    0,
+                    10,
+                    collocation="gauss_legendre",
+                    collocation_points=points,  # type: ignore[arg-type]
+                )
+
     def test_the_default_is_still_hermite_simpson(self):
         continuation = CycleContinuation(_equation(HopfField, 2, 0.5), 0, 10)
         assert continuation.collocation == "hermite_simpson"
@@ -235,7 +246,7 @@ class TestJacobianMultipliers(TestCase):
         return abs(nontrivial - math.exp(-4.0 * math.pi * 0.25))
 
     def test_nontrivial_multiplier_converges_at_twice_the_point_count(self):
-        for points, meshes in {2: (8, 16, 32), 3: (8, 16, 32)}.items():
+        for points, meshes in {2: (8, 16, 32), 3: (8, 16, 32), 4: (3, 6, 12)}.items():
             errors = [self._nontrivial_error(points, n) for n in meshes]
             for order in _orders(errors):
                 assert abs(order - 2 * points) < 0.5, (points, errors)
@@ -315,8 +326,13 @@ def _unstable_cycle(
     equation: DifferentialEquation,
     b1: float,
     intervals: int,
-) -> tuple[np.ndarray, float]:
-    """The film's seed: the unstable cycle, as an attractor of reversed time."""
+) -> tuple[np.ndarray, float, float]:
+    """The film's seed: the unstable cycle, as an attractor of reversed time.
+
+    Also the exact nontrivial multiplier, the oracle: a planar cycle's is
+    ``exp`` of the divergence ``b2 + x`` integrated over one period, carried
+    along the same run as a third component.
+    """
 
     def reversed_flow(_t: float, state: np.ndarray) -> list[float]:
         return [-v for v in equation.derivative.eval(point=list(state), time=None)]
@@ -334,12 +350,17 @@ def _unstable_cycle(
         return float(state[1])
 
     section.direction = -1.0  # type: ignore[attr-defined] (solve_ivp reads it)
+
+    def with_integral(t: float, state: np.ndarray) -> list[float]:
+        return [*reversed_flow(t, state[:2]), float(state[0])]
+
     run = solve_ivp(
-        reversed_flow,
+        with_integral,
         [0.0, 200.0],
-        settled,
-        rtol=1.0e-10,
-        atol=1.0e-12,
+        [*settled, 0.0],
+        method="DOP853",
+        rtol=1.0e-12,
+        atol=1.0e-13,
         events=section,
         dense_output=True,
         max_step=0.05,
@@ -347,21 +368,25 @@ def _unstable_cycle(
     crossings = run.t_events[0]
     period = float(crossings[1] - crossings[0])
     times = crossings[0] + np.linspace(0.0, period, intervals + 1)
-    return run.sol(times).T[::-1], period
+    integral = float(run.sol(crossings[1])[2] - run.sol(crossings[0])[2])
+    exact = math.exp(0.5 * period + integral)
+    return run.sol(times)[:2].T[::-1], period, exact
 
 
 class TestBogdanovTakensOrbit(TestCase):
     """Oracle 3 on the film's hardest orbit, b1 = -0.4554 near the homoclinic.
 
     Hermite-Simpson on 80 uniform nodes leaves 0.089% there, the film's worst;
-    the bar is 0.01% on 80 mesh intervals.
+    the bar is 0.01% on 80 mesh intervals. Measured against the exact
+    multiplier, not against the scheme's own estimate of its error: the larger
+    of the trivial multiplier's drift and the nontrivial one's relative error.
     """
 
     _B1 = -0.4554
 
     def _error(self, collocation: str, intervals: int = 80) -> float:
         equation = _bogdanov_takens(self._B1)
-        states, period = _unstable_cycle(equation, self._B1, intervals)
+        states, period, exact = _unstable_cycle(equation, self._B1, intervals)
         continuation = CycleContinuation(
             equation,
             0,
@@ -370,15 +395,51 @@ class TestBogdanovTakensOrbit(TestCase):
             collocation=collocation,
         )
         trace, _ = continuation.trace(CycleSeed(states, period, self._B1), 0.02, 0)
-        return trace[0].floquet_error
+        multipliers = trace[0].multipliers
+        trivial = int(np.argmin(np.abs(multipliers - 1.0)))
+        nontrivial = multipliers[1 - trivial]
+        return max(
+            float(abs(multipliers[trivial] - 1.0)),
+            float(abs(nontrivial - exact)) / exact,
+        )
 
     def test_hermite_simpson_is_the_baseline(self):
         assert self._error("hermite_simpson") > 1.0e-4
 
     def test_gauss_legendre_on_80_intervals_meets_the_bar(self):
-        # 1.9e-7 measured, against 8.9e-4 under Hermite-Simpson.
+        # 1.2e-10 measured (the point's own bound reads 1.9e-7), against
+        # 8.9e-4 under Hermite-Simpson.
         assert self._error("gauss_legendre") < 1.0e-4
 
     def test_gauss_legendre_meets_it_on_hermite_simpsons_unknowns(self):
-        # 20 intervals of four points are the 81 states of 80 nodes: 8.1e-5.
+        # 20 intervals of four points are the 81 states of 80 nodes:
+        # 1.3e-5 measured (the bound reads 8.1e-5).
         assert self._error("gauss_legendre", intervals=20) < 1.0e-4
+
+
+class TestSingularBlock(TestCase):
+    """An interval block too singular to solve refuses the point, not the trace."""
+
+    def test_reads_no_multipliers_and_reports_an_infinite_error(self):
+        intervals, points, mu = 6, 2, 0.5
+        continuation = CycleContinuation(
+            _equation(HopfField, 2, mu),
+            0,
+            intervals,
+            phase_index=1,
+            collocation="gauss_legendre",
+            collocation_points=points,
+        )
+        continuation._dimension = 2  # noqa: SLF001 (trace sets this)
+        nodes = intervals * points + 1
+        grid = np.linspace(0.0, 1.0, nodes)
+        states = math.sqrt(mu) * np.column_stack(
+            [np.cos(2.0 * math.pi * grid), np.sin(2.0 * math.pi * grid)],
+        )
+        unknowns = np.concatenate([states.ravel(), [2.0 * math.pi], [mu]])
+        block = np.zeros((intervals, points * 2, (points + 1) * 2))
+        continuation._assembled = (unknowns, block)  # noqa: SLF001 (the cache)
+        point = continuation._point(unknowns, nodes)  # noqa: SLF001
+        assert np.all(np.isnan(point.multipliers))
+        assert point.floquet_error == math.inf
+        assert not point.resolved()
