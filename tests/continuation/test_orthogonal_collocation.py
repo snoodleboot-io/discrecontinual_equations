@@ -18,10 +18,14 @@ from scipy.optimize import root
 
 from discrecontinual_equations.continuation.cycle_continuation import (
     CycleContinuation,
+    CyclePoint,
     CycleSeed,
     _Arc,
     _jacobian_monodromy,
     _multiplier_disagreement,
+)
+from discrecontinual_equations.continuation.periodic_orbit import (
+    PeriodicOrbitSolution,
 )
 from discrecontinual_equations.differential_equation import DifferentialEquation
 from tests.continuation.fields import (
@@ -727,3 +731,29 @@ class TestMultiplierDisagreement(TestCase):
     def test_is_absolute_for_a_small_one(self):
         gap = _multiplier_disagreement(np.array([1.0e-3, 1.0]), np.array([1.0, 2.0e-3]))
         assert abs(gap - 1.0e-3) < 1.0e-15
+
+
+class TestCollapsedCycle(TestCase):
+    """A cycle that has collapsed onto a point is not resolved, whatever the scheme.
+
+    An under-resolved seed can converge to the degenerate solution every
+    collocation admits: all states equal and the period zero (or an equilibrium
+    on the phase plane at any period). Its monodromy is the identity, so the
+    trivial drift and the Hermite disagreement both read zero and the point
+    used to pass :meth:`CyclePoint.resolved` - on van der Pol at ``mu = 2``
+    seeded from the exact orbit on 8 intervals, under all three schemes.
+    """
+
+    def test_a_point_with_no_extent_reports_an_infinite_error(self):
+        states = np.tile([1.3, 0.0], (9, 1))
+        solution = PeriodicOrbitSolution(states, -4.0e-20)
+        for error in (None, 0.0):
+            point = CyclePoint(0.5, solution, np.ones(2, dtype=complex), None, error)
+            assert point.floquet_error == math.inf
+            assert not point.resolved()
+
+    def test_the_collapse_an_under_resolved_seed_reaches_is_refused(self):
+        _, point, _, _ = _van_der_pol_point(4, 8, mu=2.0)
+        if np.ptp(point.solution.states) > 1.0e-6:  # pragma: no cover
+            pytest.skip("the seed did not collapse here")
+        assert not point.resolved()
