@@ -166,3 +166,8 @@ def test_workers_are_fresh_spawned_single_threaded_processes(tmp_path, monkeypat
     index = (tmp_path / "index.html").read_text(encoding="utf-8")
     links = re.findall(r'href="([^"]+)\.html"', index)
     assert links == [f"{unit.kind}{unit.index}" for unit in units]
+
+
+def test_only_picks_the_named_units_in_registry_order():
+    chosen = atlas._chosen(atlas._units(), ["hopf_stage", "cusp", "hopf"])
+    assert [unit.label for unit in chosen] == ["hopf", "cusp", "hopf_stage"]
