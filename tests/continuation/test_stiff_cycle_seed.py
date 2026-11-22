@@ -22,7 +22,13 @@ from discrecontinual_equations.continuation.cycle_continuation import (
 )
 from discrecontinual_equations.continuation.periodic_orbit import PeriodicOrbitSolution
 from discrecontinual_equations.differential_equation import DifferentialEquation
-from tests.continuation.fields import Alpha, State, Time, VanDerPolField
+from tests.continuation.fields import (
+    Alpha,
+    FoldOfCyclesField,
+    State,
+    Time,
+    VanDerPolField,
+)
 
 
 def _equation(mu: float) -> DifferentialEquation:
@@ -127,6 +133,42 @@ class TestStiffStart(TestCase):
 
 
 class TestRefusal(TestCase):
+    def test_a_cycle_far_smaller_than_the_seed_is_refused(self):
+        """The fold-of-cycles circle of radius 1 at ``mu = 0``, 3 intervals, m = 1.
+
+        Implicit midpoint on three points has a spurious cycle of radius 4e-4
+        and period 10.39 round the degenerate origin; the seed path took it,
+        and its multipliers, both about one, read a Floquet error of 5e-5
+        against a true error of 1, so ``resolved()`` passed it. Its period is
+        within the window; its size is 2500 times too small.
+        """
+        parameters = [Alpha(value=0.0)]
+        equation = DifferentialEquation(
+            variables=[State(), State()],
+            time=Time(),
+            parameters=parameters,
+            derivative=FoldOfCyclesField(
+                variables=[State(), State()],
+                parameters=parameters,
+                results=[State(), State()],
+                time=None,
+            ),
+        )
+        continuation = CycleContinuation(
+            equation,
+            0,
+            3,
+            phase_index=1,
+            collocation="gauss_legendre",
+            collocation_points=1,
+        )
+        angle = 2.0 * math.pi * np.linspace(0.0, 1.0, 4)
+        circle = np.column_stack([np.cos(angle), np.sin(angle)])
+        points, _ = continuation.trace(CycleSeed(circle, 2.0 * math.pi, 0.0), 0.05, 0)
+        for point in points:
+            radii = np.linalg.norm(point.solution.states, axis=1)
+            assert np.max(radii) > 0.5, np.max(radii)
+
     def test_a_negative_seed_period_is_refused(self):
         points, _ = _start(1.0, 20, 4, period=-6.66)
         assert points == []
