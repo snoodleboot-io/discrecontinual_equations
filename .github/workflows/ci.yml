@@ -3,8 +3,9 @@ name: CI
 on:
   push:
     branches: [main]
+  # Every pull request, whatever its base, so each PR in a stack is tested on its own.
+  # The build and publish jobs run only for refs/heads/main, which a PR never is.
   pull_request:
-    branches: [main]
   release:
     types: [published]
 
