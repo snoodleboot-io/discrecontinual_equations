@@ -319,3 +319,23 @@ class StackedHopfHopf(EmbeddedHopfHopf):
             rate = -(1.2 + 0.5 * index)
             rows.append(rate * mode + x1 * x1 + (index + 1) * x2 * y2 + y1 * x2)
         return rows
+
+
+class EmbeddedCusp(Embedded):
+    """``x' = m1 + m2 x + c x^3 + g x s1``, ``s1' = -s1 + x^2``, ``s2' = -2 s2 + x s1``.
+
+    The stable mode is slaved to ``s1 = x^2 + O(x^4)``, so the feedback ``g x s1``
+    adds exactly ``g`` to the cubic coefficient on the center manifold.
+    """
+
+    c = -1.0
+    g = 0.0
+
+    def core(self, z: list, mu1: object, mu2: object) -> list:
+        x, s1, s2 = z
+        cls = type(self)
+        return [
+            mu1 + mu2 * x + cls.c * x * x * x + cls.g * x * s1,
+            -s1 + x * x,
+            -2.0 * s2 + x * s1,
+        ]

@@ -41,6 +41,7 @@ from discrecontinual_equations.continuation.codim2_config import Codim2Config
 from discrecontinual_equations.continuation.codim2_normal_form import (
     bogdanov_takens_normal_form,
     classify,
+    cusp_normal_form,
     hopf_hopf_normal_form,
     hopf_normal_form,
     zero_hopf_normal_form,
@@ -66,6 +67,7 @@ from tests.continuation.normal_form_systems import (
     CurvedBogdanovTakens,
     EmbeddedBogdanovTakens,
     EmbeddedHopfHopf,
+    EmbeddedCusp,
     EmbeddedZeroHopf,
     StackedBautin,
     StackedHopfHopf,
@@ -224,6 +226,19 @@ class TestIndependentOfDimension(TestCase):
             result = hopf_hopf_normal_form(problem, np.zeros(size), 0.0, 0.0)
             assert _close(result.theta, nf.g1011.real / (0.5 * nf.g0021.real))
             assert _close(result.delta, nf.g1110.real / (0.5 * nf.g2100.real))
+
+
+class TestEmbeddedCusp(TestCase):
+    """The cusp ``c``, including the center manifold's ``3 B(q, h2)`` share."""
+
+    def test_returns_the_cubic_with_the_manifold_contribution(self):
+        for c, g, seed in [(-1.0, 0.0, 2), (0.6, 0.0, 8), (-1.0, 1.5, 13)]:
+            EmbeddedCusp.c, EmbeddedCusp.g = c, g
+            EmbeddedCusp.transform = random_transform(3, seed)
+            problem = _problem(build(EmbeddedCusp, 3))
+            result = cusp_normal_form(problem, np.zeros(3), 0.0, 0.0)
+            scale = (np.linalg.inv(EmbeddedCusp.transform) @ result.q)[0]
+            assert _close(result.c, scale**2 * (c + g))
 
 
 class TestEmbeddedZeroHopf(TestCase):
