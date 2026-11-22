@@ -107,14 +107,39 @@ independent of scaling convention.
 `Codim3Driver` continues a codim-2 curve in three parameters and detects codim-3
 points; the curve is chosen by `codim3_curve`.
 
-- `cusp` continues the **cusp curve** (the fold system augmented with `a = 0`) and
-  detects the **swallowtail**, where the cubic fold coefficient on the center
-  manifold, `b = (1/6) <p, C(q, q, q) + 3 B(q, h2)>` (the cusp normal form's `c`),
-  changes sign. Verified against the swallowtail normal form.
-- `generalized_hopf` continues the **generalized-Hopf (Bautin) curve** (the Hopf
-  system augmented with `l1 = 0`) and detects the **degenerate Bautin**, where the
-  second Lyapunov quantity `l2` changes sign. Verified against an extended Bautin
-  normal form.
+- `cusp` continues the **cusp curve** and detects the **swallowtail**, where the
+  cubic fold coefficient on the center manifold,
+  `b = (1/6) <p, C(q, q, q) + 3 B(q, h2)>` (the cusp normal form's `c`), changes
+  sign. Verified against the swallowtail normal form, and against a coupled
+  two-dimensional swallowtail whose center manifold moves the point to `x = g/4`.
+- `generalized_hopf` continues the **generalized-Hopf (Bautin) curve** and detects
+  the **degenerate Bautin**, where the second Lyapunov quantity `l2` changes sign.
+  Verified against an extended Bautin normal form, planar and coupled.
+
+Both curves are **minimally augmented** (Govaerts 2000, sections 4.1.2 and 4.3.4;
+the MatCont manual, eqs. (55)-(57) and (61)-(62)). The unknowns are the state and
+the parameters only (plus `kappa = omega^2` for the Hopf curve); the fold and Hopf
+conditions are scalar entries of a bordered solve, and the codim-2 condition is a
+test function on top:
+
+| Curve | Unknowns | Rows | Test function |
+|-------|----------|------|---------------|
+| cusp | `u, p_a, p_b` | `f`, `g` from `[[f_u, w_bor], [v_bor^T, 0]] (v, g) = (0, 1)` | `a = (1/2) w^T B(v, v)` |
+| generalized Hopf | `u, kappa, p_a, p_b` | `f`, two entries of `G` from `[[f_u^2 + kappa I, W_bor], [V_bor^T, 0]] (V, G) = (0, I)` | `l1` = `first_lyapunov` at `omega = sqrt(kappa)` |
+
+The residual supplies its own Jacobian (`jacobian="analytic_jacobian"`, which
+`Codim3Driver` selects for these two curves). The state columns are analytic:
+`g_u = -w^T B(v, e_k)` and `G_u = -W^T (f_u^2)_u V`, with `w` and `W` from the
+transposed bordered system; `a_u` and `l1_u` use adjoint solves with the same
+factors instead of differentiating the null and eigenvectors of the adjoint
+problem. Only the three parameter columns are differenced. A Newton iteration is
+then one factorisation plus `O(n)` field evaluations: `O(n^3)` for a dense field,
+where differencing every column of the old Moore-Spence systems was `O(n^4)` for
+the cusp and, through a center-manifold reduction per column, `O(n^5)` for the
+generalized Hopf. The borders are frozen through each Newton solve and moved to
+the computed null vectors at every accepted point (`ResidualFunction.adapt`, which
+the corrector calls on convergence); the Hopf curve also re-picks the pair of `G`
+entries that keeps its Jacobian best conditioned. Neither changes the curve.
 
 Automatic differentiation supplies the third-, fourth-, and fifth-order
 derivatives exactly, which is what makes robust codim-3 detection possible.

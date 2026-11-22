@@ -5,9 +5,17 @@ parametrised by ``x = t`` as ``(b1, b2, b3) = (3 t^4, -8 t^3, 6 t^2)``, with cub
 coefficient ``b = -4 t``. Continuing the cusp curve through ``t = 0`` gives a
 swallowtail at the origin, checked against that exact location. Exactness of the
 high derivatives comes from the automatic-differentiation provider.
+
+The coupled swallowtail adds a stable mode ``s`` slaved to ``s = x^2`` that feeds
+back through ``g x s``. Its equilibria are those of ``Phi(x) = b1 + b2 x + b3 x^2 +
+g x^3 - x^4`` (with ``s = x^2``), so its swallowtail is where the third derivative
+of ``Phi`` vanishes: at ``x = g / 4``, not at the origin. Only the center
+manifold's ``3 B(q, h2)`` share of the cubic coefficient moves it there (DEQ-83).
 """
 
 from unittest import TestCase
+
+import numpy as np
 
 from discrecontinual_equations.continuation.codim3_builder import (
     Codim3Driver,
@@ -100,6 +108,39 @@ def _equation(
     )
 
 
+class CoupledSwallowtail(DeterministicFunction):
+    """``x' = b1 + b2 x + b3 x^2 - x^4 + g x s``, ``s' = x^2 - s``, in ``X = T z``."""
+
+    feedback = 1.0
+    transform = np.array([[1.3, -0.4], [0.7, 0.9]])
+
+    def eval(
+        self,
+        point: list[float],
+        time: float | None = None,  # noqa: ARG002 (base signature)
+    ) -> list[float]:
+        transform = type(self).transform
+        inverse = np.linalg.inv(transform)
+        x, s = (
+            sum(float(inverse[i, k]) * point[k] for k in range(2)) for i in range(2)
+        )
+        b1 = self.parameters[0].value
+        b2 = self.parameters[1].value
+        b3 = self.parameters[2].value
+        field = [
+            b1 + b2 * x + b3 * x * x - x**4 + type(self).feedback * x * s,
+            x * x - s,
+        ]
+        return [
+            sum(float(transform[i, k]) * field[k] for k in range(2)) for i in range(2)
+        ]
+
+
+def _coupled_cusp_point(t: float, g: float) -> tuple[float, float, float]:
+    """``(b1, b2, b3)`` where ``Phi``, ``Phi'`` and ``Phi''`` vanish at ``x = t``."""
+    return 3.0 * t**4 - g * t**3, -8.0 * t**3 + 3.0 * g * t**2, 6.0 * t**2 - 3.0 * g * t
+
+
 class CoupledExtendedBautin(DeterministicFunction):
     """The extended Bautin driving a coupled stable direction z.
 
@@ -185,6 +226,38 @@ class TestCodim3(TestCase):
         assert abs(points[0].parameter_b) < LOCATION_TOLERANCE
         assert abs(points[0].parameter_c) < LOCATION_TOLERANCE
         assert abs(points[0].state[0]) < LOCATION_TOLERANCE
+
+    def test_coupled_swallowtail_sits_where_the_manifold_puts_it(self):
+        g = CoupledSwallowtail.feedback
+        start = 0.75
+        b1, b2, b3 = _coupled_cusp_point(start, g)
+        state = CoupledSwallowtail.transform @ np.array([start, start * start])
+        equation = _equation(CoupledSwallowtail, 2, b1, b2, b3)
+        seed = Codim3Seed(state=state.tolist(), parameter_a=b1, parameter_b=b3)
+        config = Codim3Config(
+            continuation_parameter_index=0,
+            second_parameter_index=2,
+            third_parameter_index=1,
+            curve="fold",
+            codim3_curve="cusp",
+            codim3_detectors=["swallowtail"],
+            initial_parameter=b2,
+            direction=1,
+            parameter_lower_bound=-3.0,
+            parameter_upper_bound=3.0,
+            initial_step=0.01,
+            maximum_step=0.02,
+            maximum_points=400,
+        )
+        result = Codim3Driver.run(config, equation, seed)
+        points = [p for p in result.points if p.kind == "swallowtail"]
+        expected = _coupled_cusp_point(g / 4.0, g)
+        assert len(points) == 1
+        x0 = (np.linalg.inv(CoupledSwallowtail.transform) @ points[0].state)[0]
+        assert abs(points[0].parameter_a - expected[0]) < LOCATION_TOLERANCE
+        assert abs(points[0].parameter_c - expected[1]) < LOCATION_TOLERANCE
+        assert abs(points[0].parameter_b - expected[2]) < LOCATION_TOLERANCE
+        assert abs(x0 - g / 4.0) < LOCATION_TOLERANCE
 
     def test_generalized_hopf_curve_finds_degenerate_bautin(self):
         # The generalized-Hopf curve is b1 = b2 = 0; the second Lyapunov quantity is

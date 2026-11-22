@@ -24,6 +24,9 @@ from discrecontinual_equations.continuation.derivative_provider import (
 from discrecontinual_equations.continuation.residual import ResidualFunction
 from discrecontinual_equations.differential_equation import DifferentialEquation
 
+_ANALYTIC_JACOBIAN = "analytic_jacobian"
+_BOGDANOV_TAKENS = "bogdanov_takens_curve_residual"
+
 
 class Codim3Seed:
     """A codim-2 point used to seed a three-parameter curve continuation."""
@@ -105,7 +108,7 @@ class Codim3Driver:
             float(seed.parameter_a),
             float(seed.parameter_b),
         )
-        seed_state, normalization, residual_key = _build_seed(
+        seed_state, borders, residual_key = _build_seed(
             config,
             seed,
             equilibrium,
@@ -116,11 +119,19 @@ class Codim3Driver:
             configuration={
                 "problem": problem,
                 "dimension": dimension,
-                "normalization": normalization,
                 "third": third,
+                **borders,
             },
         )
-        curve_config = config.model_copy(update={"detectors": []})
+        # The cusp and generalized-Hopf systems differentiate their own rows; the
+        # Bogdanov-Takens system is still differenced column by column.
+        jacobian_key = (
+            config.jacobian if residual_key == _BOGDANOV_TAKENS else _ANALYTIC_JACOBIAN
+        )
+        residual.adapt(seed_state, float(config.initial_parameter))
+        curve_config = config.model_copy(
+            update={"detectors": [], "jacobian": jacobian_key},
+        )
         continuer = ContinuerBuilder.assemble(curve_config, residual)
         curve = continuer.solve(equation, seed_state.tolist())
 
@@ -150,21 +161,21 @@ def _build_seed(
     seed: Codim3Seed,
     equilibrium: np.ndarray,
     jacobian: np.ndarray,
-) -> tuple[np.ndarray, np.ndarray, str]:
+) -> tuple[np.ndarray, dict[str, np.ndarray], str]:
     if config.codim3_curve == "generalized_hopf":
         real_vector, imag_vector, omega = _hopf_vectors(
             jacobian,
             seed.frequency or 0.0,
         )
+        left_real, left_imag, _omega = _hopf_vectors(jacobian.T, omega)
         state = np.concatenate(
-            [
-                equilibrium,
-                real_vector,
-                imag_vector,
-                [omega, seed.parameter_a, seed.parameter_b],
-            ],
+            [equilibrium, [omega * omega, seed.parameter_a, seed.parameter_b]],
         )
-        return state, real_vector.copy(), "generalized_hopf_curve_residual"
+        borders = {
+            "right_border": np.column_stack([real_vector, imag_vector]),
+            "left_border": np.column_stack([left_real, left_imag]),
+        }
+        return state, borders, "generalized_hopf_curve_residual"
     null_vector = _null_vector(jacobian)
     if config.codim3_curve == "bogdanov_takens":
         chain = _jordan_chain(jacobian, null_vector)
@@ -176,11 +187,13 @@ def _build_seed(
                 [seed.parameter_a, seed.parameter_b],
             ],
         )
-        return state, null_vector, "bogdanov_takens_curve_residual"
-    state = np.concatenate(
-        [equilibrium, null_vector, [seed.parameter_a], [seed.parameter_b]],
-    )
-    return state, null_vector, "cusp_curve_residual"
+        return state, {"normalization": null_vector}, _BOGDANOV_TAKENS
+    state = np.concatenate([equilibrium, [seed.parameter_a, seed.parameter_b]])
+    borders = {
+        "right_border": null_vector,
+        "left_border": _null_vector(jacobian.T),
+    }
+    return state, borders, "cusp_curve_residual"
 
 
 def _hopf_vectors(

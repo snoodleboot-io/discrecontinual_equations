@@ -1,29 +1,43 @@
-"""Augmented residual whose zero set is the cusp curve in three parameters.
+"""Minimally augmented residual whose zero set is the cusp curve in three parameters.
 
 A cusp is codimension two, so in three active parameters the set of cusps is a
-one-dimensional curve. It is defined by the fold (Moore-Spence) system together
-with the vanishing of the quadratic normal-form coefficient ``a``:
+one-dimensional curve. It is defined by the minimally augmented fold system of
+Govaerts (*Numerical Methods for Bifurcations of Dynamical Equilibria*, SIAM 2000,
+section 4.1.2; MatCont's ``limitpoint.m``) together with the vanishing of the
+quadratic normal-form coefficient:
 
-    f(u; p_a, p_b, p_c)      = 0
-    f_u(u; p_a, p_b, p_c) q  = 0
-    c . q - 1                = 0
-    a(u; p_a, p_b, p_c)      = 0
+    f(u; p_a, p_b, p_c)  = 0
+    g(u; p_a, p_b, p_c)  = 0      [[f_u, w_bor], [v_bor^T, 0]] (v, g) = (0, 1)
+    a(u; p_a, p_b, p_c)  = 0      a = (1/2) w^T B(v, v)
 
-with unknowns ``(u, q, p_a, p_b)`` and continuation coordinate ``p_c``. Continued
-by the ordinary pseudo-arclength engine, its zero set is the cusp curve; a
-swallowtail is where the next coefficient ``b`` vanishes along it.
+with unknowns ``(u, p_a, p_b)`` and continuation coordinate ``p_c``. Here ``w``
+solves the transposed system ``[[f_u^T, v_bor], [w_bor^T, 0]] (w, g) = (0, 1)``, so
+on the curve ``v`` and ``w`` are the right and left null vectors and ``a`` is
+MatCont's cusp test function ``w^T f_uu[v, v]`` up to the factor one half.
+
+Each row costs one LU of the bordered matrix. The state columns of the Jacobian
+are analytic: ``g_u = -w^T B(v, e_k)`` (Govaerts' ``g_z = -w^T (f_u)_z v``), and
+the derivative of ``a`` uses two more solves with the same factors in place of the
+derivatives of ``v`` and ``w``. Only the three parameter columns are differenced.
+The borders are frozen through a Newton solve and moved to the normalised ``v``
+and ``w`` at every accepted point (MatCont's adaptation); the cusp curve itself
+does not depend on them. A swallowtail is where the cubic coefficient vanishes
+along the curve.
 """
 
 import numpy as np
 
-from discrecontinual_equations.continuation.normal_form import cusp_coefficient
-from discrecontinual_equations.continuation.residual import ResidualFunction
+from discrecontinual_equations.continuation.bordered import BorderedMatrix
+from discrecontinual_equations.continuation.normal_form import MultilinearForms
+from discrecontinual_equations.continuation.residual import DifferentiableResidual
 from discrecontinual_equations.continuation.two_parameter_problem import (
     TwoParameterProblem,
 )
 from discrecontinual_equations.parameter import Parameter
 
-_NORMALIZATION_TARGET = 1.0
+_HALF = 0.5
+_CENTRAL_DIFFERENCE_POINTS = 2.0
+_PARAMETER_COUNT = 2
 
 
 class Codim3Decoded:
@@ -44,45 +58,154 @@ class Codim3Decoded:
         self.parameter_c = parameter_c
 
 
-class CuspCurveResidual(ResidualFunction):
-    """Fold system augmented with the cusp condition ``a = 0``."""
+class _CuspLinearization:
+    """Everything the residual and its state columns share at one point."""
 
-    __slots__ = ["_dimension", "_normalization", "_problem", "_third"]
+    __slots__ = ["bordered", "fold", "forms", "jacobian", "left", "residual", "right"]
+
+    def __init__(
+        self,
+        problem: TwoParameterProblem,
+        state: np.ndarray,
+        borders: tuple[np.ndarray, np.ndarray],
+    ) -> None:
+        n = state.size - _PARAMETER_COUNT
+        equilibrium = state[:n]
+        parameter_a, parameter_b = float(state[n]), float(state[n + 1])
+        right_border, left_border = borders
+        self.jacobian = problem.state_jacobian(equilibrium, parameter_a, parameter_b)
+        self.bordered = BorderedMatrix(self.jacobian, left_border, right_border)
+        unit = np.zeros(n + 1)
+        unit[n] = 1.0
+        solution = self.bordered.solve(unit)
+        self.right = solution[:n]
+        self.fold = float(solution[n])
+        self.left = self.bordered.solve_transposed(unit)[:n]
+        self.forms = MultilinearForms(problem, equilibrium, parameter_a, parameter_b)
+        self.residual = problem.evaluate(equilibrium, parameter_a, parameter_b)
+
+
+class CuspCurveResidual(DifferentiableResidual):
+    """Minimally augmented fold system with the cusp condition ``a = 0``."""
+
+    __slots__ = [
+        "_cache",
+        "_dimension",
+        "_left_border",
+        "_problem",
+        "_right_border",
+        "_third",
+    ]
 
     def __init__(
         self,
         problem: TwoParameterProblem,
         dimension: int,
-        normalization: np.ndarray,
+        right_border: np.ndarray,
+        left_border: np.ndarray,
         third: Parameter,
     ) -> None:
         self._problem = problem
         self._dimension = dimension
-        self._normalization = normalization
+        self._right_border = right_border / np.linalg.norm(right_border)
+        self._left_border = left_border / np.linalg.norm(left_border)
         self._third = third
+        self._cache: tuple[bytes, _CuspLinearization] | None = None
+
+    def _linearize(self, state: np.ndarray, parameter: float) -> _CuspLinearization:
+        self._third.value = float(parameter)
+        key = np.append(state, parameter).tobytes()
+        if self._cache is None or self._cache[0] != key:
+            borders = (self._right_border, self._left_border)
+            self._cache = (key, _CuspLinearization(self._problem, state, borders))
+        return self._cache[1]
 
     def evaluate(self, state: np.ndarray, parameter: float) -> np.ndarray:
+        point = self._linearize(np.asarray(state, dtype=float), parameter)
+        quadratic = point.forms.bilinear(point.right, point.right).real
+        cusp = _HALF * float(point.left @ quadratic)
+        return np.concatenate([point.residual, [point.fold], [cusp]])
+
+    def extended_jacobian(
+        self,
+        state: np.ndarray,
+        parameter: float,
+        epsilon: float,
+    ) -> np.ndarray:
+        state = np.asarray(state, dtype=float)
         n = self._dimension
-        equilibrium = state[:n]
-        null_vector = state[n : 2 * n]
-        parameter_a = float(state[2 * n])
-        parameter_b = float(state[2 * n + 1])
+        point = self._linearize(state, parameter)
+        size = n + _PARAMETER_COUNT
+        jacobian = np.zeros((size, size + 1))
+        jacobian[:n, :n] = point.jacobian
+        fold_row, cusp_row = self._state_rows(point)
+        jacobian[n, :n] = fold_row
+        jacobian[n + 1, :n] = cusp_row
+        for column in range(n, size + 1):
+            jacobian[:, column] = self._difference(state, parameter, column, epsilon)
+        return jacobian
+
+    def _state_rows(self, point: _CuspLinearization) -> tuple[np.ndarray, np.ndarray]:
+        """Analytic ``d g / d u`` and ``d a / d u`` at frozen borders.
+
+        With ``N = [[A, w_bor], [v_bor^T, 0]]``, ``N (v_k, g_k) = (-A_k v, 0)`` and
+        ``N^T (w_k, g_k) = (-A_k^T w, 0)`` for ``A_k = B(., e_k)``. Then
+        ``g_k = -w^T B(v, e_k)`` and
+
+            a_k = (1/2) w_k^T B(v, v) + w^T B(v, v_k) + (1/2) w^T C(v, v, e_k)
+                = -(1/2) w^T B(y, e_k) - t^T B(v, e_k) + (1/2) w^T C(v, v, e_k),
+
+        where ``N (y, .) = (B(v, v), 0)`` and ``N^T (t, .) = (s, 0)`` with
+        ``s_k = w^T B(v, e_k)``: two solves instead of ``2n``.
+        """
+        n = self._dimension
+        right, left, forms = point.right, point.left, point.forms
+        units = np.eye(n)
+        along_right = np.column_stack(
+            [forms.bilinear(right, units[k]).real for k in range(n)],
+        )
+        contracted = left @ along_right
+        quadratic = forms.bilinear(right, right).real
+        adjoint_square = point.bordered.solve(np.append(quadratic, 0.0))[:n]
+        adjoint_contracted = point.bordered.solve_transposed(
+            np.append(contracted, 0.0),
+        )[:n]
+        cusp_row = np.empty(n)
+        for k in range(n):
+            square_term = left @ forms.bilinear(adjoint_square, units[k]).real
+            cubic_term = left @ forms.trilinear(right, right, units[k]).real
+            cusp_row[k] = (
+                -_HALF * square_term
+                - adjoint_contracted @ along_right[:, k]
+                + _HALF * cubic_term
+            )
+        return -contracted, cusp_row
+
+    def _difference(
+        self,
+        state: np.ndarray,
+        parameter: float,
+        column: int,
+        epsilon: float,
+    ) -> np.ndarray:
+        size = state.size
+        if column < size:
+            step = np.zeros(size)
+            step[column] = epsilon
+            forward = self.evaluate(state + step, parameter)
+            backward = self.evaluate(state - step, parameter)
+        else:
+            forward = self.evaluate(state, parameter + epsilon)
+            backward = self.evaluate(state, parameter - epsilon)
         self._third.value = float(parameter)
-        residual = self._problem.evaluate(equilibrium, parameter_a, parameter_b)
-        singular = self._problem.directional(
-            equilibrium,
-            null_vector,
-            parameter_a,
-            parameter_b,
-        )
-        normalization = self._normalization @ null_vector - _NORMALIZATION_TARGET
-        quadratic = cusp_coefficient(
-            self._problem,
-            equilibrium,
-            parameter_a,
-            parameter_b,
-        )
-        return np.concatenate([residual, singular, [normalization], [quadratic]])
+        return (forward - backward) / (_CENTRAL_DIFFERENCE_POINTS * epsilon)
+
+    def adapt(self, state: np.ndarray, parameter: float) -> None:
+        """Move the borders to the normalised null vectors at an accepted point."""
+        point = self._linearize(np.asarray(state, dtype=float), parameter)
+        self._right_border = point.right / np.linalg.norm(point.right)
+        self._left_border = point.left / np.linalg.norm(point.left)
+        self._cache = None
 
     def decode(self, state: np.ndarray, parameter: float) -> Codim3Decoded:
         """Recover the original-system point from the augmented vector."""
@@ -90,7 +213,7 @@ class CuspCurveResidual(ResidualFunction):
         self._third.value = float(parameter)
         return Codim3Decoded(
             state=state[:n],
-            parameter_a=float(state[2 * n]),
-            parameter_b=float(state[2 * n + 1]),
+            parameter_a=float(state[n]),
+            parameter_b=float(state[n + 1]),
             parameter_c=float(parameter),
         )

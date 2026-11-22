@@ -136,6 +136,7 @@ class NewtonCorrector(Corrector):
             )
             augmented = self._augmented_residual(state, parameter, step)
             if np.linalg.norm(augmented) < self._settings.tolerance:
+                self._residual.adapt(state, parameter)
                 return CorrectionResult(state, parameter, iteration, converged=True)
             bordered = np.vstack(
                 [

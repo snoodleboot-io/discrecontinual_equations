@@ -20,6 +20,32 @@ class ResidualFunction(ABC):
         """Return ``f(state, parameter)`` as a numpy array."""
         raise NotImplementedError
 
+    def adapt(self, state: np.ndarray, parameter: float) -> None:
+        """Refresh auxiliary data at an accepted point; most residuals have none.
+
+        Minimally augmented systems override this to move their bordering vectors
+        to the null vectors at ``(state, parameter)``. The zero set does not depend
+        on the borders, so the continued curve is unchanged.
+        """
+        del state, parameter
+
+
+class DifferentiableResidual(ResidualFunction):
+    """A residual that supplies its own ``[df/du | df/dlambda]``."""
+
+    @abstractmethod
+    def extended_jacobian(
+        self,
+        state: np.ndarray,
+        parameter: float,
+        epsilon: float,
+    ) -> np.ndarray:
+        """Return the ``(m, m + 1)`` extended Jacobian at ``(state, parameter)``.
+
+        ``epsilon`` is the step for any column the residual differences.
+        """
+        raise NotImplementedError
+
 
 class EquationResidual(ResidualFunction):
     """Adapt a ``DifferentialEquation`` to a residual over one of its parameters.
