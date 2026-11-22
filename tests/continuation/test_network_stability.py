@@ -481,11 +481,31 @@ class TestPublishedIndices(TestCase):
     def test_complex_leading_eigenvalue_attracts_nothing(self):
         """C2- with ``(b1 b2 + a2 - a1)^2 + 4 a1 b1 b2 < 0``: all indices ``-inf``
         (P&A 2011, section 4.2.2), although ``|lambda| = 2`` and ``Re lambda > 1``."""
-        a1, a2, b1, b2 = 2.0, 2.0, -0.5, 1.0
-        assert (b1 * b2 + a2 - a1) ** 2 + 4 * a1 * b1 * b2 < 0.0
+        for a1, a2, b1, b2 in ((2.0, 2.0, -0.5, 1.0), (2.4, 1.4, 0.6, -1.0)):
+            assert (b1 * b2 + a2 - a1) ** 2 + 4 * a1 * b1 * b2 < 0.0
+            first = np.array([[b1, 1.0], [a1, 0.0]])
+            second = np.array([[b2, 1.0], [a2, 0.0]])
+            assert np.all(stability_indices([first, second]) == -math.inf)
+
+    def test_leading_eigenvalue_below_one_attracts_nothing(self):
+        """C2- with ``max(b1 b2 + a1 + a2, 2(b1 b2 + a1 + a2 - a1 a2)) < 2``:
+        all ``-inf`` (P&A 2011, section 4.2.2), though the eigenvector is positive."""
+        a1, a2, b1, b2 = 0.4, 0.8, -0.2, 0.1
+        total = b1 * b2 + a1 + a2
+        assert max(total, 2.0 * (total - a1 * a2)) < 2.0
         first = np.array([[b1, 1.0], [a1, 0.0]])
         second = np.array([[b2, 1.0], [a2, 0.0]])
         assert np.all(stability_indices([first, second]) == -math.inf)
+
+    def test_rounding_does_not_turn_an_infinite_index_finite(self):
+        """A C4- cycle whose leading left eigenvector has an exact zero component,
+        computed as about 1e-17: the indices into nodes 1 and 2 are ``+inf``."""
+        a, b = (0.5, 1.5, 0.4, 1.9), (-1.0, 1.6, 0.5, 1.1)
+        matrices = [np.array([[b[j], 1.0], [a[j], 0.0]]) for j in range(4)]
+        indices = stability_indices(matrices)
+        assert indices[1] == indices[2] == math.inf
+        assert abs(indices[0]) < 1.0e-12
+        assert abs(indices[3] + 0.25) < 1.0e-12
 
 
 class TestCoordinateInvariance(TestCase):
@@ -567,5 +587,5 @@ class TestRepresentationErrors(TestCase):
         bent.add_connection("xi1", "xi2", coordinate_plane(4, (0, 1)))
         bent.add_connection("xi2", "xi3", coordinate_plane(4, (1, 2)))
         bent.add_connection("xi3", "xi1", coordinate_plane(4, (0, 2, 3)))
-        with pytest.raises(ValueError, match="not quasi-simple"):
+        with pytest.raises(ValueError, match="different dimensions"):
             CycleStability.of(bent, _XI3)

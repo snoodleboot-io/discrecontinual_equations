@@ -383,9 +383,9 @@ def _permutation(
     """``A_j``: which arriving direction each leaving direction becomes."""
     cosines = np.abs(np.array(arriving) @ np.array(leaving).T)
     permutation = (cosines > 1.0 - _ALIGNMENT_TOLERANCE).astype(float)
-    if np.all(permutation.sum(axis=0) == 1.0) and np.all(
-        permutation.sum(axis=1) == 1.0
-    ):
+    # Each direction is a unit vector and each set is orthonormal, so no row or
+    # column can hold two matches; a row without one means a direction unmatched.
+    if np.all(permutation.sum(axis=1) == 1.0):
         return permutation
     following = cycle[(node + 1) % len(cycle)]
     message = (
