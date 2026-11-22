@@ -31,10 +31,10 @@ import numpy as np
 
 from discrecontinual_equations.differential_equation import DifferentialEquation
 from discrecontinual_equations.function.stochastic import StochasticFunction
-from discrecontinual_equations.solver.stochastic.euler_maruyama.euler_maruyama_config import (
+from discrecontinual_equations.solver.stochastic.euler_maruyama.euler_maruyama_config import (  # noqa: E501
     EulerMaruyamaConfig,
 )
-from discrecontinual_equations.solver.stochastic.euler_maruyama.euler_maruyama_solver import (
+from discrecontinual_equations.solver.stochastic.euler_maruyama.euler_maruyama_solver import (  # noqa: E501
     EulerMaruyamaSolver,
 )
 from discrecontinual_equations.solver.stochastic.milstein.milstein_config import (
