@@ -758,3 +758,56 @@ class TestCollapsedCycle(TestCase):
         if np.ptp(point.solution.states) > 1.0e-6:  # pragma: no cover
             pytest.skip("the seed did not collapse here")
         assert not point.resolved()
+
+
+class TestGateIsSound(TestCase):
+    """``resolved()`` must not pass a cycle whose multipliers are worse than it says.
+
+    Along the fold-of-cycles branch on coarse meshes, where the Hermite
+    cross-check alone read up to 2.1 times low at ``m = 2`` on 4 intervals and
+    6.1 times low at ``m = 3`` on 3, and let cycles with true errors of 3.1e-2
+    and 3.4e-2 through the default 2e-2. The true error is taken against the
+    nearer of the two exact cycles at the point's parameter - the more
+    charitable reading close to the fold, where the discrete fold sits a little
+    away from the exact one - and points past the exact fold, where there is no
+    exact cycle, are skipped.
+    """
+
+    def _worst_ratio(self, points_per_interval: int, intervals: int) -> float:
+        mu = -0.1
+        radius = math.sqrt((1.0 + math.sqrt(1.0 + 4.0 * mu)) / 2.0)
+        continuation = CycleContinuation(
+            _equation(FoldOfCyclesField, 2, mu),
+            0,
+            intervals,
+            phase_index=1,
+            collocation="gauss_legendre",
+            collocation_points=points_per_interval,
+        )
+        seed = CycleSeed(_circle(radius, intervals), 2.0 * math.pi, mu)
+        points, _ = continuation.trace(seed, 0.06, 60, direction=-1.0)
+        worst, checked = 0.0, 0
+        for point in points:
+            discriminant = 1.0 + 4.0 * point.parameter
+            if discriminant < 0.0:
+                continue
+            truth = min(
+                _multiplier_disagreement(
+                    point.multipliers,
+                    np.array([1.0, math.exp(4.0 * math.pi * s * (1.0 - 2.0 * s))]),
+                )
+                for s in (
+                    (1.0 + math.sqrt(discriminant)) / 2.0,
+                    (1.0 - math.sqrt(discriminant)) / 2.0,
+                )
+            )
+            worst = max(worst, truth / point.floquet_error)
+            checked += 1
+        assert checked > 50
+        return worst
+
+    def test_covers_the_true_error_at_two_points_on_four_intervals(self):
+        assert self._worst_ratio(2, 4) <= 1.0
+
+    def test_covers_the_true_error_at_three_points_on_three_intervals(self):
+        assert self._worst_ratio(3, 3) <= 1.0
