@@ -279,8 +279,9 @@ class GridQuasipotential:
 
     ``values`` is shaped like the grid and is ``inf`` where no path from the attractor
     reached: behind a point where the noise vanishes, or where the grid does not
-    connect. ``floor`` is the largest value the attractor's initialisation wrote:
-    below it ``U`` is the initialisation's, not the march's.
+    connect. ``floor`` is the largest ``U`` on the points the attractor
+    initialised, as the march left them: the level below which a state is as close
+    to the attractor as the grid resolves.
     """
 
     __slots__ = ["_floor", "_grid", "_interpolator", "_values"]
@@ -310,7 +311,7 @@ class GridQuasipotential:
 
     @property
     def floor(self) -> float:
-        """The largest initialised value."""
+        """The largest ``U`` the march left on the initialised points."""
         return self._floor
 
     def at(self, state: Sequence[float] | np.ndarray) -> float:
@@ -494,7 +495,15 @@ class OrderedLineIntegral:
         march = _March(self._grid, lattice, self._offsets)
         indices, values = attractor.initial(self._grid, self._drift, self._noise)
         march.run(indices, values)
-        return GridQuasipotential(self._grid, march.values, float(np.max(values)))
+        # The floor is read after the march, not from what the attractor wrote.
+        # A cycle's one-point starting values overestimate U badly - at mu = 1
+        # on the noisy Hopf film's grid their largest is 0.175 against an exact
+        # 0.023 - and the march lowers almost all of them (359 of 374 there) as
+        # the earlier ones are accepted; the largest it leaves is 0.032. A floor
+        # of 0.175 would count a path stalled three cells off a small cycle as
+        # arrived.
+        floor = float(np.max(march.values.ravel()[indices]))
+        return GridQuasipotential(self._grid, march.values, floor)
 
     def minimum_action_path(
         self,
@@ -515,9 +524,9 @@ class OrderedLineIntegral:
         vanishes. ``arrived`` on the result says which. A path is counted as
         arrived when it stopped within two cells of ``end`` - an equilibrium's own
         state, which is then appended as the last state - or, with no ``end``, when
-        ``U`` where it stopped is no more than the attractor's initialised values.
-        Around a cycle that band is a cell and a half wide in ``U``'s terms, so on
-        a coarse grid or about a small cycle "arrived" can mean a few cells out.
+        ``U`` where it stopped is no more than the field's ``floor``, the largest
+        ``U`` the march left on the points the attractor initialised: no lower than
+        the grid resolves next to the attractor.
         A path that has not arrived is returned as far as it got, without ``end``.
         Paths that must cross a saddle are what :class:`GeometricMinimumAction` is
         for.

@@ -155,6 +155,10 @@ class TestQuasipotentialRenderer(TestCase):
 class TestNoisyHopfFilmQuasipotential(TestCase):
     """The film's own marches, on its own grid, against its own closed form.
 
+    This is the only test that imports an example. It does so because what it
+    checks is the film itself - its grid, box, cap and closed form, as the page
+    quotes them - and a copy of those here would let the page drift from them.
+
     Measured on the built page, within ``U <= 4`` on the drawn box and beyond four
     cells of the origin: 0.03 to 0.08 for every frame with ``mu >= 0.1``, and 0.19
     at ``mu = 0.025``, where the cycle is three cells from the singular origin.

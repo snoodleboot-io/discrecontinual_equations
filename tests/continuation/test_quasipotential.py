@@ -295,6 +295,41 @@ class TestCycleAttractor(TestCase):
         error = np.abs(field.values.ravel()[band] - exact[band])
         assert np.max(error) < 5.0e-2
 
+    def test_a_trace_stalled_off_a_small_cycle_has_not_arrived(self):
+        # mu = 0.025 on the film's grid: the cycle is three cells from the
+        # singular origin and the trace from outside stalls about three cells
+        # short of it, at U = 0.244 against a floor of 0.223. Judged against the
+        # cycle's starting values instead (their largest is 0.79) it reported
+        # arrived.
+        grid, solver, field = _hopf_cycle_field(0.025)
+        path = solver.minimum_action_path(field, [1.35, 0.85])
+        off = abs(np.linalg.norm(path.states[-1]) - math.sqrt(0.025))
+        assert off > 2.5 * grid.spacings[0]
+        assert not path.arrived
+
+    def test_a_trace_onto_a_resolved_cycle_has_arrived(self):
+        grid, solver, field = _hopf_cycle_field(1.0)
+        path = solver.minimum_action_path(field, [1.35, 0.85])
+        off = abs(np.linalg.norm(path.states[-1]) - 1.0)
+        assert off < 2.0 * grid.spacings[0]
+        assert path.arrived
+
+    def test_the_floor_is_what_the_march_left_on_the_band(self):
+        _grid, _solver, field = _hopf_cycle_field(1.0)
+        assert field.floor < 0.04  # 0.032; the starting values' largest is 0.175
+
+
+@functools.cache
+def _hopf_cycle_field(mu):
+    """The noisy Hopf film's own march: s = 0.7, 88 points over [-2.2, 2.2]^2."""
+    parameters = [Alpha(value=mu), Sigma(value=0.7)]
+    drift = HopfField([State(), State()], parameters, [State(), State()], None)
+    grid = DensityGrid.box([-2.2, -2.2], [2.2, 2.2], [88, 88])
+    angle = np.linspace(0.0, 2.0 * math.pi, 400, endpoint=False)
+    cycle = math.sqrt(mu) * np.column_stack([np.cos(angle), np.sin(angle)])
+    solver = OrderedLineIntegral(drift, _conformal(parameters), grid)
+    return grid, solver, solver.solve(CycleAttractor(cycle))
+
 
 class TestRefusals(TestCase):
     def test_a_grid_that_is_not_planar_is_refused(self):
