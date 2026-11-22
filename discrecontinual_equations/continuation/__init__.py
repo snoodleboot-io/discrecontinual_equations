@@ -203,6 +203,13 @@ from discrecontinual_equations.continuation.shilnikov import (
     SaddleFocus,
     classify_saddle_focus,
 )
+from discrecontinual_equations.continuation.slow_manifold import (
+    CanardSearch,
+    FastSlowSystem,
+    FenichelExpansion,
+    MaximalCanard,
+    SlowManifold,
+)
 from discrecontinual_equations.continuation.snic import (
     SnicCharacterization,
     characterize_snic,
@@ -243,6 +250,7 @@ __all__ = [
     "BogdanovTakensNormalForm",
     "BogdanovTakensUnfolding",
     "Branch",
+    "CanardSearch",
     "CenterManifold",
     "Codim2Config",
     "Codim2Driver",
@@ -293,6 +301,8 @@ __all__ = [
     "FamilyConfig",
     "FamilyDriver",
     "FamilySlice",
+    "FastSlowSystem",
+    "FenichelExpansion",
     "FiniteTimeExponents",
     "FlowTangent",
     "FourierReduction",
@@ -320,6 +330,7 @@ __all__ = [
     "ManifoldSelection",
     "MapTangent",
     "MatrixNoiseSystem",
+    "MaximalCanard",
     "MeanTopExponent",
     "MeshSpec",
     "MinimumActionPath",
@@ -347,6 +358,7 @@ __all__ = [
     "ReturnSettings",
     "RobustPeriodicOrbit",
     "SaddleFocus",
+    "SlowManifold",
     "SnicCharacterization",
     "SpectralSplit",
     "StabilitySegment",
