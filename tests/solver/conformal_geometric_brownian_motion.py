@@ -19,8 +19,6 @@ two-channel Brownian path, as :mod:`tests.solver.geometric_brownian_motion`
 explains.
 """
 
-# system need not use)
-
 from dataclasses import dataclass
 
 import numpy as np

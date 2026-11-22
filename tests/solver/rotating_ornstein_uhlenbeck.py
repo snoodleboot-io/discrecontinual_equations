@@ -15,8 +15,6 @@ The second system has one driver for two components, ``m = 1 < n``. Its ``D`` ha
 rank one; the vector interface could not have expressed it at all.
 """
 
-# system need not use)
-
 import numpy as np
 from scipy.linalg import solve_continuous_lyapunov
 

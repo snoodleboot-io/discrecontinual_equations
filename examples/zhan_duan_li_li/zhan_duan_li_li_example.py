@@ -111,9 +111,9 @@ def run_zhan_duan_li_li_example():
 
     print("Solving Geometric Brownian Motion:")
     print("dX = μX dt + σX dW")
-    print(".2f")
-    print(".0f")
-    print(".3f")
+    print(f"Total time: {end_time:.2f}")
+    print(f"Time steps: {n_steps:.0f}")
+    print(f"Step size: {step_size:.3f}")
     print(f"Zhan-Duan-Li-Li theta parameter: {config.method_parameter}")
     print()
 
@@ -264,7 +264,7 @@ def run_method_comparison():
         solver.solve(equation, [1.0])
         final_value = solver.solution.results[0].discretization[-1]
         final_values.append(final_value)
-        print(".4f")
+        print(f"Final value: {final_value:.4f}")
 
     print("Note: Currently both methods use the same underlying algorithm.")
     print("Results will differ once the actual Zhan-Duan-Li-Li method is implemented.")

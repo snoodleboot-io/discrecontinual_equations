@@ -1,9 +1,23 @@
+import importlib
 from pathlib import Path
 
 import plotly.graph_objects as go
 
 from discrecontinual_equations.curve import Curve
 from discrecontinual_equations.variable import Variable
+
+_FORMATS = ("png", "html", "both")
+
+
+def _require_kaleido() -> None:
+    """Plotly writes PNG through kaleido; if it is missing, say how to get round it."""
+    try:
+        importlib.import_module("kaleido")
+    except ImportError as error:
+        raise ImportError(
+            "LinePlot writes PNG through kaleido, which is not installed: "
+            "`pip install kaleido`, or use output_format='html'"
+        ) from error
 
 
 class LinePlot:
@@ -39,21 +53,7 @@ class LinePlot:
             hovermode="x unified",
         )
 
-        # Save plot
-        import os
-
-        safe_title = (
-            "".join(c for c in title if c.isalnum() or c in " _-")
-            .strip()
-            .replace(" ", "_")
-        )
-        if self.output_format == "png":
-            filename = os.path.join(self.output_dir, f"{safe_title}.png")
-            self.figure.write_image(filename, engine="kaleido")
-        elif self.output_format == "html":
-            filename = os.path.join(self.output_dir, f"{safe_title}.html")
-            self.figure.write_html(filename)
-        print(f"Plot saved as {filename}")
+        self._save(title, self.output_format)
 
     def plot(self, x: Variable, y: Variable, title: str = "Curve Plot"):
         """Plot all variables and results on a single plot."""
@@ -86,21 +86,7 @@ class LinePlot:
             hovermode="x unified",
         )
 
-        # Save plot
-        import os
-
-        safe_title = (
-            "".join(c for c in title if c.isalnum() or c in " _-")
-            .strip()
-            .replace(" ", "_")
-        )
-        if self.output_format == "png":
-            filename = os.path.join(self.output_dir, f"{safe_title}.png")
-            self.figure.write_image(filename, engine="kaleido")
-        elif self.output_format == "html":
-            filename = os.path.join(self.output_dir, f"{safe_title}.html")
-            self.figure.write_html(filename)
-        print(f"Plot saved as {filename}")
+        self._save(title, self.output_format)
 
     def plot_3d(
         self,
@@ -111,8 +97,6 @@ class LinePlot:
         output_format: str = "both",
     ):
         """Plot 3D scatter plot."""
-        import plotly.graph_objects as go
-
         self.figure = go.Figure()
 
         self.figure.add_trace(
@@ -135,26 +119,26 @@ class LinePlot:
             ),
         )
 
-        # Save plot
-        import os
+        self._save(title, output_format)
 
+    def _save(self, title: str, output_format: str) -> None:
+        """Write the figure as ``png``, ``html`` or ``both``, then say where."""
+        if output_format not in _FORMATS:
+            message = f"output_format must be one of {_FORMATS}, not {output_format!r}"
+            raise ValueError(message)
         safe_title = (
             "".join(c for c in title if c.isalnum() or c in " _-")
             .strip()
             .replace(" ", "_")
         )
-        if output_format == "png":
-            filename = os.path.join(self.output_dir, f"{safe_title}.html")
-            self.figure.write_html(filename)
-            print(f"Plot saved as {filename}")
-        elif output_format == "html":
-            filename = os.path.join(self.output_dir, f"{safe_title}.png")
-            self.figure.show()
-            # self.figure.write_image(filename, engine="kaleido")
-            print(f"Plot saved as {filename}")
-        elif output_format == "both":
-            png_filename = os.path.join(self.output_dir, f"{safe_title}.png")
-            self.figure.write_image(png_filename, engine="kaleido")
-            html_filename = os.path.join(self.output_dir, f"{safe_title}.html")
-            self.figure.write_html(html_filename)
-            print(f"Plot saved as {png_filename} and {html_filename}")
+        written: list[Path] = []
+        if output_format in ("png", "both"):
+            # Before anything is written, so a missing kaleido leaves no HTML
+            # behind from a "both" that did not finish.
+            _require_kaleido()
+            written.append(Path(self.output_dir) / f"{safe_title}.png")
+            self.figure.write_image(str(written[-1]))
+        if output_format in ("html", "both"):
+            written.append(Path(self.output_dir) / f"{safe_title}.html")
+            self.figure.write_html(str(written[-1]))
+        print(f"Plot saved as {' and '.join(str(path) for path in written)}")

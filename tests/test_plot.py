@@ -1,8 +1,12 @@
+import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import TestCase
 from unittest.mock import patch
 
+import pytest
+
+from discrecontinual_equations.curve import Curve
 from discrecontinual_equations.function.function import Function
 from discrecontinual_equations.parameter import Parameter
 from discrecontinual_equations.plot.bifurcation_plot import BifurcationPlot
@@ -67,6 +71,71 @@ class TestPlot(TestCase):
             title="Oscillator",
         )
         print(oscillator.curve)
+
+
+def _line() -> tuple[Variable, Variable]:
+    class X(Variable, name="Position", abbreviation="x"):
+        pass
+
+    class Y(Variable, name="Height", abbreviation="y"):
+        pass
+
+    x, y = X(), Y()
+    x.discretization = [0.0, 1.0, 2.0]
+    y.discretization = [0.0, 1.0, 4.0]
+    return x, y
+
+
+def _is_png(path: Path) -> bool:
+    return path.is_file() and path.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+class TestLinePlotWrites(TestCase):
+    """A LinePlot that says it saved a file has written that file (DEQ-79)."""
+
+    def test_png_output_writes_a_png(self):
+        x, y = _line()
+        with TemporaryDirectory() as out:
+            LinePlot(output_dir=out, output_format="png").plot(x, y, title="Line")
+            assert _is_png(Path(out) / "Line.png")
+
+    def test_plot_3d_png_writes_a_png_and_html_writes_html(self):
+        x, y = _line()
+        with TemporaryDirectory() as out, patch("plotly.graph_objects.Figure.show"):
+            plot = LinePlot(output_dir=out)
+            plot.plot_3d(x, y, y, title="Png", output_format="png")
+            plot.plot_3d(x, y, y, title="Html", output_format="html")
+            assert _is_png(Path(out) / "Png.png")
+            assert not (Path(out) / "Png.html").exists()
+            assert "<html>" in (Path(out) / "Html.html").read_text(encoding="utf-8")
+            assert not (Path(out) / "Html.png").exists()
+
+    def test_png_without_kaleido_raises_and_claims_nothing(self):
+        x, y = _line()
+        with (
+            TemporaryDirectory() as out,
+            patch.dict(sys.modules, {"kaleido": None}),
+            patch("builtins.print") as printed,
+        ):
+            plot = LinePlot(output_dir=out, output_format="png")
+            for draw in (
+                lambda: plot.plot(x, y, title="Line"),
+                lambda: plot.plot_curves(Curve([x], [y], None), title="Line"),
+                lambda: plot.plot_3d(x, y, y, title="Line", output_format="png"),
+                lambda: plot.plot_3d(x, y, y, title="Line", output_format="both"),
+            ):
+                with pytest.raises(ImportError, match=r"kaleido.*html"):
+                    draw()
+            printed.assert_not_called()
+            assert list(Path(out).iterdir()) == []
+
+    def test_an_unknown_format_is_refused(self):
+        x, y = _line()
+        with TemporaryDirectory() as out:
+            with pytest.raises(ValueError, match="svg"):
+                LinePlot(output_dir=out, output_format="svg").plot(x, y)
+            with pytest.raises(ValueError, match="svg"):
+                LinePlot(output_dir=out).plot_3d(x, y, y, output_format="svg")
 
 
 class TestOutputDirectory(TestCase):

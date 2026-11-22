@@ -121,7 +121,7 @@ def run_brownian_motion_example():
     )
 
     print(f"Simulating {n_simulations} Brownian motion paths...")
-    print(".2f")
+    print(f"Total time: {end_time:.2f}")
     print(f"Time steps: {n_steps}")
     print(f"Step size: {step_size:.4f}")
     print()

@@ -1,4 +1,3 @@
-# system need not use)
 import numpy as np
 
 from discrecontinual_equations.differential_equation import DifferentialEquation
