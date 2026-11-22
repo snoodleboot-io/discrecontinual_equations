@@ -60,8 +60,16 @@ class StochasticStageRenderer(StageRenderer):
             return super().render(scene)
         system = scene.system
         equation = latex_to_svg(system.equation) if system.equation else ""
+        optional = scene.stochastic.quasipotential is not None
+        panel = _QUASIPOTENTIAL_PANEL if optional else ""
+        toggle = _QUASIPOTENTIAL_TOGGLE if optional else ""
         return (
-            _TEMPLATE.replace("__TITLE__", _escape(system.title))
+            # The template's own placeholders first, so no text substituted
+            # into it - a title, the library, the payload - can be mistaken
+            # for one.
+            _TEMPLATE.replace("__QUASIPOTENTIAL_PANEL__", panel)
+            .replace("__QUASIPOTENTIAL_TOGGLE__", toggle)
+            .replace("__TITLE__", _escape(system.title))
             .replace("__SUBTITLE__", _escape(system.subtitle))
             .replace("__NOTE__", _escape(system.note or ""))
             .replace("__EQUATION__", equation)
@@ -110,6 +118,7 @@ _STOCHASTIC_PANELS = """    <div class="side">
           <span><i class="dot-ring" style="border-color:var(--fold)"></i>crest</span>
         </div>
       </section>
+__QUASIPOTENTIAL_PANEL__\
       <section class="exponent" aria-label="top Lyapunov exponent">
         <div class="panel-head">
           <span class="kicker">Top Lyapunov exponent &middot; &lambda;(parameter)</span>
@@ -160,7 +169,7 @@ _STOCHASTIC_CONTROLS = """  <div class="controls">
       <span class="sw"></span>maxima</label>
     <label class="toggle"><input id="l-exact" type="checkbox" checked>
       <span class="sw"></span>closed forms</label>
-  </div>
+__QUASIPOTENTIAL_TOGGLE__  </div>
 
 """
 
@@ -393,6 +402,7 @@ function drawDensity(){
   }
   label(hskel, w-10, hh-8, xName, faint, "end").attr("font-size", 11);
   label(hskel, 8, 14, yName, faint).attr("font-size", 11);
+  drawQuasipotential();
 }
 
 // ---------- exponent panel: lambda against the parameter ----------
@@ -597,6 +607,86 @@ function drawTimeline(){
 
 """
 
+# The optional quasipotential panel: written into the page only when the scene
+# carries one, so a stochastic film without it keeps exactly the markup it had.
+_QUASIPOTENTIAL_PANEL = """\
+      <section class="density" id="qp-panel" aria-label="quasipotential">
+        <div class="panel-head">
+          <span class="kicker">Quasipotential &middot; U, minimum action paths</span>
+          <span class="mono" id="qp-note"></span>
+        </div>
+        <div class="frame"><canvas id="qp-heat"></canvas><svg id="qp-skel"></svg></div>
+        <div class="legend">
+          <span><i style="border-color:var(--fold)"></i>minimum action path</span>
+          <span>warm is cheap: noise reaches a state at cost
+            exp(&minus;U/&epsilon;); pale is U at or above the cap</span>
+        </div>
+      </section>
+"""
+
+_QUASIPOTENTIAL_TOGGLE = """\
+    <label class="toggle"><input id="l-quasipotential" type="checkbox" checked>
+      <span class="sw"></span>quasipotential</label>
+"""
+
+_QUASIPOTENTIAL_SCRIPT = r"""// ---------- quasipotential panel (optional) ----------
+// U is drawn from the nearer frame rather than blended: between two frames the
+// attractor itself moves, and a blend of two fields measured from two
+// different attractors is neither of them.
+const QP = S.quasipotential || null;
+function drawQuasipotential(){
+  if (!QP) return;
+  const panel = document.getElementById("qp-panel");
+  const toggle = document.getElementById("l-quasipotential");
+  panel.hidden = !(toggle && toggle.checked);
+  if (panel.hidden) return;
+  const cv = document.getElementById("qp-heat"), qctx = cv.getContext("2d");
+  const qskel = d3.select("#qp-skel");
+  const r = cv.getBoundingClientRect(); const w = r.width, hh = r.height;
+  qskel.attr("viewBox", `0 0 ${w} ${hh}`).selectAll("*").remove();
+  const [qx0, qx1] = QP.box.x, [qy0, qy1] = QP.box.y;
+  const qsx = v => (v - qx0) / (qx1 - qx0) * w;
+  const qsy = v => hh - (v - qy0) / (qy1 - qy0) * hh;
+  const {i, j, f} = frameAt(t);
+  const q = QP.frames[f < 0.5 ? i : j];
+  const note = document.getElementById("qp-note");
+  cv.width = QP.nx; cv.height = QP.ny;
+  if (!q){
+    qctx.fillStyle = css("--panel"); qctx.fillRect(0, 0, QP.nx, QP.ny);
+    label(qskel, w/2, hh/2, "no attractor to measure U from", css("--muted"),
+      "middle").attr("font-size", 12).attr("font-family", sans);
+    note.textContent = "no quasipotential";
+    return;
+  }
+  const table = rampTable();
+  const img = qctx.createImageData(QP.nx, QP.ny);
+  for (let iy=0; iy<QP.ny; iy++){
+    for (let ix=0; ix<QP.nx; ix++){
+      // Low U is likely, so it gets the hot end of the density's ramp.
+      const v = 1 - Math.min(1, q.values[iy*QP.nx + ix] / q.cap);
+      const c = 3*Math.round(255*v), k = 4*((QP.ny-1-iy)*QP.nx + ix);
+      img.data[k] = table[c]; img.data[k+1] = table[c+1]; img.data[k+2] = table[c+2];
+      img.data[k+3] = 255;
+    }
+  }
+  qctx.putImageData(img, 0, 0);
+  for (const path of q.paths){
+    qskel.append("path")
+      .attr("d", d3.line().x(p => qsx(p[0])).y(p => qsy(p[1]))(path))
+      .attr("fill", "none").attr("stroke", css("--fold")).attr("stroke-width", 1.6)
+      .attr("opacity", .95);
+    const [sx0, sy0] = path[0];
+    qskel.append("circle").attr("cx", qsx(sx0)).attr("cy", qsy(sy0)).attr("r", 3)
+      .attr("fill", css("--fold"));
+  }
+  const faint = css("--faint");
+  label(qskel, w-10, hh-8, xName, faint, "end").attr("font-size", 11);
+  label(qskel, 8, 14, yName, faint).attr("font-size", 11);
+  note.textContent = `U capped at ${q.cap.toFixed(1)} ${DOT} ${q.paths.length} paths`;
+}
+
+"""
+
 _STOCHASTIC_READOUTS = r"""// ---------- readouts ----------
 const fmt = v => `${v >= 0 ? "+" : MINUS}${Math.abs(v).toFixed(3)}`;
 function exactCrestAt(p){
@@ -678,6 +768,8 @@ for (const id of ["l-cycle","l-crest"]){
     () => { drawSkeleton(); drawCrest(); drawDensity(); });
 }
 document.getElementById("l-maxima").addEventListener("change", drawDensity);
+const qpToggle = document.getElementById("l-quasipotential");
+if (qpToggle) qpToggle.addEventListener("change", drawQuasipotential);
 document.getElementById("l-exact").addEventListener("change",
   () => { drawExponent(); drawTimeline(); });
 setKicker(document.getElementById("ro-p-kicker"), "", PARAM);
@@ -702,6 +794,7 @@ _SCRIPT = (
     + _STOCHASTIC_PARTICLES
     + _SCRIPT_SKELETON
     + _STOCHASTIC_PANELS_SCRIPT
+    + _QUASIPOTENTIAL_SCRIPT
     + _STOCHASTIC_TIMELINE
     + _STOCHASTIC_READOUTS
     + _STOCHASTIC_TAIL

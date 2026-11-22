@@ -37,6 +37,18 @@ correction ``(1/2) sum_k (dG_k/dx) G_k`` vanishes identically for conformal
 noise, which ``check_noise`` verifies, so neither threshold moves between
 them. The page says so, and names the Ito reading it is integrated in.
 
+The quasipotential panel (DEQ-31) answers what the density cannot: how a path
+gets anywhere. For ``mu > 0`` the attractor is the deterministic cycle at
+``sqrt(mu)``, the rotation is orthogonal to every radial gradient, and ``U``
+measured from the cycle is radial in closed form,
+``U = (r^2 - mu - mu log(r^2 / mu)) / sigma^2``: zero on the cycle, rising
+outwards like ``r^2 / sigma^2`` and inwards without bound, logarithmically,
+because the noise vanishes at the origin and nothing can be pushed onto it. The
+panel draws the ordered-line-integral ``U`` and the minimum action paths from
+two chosen points, which spiral back onto the cycle. For
+``mu <= 0`` the attractor is the origin, where ``D = 0``, and there is no
+quasipotential to draw.
+
 ``mu`` is scrubbed at fixed ``sigma = 0.7``: D at 0 and P at 0.49 both sit
 inside ``[-0.5, 1.5]`` with a quarter of the axis between them. Scrubbing
 ``sigma`` at fixed ``mu`` would move P (at ``sigma = sqrt(mu)``) but never D,
@@ -57,6 +69,10 @@ from discrecontinual_equations.continuation.lyapunov import (
     StochasticLyapunovSettings,
 )
 from discrecontinual_equations.continuation.noise import NoiseMatrix
+from discrecontinual_equations.continuation.quasipotential import (
+    CycleAttractor,
+    OrderedLineIntegral,
+)
 from discrecontinual_equations.continuation.root_finder import (
     RootFinderSettings,
     Secant,
@@ -69,6 +85,10 @@ from discrecontinual_equations.continuation.stochastic_threshold import (
 from discrecontinual_equations.function.deterministic import DeterministicFunction
 from discrecontinual_equations.parameter import Parameter
 from discrecontinual_equations.variable import Variable
+from discrecontinual_equations.webplot.quasipotential_stage import (
+    QuasipotentialSettings,
+    with_quasipotential,
+)
 from discrecontinual_equations.webplot.report import AtlasEntry
 from discrecontinual_equations.webplot.stage import (
     Frame,
@@ -142,6 +162,18 @@ EXPONENT_SEEDS = (3, 5)
 PATH_SEED = 7
 PATH_STEP = 0.02
 _IDENTITY = [[1.0, 0.0], [0.0, 1.0]]
+# The quasipotential is marched on the density's spacing over a box just wide
+# enough that the minimum action path to every state drawn stays inside it (U is
+# radial and grows along each path, so the path to x stays within |x| of the
+# origin, and the stage box's corners are at 2.12). An even count keeps the
+# origin, where the noise vanishes, off the grid points; it sits between them,
+# where the march treats it as a wall.
+QUASIPOTENTIAL_BOX = 2.2
+QUASIPOTENTIAL_CELLS = 88
+# The paths are traced from one state inside the cycle and one outside it.
+QUASIPOTENTIAL_STARTS = ((0.3, 0.0), (1.35, 0.85))
+QUASIPOTENTIAL_CAP = 4.0
+CYCLE_SAMPLES = 400
 
 
 class Sigma(Parameter, name="Sigma", abbreviation="sigma"):
@@ -204,6 +236,39 @@ def _grid(cells: int) -> DensityGrid:
         [-DENSITY_BOX, -DENSITY_BOX],
         [DENSITY_BOX, DENSITY_BOX],
         [cells, cells],
+    )
+
+
+def quasipotential_at(
+    mu: float,
+    grid: DensityGrid,
+) -> tuple[OrderedLineIntegral, CycleAttractor] | None:
+    """The march about the deterministic cycle at ``mu``, or ``None`` below zero.
+
+    For ``mu <= 0`` the attractor is the origin, where this noise vanishes, and
+    a quasipotential needs a non-degenerate diffusion at its attractor.
+    """
+    if mu <= 0.0:
+        return None
+    parameters = _parameters(mu)
+    angle = np.linspace(0.0, 2.0 * math.pi, CYCLE_SAMPLES, endpoint=False)
+    cycle = math.sqrt(mu) * np.column_stack([np.cos(angle), np.sin(angle)])
+    solver = OrderedLineIntegral(_drift(parameters), _noise(parameters), grid)
+    return solver, CycleAttractor(cycle)
+
+
+def exact_quasipotential(mu: float, points: np.ndarray) -> np.ndarray:
+    """``(r^2 - mu - mu log(r^2 / mu)) / sigma^2`` at each row of ``points``."""
+    squared = np.sum(points * points, axis=1)
+    return (squared - mu - mu * np.log(squared / mu)) / (SIGMA * SIGMA)
+
+
+def quasipotential_grid() -> DensityGrid:
+    """The grid the quasipotential panel is marched on."""
+    return DensityGrid.box(
+        [-QUASIPOTENTIAL_BOX, -QUASIPOTENTIAL_BOX],
+        [QUASIPOTENTIAL_BOX, QUASIPOTENTIAL_BOX],
+        [QUASIPOTENTIAL_CELLS, QUASIPOTENTIAL_CELLS],
     )
 
 
@@ -328,7 +393,21 @@ def _system() -> StageSystem:
             "Monte-Carlo offset of standard deviation 0.035; the exact exponent "
             "is mu, so D is at mu = 0 exactly, and the dashed closed forms show "
             "the gap. Sample paths are integrated in the browser by "
-            "Euler-Maruyama from a generator seeded in the page."
+            "Euler-Maruyama from a generator seeded in the page. The "
+            "quasipotential U, measured from the cycle, is marched by "
+            "OrderedLineIntegral (OLIM-MID) on an 88 x 88 grid over [-2.2, 2.2]^2; "
+            "its closed form is (r^2 - mu - mu log(r^2 / mu)) / sigma^2, and on "
+            "the drawn box, within U <= 4 and beyond four cells of the origin, "
+            "the marched U agrees with it to 0.055 on every frame, including "
+            "mu = 0.025, where the cycle is three cells from the origin. Next to "
+            "the origin the noise vanishes, U diverges logarithmically, and the "
+            "cells there are not claimed. The curves are minimum action paths, "
+            "traced back along -(f + D grad U) from (0.3, 0) and (1.35, 0.85) "
+            "until U stops falling. For mu of 0.2 and above that is within two "
+            "and a half cells of the cycle, mostly under two; below it, where the "
+            "cycle is a few cells from the origin, the paths stall up to three "
+            "cells short, and at the smallest mu the one from (0.3, 0) barely "
+            "moves."
         ),
     )
 
@@ -380,7 +459,16 @@ def noisy_hopf_stage() -> StageScene:
         ),
         _grid(DENSITY_CELLS),
     )
-    return stochastic_stage(scene, continued, noise, diagnostics, describe)
+    scene = stochastic_stage(scene, continued, noise, diagnostics, describe)
+    return with_quasipotential(
+        scene,
+        QuasipotentialSettings(
+            quasipotential_at,
+            quasipotential_grid(),
+            QUASIPOTENTIAL_STARTS,
+            QUASIPOTENTIAL_CAP,
+        ),
+    )
 
 
 STAGE_FILENAME = "noisy_hopf_stage.html"
@@ -389,7 +477,8 @@ STAGE_ENTRY = AtlasEntry(
     "Noisy Hopf: two bifurcations",
     "The dynamical threshold at mu = 0 and the phenomenological one at "
     "mu = sigma^2, passing at different places on the same axis: sample paths, "
-    "the stationary density, and the top Lyapunov exponent.",
+    "the stationary density, the quasipotential and its minimum action paths, "
+    "and the top Lyapunov exponent.",
     kind="stage",
 )
 
