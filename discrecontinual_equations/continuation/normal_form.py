@@ -23,12 +23,19 @@ from discrecontinual_equations.continuation.two_parameter_problem import (
 
 _HALF = 0.5
 _MINIMUM_DENOMINATOR = 1.0e-9
+_SECOND_ORDER = 2
+_THIRD_ORDER = 3
 
 
 class MultilinearForms:
-    """Symmetric multilinear derivatives of the field at a fixed point."""
+    """Symmetric multilinear derivatives of the field at a fixed point.
 
-    __slots__ = ["_parameter_a", "_parameter_b", "_problem", "_state"]
+    Each directional Taylor coefficient is cached, so polarising many forms that
+    share an argument (``B(v, e_k)`` over ``k``, say) evaluates the shared
+    direction once.
+    """
+
+    __slots__ = ["_cache", "_parameter_a", "_parameter_b", "_problem", "_state"]
 
     def __init__(
         self,
@@ -41,26 +48,41 @@ class MultilinearForms:
         self._state = state.astype(complex)
         self._parameter_a = parameter_a
         self._parameter_b = parameter_b
+        self._cache: dict[tuple[int, bytes], np.ndarray] = {}
+
+    def _power(self, direction: np.ndarray, order: int) -> np.ndarray:
+        # Coefficient m equals D^m f(direction, ..., direction) / m!.
+        direction = np.asarray(direction, dtype=complex)
+        key = (order, direction.tobytes())
+        if key not in self._cache:
+            self._cache[key] = self._problem.taylor(
+                self._state,
+                direction,
+                order,
+                self._parameter_a,
+                self._parameter_b,
+            )[order]
+        return self._cache[key]
 
     def _second(self, direction: np.ndarray) -> np.ndarray:
-        # Coefficient 2 equals B(direction, direction) / 2.
-        return self._problem.taylor(
-            self._state,
-            direction,
-            2,
-            self._parameter_a,
-            self._parameter_b,
-        )[2]
+        return self._power(direction, _SECOND_ORDER)
 
     def _third(self, direction: np.ndarray) -> np.ndarray:
-        # Coefficient 3 equals C(direction, direction, direction) / 6.
-        return self._problem.taylor(
-            self._state,
-            direction,
-            3,
-            self._parameter_a,
-            self._parameter_b,
-        )[3]
+        return self._power(direction, _THIRD_ORDER)
+
+    def form(self, *vectors: np.ndarray) -> np.ndarray:
+        """The symmetric ``m``-linear form on ``m`` vectors, by polarisation.
+
+        ``F(v1, ..., vm) = sum over nonempty S of (-1)^(m - |S|) P_m(sum_S v_i)``
+        with ``P_m(d) = D^m f(d, ..., d) / m!``.
+        """
+        order = len(vectors)
+        total = np.zeros(self._state.size, dtype=complex)
+        for mask in range(1, 2**order):
+            chosen = [vectors[i] for i in range(order) if mask >> i & 1]
+            sign = -1.0 if (order - len(chosen)) % 2 else 1.0
+            total = total + sign * self._power(np.sum(chosen, axis=0), order)
+        return total
 
     def bilinear(self, left: np.ndarray, right: np.ndarray) -> np.ndarray:
         """Symmetric second-order form ``B(left, right)``."""
@@ -204,6 +226,61 @@ def cubic_fold_coefficient(
     return cusp_normal_form(problem, state, parameter_a, parameter_b).c
 
 
+class HopfCoefficients:
+    """The pieces of Kuznetsov's invariant formula for ``l1`` at a Hopf point.
+
+    ``A q = i omega q`` with ``|q| = 1``, ``A^T p = -i omega p`` with
+    ``<p, q> = 1``, ``h11 = -A^-1 B(q, conj q)``,
+    ``h20 = (2 i omega - A)^-1 B(q, q)`` and
+    ``g21 = <p, C(q, q, conj q) + 2 B(q, h11) + B(conj q, h20)>``.
+    """
+
+    __slots__ = ["forms", "g21", "h11", "h20", "jacobian", "left", "omega", "right"]
+
+    def __init__(
+        self,
+        problem: TwoParameterProblem,
+        state: np.ndarray,
+        parameter_a: float,
+        parameter_b: float,
+        omega: float,
+    ) -> None:
+        jacobian = problem.state_jacobian(state, parameter_a, parameter_b)
+        dimension = jacobian.shape[0]
+        right = _eigenvector(jacobian, 1j * omega)
+        left = _eigenvector(jacobian.T, -1j * omega)
+        right = right / np.sqrt(right.conj() @ right)
+        # <p, q> = conj(p) . q = 1: divide by the conjugate of the overlap. The
+        # two eig calls fix their phases independently, so it is not real.
+        left = left / np.conj(left.conj() @ right)
+
+        forms = MultilinearForms(problem, state, parameter_a, parameter_b)
+        conjugate = right.conj()
+        identity = np.eye(dimension)
+        h11 = np.linalg.solve(-jacobian, forms.bilinear(right, conjugate))
+        h20 = np.linalg.solve(
+            2j * omega * identity - jacobian,
+            forms.bilinear(right, right),
+        )
+        self.g21 = left.conj() @ (
+            forms.trilinear(right, right, conjugate)
+            + 2.0 * forms.bilinear(right, h11)
+            + forms.bilinear(conjugate, h20)
+        )
+        self.jacobian = jacobian
+        self.right = right
+        self.left = left
+        self.h11 = h11
+        self.h20 = h20
+        self.omega = omega
+        self.forms = forms
+
+    @property
+    def first_lyapunov(self) -> float:
+        """``l1 = Re g21 / (2 omega)``."""
+        return float(self.g21.real / (2.0 * self.omega))
+
+
 def first_lyapunov(
     problem: TwoParameterProblem,
     state: np.ndarray,
@@ -219,27 +296,10 @@ def first_lyapunov(
     ``-omega`` names the same eigenpair (a Hopf curve continued past a
     Bogdanov-Takens point returns it), so the positive frequency is used.
     """
-    omega = abs(omega)
-    jacobian = problem.state_jacobian(state, parameter_a, parameter_b)
-    dimension = jacobian.shape[0]
-    right = _eigenvector(jacobian, 1j * omega)
-    left = _eigenvector(jacobian.T, -1j * omega)
-    right = right / np.sqrt(right.conj() @ right)
-    # <p, q> is conjugate-linear in p, so p is divided by the conjugate of
-    # <p, q>; dividing by <p, q> itself leaves <p, q> = c / conj(c).
-    left = left / np.conj(left.conj() @ right)
-
-    forms = MultilinearForms(problem, state, parameter_a, parameter_b)
-    conjugate = right.conj()
-    identity = np.eye(dimension)
-    h11 = np.linalg.solve(-jacobian, forms.bilinear(right, conjugate))
-    h20 = np.linalg.solve(
-        2j * omega * identity - jacobian,
-        forms.bilinear(right, right),
-    )
-    g21 = left.conj() @ (
-        forms.trilinear(right, right, conjugate)
-        + 2.0 * forms.bilinear(right, h11)
-        + forms.bilinear(conjugate, h20)
-    )
-    return float(g21.real / (2.0 * omega))
+    return HopfCoefficients(
+        problem,
+        state,
+        parameter_a,
+        parameter_b,
+        abs(omega),
+    ).first_lyapunov

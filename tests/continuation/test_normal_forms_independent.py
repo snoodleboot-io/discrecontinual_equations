@@ -35,7 +35,10 @@ from discrecontinual_equations.continuation.codim2_normal_form import (
 from discrecontinual_equations.continuation.derivative_provider import (
     AutomaticDifferentiation,
 )
-from discrecontinual_equations.continuation.normal_form import cubic_fold_coefficient
+from discrecontinual_equations.continuation.normal_form import (
+    cubic_fold_coefficient,
+    first_lyapunov,
+)
 from discrecontinual_equations.continuation.two_parameter_problem import (
     TwoParameterProblem,
 )
@@ -241,6 +244,27 @@ class TestTensorPoincareDulac(TestCase):
             }
             for name, value in expected.items():
                 assert _close(getattr(result, name), value), (seed, name)
+
+    def test_first_lyapunov_with_a_non_real_adjoint_overlap(self):
+        # DEQ-51: the generalized-Hopf test function. With eigenvectors from two
+        # separate eig calls, conj(p0) . q is not real, so <p, q> = 1 needs the
+        # conjugate of that overlap; dividing by the overlap itself rotates g21.
+        omega = 1.3
+        for seed in (1, 2, 3):
+            block = np.diag([0.0, 0.0, -0.7, -1.9])
+            block[0, 1], block[1, 0] = -omega, omega
+            tensors = _dense_system(block, seed)
+            problem = _problem(_tensor_field(*tensors), 4)
+            value = first_lyapunov(problem, np.zeros(4), 0.0, 0.0, omega)
+            values, vectors = np.linalg.eig(tensors[0])
+            order = np.argsort(np.abs(values - 1j * omega))
+            q = vectors[:, order[0]]
+            vectors_stable, values_stable = _stable_modes(tensors[0])
+            basis = np.column_stack([q, q.conj(), *vectors_stable])
+            spectrum = np.array([1j * omega, -1j * omega, *values_stable])
+            _, third = _poincare_dulac(tensors, basis, spectrum)
+            g21 = 2.0 * _coefficient(third, 0, (0, 0, 1))
+            assert _close(value, g21.real / (2.0 * omega)), seed
 
     def test_cubic_fold_coefficient_at_a_dense_cusp(self):
         # DEQ-83: the swallowtail test function against the reduction. The quadratic
