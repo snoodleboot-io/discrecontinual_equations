@@ -435,10 +435,53 @@ class ExponentCurve:
         self.exact = exact
 
 
+class QuasipotentialFrame:
+    """The quasipotential at one frame, as its panel draws it.
+
+    ``values`` is ``U`` on the panel's window, ``ny * nx`` floats in row-major
+    order (rows of constant ``y``), the layout the density uses, with every
+    value above ``cap`` - including the infinite ones behind a point where the
+    noise vanishes - written as ``cap``. ``paths`` are minimum action paths, each
+    a list of states from its chosen point back to the attractor.
+    """
+
+    __slots__ = ["cap", "paths", "values"]
+
+    def __init__(
+        self,
+        values: list[float],
+        cap: float,
+        paths: Sequence[Pairs],
+    ) -> None:
+        self.values = values
+        self.cap = cap
+        self.paths = [list(path) for path in paths]
+
+
+class QuasipotentialPanel:
+    """The optional quasipotential panel: a window, and ``U`` at each frame.
+
+    ``frames`` runs alongside the scene's frames and is ``None`` where there is
+    no attractor to measure ``U`` from.
+    """
+
+    __slots__ = ["box", "frames", "shape"]
+
+    def __init__(
+        self,
+        box: Box,
+        shape: tuple[int, int],
+        frames: Sequence[QuasipotentialFrame | None],
+    ) -> None:
+        self.box = box
+        self.shape = shape
+        self.frames = list(frames)
+
+
 class StochasticStage:
     """What makes a staged system stochastic: its paths, density and exponent."""
 
-    __slots__ = ["exponent", "paths", "window"]
+    __slots__ = ["exponent", "paths", "quasipotential", "window"]
 
     def __init__(
         self,
@@ -449,6 +492,8 @@ class StochasticStage:
         self.paths = paths
         self.window = window
         self.exponent = exponent
+        # Set after construction, and only when the film asks for the panel.
+        self.quasipotential: QuasipotentialPanel | None = None
 
 
 class BranchPoint:
@@ -598,7 +643,7 @@ def _density_payload(density: Density) -> dict:
 
 def _stochastic_payload(stochastic: StochasticStage) -> dict:
     paths, window, exponent = stochastic.paths, stochastic.window, stochastic.exponent
-    return {
+    payload = {
         "convention": paths.convention,
         "seed": int(paths.seed),
         "step": float(paths.step),
@@ -612,6 +657,30 @@ def _stochastic_payload(stochastic: StochasticStage) -> dict:
         "exponent": _pairs(exponent.samples),
         "exact_exponent": _pairs(exponent.exact) if exponent.exact else None,
         "exact_crest": _pairs(window.exact_crest) if window.exact_crest else None,
+    }
+    if stochastic.quasipotential is not None:
+        payload["quasipotential"] = _quasipotential_payload(stochastic.quasipotential)
+    return payload
+
+
+def _quasipotential_payload(panel: QuasipotentialPanel) -> dict:
+    """The panel's block, written only when there is one: without it, unchanged."""
+    return {
+        "box": {"x": list(panel.box[0]), "y": list(panel.box[1])},
+        "nx": int(panel.shape[0]),
+        "ny": int(panel.shape[1]),
+        "frames": [
+            (
+                None
+                if frame is None
+                else {
+                    "values": _field(frame.values),
+                    "cap": _num(frame.cap),
+                    "paths": [_pairs(path) for path in frame.paths],
+                }
+            )
+            for frame in panel.frames
+        ],
     }
 
 

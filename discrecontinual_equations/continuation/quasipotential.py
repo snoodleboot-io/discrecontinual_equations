@@ -278,8 +278,8 @@ class GridQuasipotential:
 
     ``values`` is shaped like the grid and is ``inf`` where no path from the attractor
     reached: behind a point where the noise vanishes, or where the grid does not
-    connect. ``floor`` is the largest value the attractor's initialisation wrote,
-    below which a traced path counts as having arrived.
+    connect. ``floor`` is the largest value the attractor's initialisation wrote:
+    below it ``U`` is the initialisation's, not the march's.
     """
 
     __slots__ = ["_floor", "_grid", "_values"]
@@ -476,8 +476,9 @@ class OrderedLineIntegral:
         """Trace the minimum action path from ``start`` back to the attractor.
 
         The path is followed along ``-(f + D grad U)`` in steps of ``step`` in arc
-        length (half a cell by default) by the midpoint rule, and stops when ``U``
-        falls below the attractor's initialised values; ``end``, when given, is
+        length (half a cell by default) by the midpoint rule, and stops when a step
+        would raise ``U``, which on the way down happens only on arrival; ``end``,
+        when given, is
         appended as the last state (an equilibrium's own state, say). The action is
         accumulated along the way by the same midpoint quadrature the march uses,
         plus ``U`` where the path stopped, so it is an independent estimate of
@@ -487,16 +488,23 @@ class OrderedLineIntegral:
         length = step or _DESCENT_STEP * spacing
         gradient = field.gradient()
         current = np.asarray(start, dtype=float)
+        level = field.at(current)
         states = [current]
         action = 0.0
         for _ in range(_DESCENT_MAX_STEPS):
-            if field.at(current) <= field.floor:
-                break
             half = current + _HALF * length * self._backward(current, gradient)
             direction = self._backward(half, gradient)
             if not np.all(np.isfinite(direction)):
                 break
             following = current + length * direction
+            # U falls along every minimum action path, so the path has arrived
+            # when a step would raise it: at the attractor, where U is least, or
+            # in a region the grid does not resolve - beside a point where the
+            # noise vanishes, say - where going on would only circle.
+            following_level = field.at(following)
+            if not following_level < level:
+                break
+            level = following_level
             metric = np.linalg.inv(diffusion_matrix(self._noise.columns_at(half)))
             velocity = field_at(self._drift, half)
             action += _geometric(current - following, velocity, metric)

@@ -110,12 +110,16 @@ is the dial if a coarser fan still reads as a surface.
 the stage: the particles are sample paths of the SDE, integrated in the browser
 by Euler-Maruyama from a generator seeded in the page; a density panel shows
 the stationary density solved on a grid at every frame, with its interior
-maxima; and the spectral clock is replaced by the top Lyapunov exponent drawn
+maxima; an optional quasipotential panel beside it shows the Freidlin-Wentzell
+quasipotential measured from the cycle, marched by ordered line integrals,
+with two minimum action paths drawn over it; and the spectral clock is replaced by the top Lyapunov exponent drawn
 against the parameter, since for a stochastic system that one number's sign is
 what the dynamical bifurcation changes. The timeline marks both thresholds as
 rules at their own parameter values. Its time goes on the exponent, a
-simulated path at each of about seven parameter values, and on sixty sparse
-solves of the stationary Fokker-Planck equation, one per frame with a density.
+simulated path at each of about seven parameter values, on sixty sparse
+solves of the stationary Fokker-Planck equation, one per frame with a density,
+and on sixty quasipotential marches, which add about two to three seconds a
+frame (measured at a load of five; the table's figure predates the panel).
 
 `build_sites.py` builds all eleven as part of the `continuation` example, along
 with the rest of the atlas.

@@ -61,6 +61,38 @@ class ConformalNoise(StochasticFunction):
         return s * np.stack([np.stack([x, -y], 1), np.stack([y, x], 1)], 1)
 ```
 
+### Quasipotential and minimum action paths
+
+How a planar system gets from one attractor to another under small noise is
+answered by the Freidlin-Wentzell quasipotential `U`: escapes cost
+`exp(-U / eps)`, and the minimiser of the action is the most probable path.
+`OrderedLineIntegral` computes `U` on a `DensityGrid` by the ordered line
+integral method (OLIM-MID), for a drift `Function` and a `NoiseMatrix`, from a
+stable equilibrium or a limit cycle:
+
+```python
+from discrecontinual_equations.continuation import (
+    DensityGrid, EquilibriumAttractor, GeometricMinimumAction, OrderedLineIntegral,
+)
+
+grid = DensityGrid.box([-2.0, -1.5], [1.0, 1.5], [161, 161])
+solver = OrderedLineIntegral(drift, noise, grid)
+field = solver.solve(EquilibriumAttractor([-1.0, 0.0]))
+field.values                                   # U on the grid, shaped like it
+path = solver.minimum_action_path(field, [-0.3, 0.6], end=[-1.0, 0.0])
+path.states, path.action                       # back along -(f + D grad U)
+
+between = GeometricMinimumAction(drift, noise).path(initial_chain)  # across a saddle
+```
+
+`U` is normalised as the rest of the library writes `dx = f dt + G dW`:
+`D = G G^T`, so a gradient drift `-grad V` with `G = I` has `U = 2 V`, and the
+grid density of `StationaryFokkerPlanck` is `exp(-U)` to leading order. The
+method is planar and time-independent and needs `D` non-singular at every grid
+point; it is first order in the spacing (measured, and the bound the method's
+authors give). `GeometricMinimumAction` needs a constant `D`. The module
+docstring of `continuation/quasipotential.py` has the measured errors.
+
 ## Custom Solvers
 
 Extend the base `Solver` class to implement custom numerical methods.
