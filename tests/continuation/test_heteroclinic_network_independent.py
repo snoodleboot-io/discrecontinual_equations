@@ -380,3 +380,25 @@ class TestSubspaceChecks(TestCase):
             defects.append(network.solve(connection, mesh).subspace_defect)
         assert defects[0] < 1.0e-12
         assert defects[1] > 1.0e-3
+
+
+class TestNoConnectionIsRefused(TestCase):
+    """A connection the eigenvalues rule out must not come back as an orbit.
+
+    In the stable GH system xi1 attracts in the x1x3 plane (``-c = -0.5`` there)
+    and xi3 repels in it (``e = 0.4``), so there is no orbit xi1 -> xi3. Measured
+    before the refusal existed: at 20/400 the solver returned a path within 2e-5
+    of both saddles, ``subspace_defect`` 0 and ``resolution.estimate`` 3.4e-4 -
+    every number the network offers as a reason to trust an orbit - while its
+    trapezoidal residual was 4e-2: not a trajectory at all.
+    """
+
+    def test_solve_refuses_when_a_margin_is_not_positive(self):
+        network = HeteroclinicNetwork(guckenheimer_holmes(1.0, -1.0, -1.5, -0.6))
+        for index, name in enumerate(_NAMES):
+            network.add_saddle(name, np.eye(3)[index])
+        backwards = network.add_connection("xi1", "xi3", coordinate_plane(3, (0, 2)))
+        assert max(network.connection_margins(backwards)) < 0.0
+        mesh = network.mesh(backwards, half_length=20.0, intervals=400)
+        with pytest.raises(ValueError, match="margin"):
+            network.solve(backwards, mesh)
