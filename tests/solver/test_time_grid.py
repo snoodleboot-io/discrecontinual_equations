@@ -5,9 +5,11 @@ stochastic solvers read it twice per step, so a path of K steps cost O(K^2):
 64k Euler-Maruyama steps took 4.0 s, growing as K^1.85. Two things are pinned
 here. Structurally, every fixed-step solver reads the grid a bounded number of
 times however many steps it takes, which a config that counts its reads shows
-without a clock. And by the clock, Euler-Maruyama's time grows linearly in K:
-a local slope of at most 1.1 between K = 16k and 128k. The grid each solve
-records is the config's grid, value for value.
+without a clock, and Euler-Maruyama's drift is evaluated once a step. By the
+clock, Euler-Maruyama's time grows linearly in K - a local slope of at most 1.1
+between K = 16k and 128k - but other work on the machine moves the clock, so that
+test is marked ``timing`` and runs only with ``pytest -m timing``. The grid each
+solve records is the config's grid, value for value.
 """
 
 import time
@@ -212,6 +214,46 @@ def test_the_ensemble_reads_the_grid_a_bounded_number_of_times():
     assert counting.reads <= _MOST_READS
 
 
+class _CountingLinear(_Linear):
+    """:class:`_Linear`, counting its drift evaluations."""
+
+    calls: ClassVar[int] = 0
+
+    def eval(self, point: list[float], time: float | None = None) -> list[float]:
+        type(self).calls += 1
+        return super().eval(point, time)
+
+
+@pytest.mark.parametrize("steps", [1_000, 8_000])
+def test_euler_maruyama_work_is_linear_in_the_steps(steps):
+    # Arrange: the clock-free form of the scaling claim - the grid is built a
+    # fixed number of times and the drift evaluated once a step, at 1k and 8k
+    # steps alike, so the work is O(K) whatever the machine is doing.
+    counting = _counting(EulerMaruyamaConfig)
+    config = counting(
+        start_time=0.0,
+        end_time=1.0,
+        step_size=1.0 / steps,
+        random_seed=1,
+    )
+    time_variable = Variable(name="t")
+    variables = [Variable(name="X")]
+    equation = DifferentialEquation(
+        variables=variables,
+        time=time_variable,
+        parameters=[],
+        derivative=_CountingLinear(variables, [], time_variable),
+    )
+    _CountingLinear.calls = 0
+
+    # Act
+    EulerMaruyamaSolver(config).solve(equation, [1.0])
+
+    # Assert
+    assert counting.reads <= _MOST_READS
+    assert _CountingLinear.calls == steps
+
+
 def _cpu_seconds(steps: int) -> float:
     """CPU time of one seeded solve: less disturbed than wall time by other work."""
     config = EulerMaruyamaConfig(
@@ -227,6 +269,7 @@ def _cpu_seconds(steps: int) -> float:
     return time.process_time() - start
 
 
+@pytest.mark.timing
 def test_euler_maruyama_time_grows_linearly_in_the_steps():
     # Arrange / Act: the best of five of each size, the sizes interleaved so a
     # spell of contention from other work on the machine hits both alike.

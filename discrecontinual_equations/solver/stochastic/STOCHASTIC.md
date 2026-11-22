@@ -251,6 +251,18 @@ warning names the cost once per solve. Measured strong order on a nonlinear
 non-commuting noise: 0.96, against Euler-Maruyama's 0.51. The ensemble's Milstein
 scheme still refuses non-commuting noise.
 
+A function whose `b_i` reads `x_i` alone can say so with the class attribute
+`diagonal_noise = True` (DEQ-48). The derivatives `db_i/dx_i` - the Milstein term
+and the Stratonovich correction `(1/2) b_i db_i/dx_i` - are then read from two
+evaluations of `b` instead of `2 n`, in every per-path solver and the ensemble; at
+`n = 128` a Milstein step went from 38 ms (found automatically) to 1.9 ms. The
+promise is checked once per solve at the initial state (`1 + 2 n` evaluations): if
+`b` is not diagonal there, a `UserWarning` names the function and the solve runs as
+undeclared, bit for bit. A coupling that vanishes at the initial state is not caught,
+and makes a wrong step; see `milstein/MILSTEIN.md`. The ensemble counts a NaN
+product as non-commuting, as the per-path solver does, so one path gone to NaN stops
+a Milstein ensemble with its refusal rather than hiding the other paths' coupling.
+
 ### Ensembles
 
 `StochasticEnsemble` (DEQ-32) steps a `(paths, n)` array of states at once with

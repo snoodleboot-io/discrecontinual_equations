@@ -66,7 +66,11 @@ class MilsteinSolver(Solver):
     so once per solve;
     before DEQ-36 such noise was refused. A vector diffusion is ``G = diag(b)``:
     with each ``b_i`` depending only on ``x_i`` the noise commutes and the term is
-    the familiar per-component ``(1/2) b_i b_i' (ΔW_i² - Δt)``.
+    the familiar per-component ``(1/2) b_i b_i' (ΔW_i² - Δt)``. That case is
+    stepped from the ``n x n`` Jacobian of ``b`` rather than the ``n x n x n``
+    array of products, ``O(n C_b)`` time and ``O(n^2)`` memory a step where the
+    general form takes ``O(n^4)`` and ``O(n^3)``, and agrees with it to rounding
+    (DEQ-48); vector noise that does not commute takes the general form.
 
     **Order with non-commuting noise.** Strong order 1.0, with the truncation
     keeping the areas' L2 error at ``Δt^{3/2}`` per step. Measured on ``dx = -x/2
@@ -160,8 +164,16 @@ class MilsteinSolver(Solver):
             # here in either calculus.
             drift = coefficients.written_drift(y, t_current)
             diffusion = coefficients.diffusion(y, t_current)
-            products = self._products(coefficients, y, t_current, diffusion)
-            commuting = self._commute(products)
+            # Diagonal noise whose products commute takes the n^2 form of the
+            # term (DEQ-48); a matrix, or a vector whose b_k depends on another
+            # component than its own so that the noise does not commute, takes
+            # the general form, which this leaves as it was.
+            diagonal = self._commuting_diagonal(coefficients, y, t_current, diffusion)
+            if diagonal is None:
+                products = self._products(coefficients, y, t_current, diffusion)
+                commuting = self._commute(products)
+            else:
+                commuting = True
             if not commuting and not warned:
                 self._warn_cost(drivers)
                 warned = True
@@ -187,11 +199,19 @@ class MilsteinSolver(Solver):
             # Milstein term: (1/2) sum_{j,k} (dG_k/dx) G_j (dW_j dW_k - delta_jk dt),
             # the delta_jk dt only in the Ito form (see the class docstring), plus
             # sum_{j,k} (dG_k/dx) G_j A_(j,k) when the noise does not commute.
-            correction = 0.5 * np.einsum("jki,j,k->i", products, delta_w, delta_w)
-            if ito:
-                correction -= 0.5 * dt * np.einsum("kki->i", products)
-            if area is not None:
-                correction += np.einsum("jki,jk->i", products, area)
+            if diagonal is not None:
+                correction = self._diagonal_correction(
+                    diagonal,
+                    delta_w,
+                    dt,
+                    ito=ito,
+                )
+            else:
+                correction = 0.5 * np.einsum("jki,j,k->i", products, delta_w, delta_w)
+                if ito:
+                    correction -= 0.5 * dt * np.einsum("kki->i", products)
+                if area is not None:
+                    correction += np.einsum("jki,jk->i", products, area)
 
             # Milstein step: y_{n+1} = y_n + a dt + b dW + correction
             y_new = (
@@ -205,6 +225,79 @@ class MilsteinSolver(Solver):
             # Append to solution
             self.solution.append([t_next, [0] * len(initial_values), y.tolist()])
         return self.solution
+
+    @staticmethod
+    def _commuting_diagonal(
+        coefficients: ItoCoefficients,
+        state: np.ndarray,
+        time: float,
+        diffusion: np.ndarray,
+    ) -> np.ndarray | None:
+        """``b_j d b_k / d x_j`` as ``[j, k]`` for commuting diagonal noise, else None.
+
+        For a vector diffusion ``G = diag(b)`` the product ``(dG_k/dx) G_j`` of
+        :meth:`_products` is ``b_j (d b_k / d x_j) e_k``: one nonzero entry, so the
+        ``(n, n, n)`` array that method builds in ``O(n^4)`` holds these ``n^2``
+        numbers and zeros (DEQ-48). Its commutativity check reduces exactly:
+        entry ``(j, k)`` of the antisymmetric part is ``P[j, k] e_k - P[k, j] e_j``,
+        so the asymmetry is the largest off-diagonal ``|P[j, k]|`` and the scale
+        the largest ``|P[j, k]|``, the same two numbers :meth:`_commute` compares,
+        and the same verdict. They commute exactly when every ``b_k`` depends on
+        ``x_k`` alone wherever ``b_j`` is not zero - Kloeden and Platen's diagonal
+        noise (Section 10.3) - and then ``P`` is diagonal. None for a matrix, and
+        for a vector that does not commute: its Levy-area step stays general.
+        An equation that declares diagonal noise gets ``P``'s diagonal alone, a
+        vector, from ``2`` evaluations instead of ``2 n``, once the declaration
+        has been checked at the first state (``2 n`` evaluations, once a solve).
+        """
+        if ItoCoefficients.is_matrix(diffusion):
+            return None
+        coefficients.confirm_declaration(state, time)
+        if coefficients.declared_diagonal:
+            # P is diagonal by the declaration: its diagonal alone, from two
+            # evaluations, in O(n).
+            return diffusion * coefficients.diagonal_slopes(state, time)
+        products = diffusion[:, None] * coefficients.diffusion_jacobian(state, time).T
+        scale = float(np.max(np.abs(products)))
+        cross = np.abs(products)
+        np.fill_diagonal(cross, 0.0)
+        asymmetry = float(np.max(cross))
+        if scale == 0.0 or asymmetry <= _COMMUTATIVITY_TOLERANCE * scale:
+            return products
+        return None
+
+    @staticmethod
+    def _diagonal_correction(
+        products: np.ndarray,
+        delta_w: np.ndarray,
+        dt: float,
+        *,
+        ito: bool,
+    ) -> np.ndarray:
+        """The Milstein term from ``products[j, k] = b_j d b_k / d x_j``, in O(n^2).
+
+        ``(1/2) sum_{j,k} (dG_k/dx) G_j (dW_j dW_k - delta_jk dt)`` with only the
+        ``e_k`` entries nonzero is, in component ``k``, ``(1/2) dW_k sum_j P[j, k]
+        dW_j - (1/2) dt P[k, k]``. With ``P`` diagonal that is Kloeden and Platen's
+        diagonal-noise term ``(1/2) b_k (d b_k / d x_k) (dW_k^2 - dt)``; the
+        off-diagonal entries the tolerance admits are kept rather than dropped,
+        so the step is the general one to rounding. The sum over ``j`` runs in
+        the order the ensemble's does, which keeps the two hex-identical. A
+        vector ``products`` is the diagonal of a diagonal ``P``, whose sum has
+        the one term ``P[k, k] dW_k``.
+        """
+        if products.ndim == 1:
+            own = products
+            pushed = own * delta_w
+        else:
+            own = np.diagonal(products)
+            pushed = np.zeros(delta_w.size)
+            for j in range(delta_w.size):
+                pushed += products[j] * delta_w[j]
+        correction = 0.5 * delta_w * pushed
+        if ito:
+            correction -= 0.5 * dt * own
+        return correction
 
     @staticmethod
     def _products(

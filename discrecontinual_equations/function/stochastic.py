@@ -1,3 +1,5 @@
+from typing import ClassVar
+
 import numpy as np
 
 from discrecontinual_equations.function.function import Function
@@ -16,7 +18,25 @@ class StochasticFunction(Function):
     ``diffusion``, so every existing function works in an ensemble unchanged;
     a function that overrides them with array arithmetic is what makes an
     ensemble of ten thousand paths cost what one path used to.
+
+    ``diagonal_noise`` is a promise a subclass may make by setting it to True:
+    that ``diffusion`` returns the vector form and that ``b_i`` depends on
+    ``x_i`` (and ``t``) alone - Kloeden and Platen's diagonal noise (Section
+    10.3). The solvers then read every ``d b_i / d x_i`` from two evaluations,
+    moving all components at once, instead of ``2 n`` moving one at a time, so
+    a Milstein step costs ``O(C_b)`` rather than ``O(n C_b)`` (DEQ-48). The
+    promise is checked once per solve, at the first state it is used (the
+    initial state): the full Jacobian of ``b`` there, ``2 n`` evaluations. An
+    off-diagonal slope beyond the commutativity tolerance of the largest one
+    withdraws it with a ``UserWarning`` naming the function, and that solve
+    runs as if nothing had been declared. Only that one state is looked at, so
+    a ``b_i`` whose dependence on another component vanishes there (``x_0 *
+    x_1`` started at ``x_0 = 0``, say) still makes a wrong step, not an error.
+    Without the declaration the solvers find commuting diagonal noise
+    themselves.
     """
+
+    diagonal_noise: ClassVar[bool] = False
 
     def eval(self, point: list[float], time: float | None = None) -> list[float]:
         """Evaluate the drift term μ(x, t) for SDEs."""
