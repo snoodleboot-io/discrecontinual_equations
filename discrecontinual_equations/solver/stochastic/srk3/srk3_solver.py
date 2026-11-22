@@ -121,7 +121,29 @@ class SRK3Solver(StochasticRungeKuttaSolver):
     hand, so the form above is derived here from the Taylor scheme as quoted by
     Kuznetsov, and checked against it term by term in the tests.
 
-    MEASURED_TABLE
+    **Several channels, as measured.** ``dx = dW_1``, ``dz = mu z dt + z x dW_2``
+    (``mu = 1/2``, ``x(0) = 1/2``, ``z(0) = 1``) on ``[0, 1]``, non-commuting, with
+    three triple-integral terms, against its exact solution ``z = exp(mu t + int x
+    dW_2 - (1/2) int x^2 dt)`` computed from the path's cells; and ``dx = -x/2 dt
+    + cos(y) dW_1``, ``dy = -y/2 dt + cos(x) dW_2`` against srk3 at ``h = 2^-11`` on
+    the same path. Mean error over 60 paths of an
+    :class:`~.iterated_integrals.IteratedIntegralPath` on ``2^-12``, every step
+    size reading the same path; Milstein (Levy areas from the same path) alongside:
+
+    ====== ============ ============ ==============
+    h      z, srk3      cos, srk3    z, Milstein
+    ====== ============ ============ ==============
+    1/8    6.21e-02     8.80e-03     1.47e-01
+    1/16   2.74e-02     3.52e-03     9.70e-02
+    1/32   8.74e-03     1.25e-03     3.51e-02
+    1/64   6.46e-03     4.76e-04     3.53e-02
+    1/128  1.48e-03     1.75e-04     1.58e-02
+    1/256  3.95e-04     5.39e-05     7.35e-03
+    slope  1.42         1.46         0.84
+    ====== ============ ============ ==============
+
+    ``z`` is lognormal and its mean error is carried by a few paths (the 1/64 row);
+    the cosine system, whose errors are not heavy-tailed, shows the order cleanly.
 
     A single variable with vector noise is integrated by (11.2.1) itself, the code
     path it always took, number for number.

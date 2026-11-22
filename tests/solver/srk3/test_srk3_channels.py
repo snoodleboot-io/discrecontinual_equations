@@ -275,6 +275,34 @@ class TestAgainstTheTaylorScheme:
         assert measured > 1.85, table
 
 
+class TestDeterministicPart:
+    def test_with_no_noise_drawn_the_step_is_the_taylor_step_to_h_cubed(self):
+        # With every integral zero only the drift lines remain, a h + (1/2) L^0 a
+        # h^2: their error is deterministic, so it must be O(h^3) for order 1.5
+        # (a local mean error of O(h^2) would cost half an order). This is where
+        # the 1 / m in the supporting values, and the time t + h / m, show.
+        zero = IteratedIntegrals(
+            delta_w=np.zeros(2),
+            delta_z=np.zeros(2),
+            double=np.zeros((2, 2)),
+            triple=np.zeros((2, 2, 2)),
+        )
+        point = np.array([0.4, -0.7])
+        table = {}
+        for k in range(3, 9):
+            h = 2.0**-k
+            scheme = _final(
+                h,
+                _Fixed(zero),
+                TimeDependentMatrixNoise,
+                point,
+                start=0.5,
+                end=0.5 + h,
+            )
+            table[h] = float(np.max(np.abs(scheme - _taylor_step(point, 0.5, h, zero))))
+        assert slope(table) > 2.7, table
+
+
 _MAIN_HASHES = [
     "f0e077d20d0f39df",
     "9954679e7aaca142",

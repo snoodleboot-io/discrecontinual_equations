@@ -79,11 +79,11 @@ class StochasticRungeKuttaSolver(Solver):
         Every ``srk*`` step formula reads ``diffusion[channel]`` and perturbs one
         component per supporting value, which is the diagonal case and nothing
         else; their orders are stated for scalar or diagonal noise because their
-        several-channel forms (extra supporting values per pair of channels, and
-        for srk3 the triple integrals ``I_(j,k,l)``) are not implemented; the Levy
-        areas themselves are sampled since DEQ-36, for the Milstein solver. A
-        matrix diffusion would be misread, not integrated at a lower order, so it
-        is refused up front.
+        several-channel forms (extra supporting values per pair of channels) are
+        not implemented; the Levy areas themselves are sampled since DEQ-36, for
+        the Milstein solver. A matrix diffusion would be misread, not integrated
+        at a lower order, so it is refused up front. (srk3 has its several-channel
+        form since DEQ-66 and sends only a single scalar variable through here.)
         """
         if ItoCoefficients.is_matrix(coefficients.diffusion(state, time)):
             message = (

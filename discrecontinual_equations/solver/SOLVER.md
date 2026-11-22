@@ -136,7 +136,8 @@ the derivations are in Kloeden and Platen (1992).
 - **Strong Order**: 1.5 (measured 1.48); weak slope measured 1.98
 - **Scheme**: explicit order 1.5 strong scheme, Kloeden-Platen (11.2.1), driven by
   the Wiener increment and its time integral drawn jointly
-- **Noise**: scalar only; systems are refused
+- **Noise**: scalar, or any `n x m` / diagonal noise through its several-channel
+  form with the triple integrals `I_(j,k,l)` (DEQ-66)
 - **Calculus**: Supports both Ito and Stratonovich
 
 #### SRK4 (two drift stages, four diffusion stages)
@@ -241,7 +242,7 @@ solver.solve(stochastic_equation, [0.0])
 | **Stiff ODEs** | Adaptive Runge-Kutta | Automatic step size control |
 | **Basic SDEs** | Euler-Maruyama | Fundamental stochastic method |
 | **Accurate SDEs** | SRK2, Milstein | Higher-order stochastic methods |
-| **High-Precision SDEs** | SRK3 (paths), SRK4 (expectations) | Strong order 1.5 and weak order 2.0, scalar noise |
+| **High-Precision SDEs** | SRK3 (paths), SRK4 (expectations) | Strong order 1.5 (any noise) and weak order 2.0 (scalar noise) |
 | **Financial Modeling** | Ito calculus methods | Standard for Black-Scholes type models |
 | **Physical Systems** | Stratonovich calculus | Natural for physical stochastic processes |
 

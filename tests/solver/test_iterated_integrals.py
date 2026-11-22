@@ -238,6 +238,29 @@ class TestPathwise:
             area = 0.5 * (sampled.double[j, k] - sampled.double[k, j])
             assert area == pytest.approx(0.5 * (curve - curve_reverse), abs=1.0e-8)
 
+    def test_time_integral_is_the_curves_and_reads_back_to_its_coefficients(self):
+        # delta_z = int (W(s) - W(0)) ds on the curve, and zeta_0, zeta_1 are
+        # recovered from (delta_w, delta_z): the sign of zeta_1 is what ties the
+        # triple integrals to the I_(j,0) a source already drew.
+        times = np.linspace(0.0, 1.0, 40001)
+        zeta = self._zeta(6)
+        value, _ = _legendre_path(zeta, times)
+        sampled = IteratedIntegralSampler.assemble(zeta, 1.0, 1, 2)
+        area = np.trapezoid(value - value[0], times, axis=0)
+        np.testing.assert_allclose(sampled.delta_z, area, atol=1.0e-9)
+        np.testing.assert_allclose(
+            IteratedIntegralSampler.leading(sampled.delta_w, sampled.delta_z, 1.0),
+            zeta[:2],
+            atol=1.0e-12,
+        )
+        step = 0.2
+        scaled = IteratedIntegralSampler.assemble(zeta, step, 1, 2)
+        np.testing.assert_allclose(
+            IteratedIntegralSampler.leading(scaled.delta_w, scaled.delta_z, step),
+            zeta[:2],
+            atol=1.0e-12,
+        )
+
     def test_increments_come_back_unchanged(self):
         source = GaussianWienerSource(3)
         increments = source.increments(0.0, 0.1, 4)

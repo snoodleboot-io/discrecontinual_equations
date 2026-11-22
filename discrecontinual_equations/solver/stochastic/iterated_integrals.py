@@ -120,13 +120,9 @@ def _legendre_triple(terms: int) -> np.ndarray:
     for p in range(1, terms + 1):
         antiderivatives[p] = (values[p + 1] - values[p - 1]) / (2 * p + 1)
     plain = values[: terms + 1]
-    bar = -np.einsum(
-        "n,an,bn,cn->abc",
-        weights,
-        antiderivatives,
-        plain,
-        antiderivatives,
-    )
+    # bar[a, b, c] = -sum_n w_n Q_a(x_n) P_b(x_n) Q_c(x_n), as one product.
+    products = antiderivatives[:, np.newaxis, :] * plain[np.newaxis, :, :]
+    bar = -(products @ (weights * antiderivatives).T)
     bar[0] += 2.0 * np.einsum("n,bn,cn->bc", weights, plain, antiderivatives)
     scale = np.sqrt(2.0 * np.arange(terms + 1) + 1.0)
     coefficients = bar * np.einsum("a,b,c->abc", scale, scale, scale) / 8.0
@@ -163,6 +159,7 @@ class IteratedIntegralSampler:
         return 0.25 / (2 * terms + 1)
 
     @staticmethod
+    @lru_cache(maxsize=256)
     def triple_errors(terms: int) -> dict[str, float]:
         """Kuznetsov's exact (49), (59)-(61) for ``h = 1``, by pattern of channels.
 
@@ -187,9 +184,17 @@ class IteratedIntegralSampler:
     @staticmethod
     def triple_terms(step: float) -> int:
         """The least ``q`` whose worst exact error (49), (59)-(61) is ``<= h^4``."""
-        terms = 0
-        while max(IteratedIntegralSampler.triple_errors(terms).values()) > step:
+
+        def worst(terms: int) -> float:
+            return max(IteratedIntegralSampler.triple_errors(terms).values())
+
+        # The worst error is about 1 / (8 q) for large q and below it for small
+        # q, so the answer is near 0.13 / h: start there and walk to it.
+        terms = max(0, int(0.12 / step) - 1)
+        while worst(terms) > step:
             terms += 1
+        while terms > 0 and worst(terms - 1) <= step:
+            terms -= 1
         return terms
 
     @staticmethod

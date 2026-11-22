@@ -11,7 +11,7 @@ Stochastic Solvers
 ├── EulerMaruyamaSolver - Strong order 0.5, weak order 1.0
 ├── MilsteinSolver - Strong order 1.0, weak order 1.0
 ├── SRK2Solver - Strong order 1.0, weak order 1.0 (Kloeden-Platen 11.1.7, measured)
-├── SRK3Solver - Strong order 1.5, scalar noise (Kloeden-Platen 11.2.1, measured)
+├── SRK3Solver - Strong order 1.5, scalar or several channels (Kloeden-Platen 11.2.1; DEQ-66)
 ├── SRK4Solver - Weak order 2.0, strong order 1.0, scalar noise (Kloeden-Platen 15.1.4, measured)
 ├── SRK5Solver - Refuses to run; no scheme of the claimed order exists (DEQ-25)
 ├── GottwaldMelbourneSolver - Deterministic homogenisation for α-stable SDEs
@@ -301,7 +301,7 @@ class ConformalNoise(StochasticFunction):
 | Euler-Maruyama | 0.5 | 1.0 | 1 | Fastest |
 | Milstein | 1.0 | 1.0 | 1 | Fast |
 | SRK2 | 1.0 (measured 0.99) | 1.0 (measured 0.97) | 2 | Medium |
-| SRK3 | 1.5 (measured 1.48), scalar noise | measured 1.98 | 3 drift + 6 diffusion | Slow |
+| SRK3 | 1.5 (measured 1.48; 1.42-1.46 on two non-commuting channels) | measured 1.98 | 3 drift + 6 diffusion (`1+2m`, `1+2m+2m^2` for `m` channels) | Slow |
 | SRK4 | 1.0 (measured 1.05), scalar noise | 2.0 (measured 1.96) | 2 drift + 4 diffusion | Medium |
 | SRK5 | refused | refused | - | - |
 
@@ -309,10 +309,10 @@ The measured slopes are from 100000 paths of geometric Brownian motion
 `dX = X dt + 0.5 X dW` on `[0, 1]`, every step size driven by the same Brownian
 path; the tables are in each solver's docstring. Euler-Maruyama and Milstein
 measured 0.59 / 0.97 and 0.97 / 0.97 in the same run. For systems, SRK2's order
-1.0 needs each component's diffusion to depend only on that component; SRK3 and
-SRK4 refuse systems because their several-channel forms are not implemented (SRK3's
-would also need the triple integrals `I_(j,k,l)`, which are not sampled; the Levy
-areas are, since DEQ-36).
+1.0 needs each component's diffusion to depend only on that component; SRK4 refuses
+systems because its several-channel form is not implemented. SRK3 takes any number
+of channels since DEQ-66, with the twofold and threefold integrals drawn jointly by
+Kuznetsov's Legendre series (`iterated_integrals.py`).
 
 ## Calculus Conversion Algorithm
 
