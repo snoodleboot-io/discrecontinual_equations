@@ -30,6 +30,169 @@ addopts = "--cov=discrecontinual_equations --cov-report=term-missing"
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[tool.black]
+# Same floor as requires-python and ruff, so black parses and formats identically on 3.13 (CI) and 3.14 (local)
+target-version = ["py313"]
+
+[tool.mypy]
+python_version = "3.13"
+files = ["discrecontinual_equations"]
+
+# plotly ships neither a py.typed marker nor a stubs package
+[[tool.mypy.overrides]]
+module = ["plotly", "plotly.*"]
+ignore_missing_imports = true
+
+# scipy ships no py.typed; scipy-stubs exists but rejects the open branches' sparse calls
+# (bmat, splu) on overloads, so adopting it is its own change
+[[tool.mypy.overrides]]
+module = ["scipy", "scipy.*"]
+ignore_missing_imports = true
+
+# Baseline of type errors that predate mypy running against the installed project in CI
+# (DEQ-64). Each entry disables only the codes that module already reports, so new code
+# elsewhere is fully checked. Remove an entry when its module is fixed.
+
+# Solvers read their own config's fields (step_size, tolerances, times) through
+# `solver_config`, which is typed as the base SolverConfig; the ensemble and coefficients
+# call the stochastic methods through a plain Function
+[[tool.mypy.overrides]]
+module = [
+    "discrecontinual_equations.solver.deterministic.adams_bashforth2.adams_bashforth2_solver",
+    "discrecontinual_equations.solver.deterministic.adams_bashforth3.adams_bashforth3_solver",
+    "discrecontinual_equations.solver.deterministic.cash_karp.cash_karp_solver",
+    "discrecontinual_equations.solver.deterministic.dormand_prince.dormand_prince_solver",
+    "discrecontinual_equations.solver.deterministic.dormand_prince89.dormand_prince89_solver",
+    "discrecontinual_equations.solver.deterministic.euler.euler_solver",
+    "discrecontinual_equations.solver.deterministic.fehlberg.fehlberg_solver",
+    "discrecontinual_equations.solver.stochastic.coefficients",
+    "discrecontinual_equations.solver.stochastic.ensemble",
+    "discrecontinual_equations.solver.stochastic.euler_maruyama.euler_maruyama_solver",
+    "discrecontinual_equations.solver.stochastic.gottwald_melbourne.gottwald_melbourne_solver",
+    "discrecontinual_equations.solver.stochastic.milstein.milstein_solver",
+    "discrecontinual_equations.solver.stochastic.zhan_duan_li_li.zhan_duan_li_li_solver",
+]
+disable_error_code = ["attr-defined"]
+
+# As above, and `solution` is assigned on a subclass of a __slots__ class
+[[tool.mypy.overrides]]
+module = ["discrecontinual_equations.solver.stochastic.runge_kutta"]
+disable_error_code = ["attr-defined", "misc"]
+
+# Parameter.value is `float | None` and is read inside eval() without a None check
+[[tool.mypy.overrides]]
+module = [
+    "discrecontinual_equations.simple_ode_function",
+    "discrecontinual_equations.systems.coupled_ring",
+]
+disable_error_code = ["operator"]
+
+# Name-mangled class attributes are set in __init_subclass__
+[[tool.mypy.overrides]]
+module = ["discrecontinual_equations.parameter"]
+disable_error_code = ["attr-defined"]
+
+# One list type holds both flat and nested points, and list comprehensions are run for
+# their appends
+[[tool.mypy.overrides]]
+module = ["discrecontinual_equations.curve"]
+disable_error_code = ["arg-type", "assignment", "func-returns-value", "return-value"]
+
+# Jet arithmetic is typed against numbers.Number, which declares no operators
+[[tool.mypy.overrides]]
+module = ["discrecontinual_equations.continuation.jet"]
+disable_error_code = ["operator"]
+
+# Functions typed for floats are evaluated on Jets and Multivariates (automatic
+# differentiation), and residuals are decoded through the ResidualFunction base type
+[[tool.mypy.overrides]]
+module = ["discrecontinual_equations.continuation.center_manifold"]
+disable_error_code = ["arg-type"]
+
+[[tool.mypy.overrides]]
+module = ["discrecontinual_equations.continuation.codim2"]
+disable_error_code = ["arg-type", "attr-defined"]
+
+[[tool.mypy.overrides]]
+module = ["discrecontinual_equations.continuation.codim2_builder"]
+disable_error_code = ["attr-defined"]
+
+[[tool.mypy.overrides]]
+module = ["discrecontinual_equations.continuation.codim3"]
+disable_error_code = ["arg-type", "attr-defined"]
+
+[[tool.mypy.overrides]]
+module = ["discrecontinual_equations.continuation.codim3_builder"]
+disable_error_code = ["attr-defined"]
+
+[[tool.mypy.overrides]]
+module = ["discrecontinual_equations.continuation.derivative_provider"]
+disable_error_code = ["arg-type", "call-overload"]
+
+[[tool.mypy.overrides]]
+module = ["discrecontinual_equations.continuation.focal"]
+disable_error_code = ["arg-type"]
+
+[[tool.mypy.overrides]]
+module = ["discrecontinual_equations.continuation.manifold"]
+disable_error_code = ["arg-type", "attr-defined"]
+
+# Plain str and int arguments reach Literal-typed config fields
+[[tool.mypy.overrides]]
+module = ["discrecontinual_equations.continuation.exploration"]
+disable_error_code = ["arg-type", "misc"]
+
+# The refined orbit is annotated as the base class but is the adaptive one, which takes
+# warm_start; periods are `float | None` until solved
+[[tool.mypy.overrides]]
+module = ["discrecontinual_equations.continuation.periodic_orbit"]
+disable_error_code = ["arg-type", "call-arg"]
+
+# _function and _mesh are __slots__ assigned outside __init__
+[[tool.mypy.overrides]]
+module = ["discrecontinual_equations.continuation.connecting_orbit"]
+disable_error_code = ["attr-defined", "has-type"]
+
+# A branch is stored where a Curve is declared
+[[tool.mypy.overrides]]
+module = ["discrecontinual_equations.continuation.continuer"]
+disable_error_code = ["assignment"]
+
+# A grid index tuple holds numpy integers where Sequence[int] is declared
+[[tool.mypy.overrides]]
+module = ["discrecontinual_equations.continuation.fokker_planck"]
+disable_error_code = ["arg-type"]
+
+# Renderers narrow render()'s Scene argument; scenes and their parts are typed as object;
+# solve_ivp event attributes and optional callables are untyped
+[[tool.mypy.overrides]]
+module = ["discrecontinual_equations.webplot.report"]
+disable_error_code = ["arg-type"]
+
+[[tool.mypy.overrides]]
+module = ["discrecontinual_equations.webplot.scene_builder"]
+disable_error_code = ["arg-type"]
+
+[[tool.mypy.overrides]]
+module = ["discrecontinual_equations.webplot.stage"]
+disable_error_code = ["attr-defined"]
+
+[[tool.mypy.overrides]]
+module = ["discrecontinual_equations.webplot.stage_builder"]
+disable_error_code = ["assignment", "attr-defined"]
+
+[[tool.mypy.overrides]]
+module = ["discrecontinual_equations.webplot.stage_renderer"]
+disable_error_code = ["override"]
+
+[[tool.mypy.overrides]]
+module = ["discrecontinual_equations.webplot.stochastic_stage_builder"]
+disable_error_code = ["arg-type", "var-annotated"]
+
+[[tool.mypy.overrides]]
+module = ["discrecontinual_equations.webplot.stochastic_stage_renderer"]
+disable_error_code = ["override", "var-annotated"]
+
 [tool.ruff]
 target-version = "py313"
 line-length = 88
@@ -109,11 +272,52 @@ ignore = [
     "YTT101", "YTT102", "YTT103",
     # Allow `raise NotImplementedError`
     "F901",
+    # Conflicts with black, which drops the trailing comma when a bracket's body fits on one line
+    "COM812",
+    # Greek letters and math symbols (α, σ, ×, −) in strings and comments, as RUF002 for docstrings
+    "RUF001", "RUF003",
+    # Exceptions carry their message inline, `raise ValueError("...")`, throughout the library
+    "EM101", "TRY003",
+    # A named result before `return` (h_new, y_new) mirrors the formula it implements
+    "RET504",
+    # PLR0913 already bounds the argument count, and is what long numerical signatures
+    # carry a reasoned `# noqa: PLR0913` for; PLR0917 would ask for a second one
+    "PLR0917",
 ]
 
 [tool.ruff.lint.per-file-ignores]
-# Tests can use magic values, assertions, and imports
-"tests/**/*" = ["PLR2004", "S101", "TID252"]
+# Tests can use magic values, assertions, imports, and print diagnostics
+"tests/**/*" = ["PLR2004", "S101", "TID252", "T20"]
+# unittest.TestCase-style tests use self.assert*
+"tests/{test_variable,test_parameter}.py" = ["PT009"]
+# Commented-out alternative test setups kept for reference
+"tests/test_euler_solver.py" = ["ERA001"]
+# Test systems implement the Function interface and ignore `time`
+"tests/{test_function,test_plot}.py" = ["ARG002"]
+"tests/solver/{gottwald_melbourne,zhan_duan_li_li}/**/*" = ["ARG002"]
+# Library: implements the Function interface and ignores `time`
+"discrecontinual_equations/simple_ode_function.py" = ["ARG002"]
+# Library: `h` keeps the adaptive solvers' `_accept_step` signature uniform; the multistep
+# start-up counts steps by hand and branches on step 2; long lines as below
+"discrecontinual_equations/solver/deterministic/**/*" = ["ARG002", "SIM113", "PLR2004", "E501"]
+# Library: the α ∈ (1, 2) stability range is the method's definition, not a magic number
+"discrecontinual_equations/solver/stochastic/gottwald_melbourne/**/*" = ["PLR2004", "SIM108"]
+# Library: `dW` is the Wiener-increment notation of the method's paper
+"discrecontinual_equations/solver/stochastic/zhan_duan_li_li/**/*" = ["N803", "N806", "PLR0913"]
+# Library: plots build plotly kwargs with dict(), use os.path, import lazily, and print where they saved
+"discrecontinual_equations/plot/**/*" = ["C408", "PTH", "PLC0415", "T20", "ERA001"]
+# Long lines black cannot split (strings, comments, dotted imports) that predate this config;
+# newer code marks each one with `# noqa: E501` instead
+"discrecontinual_equations/{curve,parameter}.py" = ["E501"]
+"discrecontinual_equations/solver/stochastic/{euler_maruyama,gottwald_melbourne,zhan_duan_li_li}/*_{solver,config}.py" = ["E501"]
+"tests/solver/{adams_bashforth2,adams_bashforth3,dormand_prince,dormand_prince89,euler_maruyama,gottwald_melbourne,milstein,zhan_duan_li_li}/test_*_solver.py" = ["E501"]
+"tests/solver/test_ensemble.py" = ["E501"]
+# Standalone scripts from the first release, not library code: unused `time` in Function
+# implementations, os.path, dict() kwargs, long main()s, no __init__.py, shebangs without +x
+"examples/{brownian_motion,ccefs,complex_ode_system,geometric_brownian_motion,lorenz,quartic,thaler,zhan_duan_li_li}/**/*" = [
+    "ARG002", "PTH", "C408", "ERA001", "INP001", "EXE001", "PLR0913", "PLR0915",
+    "PLR2004", "N806", "NPY002", "RUF015", "E501",
+]
 # Examples can use print statements and imports
 "examples/**/*" = ["T20", "TID252"]
 # Docs can use print statements
@@ -136,8 +340,12 @@ line-ending = "auto"
 
 [dependency-groups]
 dev = [
+    "bandit[toml]==1.9.4",
+    "black==26.10.1",
     "mkdocs>=1.6.1",
     "mkdocs-material>=9.7.1",
     "mkdocstrings[python]>=1.0.0",
+    "mypy==2.4.1",
     "pymdown-extensions>=10.19.1",
+    "ruff==0.17.6",
 ]

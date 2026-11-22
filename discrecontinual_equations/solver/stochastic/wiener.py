@@ -79,7 +79,9 @@ class GaussianWienerSource(WienerSource):
     def __init__(self, seed: int | None = None) -> None:
         self._generator = np.random.default_rng(seed)
 
-    def increments(self, time: float, step: float, dimension: int) -> WienerIncrements:  # noqa: ARG002
+    def increments(
+        self, time: float, step: float, dimension: int  # noqa: ARG002
+    ) -> WienerIncrements:
         u1 = self._generator.standard_normal(dimension)
         u2 = self._generator.standard_normal(dimension)
         root = np.sqrt(step)

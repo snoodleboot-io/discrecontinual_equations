@@ -1,4 +1,5 @@
 from pathlib import Path
+
 import plotly.graph_objects as go
 
 from discrecontinual_equations.curve import Curve

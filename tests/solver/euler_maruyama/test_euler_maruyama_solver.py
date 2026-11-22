@@ -35,12 +35,16 @@ class StochasticTestFunction(StochasticFunction):
         self.alpha = parameters[0].value  # drift coefficient
         self.sigma = parameters[1].value  # diffusion coefficient
 
-    def eval(self, point: list[float], time: float | None = None) -> list[float]:  # noqa: ARG002
+    def eval(
+        self, point: list[float], time: float | None = None  # noqa: ARG002
+    ) -> list[float]:
         """Drift term: a(x, t) = -alpha x"""
         x = point[0]
         return [-self.alpha * x]
 
-    def diffusion(self, point: list[float], time: float | None = None) -> list[float]:  # noqa: ARG002
+    def diffusion(
+        self, point: list[float], time: float | None = None  # noqa: ARG002
+    ) -> list[float]:
         """Diffusion term: b(x, t) = sigma"""
         return [self.sigma]
 

@@ -67,7 +67,9 @@ class TestMilsteinConvergence:
 class ShearNoise(StochasticFunction):
     """``G = [[1, x], [0, 1]]``: ``(dG_2/dx) G_1 = (1, 0)``, ``(dG_1/dx) G_2 = 0``."""
 
-    def eval(self, point: list[float], time: float | None = None) -> list[float]:  # noqa: ARG002
+    def eval(
+        self, point: list[float], time: float | None = None  # noqa: ARG002
+    ) -> list[float]:
         return [0.0, 0.0]
 
     def diffusion(
