@@ -22,6 +22,7 @@ directions feed back into the critical ones.
 """
 
 import math
+import warnings
 from dataclasses import replace
 from unittest import TestCase
 
@@ -29,6 +30,7 @@ import numpy as np
 from scipy.optimize import fsolve
 
 from discrecontinual_equations.continuation.center_manifold import (
+    EigenvalueSplit,
     TaylorCenterManifold,
 )
 from discrecontinual_equations.continuation.codim2_builder import (
@@ -63,7 +65,10 @@ from tests.continuation.normal_form_reference import (
 from tests.continuation.normal_form_systems import (
     EmbeddedBogdanovTakens,
     EmbeddedHopfHopf,
+    CurvedBogdanovTakens,
     EmbeddedZeroHopf,
+    StackedBautin,
+    StackedHopfHopf,
     build,
     polynomial_field,
     random_transform,
@@ -116,6 +121,109 @@ class TestEmbeddedBogdanovTakens(TestCase):
             hopf = unfolding.hopf(step)
             assert abs(fold[0]) < 1.0e-12
             assert abs(hopf[0] + (-0.7) * hopf[1] ** 2 / 2.3**2) < 1.0e-12
+
+
+class TestBogdanovTakensUnfoldingOrder(TestCase):
+    """The predicted fold and Hopf curves are right to second order.
+
+    The unfolding is nonlinear in the parameters and moves the center manifold, so
+    the exact curves are only known numerically: at each predicted point the exact
+    curve is solved for the first parameter at the same second parameter. The
+    distance must fall as ``beta2^3``.
+    """
+
+    def _exact(self, problem, alpha, condition, guess_state) -> float:
+        def residual(unknowns):
+            state, first = unknowns[:4], unknowns[4]
+            jacobian = problem.state_jacobian(state, first, alpha[1])
+            return [*problem.evaluate(state, first, alpha[1]), condition(jacobian)]
+
+        guess = np.concatenate([guess_state, [alpha[0]]])
+        solution = fsolve(residual, guess, xtol=1.0e-14)
+        assert np.linalg.norm(residual(solution)) < 1.0e-12
+        return float(solution[4])
+
+    def test_fold_and_hopf_errors_are_third_order(self):
+        CurvedBogdanovTakens.transform = random_transform(4, 41)
+        problem = _problem(build(CurvedBogdanovTakens, 4))
+        result = bogdanov_takens_normal_form(problem, np.zeros(4), 0.0, 0.0)
+        unfolding = result.unfolding
+        conditions = {
+            "fold": np.linalg.det,
+            "hopf": _critical_real_part,
+        }
+        for name, condition in conditions.items():
+            sizes, errors = [], []
+            for beta2 in (0.04, 0.02, 0.01, 0.005):
+                step = unfolding.side * beta2
+                alpha = getattr(unfolding, name)(step)
+                # The Hopf equilibrium sits at w0 = -beta2 / b on the manifold.
+                guess = result.q0 * (-step / result.b if name == "hopf" else 0.0)
+                exact = self._exact(problem, alpha, condition, guess)
+                sizes.append(beta2)
+                errors.append(abs(alpha[0] - exact))
+            order = np.polyfit(np.log(sizes), np.log(errors), 1)[0]
+            assert 2.8 < order < 3.2, (name, order, errors)
+
+
+def _critical_real_part(jacobian: np.ndarray) -> float:
+    """``prod_{i<j} (lambda_i + lambda_j)``: zero where a pair sums to zero (Hopf).
+
+    The determinant of the bialternate product ``2 A (.) I``, smooth in ``A``.
+    """
+    values = np.linalg.eigvals(jacobian)
+    size = len(values)
+    product = np.prod(
+        [values[i] + values[j] for i in range(size) for j in range(i + 1, size)],
+    )
+    return float(product.real)
+
+
+class TestIndependentOfDimension(TestCase):
+    """Adding stable modes that do not feed back must not change the coefficients.
+
+    Raw coefficients scale with the critical eigenvectors, which a different
+    ambient dimension (and a different random ``T``) normalises differently, so the
+    check is on what the scale leaves fixed: the second focal value over the fourth
+    power of the center basis' conformal scale (``eta4 = 0`` here, which is the only
+    case in which ``eta6`` is an invariant at all), and the double-Hopf ``theta``
+    and ``delta``.
+    """
+
+    def test_second_focal_value_from_three_to_eight_dimensions(self):
+        for size in range(3, 9):
+            StackedBautin.transform = random_transform(size, 7 * size + 1)
+            equation = build(StackedBautin, size)
+            problem = _problem(equation)
+            origin = np.zeros(size)
+            jacobian = problem.state_jacobian(origin, 0.0, 0.0)
+            first, second = TaylorCenterManifold().lyapunov_quantities(
+                equation.derivative,
+                origin,
+                jacobian,
+                0.0,
+            )
+            basis = (
+                np.linalg.inv(StackedBautin.transform)
+                @ EigenvalueSplit()
+                .split(
+                    jacobian,
+                )
+                .transform[:, :2]
+            )
+            scale = abs(np.linalg.det(basis[:2, :2]))
+            assert abs(first) < 1.0e-12
+            assert _close(second / scale**2, 0.5)
+            assert abs(hopf_normal_form(problem, origin, 0.0, 0.0).g21) < 1.0e-12
+
+    def test_double_hopf_invariants_from_five_to_eight_dimensions(self):
+        nf = EmbeddedHopfHopf
+        for size in range(5, 9):
+            StackedHopfHopf.transform = random_transform(size, 3 * size)
+            problem = _problem(build(StackedHopfHopf, size))
+            result = hopf_hopf_normal_form(problem, np.zeros(size), 0.0, 0.0)
+            assert _close(result.theta, nf.g1011.real / (0.5 * nf.g0021.real))
+            assert _close(result.delta, nf.g1110.real / (0.5 * nf.g2100.real))
 
 
 class TestEmbeddedZeroHopf(TestCase):
@@ -370,7 +478,10 @@ class TestBykovMatcont(TestCase):
     """
 
     def _locate(self, residual, guess):
-        solution = fsolve(residual, guess, xtol=1.0e-14)
+        with warnings.catch_warnings():
+            # fsolve reports that it cannot beat xtol=1e-14; the residual decides.
+            warnings.simplefilter("ignore", RuntimeWarning)
+            solution = fsolve(residual, guess, xtol=1.0e-14)
         assert np.linalg.norm(residual(solution)) < 1.0e-13
         return solution
 

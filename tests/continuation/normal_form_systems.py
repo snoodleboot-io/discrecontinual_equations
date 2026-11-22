@@ -262,3 +262,60 @@ def build(
         parameters=parameters,
         derivative=derivative,
     )
+
+
+class CurvedBogdanovTakens(Embedded):
+    """A BT whose unfolding is nonlinear in the parameters and moves the manifold.
+
+    ``mu1 = m1 + 0.7 m2^2 + 0.4 m1 m2 + 0.3 m1^2`` and
+    ``mu2 = m2 + 0.3 m1 - 0.5 m2^2`` enter the BT block, and ``m2`` also pushes
+    the stable mode ``s1``, which feeds back through ``0.3 x s1``: the parameter
+    map has a ``beta2^2`` term and the center manifold moves with the parameters,
+    so ``K02``, ``delta1`` and ``gamma3`` all matter.
+    """
+
+    a = -0.8
+    b = 1.6
+
+    def core(self, z: list, mu1: object, mu2: object) -> list:
+        x, y, s1, s2 = z
+        cls = type(self)
+        first = mu1 + 0.7 * mu2 * mu2 + 0.4 * mu1 * mu2 + 0.3 * mu1 * mu1
+        second = mu2 + 0.3 * mu1 - 0.5 * mu2 * mu2
+        return [
+            y,
+            first + second * y + cls.a * x * x + cls.b * x * y + 0.3 * x * s1,
+            -s1 + x * x + 0.5 * x * y + 0.6 * mu2,
+            -2.5 * s2 + 0.4 * s1 * x,
+        ]
+
+
+class StackedBautin(Embedded):
+    """``z' = i z + 0.5 z |z|^4`` (so ``eta4 = 0``) with any number of stable modes.
+
+    Each stable mode is driven by the center (``x^2``, ``x y``, ``y^3``) and none
+    feeds back, so the restricted dynamics is the written planar one whatever the
+    dimension: its second focal value must not depend on how many modes there are.
+    """
+
+    def core(self, z: list, mu1: object, mu2: object) -> list:  # noqa: ARG002
+        x, y = z[0], z[1]
+        radius = x * x + y * y
+        drive = 0.5 * radius * radius
+        rows = [drive * x - y, x + drive * y]
+        for index, mode in enumerate(z[2:]):
+            rate = -(1.0 + 0.7 * index)
+            rows.append(rate * mode + x * x + 0.5 * (index + 1) * x * y + 0.3 * y**3)
+        return rows
+
+
+class StackedHopfHopf(EmbeddedHopfHopf):
+    """``EmbeddedHopfHopf``'s critical block with any number of driven stable modes."""
+
+    def core(self, z: list, mu1: object, mu2: object) -> list:
+        rows = super().core([*z[:4], 0.0 * z[0]], mu1, mu2)[:4]
+        x1, y1, x2, y2 = z[:4]
+        for index, mode in enumerate(z[4:]):
+            rate = -(1.2 + 0.5 * index)
+            rows.append(rate * mode + x1 * x1 + (index + 1) * x2 * y2 + y1 * x2)
+        return rows
