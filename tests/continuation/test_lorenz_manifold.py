@@ -39,6 +39,8 @@ from itertools import pairwise
 from unittest import TestCase
 
 import numpy as np
+from scipy.integrate import solve_ivp
+from scipy.optimize import brentq
 
 from discrecontinual_equations.continuation.derivative_provider import (
     AutomaticDifferentiation,
@@ -207,3 +209,123 @@ class TestLossyLorenzManifold(TestCase):
             assert current.stitches == previous.stitches + (
                 current.increases - current.decreases
             )
+
+
+_SIGMA = 10.0
+
+
+def _lorenz_rhs(_t, state):
+    x, y, z = state
+    return [_SIGMA * (y - x), x * (_RHO - z) - y, x * y - _BETA * z]
+
+
+def _off_manifold(point: np.ndarray, normal: np.ndarray) -> float:
+    """How far ``point`` is from W^s(0) along ``normal``, found independently.
+
+    Forward in time W^s(0) runs into the origin and everything beside it
+    leaves along the unstable direction, one side each way. So flow a point
+    ``point + e normal`` to the time ``T`` at which the orbit is closest to the
+    origin and read its unstable coordinate there: it changes sign where the
+    line crosses W^s(0). Root-find that (DOP853, rtol 1e-12), then take ``T``
+    again from the root's own orbit, which comes closer, until it settles.
+    """
+    jacobian = np.array([[-_SIGMA, _SIGMA, 0.0], [_RHO, -1.0, 0.0], [0.0, 0.0, -_BETA]])
+    values, left = np.linalg.eig(jacobian.T)
+    unstable = np.real(left[:, int(np.argmax(values.real))])
+
+    def closest(start):
+        path = solve_ivp(
+            _lorenz_rhs,
+            (0.0, 12.0),
+            start,
+            method="DOP853",
+            rtol=1.0e-12,
+            atol=1.0e-15,
+            dense_output=True,
+        )
+        times = np.linspace(0.0, path.t[-1], 40001)
+        return float(times[np.argmin(np.linalg.norm(path.sol(times), axis=0))])
+
+    def coordinate(start, horizon):
+        path = solve_ivp(
+            _lorenz_rhs,
+            (0.0, horizon),
+            start,
+            method="DOP853",
+            rtol=1.0e-12,
+            atol=1.0e-15,
+        )
+        return float(unstable @ path.y[:, -1])
+
+    offset, horizon = 0.0, closest(point)
+    for _ in range(4):
+        base = point + offset * normal
+
+        def side(e, base=base, horizon=horizon):
+            return coordinate(base + e * normal, horizon)
+
+        here, width, bracket = side(0.0), 1.0e-9, None
+        while bracket is None and width < 1.0:
+            for sign in (1.0, -1.0):
+                if bracket is None and np.sign(side(sign * width)) != np.sign(here):
+                    bracket = sorted((0.0, sign * width))
+            width *= 3.0
+        assert bracket is not None
+        root = brentq(side, *bracket, xtol=1.0e-15, rtol=1.0e-14)
+        offset += root
+        later = closest(point + offset * normal)
+        if abs(root) < 1.0e-12 or abs(later - horizon) < 1.0e-3:
+            break
+        horizon = later
+    return abs(offset)
+
+
+def _normals(mesh) -> np.ndarray:
+    corners = mesh.vertices[mesh.triangles]
+    faces = np.cross(corners[:, 1] - corners[:, 0], corners[:, 2] - corners[:, 0])
+    normals = np.zeros_like(mesh.vertices)
+    for k in range(3):
+        np.add.at(normals, mesh.triangles[:, k], faces)
+    return normals / np.linalg.norm(normals, axis=1, keepdims=True)
+
+
+def _outer_ring_error(step: float) -> float:
+    function = LorenzField(
+        variables=[State(), State(), State()],
+        parameters=[Alpha(value=0.0)],
+        results=[State(), State(), State()],
+        time=None,
+    )
+    jacobian = AutomaticDifferentiation().jacobian(function, np.zeros(3), 0.0)
+    mesh = GeodesicLevelSets(
+        GeodesicSettings(initial_radius=1.0, step=step, spacing=(step, 3.0 * step)),
+    ).compute(function, np.zeros(3), jacobian, StableManifold(), distance=20.0)
+    normals = _normals(mesh)
+    # Half the ring: the other half is its image under (x, y) -> (-x, -y).
+    ring = mesh.rings[-1]
+    chosen = ring[np.linspace(0, len(ring) // 2, 4, endpoint=False).astype(int)]
+    return max(_off_manifold(mesh.vertices[i], normals[i]) for i in chosen)
+
+
+class TestLorenzManifoldIsOnTheManifold(TestCase):
+    """Vertices against W^s(0) itself, located without the grower.
+
+    The z-axis tests above are exact but see only the axis. Here four points
+    of the ring at distance 20 are each held to the stable manifold through
+    them, found by flowing the line along the mesh normal into the origin
+    (see :func:`_off_manifold`). Measured: within 7.6e-3 at step 1.5 and
+    spacing (1.5, 4.5), within 9.2e-4 at half of both - the error of the
+    ring's interpolation the next orbits start from, falling faster than
+    the square of the spacing. On the film's own mesh (step 1.5, out to 100)
+    the same probe measured a median 1e-3 and a worst 0.23 (at r = 74.5),
+    so the film is a picture of the manifold to a few tenths, not 1e-10:
+    the BVP's tolerance is how well each orbit is solved, not how far the
+    ring it starts from is off the manifold.
+    """
+
+    def test_the_ring_at_distance_twenty_converges_onto_the_manifold(self):
+        coarse = _outer_ring_error(1.5)
+        fine = _outer_ring_error(0.75)
+        assert coarse < 2.0e-2
+        assert fine < 2.5e-3
+        assert coarse / fine > 4.0

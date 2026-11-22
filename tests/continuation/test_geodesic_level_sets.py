@@ -23,6 +23,9 @@ from unittest.mock import patch
 import numpy as np
 import pytest
 from scipy.integrate import quad, solve_ivp
+from scipy.interpolate import CubicSpline
+from scipy.optimize import least_squares
+from scipy.spatial import cKDTree
 
 from discrecontinual_equations.continuation.derivative_provider import (
     AutomaticDifferentiation,
@@ -511,3 +514,197 @@ class TestLorenzManifoldNearTheOrigin(TestCase):
 
     def test_the_bvp_residual_is_at_tolerance(self):
         assert self.mesh.residual < 1.0e-8
+
+    def test_each_ring_is_its_step_from_the_ring_before(self):
+        # The geodesic property, checked against a spline through the ring
+        # before rather than the grower's own interpolant: measured within
+        # 1.1% of the step (near the seed, where the rings bend most) and
+        # 0.03% beyond r = 5.
+        assert max(_ring_gaps(self.mesh)) < 0.03
+
+
+# A doubly curved manifold known exactly. Conjugating the linear saddle
+# x' = A x (A keeps {x3 = 0} invariant) by y = (x1, x2, x3 + h(x1, x2)) gives
+# a nonlinear field whose stable manifold is the graph z = h(x, y). The rates
+# on it are -1 and -5 along skewed eigenvectors, and h has degree 6, beyond
+# the order-5 Taylor seed, so neither the chart nor the flow is exact. Its
+# geodesic distance from the origin is computed independently of the grower,
+# by shooting geodesics of the graph's metric from the origin (the
+# exponential map) with DOP853.
+_GRAPH_RATES = np.array([[1.0, 0.7], [0.2, 1.0]])
+_GRAPH_LINEAR = np.zeros((3, 3))
+_GRAPH_LINEAR[:2, :2] = (
+    _GRAPH_RATES @ np.diag([-1.0, -5.0]) @ np.linalg.inv(_GRAPH_RATES)
+)
+_GRAPH_LINEAR[:2, 2] = [0.4, -0.3]
+_GRAPH_LINEAR[2, 2] = 2.0
+_C1, _C2, _C3, _C4, _C5 = 0.3, -0.2, 0.25, 0.1, 0.03
+
+
+def _height(x, y):
+    return _C1 * x * x + _C2 * x * y + _C3 * y * y + _C4 * x**3 + _C5 * x * x * y**4
+
+
+def _slope(x, y):
+    hx = 2 * _C1 * x + _C2 * y + 3 * _C4 * x * x + 2 * _C5 * x * y**4
+    hy = _C2 * x + 2 * _C3 * y + 4 * _C5 * x * x * y**3
+    return hx, hy
+
+
+def _curvature(x, y):
+    hxx = 2 * _C1 + 6 * _C4 * x + 2 * _C5 * y**4
+    hxy = _C2 + 8 * _C5 * x * y**3
+    hyy = 2 * _C3 + 12 * _C5 * x * x * y * y
+    return hxx, hxy, hyy
+
+
+class GraphSaddle(DeterministicFunction):
+    """The linear saddle bent so that its stable plane becomes z = h(x, y)."""
+
+    def eval(self, point, time=None):  # noqa: ARG002 (base signature)
+        x, y = point[0], point[1]
+        off = point[2] - _height(x, y)
+        a = _GRAPH_LINEAR
+        dx = a[0, 0] * x + a[0, 1] * y + a[0, 2] * off
+        dy = a[1, 0] * x + a[1, 1] * y + a[1, 2] * off
+        hx, hy = _slope(x, y)
+        return [dx, dy, a[2, 2] * off + hx * dx + hy * dy]
+
+
+def _graph_offset(vertices: np.ndarray) -> np.ndarray:
+    """Each vertex's distance from the graph, to first order in that distance."""
+    x, y, z = vertices.T
+    hx, hy = _slope(x, y)
+    return np.abs(z - _height(x, y)) / np.sqrt(1.0 + hx * hx + hy * hy)
+
+
+def _metric_root() -> np.ndarray:
+    hx, hy = _slope(0.0, 0.0)
+    metric = np.array([[1 + hx * hx, hx * hy], [hx * hy, 1 + hy * hy]])
+    values, vectors = np.linalg.eigh(metric)
+    return vectors @ np.diag(np.sqrt(values)) @ vectors.T
+
+
+def _geodesic(_s, state):
+    x, y, vx, vy = state
+    hx, hy = _slope(x, y)
+    hxx, hxy, hyy = _curvature(x, y)
+    bend = (hxx * vx * vx + 2 * hxy * vx * vy + hyy * vy * vy) / (1 + hx * hx + hy * hy)
+    return [vx, vy, -hx * bend, -hy * bend]
+
+
+def _graph_geodesic_distance(point: np.ndarray, guess: float) -> float:
+    """Geodesic distance from the origin on the graph, by the exponential map."""
+    root = _metric_root()
+    inverse = np.linalg.inv(root)
+
+    def landing(unknowns):
+        angle, length = unknowns
+        start = inverse @ np.array([math.cos(angle), math.sin(angle)])
+        path = solve_ivp(
+            _geodesic,
+            (0.0, length),
+            [0.0, 0.0, *start],
+            method="DOP853",
+            rtol=1.0e-12,
+            atol=1.0e-13,
+        )
+        return path.y[:2, -1] - point[:2]
+
+    direction = root @ point[:2]
+    solution = least_squares(
+        landing,
+        [math.atan2(direction[1], direction[0]), guess],
+        xtol=1.0e-14,
+        ftol=1.0e-14,
+        gtol=1.0e-14,
+    )
+    assert float(np.max(np.abs(solution.fun))) < 1.0e-11
+    return float(solution.x[1])
+
+
+def _ring_gaps(mesh) -> list[float]:
+    """How far each ring's points are from the ring before, less the step between.
+
+    The ring before is a periodic cubic spline through its points, so this
+    measures the grower against the step it reports, not its own interpolant.
+    """
+    gaps = []
+    for inner, outer, (near, far) in zip(
+        mesh.rings,
+        mesh.rings[1:],
+        pairwise(mesh.ring_distances),
+        strict=False,
+    ):
+        points = mesh.vertices[inner]
+        closed = np.vstack([points, points[:1]])
+        knots = np.concatenate(
+            [[0.0], np.cumsum(np.linalg.norm(np.diff(closed, axis=0), axis=1))],
+        )
+        spline = CubicSpline(knots, closed, bc_type="periodic", axis=0)
+        dense = spline(np.linspace(0.0, knots[-1], 60 * len(points), endpoint=False))
+        distance, _ = cKDTree(dense).query(mesh.vertices[outer])
+        gaps.append(float(np.max(np.abs(distance - (far - near)))) / (far - near))
+    return gaps
+
+
+def _graph_mesh(step: float, spacing: tuple[float, float], distance: float):
+    function = _field(GraphSaddle)
+    return GeodesicLevelSets(GeodesicSettings(0.1, step, spacing)).compute(
+        function,
+        np.zeros(3),
+        _jacobian(function, np.zeros(3)),
+        StableManifold(),
+        distance=distance,
+    )
+
+
+class TestCurvedGraph(TestCase):
+    """A doubly curved manifold, held to its surface and its geodesic distance.
+
+    Measured independently (DOP853 geodesics, the graph's own equation) at
+    step 0.1, spacing (0.05, 0.15), out to 1.5: vertices within 9.4e-5 of the
+    surface, the seed ring within 4.4e-9; geodesic distance within 2.3e-4 of
+    the ring each vertex is on; every vertex is its ring's step from the ring
+    before to 1.2e-3 of the step. Halving step and spacing together brought
+    the surface error from 7.2e-4 to 1.0e-4 to 3.6e-5 (steps 0.2, 0.1, 0.05
+    to distance 2) - third order in the spacing, since it is the ring's
+    interpolation the next orbits start from - and the geodesic error from
+    1.2e-3 to 2.7e-4 to 6.1e-5, second order in the step.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.mesh = _graph_mesh(0.1, (0.05, 0.15), 1.5)
+
+    def test_it_reaches_the_distance(self):
+        assert self.mesh.stopped is None
+        assert self.mesh.lost == 0
+        assert self.mesh.ring_distances[-1] == pytest.approx(1.5)
+
+    def test_the_seed_ring_is_on_the_surface(self):
+        # The order-5 chart: a tangent-plane seed would be 3e-3 off here.
+        assert float(np.max(_graph_offset(self.mesh.vertices[self.mesh.rings[0]]))) < (
+            1.0e-7
+        )
+
+    def test_every_vertex_is_on_the_surface(self):
+        assert float(np.max(_graph_offset(self.mesh.vertices[1:]))) < 2.0e-4
+
+    def test_every_vertex_is_at_its_rings_geodesic_distance(self):
+        worst = 0.0
+        for ring, distance in zip(
+            self.mesh.rings,
+            self.mesh.ring_distances,
+            strict=True,
+        ):
+            for index in ring[::4]:
+                point = self.mesh.vertices[index]
+                worst = max(
+                    worst,
+                    abs(_graph_geodesic_distance(point, distance) - distance),
+                )
+        assert worst < 5.0e-4
+
+    def test_each_ring_is_its_step_from_the_ring_before(self):
+        assert max(_ring_gaps(self.mesh)) < 3.0e-3
