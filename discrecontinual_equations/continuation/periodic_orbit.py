@@ -21,6 +21,7 @@ import numpy as np
 from scipy.sparse import coo_matrix, csc_matrix
 from scipy.sparse.linalg import MatrixRankWarning, spsolve
 
+from discrecontinual_equations.continuation.batched_field import field_values
 from discrecontinual_equations.continuation.derivative_provider import (
     AutomaticDifferentiation,
 )
@@ -276,7 +277,7 @@ def _difference_pattern(
 def _hermite_positions(
     ends: np.ndarray,
     slopes: np.ndarray,
-    step: float,
+    step: float | np.ndarray,
     fractions: np.ndarray,
 ) -> np.ndarray:
     """Points on the cubic Hermite interpolant of one mesh interval.
@@ -289,6 +290,10 @@ def _hermite_positions(
     the fourth-order orbit converged rather than a chord that is ``O(h^2)`` off
     it between the nodes. For a trapezoidal orbit the slopes are still exact at
     the nodes, so the interpolant degrades gracefully to the orbit's own order.
+
+    Every interval at once, too: ``ends`` and ``slopes`` of shape
+    ``(2, intervals, 1, dimension)`` and ``step`` of ``(intervals, 1, 1)`` give
+    ``(intervals, fractions, dimension)``, each entry the same number.
     """
     tau = fractions[:, None]
     square = tau * tau
@@ -525,6 +530,34 @@ class PeriodicOrbit:
             columns[:, j] = (self._field(shifted) - base) / _STEP
         return columns
 
+    def _values(self, states: np.ndarray) -> np.ndarray:
+        """``f`` at every row of ``states``, in one call where the field allows."""
+        batched = field_values(self._function, states, self._field)
+        if batched is not None:
+            return batched
+        return np.array([self._field(state) for state in states])
+
+    def _jacobians(self, states: np.ndarray) -> np.ndarray:
+        """:meth:`_jacobian` at every row of ``states``, shape ``(n, d, d)``.
+
+        The same forward differences, the same numbers to the last bit, with
+        each column's shifted fields taken in one call where the field takes
+        arrays (:mod:`.batched_field`) and a state at a time where it does not.
+        """
+        base = field_values(self._function, states, self._field)
+        if base is None:
+            return np.array([self._jacobian(state) for state in states])
+        dimension = states.shape[1]
+        jacobians = np.empty((states.shape[0], dimension, dimension))
+        for j in range(dimension):
+            shifted = states.copy()
+            shifted[:, j] += _STEP
+            moved = field_values(self._function, shifted, self._field)
+            if moved is None:
+                return np.array([self._jacobian(state) for state in states])
+            jacobians[:, :, j] = (moved - base) / _STEP
+        return jacobians
+
     def monodromy(self, solution: PeriodicOrbitSolution) -> np.ndarray:
         """Integrate the variational equation over one period, returning ``Y(1)``.
 
@@ -561,28 +594,45 @@ class PeriodicOrbit:
         dimension = states.shape[1]
         # The orbit's slope in the rescaled time, exact at every node of a
         # converged orbit whatever the collocation scheme.
-        slopes = period * np.array([self._field(state) for state in states])
+        slopes = period * self._values(states)
         # Where the Runge-Kutta stages sit along one interval: the start, middle
         # and end of every substep, each substep's end being the next one's start.
         fractions = np.linspace(0.0, 1.0, 2 * _VARIATIONAL_SUBSTEPS + 1)
+        steps = np.diff(self._mesh[: self._intervals + 1]).astype(float)
+        positions = _hermite_positions(
+            np.stack([states[:-1, None], states[1:, None]]),
+            np.stack([slopes[:-1, None], slopes[1:, None]]),
+            steps[:, None, None],
+            fractions,
+        )
+        # Every stage's Jacobian in one batch, then each substep's propagator.
+        # The variational equation is linear, so one RK4 substep maps Y to
+        # P Y with P the step taken from Y = I; the monodromy is the product
+        # of the P in order. Equal to carrying Y through the steps in exact
+        # arithmetic, it rounds differently: 6.7e-16 apart on the Hopf cycle.
+        matrices = period * self._jacobians(positions.reshape(-1, dimension)).reshape(
+            self._intervals,
+            fractions.size,
+            dimension,
+            dimension,
+        )
+        at_start = matrices[:, 0:-1:2].reshape(-1, dimension, dimension)
+        at_middle = matrices[:, 1::2].reshape(-1, dimension, dimension)
+        at_end = matrices[:, 2::2].reshape(-1, dimension, dimension)
+        substep = np.repeat(steps / _VARIATIONAL_SUBSTEPS, _VARIATIONAL_SUBSTEPS)[
+            :,
+            None,
+            None,
+        ]
+        identity = np.eye(dimension)[None]
+        k1 = at_start
+        k2 = at_middle @ (identity + 0.5 * substep * k1)
+        k3 = at_middle @ (identity + 0.5 * substep * k2)
+        k4 = at_end @ (identity + substep * k3)
+        propagators = identity + substep / 6.0 * (k1 + 2 * k2 + 2 * k3 + k4)
         transition = np.eye(dimension)
-        for i in range(self._intervals):
-            step = float(self._mesh[i + 1] - self._mesh[i])
-            substep = step / _VARIATIONAL_SUBSTEPS
-            positions = _hermite_positions(
-                states[i : i + 2],
-                slopes[i : i + 2],
-                step,
-                fractions,
-            )
-            matrices = [period * self._jacobian(position) for position in positions]
-            for k in range(_VARIATIONAL_SUBSTEPS):
-                at_start, at_middle, at_end = matrices[2 * k : 2 * k + 3]
-                k1 = at_start @ transition
-                k2 = at_middle @ (transition + 0.5 * substep * k1)
-                k3 = at_middle @ (transition + 0.5 * substep * k2)
-                k4 = at_end @ (transition + substep * k3)
-                transition = transition + substep / 6.0 * (k1 + 2 * k2 + 2 * k3 + k4)
+        for propagator in propagators:
+            transition = propagator @ transition
         return transition
 
     def floquet_multipliers(self, solution: PeriodicOrbitSolution) -> np.ndarray:

@@ -36,6 +36,10 @@ from scipy.optimize import linear_sum_assignment
 from scipy.sparse import coo_matrix
 from scipy.sparse.linalg import spsolve
 
+from discrecontinual_equations.continuation.batched_field import (
+    field_jacobians,
+    field_values,
+)
 from discrecontinual_equations.continuation.derivative_provider import (
     AutomaticDifferentiation,
 )
@@ -125,25 +129,28 @@ def _extent(states: np.ndarray) -> float:
 
 
 class _VectorField:
-    """``f``, ``df/dx`` and ``df/dp`` of the equation, as three callables.
+    """``f``, ``df/dx`` and ``df/dp`` of the equation, at many states at once.
 
-    Each takes ``(state, parameter)``. Bundled so that a collocation scheme asks
-    one object for whatever it needs at a node or a midpoint, and so that the
-    scheme itself holds no reference to the equation and stays a stateless
-    singleton.
+    Each takes ``(states, parameter)`` with one state to a row and returns one
+    row per state; ``parameter_derivatives`` also takes the values at those
+    states, which its difference starts from. Bundled so that a collocation
+    scheme asks one object for whatever it needs at its nodes or midpoints, and
+    so that the scheme itself holds no reference to the equation and stays a
+    stateless singleton. Taking every state at once is what lets a field that
+    accepts arrays be evaluated in one pass (DEQ-75, :mod:`.batched_field`).
     """
 
-    __slots__ = ["jacobian", "parameter_derivative", "value"]
+    __slots__ = ["jacobians", "parameter_derivatives", "values"]
 
     def __init__(
         self,
-        value: Callable[[np.ndarray, float], np.ndarray],
-        jacobian: Callable[[np.ndarray, float], np.ndarray],
-        parameter_derivative: Callable[[np.ndarray, float], np.ndarray],
+        values: Callable[[np.ndarray, float], np.ndarray],
+        jacobians: Callable[[np.ndarray, float], np.ndarray],
+        parameter_derivatives: Callable[[np.ndarray, float, np.ndarray], np.ndarray],
     ) -> None:
-        self.value = value
-        self.jacobian = jacobian
-        self.parameter_derivative = parameter_derivative
+        self.values = values
+        self.jacobians = jacobians
+        self.parameter_derivatives = parameter_derivatives
 
 
 class _Collocation:
@@ -253,7 +260,7 @@ class _Trapezoidal(_Collocation):
         parameter: float,
         step: float | np.ndarray,
     ) -> np.ndarray:
-        fields = np.array([field.value(state, parameter) for state in states])
+        fields = field.values(states, parameter)
         weight = _HALF * period * step
         return states[1:] - states[:-1] - weight * (fields[:-1] + fields[1:])
 
@@ -267,11 +274,9 @@ class _Trapezoidal(_Collocation):
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         identity = np.eye(states.shape[1])
         weight = _HALF * period * step
-        derivatives = np.array([field.jacobian(state, parameter) for state in states])
-        fields = np.array([field.value(state, parameter) for state in states])
-        parameter_fields = np.array(
-            [field.parameter_derivative(state, parameter) for state in states],
-        )
+        derivatives = field.jacobians(states, parameter)
+        fields = field.values(states, parameter)
+        parameter_fields = field.parameter_derivatives(states, parameter, fields)
         left = -identity[None] - weight * derivatives[:-1]
         right = identity[None] - weight * derivatives[1:]
         period_values = -_HALF * step * (fields[:-1] + fields[1:])
@@ -314,9 +319,9 @@ class _HermiteSimpson(_Collocation):
         parameter: float,
         step: float | np.ndarray,
     ) -> np.ndarray:
-        fields = np.array([field.value(state, parameter) for state in states])
+        fields = field.values(states, parameter)
         midpoints = self._midpoints(states, fields, period, step)
-        middles = np.array([field.value(point, parameter) for point in midpoints])
+        middles = field.values(midpoints, parameter)
         weight = period * step / _SIXTH
         return (
             states[1:]
@@ -333,18 +338,16 @@ class _HermiteSimpson(_Collocation):
         step: float | np.ndarray,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         identity = np.eye(states.shape[1])
-        fields = np.array([field.value(state, parameter) for state in states])
-        derivatives = np.array([field.jacobian(state, parameter) for state in states])
-        parameter_fields = np.array(
-            [field.parameter_derivative(state, parameter) for state in states],
-        )
+        fields = field.values(states, parameter)
+        derivatives = field.jacobians(states, parameter)
+        parameter_fields = field.parameter_derivatives(states, parameter, fields)
         midpoints = self._midpoints(states, fields, period, step)
-        middles = np.array([field.value(point, parameter) for point in midpoints])
-        middle_derivatives = np.array(
-            [field.jacobian(point, parameter) for point in midpoints],
-        )
-        middle_parameter_fields = np.array(
-            [field.parameter_derivative(point, parameter) for point in midpoints],
+        middles = field.values(midpoints, parameter)
+        middle_derivatives = field.jacobians(midpoints, parameter)
+        middle_parameter_fields = field.parameter_derivatives(
+            midpoints,
+            parameter,
+            middles,
         )
 
         end_weight = period * step / _SIXTH
@@ -469,12 +472,8 @@ class _GaussLegendre(_Collocation):
         steps = np.broadcast_to(np.asarray(step, dtype=float), windows.shape[:1])
         points = np.einsum("kj,njd->nkd", self._values, windows)
         slopes = np.einsum("kj,njd->nkd", self._derivatives, windows)
-        fields = np.array(
-            [
-                [field.value(point, parameter) for point in interval]
-                for interval in points
-            ],
-        )
+        flat = points.reshape(-1, points.shape[2])
+        fields = field.values(flat, parameter).reshape(points.shape)
         defect = slopes - (period * steps)[:, None, None] * fields
         return defect.reshape(-1, states.shape[1])
 
@@ -490,24 +489,17 @@ class _GaussLegendre(_Collocation):
         intervals, width, dimension = windows.shape[0], self.width, states.shape[1]
         steps = np.broadcast_to(np.asarray(step, dtype=float), (intervals,))
         points = np.einsum("kj,njd->nkd", self._values, windows)
-        fields = np.array(
-            [
-                [field.value(point, parameter) for point in interval]
-                for interval in points
-            ],
+        flat = points.reshape(-1, dimension)
+        flat_fields = field.values(flat, parameter)
+        fields = flat_fields.reshape(points.shape)
+        derivatives = field.jacobians(flat, parameter).reshape(
+            (*points.shape, dimension),
         )
-        derivatives = np.array(
-            [
-                [field.jacobian(point, parameter) for point in interval]
-                for interval in points
-            ],
-        )
-        parameter_fields = np.array(
-            [
-                [field.parameter_derivative(point, parameter) for point in interval]
-                for interval in points
-            ],
-        )
+        parameter_fields = field.parameter_derivatives(
+            flat,
+            parameter,
+            flat_fields,
+        ).reshape(points.shape)
         # Rows (stage k, component d) against columns (point j, component e).
         identity = np.einsum("kj,de->kdje", self._derivatives, np.eye(dimension))
         chain = np.einsum("kj,nkde->nkdje", self._values, derivatives)
@@ -627,6 +619,12 @@ class _DifferentiatedOrbit(PeriodicOrbit):
             return _AUTODIFF.jacobian(self._function, state, 0.0)
         except (TypeError, ValueError, AttributeError):
             return super()._jacobian(state)
+
+    def _jacobians(self, states: np.ndarray) -> np.ndarray:
+        batched = field_jacobians(self._function, states, self._jacobian)
+        if batched is not None:
+            return batched
+        return np.array([self._jacobian(state) for state in states])
 
 
 class CycleSeed:
@@ -1242,20 +1240,58 @@ class CycleContinuation:
             dtype=float,
         )
 
-    def _parameter_derivative(self, state: np.ndarray, parameter: float) -> np.ndarray:
-        """``df/dp`` at one state, by a forward difference in the parameter.
+    def _values(self, states: np.ndarray, parameter: float) -> np.ndarray:
+        """``f`` at every state: in one call where the field takes arrays.
 
-        One extra field evaluation per node, against the whole augmented residual
-        that a finite-difference column of the full Jacobian would have cost.
+        Otherwise a state at a time, exactly as before. Either way the same
+        numbers, to the last bit (see :mod:`.batched_field`).
         """
-        base = self._field(state, parameter)
-        return (self._field(state, parameter + _STEP) - base) / _STEP
+        self._equation.derivative.parameters[self._parameter_index].value = parameter
+        batched = field_values(
+            self._equation.derivative,
+            states,
+            lambda state: self._field(state, parameter),
+        )
+        if batched is not None:
+            return batched
+        return np.array([self._field(state, parameter) for state in states])
+
+    def _state_jacobians(self, states: np.ndarray, parameter: float) -> np.ndarray:
+        """``df/dx`` at every state: one dual-number pass where the field allows.
+
+        A field the duals cannot pass falls back to :meth:`_state_jacobian` a
+        state at a time - Taylor jets, or forward differences - as before.
+        """
+        self._equation.derivative.parameters[self._parameter_index].value = parameter
+        batched = field_jacobians(
+            self._equation.derivative,
+            states,
+            lambda state: self._state_jacobian(state, parameter),
+        )
+        if batched is not None:
+            return batched
+        return np.array([self._state_jacobian(state, parameter) for state in states])
+
+    def _parameter_derivatives(
+        self,
+        states: np.ndarray,
+        parameter: float,
+        values: np.ndarray,
+    ) -> np.ndarray:
+        """``df/dp`` at every state, by a forward difference in the parameter.
+
+        One extra field evaluation per state, against the whole augmented
+        residual that a finite-difference column of the full Jacobian would have
+        cost. ``values`` are ``f`` at the same states and parameter, which the
+        difference starts from rather than evaluating them again.
+        """
+        return (self._values(states, parameter + _STEP) - values) / _STEP
 
     def _vector_field(self) -> _VectorField:
         return _VectorField(
-            self._field,
-            self._state_jacobian,
-            self._parameter_derivative,
+            self._values,
+            self._state_jacobians,
+            self._parameter_derivatives,
         )
 
     def _cycle_residual(self, unknowns: np.ndarray, nodes: int) -> np.ndarray:
@@ -1308,7 +1344,7 @@ class CycleContinuation:
         states = unknowns[: nodes * dimension].reshape(nodes, dimension)
         period = float(unknowns[nodes * dimension])
         parameter = float(unknowns[-1])
-        slopes = period * np.array([self._field(state, parameter) for state in states])
+        slopes = period * self._values(states, parameter)
         weights = self._collocation.weights(self._mesh)
         row = (weights[:, None] * slopes).ravel()
         self._phase_reference = (states.ravel().copy(), row)
@@ -1957,9 +1993,7 @@ class CycleContinuation:
         if width == 1:
             return solved.states
         states = solved.states
-        slopes = solved.period * np.array(
-            [self._field(state, parameter) for state in states],
-        )
+        slopes = solved.period * self._values(states, parameter)
         fractions = np.arange(width) / width
         step = 1.0 / self._intervals
         pieces = [
