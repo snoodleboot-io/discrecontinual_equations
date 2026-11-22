@@ -34,7 +34,7 @@ import numpy as np
 from numpy.polynomial.legendre import leggauss
 from scipy.optimize import linear_sum_assignment
 from scipy.sparse import coo_matrix
-from scipy.sparse.linalg import spsolve
+from scipy.sparse.linalg import SuperLU, splu
 
 from discrecontinual_equations.continuation.batched_field import (
     field_jacobians,
@@ -113,6 +113,12 @@ _DAMPED_ITERATIONS = 80
 _BACKTRACK_STEPS = 30
 _BACKTRACK_FACTOR = 0.5
 _PERIOD_FLOOR_FRACTION = 0.1
+# The adaptive step (DEQ-75): AUTO's ITNW, the iteration count its step rules
+# are scaled to; the factor a failed or slow step shrinks by; and what is left
+# of the arclength budget, in units of the base step, below which it is spent.
+_NEWTON_LIMIT = 5
+_STEP_DECREASE = 0.5
+_BUDGET_SLACK = 1.0e-9
 
 
 def _near(period: float, expected: float) -> bool:
@@ -1034,6 +1040,50 @@ def resolved_branch(
     return ResolvedBranch(kept, bifurcations, len(points) - len(kept), tolerance)
 
 
+def _step_limits(
+    arclength: float,
+    maximum: float | None,
+    minimum: float | None,
+) -> tuple[float, float] | None:
+    """``(max, min)`` for the adaptive step, or ``None`` for the fixed one."""
+    if maximum is None:
+        if minimum is not None:
+            message = "min_arclength applies to the adaptive step; pass max_arclength"
+            raise ValueError(message)
+        return None
+    floor = arclength if minimum is None else minimum
+    if not 0.0 < floor <= arclength <= maximum:
+        message = (
+            "need 0 < min_arclength <= arclength <= max_arclength, got "
+            f"{floor!r}, {arclength!r}, {maximum!r}"
+        )
+        raise ValueError(message)
+    return float(maximum), float(floor)
+
+
+def _adapted_step(length: float, iterations: int) -> float:
+    """The next step after a correction that took ``iterations`` Newton solves.
+
+    AUTO-07p's ``ADPTDS`` (``src/mesh.f90``) with its recommended ``ITNW = 5``:
+    double after at most one iteration, half as much again after two, a tenth
+    more up to ``ITNW / 2`` (in integers, so never at ``ITNW = 5``), and halve
+    at ``ITNW`` or more. MATCONT's rule is the same shape (manual 2019, section
+    2.3: grow after fewer than a threshold of iterations, shrink on failure);
+    Allgower and Georg (*Numerical Continuation Methods*, 1990, chapter 6)
+    derive steplength rules from the corrector's contraction, which the
+    iteration count stands in for here.
+    """
+    if iterations <= 1:
+        return 2.0 * length
+    if iterations == 2:  # noqa: PLR2004 (AUTO's table, entry by entry)
+        return 1.5 * length
+    if iterations <= _NEWTON_LIMIT // 2:
+        return 1.1 * length
+    if iterations >= _NEWTON_LIMIT:
+        return _STEP_DECREASE * length
+    return length
+
+
 class CycleContinuation:
     """Pseudo-arclength continuation of a limit cycle in one parameter.
 
@@ -1145,7 +1195,9 @@ class CycleContinuation:
         "_collocation",
         "_dimension",
         "_equation",
+        "_factored",
         "_intervals",
+        "_iterations",
         "_mesh",
         "_parameter_index",
         "_phase",
@@ -1211,6 +1263,11 @@ class CycleContinuation:
         # The last Jacobian blocks assembled and the unknowns they were taken
         # at, so the multipliers of a point can reuse the tangent solve's.
         self._assembled: tuple[np.ndarray, np.ndarray] | None = None
+        # The last corrector iteration's factorisation and the border row it
+        # was taken with, which the tangent solve reuses (see :meth:`_tangent`),
+        # and how many Newton solves that correction took.
+        self._factored: tuple[np.ndarray, SuperLU] | None = None
+        self._iterations = 0
 
     @property
     def collocation(self) -> str:
@@ -1542,18 +1599,20 @@ class CycleContinuation:
             shape=(size, size),
         )
 
-    def _solve_bordered(
+    def _solve_bordered(  # noqa: PLR0913 (the factorisation is kept on request)
         self,
         unknowns: np.ndarray,
         nodes: int,
         border: np.ndarray,
         rhs: np.ndarray,
         dense: Callable[[], np.ndarray],
+        *,
+        keep: bool = False,
     ) -> np.ndarray:
         """One sparse solve, falling back to a dense least squares.
 
-        Where the Jacobian is singular the sparse LU returns a non-finite vector
-        rather than raising, so the result is checked before it is trusted - the
+        Where the Jacobian is singular the LU cannot be formed, or yields a
+        non-finite vector, so the result is checked before it is trusted - the
         same guard the periodic orbit solver uses.
 
         ``dense`` is a callable and not an array on purpose. Building the
@@ -1561,11 +1620,24 @@ class CycleContinuation:
         evaluations, which is the expense this class exists to avoid; passing it
         eagerly would pay that cost on every step and leave the sparse path
         saving nothing at all.
+
+        The LU is SuperLU's, factored once and kept when ``keep`` asks, so a
+        later solve with the same matrix costs two triangular sweeps. It gives
+        the same vector :func:`scipy.sparse.linalg.spsolve` did to the last bit
+        (both are SuperLU with the same column ordering), which the corrector
+        used before DEQ-75.
         """
         sparse = self._bordered(unknowns, nodes, border).tocsc()
-        update = spsolve(sparse, rhs)
-        if np.all(np.isfinite(update)):
-            return update
+        try:
+            factor = splu(sparse)
+        except RuntimeError:  # exactly singular: no LU to solve with
+            factor = None
+        if factor is not None:
+            update = factor.solve(rhs)
+            if np.all(np.isfinite(update)):
+                if keep:
+                    self._factored = (border.copy(), factor)
+                return update
         fallback, *_ = np.linalg.lstsq(dense(), rhs, rcond=None)
         return fallback
 
@@ -1575,7 +1647,14 @@ class CycleContinuation:
         nodes: int,
         arc: _Arc,
     ) -> np.ndarray | None:
+        """Newton on the arclength-augmented system from ``prediction``.
+
+        Keeps the last iteration's factorisation for :meth:`_tangent`, and
+        counts its solves in ``_iterations`` for the step control.
+        """
         unknowns = prediction
+        self._factored = None
+        self._iterations = 0
         for _ in range(_ITERATIONS):
             residual = self._augmented(unknowns, nodes, arc)
             if np.linalg.norm(residual) < _TOLERANCE:
@@ -1586,6 +1665,7 @@ class CycleContinuation:
                 # finite-difference Jacobian - seconds at 160 intervals -
                 # finding that out, or raise.
                 return None
+            self._factored = None
             update = self._solve_bordered(
                 unknowns,
                 nodes,
@@ -1598,7 +1678,9 @@ class CycleContinuation:
                     arc,
                     r,
                 ),
+                keep=True,
             )
+            self._iterations += 1
             unknowns = unknowns + update
         residual = self._augmented(unknowns, nodes, arc)
         return unknowns if np.linalg.norm(residual) < _TOLERANCE else None
@@ -1609,17 +1691,50 @@ class CycleContinuation:
         nodes: int,
         previous: np.ndarray,
     ) -> np.ndarray:
+        """The unit tangent at ``unknowns``, pointing the way ``previous`` did.
+
+        It solves ``[J; b^T] t = e_last`` with ``J`` the cycle Jacobian and ``b``
+        the previous tangent in the arclength's inner product - the very matrix
+        the corrector's last iteration factored, except that the corrector took
+        ``J`` one Newton update earlier. Where :meth:`_correct` left that
+        factorisation behind (``_factored``, with the same border), it is
+        reused (DEQ-75), as MATCONT's Moore-Penrose corrector takes its
+        tangent off the corrector's own factorisation (MATCONT manual, 2019,
+        section 2.2.2); AUTO goes further and takes the secant
+        ``(u - u_old) / ds`` (``CONTBV`` in AUTO-07p's ``bvp.f90``). The
+        tangent is then off by the order of that last update. It is only a
+        direction to predict along and a plane to correct in, so the points
+        stay on the branch to the corrector's tolerance, but they are not the
+        same points: on the films the next point moved by up to ``1e-4`` in
+        the parameter, the spacing of the branch and not its geometry. That is
+        why :meth:`trace` reuses it only under the adaptive step, which moves
+        the points anyway, and keeps the fixed step bit for bit. Rebuilt and
+        refactored where the corrector did not iterate, and under
+        Gauss-Legendre, whose multipliers need the blocks at this very point
+        anyway (see :meth:`_jacobian_multipliers`).
+        """
         rhs = np.zeros(unknowns.size)
         rhs[-1] = 1.0
         weights = self._norm_weights(unknowns.size)
         border = previous if weights is None else weights * previous
-        tangent = self._solve_bordered(
-            unknowns,
-            nodes,
-            border,
-            rhs,
-            lambda: self._dense_tangent_system(unknowns, nodes, border),
-        )
+        tangent = None
+        factored = self._factored
+        if (
+            factored is not None
+            and not self._collocation.jacobian_monodromy
+            and np.array_equal(factored[0], border)
+        ):
+            reused = factored[1].solve(rhs)
+            if np.all(np.isfinite(reused)):
+                tangent = reused
+        if tangent is None:
+            tangent = self._solve_bordered(
+                unknowns,
+                nodes,
+                border,
+                rhs,
+                lambda: self._dense_tangent_system(unknowns, nodes, border),
+            )
         if weights is None:
             tangent = tangent / np.linalg.norm(tangent)
         else:
@@ -2002,48 +2117,103 @@ class CycleContinuation:
         ]
         return np.vstack([*pieces, states[-1:]])
 
-    def trace(
+    def trace(  # noqa: PLR0913 (step limits beside the established signature)
         self,
         seed: CycleSeed,
         arclength: float,
         steps: int,
         direction: float = 1.0,
+        *,
+        max_arclength: float | None = None,
+        min_arclength: float | None = None,
     ) -> tuple[list[CyclePoint], list[CycleBifurcation]]:
         """Trace the cycle branch, returning its points and detected bifurcations.
 
         ``direction`` sets the initial parameter sense (+1 increasing, -1 decreasing);
         the branch then follows its own tangent and may round a turning point.
+
+        By default every step is ``arclength`` long and the trace takes
+        ``steps`` of them, stopping at the first the corrector cannot close.
+        ``max_arclength`` turns on AUTO's step control instead (DEQ-75, see
+        :func:`_adapted_step`): the step starts at ``arclength``, doubles while
+        Newton converges in one iteration, grows by half at two, is halved at
+        five or more, and never exceeds ``max_arclength``; a step that fails is
+        halved and retried, down to ``min_arclength`` (default ``arclength``,
+        so that the branch ends where the fixed step would have ended it).
+        ``steps * arclength`` is then the arclength budget, the distance the
+        fixed-step trace covers, and the last step is shortened to land on it;
+        ``steps`` still caps the number of points.
+
+        The adaptive step also takes each tangent off the corrector's last
+        factorisation instead of a fresh one (see :meth:`_tangent`), one LU per
+        step fewer.
+
+        A crossing the step control would have stepped over is not: a step
+        longer than ``arclength`` across which :func:`classify_transition`
+        finds a bifurcation is discarded and retaken at ``arclength``, so the
+        crossing is bracketed by points as close as the fixed step put them
+        and located as accurately. Tracing at a few times the step everywhere
+        else is where the time goes; see :meth:`trace`'s use in the films.
         """
         self._dimension = seed.states.shape[1]
         self._mesh = np.linspace(0.0, 1.0, self._intervals + 1)
         nodes = self._intervals * self._collocation.width + 1
+        limits = _step_limits(arclength, max_arclength, min_arclength)
         unknowns = self._solve_seed(seed, nodes)
         if unknowns is None:
             return [], []
         self._set_phase_reference(unknowns, nodes)
         seed_direction = np.zeros(unknowns.size)
         seed_direction[-1] = direction
+        # The seed's own correction held the parameter fixed; its factorisation
+        # is not the tangent system's, whatever its border reads.
+        self._factored = None
         tangent = self._tangent(unknowns, nodes, seed_direction)
         weights = self._norm_weights(unknowns.size)
         points = [self._point(unknowns, nodes)]
         bifurcations: list[CycleBifurcation] = []
-        for _ in range(steps):
-            prediction = unknowns + arclength * tangent
-            # The constraint's row is the tangent in the arclength's own inner
-            # product, so it reads ``arclength`` at the prediction either way.
-            row = tangent if weights is None else weights * tangent
-            arc = _Arc(unknowns, row, arclength)
-            corrected = self._correct(prediction, nodes, arc)
-            if corrected is None:
+        budget = steps * arclength
+        travelled = 0.0
+        length = arclength
+        while len(points) <= steps:
+            step = arclength if limits is None else min(length, budget - travelled)
+            if step <= _BUDGET_SLACK * arclength:
                 break
+            prediction = unknowns + step * tangent
+            # The constraint's row is the tangent in the arclength's own inner
+            # product, so it reads ``step`` at the prediction either way.
+            row = tangent if weights is None else weights * tangent
+            corrected = self._correct(prediction, nodes, _Arc(unknowns, row, step))
+            if corrected is None:
+                if limits is None or length * _STEP_DECREASE < limits[1]:
+                    break
+                length *= _STEP_DECREASE
+                continue
+            iterations = self._iterations
+            reference = self._phase_reference
             self._set_phase_reference(corrected, nodes)
-            tangent = self._tangent(corrected, nodes, tangent)
-            unknowns = corrected
-            point = self._point(unknowns, nodes)
+            if limits is None:
+                # The fixed step keeps the tangent rebuilt at the point, and so
+                # every result it ever gave, to the last bit.
+                self._factored = None
+            following = self._tangent(corrected, nodes, tangent)
+            point = self._point(corrected, nodes)
             transition = classify_transition(points[-1], point)
+            if transition is not None and step > arclength:
+                self._phase_reference = reference
+                length = arclength
+                continue
+            tangent = following
+            unknowns = corrected
             if transition is not None:
                 bifurcations.append(transition)
             points.append(point)
+            travelled += step
+            if limits is not None:
+                length = min(
+                    max(_adapted_step(length, iterations), limits[1]),
+                    limits[0],
+                )
         return points, bifurcations
 
     def _point(self, unknowns: np.ndarray, nodes: int) -> CyclePoint:

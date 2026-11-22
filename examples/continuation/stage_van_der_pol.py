@@ -33,6 +33,7 @@ from discrecontinual_equations.webplot.stage_builder import Continued, Film, sta
 
 try:  # python -m examples.continuation.<module>
     from examples.continuation.stage_support import (
+        STEP_GROWTH,
         Mu,
         circle_seed,
         continue_branch,
@@ -43,6 +44,7 @@ try:  # python -m examples.continuation.<module>
     )
 except ImportError:  # run as a script path: only this directory is on sys.path
     from stage_support import (
+        STEP_GROWTH,
         Mu,
         circle_seed,
         continue_branch,
@@ -78,7 +80,13 @@ def cycle_branch() -> list[CyclePoint]:
     eq = equation(VanDerPol, [Mu(value=SEED_MU)])
     seed = circle_seed(SEED_RADIUS, 2.0 * math.pi, SEED_MU, INTERVALS)
     continuation = CycleContinuation(eq, 0, INTERVALS, phase_index=1, phase_value=0.0)
-    points, _ = continuation.trace(seed, 0.04, 400, direction=1.0)
+    points, _ = continuation.trace(
+        seed,
+        0.04,
+        400,
+        direction=1.0,
+        max_arclength=STEP_GROWTH * 0.04,
+    )
     return within(keep_cycles(points), (P_LO, P_HI))
 
 

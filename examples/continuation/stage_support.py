@@ -42,6 +42,11 @@ except ImportError:  # run as a script path: only this directory is on sys.path
 # losing the branch rather than a smaller or slower orbit.
 MIN_AMPLITUDE = 1.0e-3
 PERIOD_RANGE = (0.5, 400.0)
+# How far a film's cycle continuation may grow its arclength step past the one
+# it asks for (DEQ-75): AUTO's step control spends most of a branch at the
+# largest step, so this, against the films' frame spacing, is what sets how
+# finely the branch is sampled between frames.
+STEP_GROWTH = 4.0
 # How far past the filmed range a kept cycle may sit, as a fraction of it.
 _TRIM_MARGIN = 0.02
 

@@ -58,6 +58,9 @@ except ImportError:  # run as a script path: only this directory is on sys.path
 P_LO, P_HI, FRAMES = 0.2, 2.4, 89
 BOX = ((-1.7, 1.7), (-1.7, 1.7))
 INTERVALS = 80
+# The adaptive step may only double here (DEQ-75): at the shared STEP_GROWTH
+# the cycle a frame shows sat up to a frame and a half from it.
+_STEP_GROWTH = 2.0
 SNIC = 1.0
 # The cycle is seeded where its period is comfortably finite and continued down
 # toward the collision, where the period runs away and the mesh gives out.
@@ -93,8 +96,20 @@ def cycle_branch() -> list[CyclePoint]:
     eq = equation(SnicSystem, [Mu(value=SEED_MU)])
     seed = circle_seed(1.0, exact_period(SEED_MU), SEED_MU, INTERVALS)
     continuation = CycleContinuation(eq, 0, INTERVALS, phase_index=1, phase_value=0.0)
-    downward, _ = continuation.trace(seed, 0.02, 320, direction=-1.0)
-    upward, _ = continuation.trace(seed, 0.04, 120, direction=1.0)
+    downward, _ = continuation.trace(
+        seed,
+        0.02,
+        320,
+        direction=-1.0,
+        max_arclength=_STEP_GROWTH * 0.02,
+    )
+    upward, _ = continuation.trace(
+        seed,
+        0.04,
+        120,
+        direction=1.0,
+        max_arclength=_STEP_GROWTH * 0.04,
+    )
     traced = keep_cycles(downward) + keep_cycles(upward)[1:]
     return within(sorted(traced, key=lambda point: point.parameter), (P_LO, P_HI))
 
