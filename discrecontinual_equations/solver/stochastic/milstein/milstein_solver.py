@@ -121,7 +121,7 @@ class MilsteinSolver(Solver):
 
         # Levy areas for non-commuting noise when no source is given, on a stream of
         # their own so that drawing them leaves the increment stream untouched.
-        sequence = np.random.SeedSequence(self.solver_config.random_seed)
+        sequence = np.random.SeedSequence(solver_config.random_seed)
         self._areas = LevyAreaSampler(np.random.default_rng(sequence.spawn(1)[0]))
 
     def solve(self, equation: DifferentialEquation, initial_values: list[float]):

@@ -53,7 +53,11 @@ from tests.solver.geometric_brownian_motion import slope
 class IteratedIntegralNoise(StochasticFunction):
     """``dx = dW_1``, ``dy = x dW_2``: ``G = [[1, 0], [0, x]]``, no drift."""
 
-    def eval(self, point: list[float], time: float | None = None) -> list[float]:  # noqa: ARG002
+    def eval(
+        self,
+        point: list[float],  # noqa: ARG002
+        time: float | None = None,  # noqa: ARG002
+    ) -> list[float]:
         return [0.0, 0.0]
 
     def diffusion(
@@ -67,7 +71,11 @@ class IteratedIntegralNoise(StochasticFunction):
 class CrossCosineNoise(StochasticFunction):
     """``dx = -x/2 dt + cos(y) dW_1``, ``dy = -y/2 dt + cos(x) dW_2``."""
 
-    def eval(self, point: list[float], time: float | None = None) -> list[float]:  # noqa: ARG002
+    def eval(
+        self,
+        point: list[float],
+        time: float | None = None,  # noqa: ARG002
+    ) -> list[float]:
         return [-0.5 * point[0], -0.5 * point[1]]
 
     def diffusion(
@@ -96,7 +104,15 @@ def _equation(function_type) -> DifferentialEquation:
     )
 
 
-def _final(solver_type, config_type, step, wiener, function_type, initial, **extra):
+def _final(  # noqa: PLR0913 (a solver, its config, a step, a path, a problem)
+    solver_type,
+    config_type,
+    step,
+    wiener,
+    function_type,
+    initial,
+    **extra,
+):
     config = config_type(start_time=0.0, end_time=1.0, step_size=step, **extra)
     solver = solver_type(config, wiener=wiener)
     with warnings.catch_warnings():
@@ -131,18 +147,21 @@ class TestIteratedIntegralOracle:
                 # of 0.1 and an error of the same size for I_(2,1) in place of
                 # I_(1,2).
                 assert abs(milstein[1] - exact) < 1e-9, (step, milstein, exact)
-                euler[step] += abs(
-                    _final(
-                        EulerMaruyamaSolver,
-                        EulerMaruyamaConfig,
-                        step,
-                        path,
-                        IteratedIntegralNoise,
-                        [0.0, 0.0],
-                    )[1]
-                    - exact,
-                ) / paths
-        assert 0.35 < slope(euler) < 0.65, euler  # noqa: PLR2004
+                euler[step] += (
+                    abs(
+                        _final(
+                            EulerMaruyamaSolver,
+                            EulerMaruyamaConfig,
+                            step,
+                            path,
+                            IteratedIntegralNoise,
+                            [0.0, 0.0],
+                        )[1]
+                        - exact,
+                    )
+                    / paths
+                )
+        assert 0.35 < slope(euler) < 0.65, euler
 
     def test_milstein_with_the_sampler_is_within_the_order_one_bound(self):
         # Driven by the sampler the scheme's only error is the sampler's, and the
@@ -165,7 +184,7 @@ class TestIteratedIntegralOracle:
                 squared += (final[1] - source.exact_y) ** 2 / paths
             errors[step] = float(np.sqrt(squared))
             assert errors[step] < step, errors
-        assert slope(errors) > 0.6, errors  # noqa: PLR2004
+        assert slope(errors) > 0.6, errors
 
 
 class CoupledSource(WienerSource):
@@ -190,8 +209,8 @@ class CoupledSource(WienerSource):
         *,
         levy_area: bool = False,
     ) -> WienerIncrements:
-        assert dimension == 2  # noqa: PLR2004, S101
-        assert levy_area  # noqa: S101
+        assert dimension == 2
+        assert levy_area
         delta_w = np.sqrt(step) * self._generator.standard_normal((1, 2))
         terms = LevyAreaSampler.terms(step, 2)
         approximation, reference = coupled_areas(
@@ -231,30 +250,36 @@ class TestNonCommutingConvergence:
                 initial,
             )
             for step in steps:
-                milstein[step] += np.linalg.norm(
-                    _final(
-                        MilsteinSolver,
-                        MilsteinConfig,
-                        step,
-                        path,
-                        CrossCosineNoise,
-                        initial,
+                milstein[step] += (
+                    np.linalg.norm(
+                        _final(
+                            MilsteinSolver,
+                            MilsteinConfig,
+                            step,
+                            path,
+                            CrossCosineNoise,
+                            initial,
+                        )
+                        - reference,
                     )
-                    - reference,
-                ) / paths
-                euler[step] += np.linalg.norm(
-                    _final(
-                        EulerMaruyamaSolver,
-                        EulerMaruyamaConfig,
-                        step,
-                        path,
-                        CrossCosineNoise,
-                        initial,
+                    / paths
+                )
+                euler[step] += (
+                    np.linalg.norm(
+                        _final(
+                            EulerMaruyamaSolver,
+                            EulerMaruyamaConfig,
+                            step,
+                            path,
+                            CrossCosineNoise,
+                            initial,
+                        )
+                        - reference,
                     )
-                    - reference,
-                ) / paths
-        assert 0.85 < slope(milstein) < 1.3, milstein  # noqa: PLR2004
-        assert slope(euler) < 0.7, euler  # noqa: PLR2004
+                    / paths
+                )
+        assert 0.85 < slope(milstein) < 1.3, milstein
+        assert slope(euler) < 0.7, euler
         assert milstein[steps[-1]] < 0.5 * euler[steps[-1]], (milstein, euler)
 
 
@@ -264,7 +289,7 @@ class TestNonCommutingInterface:
         solver = MilsteinSolver(config)
         with pytest.warns(UserWarning, match="Levy areas"):
             solver.solve(_equation(CrossCosineNoise), [0.3, -0.2])
-        assert len(solver.solution.results[0].discretization) == 101  # noqa: PLR2004
+        assert len(solver.solution.results[0].discretization) == 101
         assert np.all(np.isfinite(solver.solution.results[1].discretization))
 
     def test_seeded_non_commuting_runs_repeat_and_differ_by_seed(self):

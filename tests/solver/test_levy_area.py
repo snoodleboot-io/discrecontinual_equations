@@ -107,7 +107,7 @@ class TestSamplerLaw:
         # The law depends on the truncation only, not on h; at h = 2^-10 with two
         # drivers the order-one rule gives five terms.
         step = 2.0**-10
-        assert LevyAreaSampler.terms(step, 2) == 5  # noqa: PLR2004
+        assert LevyAreaSampler.terms(step, 2) == 5
         generator = np.random.default_rng(21)
         delta_w = np.sqrt(step) * generator.standard_normal((_DRAWS, 2))
         areas = LevyAreaSampler(np.random.default_rng(22)).sample(delta_w, step)
@@ -163,7 +163,7 @@ class TestSamplerPathwiseError:
             bound = np.sqrt(_STEP**2 * 2 * fourth / (4 * np.pi**2 * tail(terms)))
             assert error < 1.1 * bound, (terms, error, bound)
         order = -np.polyfit(np.log(terms_list), np.log(list(errors.values())), 1)[0]
-        assert 0.8 < order < 1.2, errors  # noqa: PLR2004
+        assert 0.8 < order < 1.2, errors
 
     def test_dropping_the_remainders_is_much_worse(self):
         # The truncated Fourier series alone (no Psi terms) errs by
@@ -257,7 +257,7 @@ class TestTruncationRuleOrder:
             errors[step] = float(np.sqrt(1.0 / step) * per_step)
             assert errors[step] < step, errors
         order = np.polyfit(np.log(list(errors)), np.log(list(errors.values())), 1)[0]
-        assert 0.9 < order < 1.1, errors  # noqa: PLR2004
+        assert 0.9 < order < 1.1, errors
 
 
 def _path_areas(paths: int, step: float, resolution: float, *, sampled: bool):

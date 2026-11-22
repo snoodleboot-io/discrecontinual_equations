@@ -38,7 +38,7 @@ def coupled_areas(
     terms: int,
     reference_terms: int,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """``(approximation, reference)`` areas for increments ``delta_w`` of shape ``(s, 2)``."""
+    """``(approximation, reference)`` areas for increments ``delta_w``, ``(s, 2)``."""
     samples = delta_w.shape[0]
     x = generator.standard_normal((samples, reference_terms, 2))
     y = generator.standard_normal((samples, reference_terms, 2))
@@ -53,11 +53,16 @@ def coupled_areas(
         np.einsum("k,skm->sm", weights, x[:, beyond])
         + np.sqrt(tail(reference_terms)) * psi1
     ) / np.sqrt(tail(terms))
-    remainder = step / (2 * np.pi) * np.einsum(
-        "k,sk->s",
-        weights,
-        x[:, beyond, 0] * y[:, beyond, 1] - x[:, beyond, 1] * y[:, beyond, 0],
-    ) + step / (np.sqrt(2) * np.pi) * np.sqrt(tail(reference_terms)) * psi2[:, 0, 1]
+    remainder = (
+        step
+        / (2 * np.pi)
+        * np.einsum(
+            "k,sk->s",
+            weights,
+            x[:, beyond, 0] * y[:, beyond, 1] - x[:, beyond, 1] * y[:, beyond, 0],
+        )
+        + step / (np.sqrt(2) * np.pi) * np.sqrt(tail(reference_terms)) * psi2[:, 0, 1]
+    )
     variance = step**2 / (4 * np.pi**2) * np.einsum(
         "k,sk->s",
         weights**2,

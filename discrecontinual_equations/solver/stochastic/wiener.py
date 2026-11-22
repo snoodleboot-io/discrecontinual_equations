@@ -39,11 +39,12 @@ A third functional couples the channels: the Levy areas (DEQ-36),
   (Levy's formula); its law is not Gaussian and has no closed-form sampler.
 
 :class:`LevyAreaSampler` draws it by the algorithm of Mrongowius and Rossler
-(arXiv:2101.09542): the truncated Fourier series of the Brownian bridge (Milstein; Kloeden,
-Platen and Wright), with the part of the remainder that is linear in ``dW``
-simulated exactly and the rest replaced by a Gaussian of the right (diagonal,
-``dW``-independent) covariance. Its first two moments are exact at any truncation
-and its pathwise L2 error falls like ``h / n`` in the number ``n`` of terms;
+(arXiv:2101.09542): the truncated Fourier series of the Brownian bridge
+(Milstein; Kloeden, Platen and Wright), with the part of the remainder that is
+linear in ``dW`` simulated exactly and the rest replaced by a Gaussian of the
+right (diagonal, ``dW``-independent) covariance. Its first two moments are exact
+at any truncation and its pathwise L2 error falls like ``h / n`` in the number
+``n`` of terms;
 :meth:`LevyAreaSampler.terms` picks ``n`` so that the error per step is at most
 ``h^(3/2)``, which is what a scheme of strong order 1.0 needs (Kastner and
 Rossler, arXiv:2201.08424, (64)-(67)). Areas are drawn only when a scheme asks
@@ -153,16 +154,16 @@ class LevyAreaSampler:
         """The truncation ``n`` that keeps the L2 error per step below ``h^(3/2)``.
 
         From Mrongowius and Rossler's (36), ``max E|I^(n) - I|^2 <= m h^2 / (12
-        pi^2 n^2)``; asking for ``h^(3/2)`` (Kastner and Rossler, arXiv:2201.08424, (64) with
-        ``gamma = 1``, ``c1 = 1``) gives ``n >= sqrt(m / (12 pi^2)) / sqrt(h)``
-        (their (67)), which is ``O(h^(-1/2))`` - against ``O(h^(-1))`` for the
-        Fourier series without the remainder terms.
+        pi^2 n^2)``; asking for ``h^(3/2)`` (Kastner and Rossler,
+        arXiv:2201.08424, (64) with ``gamma = 1``, ``c1 = 1``) gives ``n >=
+        sqrt(m / (12 pi^2)) / sqrt(h)`` (their (67)), which is ``O(h^(-1/2))`` -
+        against ``O(h^(-1))`` for the Fourier series without the remainder terms.
         """
         bound = np.sqrt(dimension / (12.0 * np.pi**2)) / np.sqrt(step)
         return max(1, int(np.ceil(bound)))
 
     @staticmethod
-    def assemble(
+    def assemble(  # noqa: PLR0913 (the increments, the step and four normals)
         delta_w: np.ndarray,
         step: float,
         x: np.ndarray,
@@ -349,7 +350,7 @@ class BrownianPath(WienerSource):
         increments = generator.standard_normal((cells, dimension)) * np.sqrt(resolution)
         values = np.vstack([np.zeros((1, dimension)), np.cumsum(increments, axis=0)])
         path = cls(start=start, resolution=resolution, values=values)
-        path._area_sampler = _area_stream(sequence)  # noqa: SLF001
+        path._area_sampler = _area_stream(sequence)
         return path
 
     @property
