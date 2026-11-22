@@ -18,7 +18,9 @@ from discrecontinual_equations.continuation.cycle_continuation import (
     _NOISE_FLOOR,
     CycleContinuation,
     CycleSeed,
+    _Arc,
 )
+from discrecontinual_equations.continuation.periodic_orbit import PeriodicOrbitSolution
 from discrecontinual_equations.differential_equation import DifferentialEquation
 from tests.continuation.fields import Alpha, State, Time, VanDerPolField
 
@@ -150,3 +152,45 @@ class TestNonStiffUnchanged(TestCase):
             solved = continuation._solve_seed(seed, nodes)  # noqa: SLF001
             np.testing.assert_array_equal(solved, staged)
             assert math.isclose(solved[2 * nodes], reference, rel_tol=1e-2)
+
+
+class TestDampedFloor(TestCase):
+    def test_the_damped_newton_never_takes_the_period_under_its_floor(self):
+        """Started at 1.05 T, the cycle at T lies under a floor at 1.02 T.
+
+        Without the floor the correction converges there; with it, every step
+        that would cross is halved, and the correction ends above the floor or
+        reports nothing. A floor at half the period does not bind, and the
+        same correction lands on the cycle.
+        """
+        reference, orbit = _reference(1.0)
+        continuation = CycleContinuation(
+            _equation(1.0),
+            0,
+            20,
+            phase_index=1,
+            collocation="gauss_legendre",
+            collocation_points=2,
+        )
+        continuation._dimension = 2  # noqa: SLF001 (trace sets it)
+        nodes = 20 * 2 + 1
+        seed = CycleSeed(orbit(np.linspace(0.0, 1.0, 21)), 1.05 * reference, 1.0)
+        states = continuation._filled(  # noqa: SLF001
+            PeriodicOrbitSolution(seed.states, seed.period),
+            1.0,
+        )
+        unknowns = np.concatenate([states.ravel(), [seed.period], [1.0]])
+        fixed = np.zeros(unknowns.size)
+        fixed[-1] = 1.0
+        arc = _Arc(unknowns, fixed, 0.0)
+        free = continuation._damped_correct(  # noqa: SLF001
+            unknowns,
+            nodes,
+            arc,
+            0.5 * reference,
+        )
+        assert free is not None
+        assert math.isclose(free[2 * nodes], reference, rel_tol=1e-3)
+        floor = 1.02 * reference
+        held = continuation._damped_correct(unknowns, nodes, arc, floor)  # noqa: SLF001
+        assert held is None or held[2 * nodes] > floor
