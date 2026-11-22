@@ -333,7 +333,7 @@ def _milstein_step(self, y, t, dt, equation):
 ### Practical Considerations
 - **Numerical differentiation** introduces small errors
 - **Step size sensitivity** affects derivative accuracy
-- **Multi-dimensional** systems need commuting noise (see *Systems and Matrix Noise*); non-commuting noise is refused
+- **Multi-dimensional** systems with non-commuting noise draw Levy areas every step (see *Systems and Matrix Noise*), per path and in `StochasticEnsemble` alike
 
 ## Applications
 

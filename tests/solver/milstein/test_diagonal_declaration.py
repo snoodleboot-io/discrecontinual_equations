@@ -41,17 +41,17 @@ from discrecontinual_equations.solver.stochastic.milstein.milstein_solver import
 from discrecontinual_equations.solver.stochastic.srk2.srk2_config import SRK2Config
 from discrecontinual_equations.solver.stochastic.srk2.srk2_solver import SRK2Solver
 from discrecontinual_equations.solver.stochastic.wiener import BrownianPath
-from tests.solver.test_ensemble_levy_area import (
-    EachPathItsOwn,
-    Replay,
-    ensemble_draws,
-)
 from tests.solver.milstein.test_diagonal_milstein import (
     CrossVectorNoise,
     DeclaredDiagonalNoise,
     DiagonalMatrixNoise,
     DiagonalNoise,
     _equation,
+)
+from tests.solver.test_ensemble_levy_area import (
+    EachPathItsOwn,
+    Replay,
+    ensemble_draws,
 )
 
 _STEP = 2.0**-5

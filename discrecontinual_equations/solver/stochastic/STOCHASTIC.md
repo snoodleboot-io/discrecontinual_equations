@@ -249,7 +249,10 @@ the increments do not change. `MilsteinSolver` checks `(dG_k/dx) G_j =
 bit; when it does not the step adds `sum_{j,k} (dG_k/dx) G_j A_(j,k)` and a
 warning names the cost once per solve. Measured strong order on a nonlinear
 non-commuting noise: 0.96, against Euler-Maruyama's 0.51. The ensemble's Milstein
-scheme still refuses non-commuting noise.
+scheme adds the same term since DEQ-65, the areas of every path drawn in one call
+of the sampler given the `(paths, m)` increments; it agrees with the per-path
+solver path by path, to rounding, given the same increments and areas, and
+measured strong order 1.01 on that noise (100 paths, `dt = 2^-2 ... 2^-8`).
 
 A function whose `b_i` reads `x_i` alone can say so with the class attribute
 `diagonal_noise = True` (DEQ-48). The derivatives `db_i/dx_i` - the Milstein term
@@ -260,13 +263,14 @@ promise is checked once per solve at the initial state (`1 + 2 n` evaluations): 
 `b` is not diagonal there, a `UserWarning` names the function and the solve runs as
 undeclared, bit for bit. A coupling that vanishes at the initial state is not caught,
 and makes a wrong step; see `milstein/MILSTEIN.md`. The ensemble counts a NaN
-product as non-commuting, as the per-path solver does, so one path gone to NaN stops
-a Milstein ensemble with its refusal rather than hiding the other paths' coupling.
+product as non-commuting, as the per-path solver does, so one path gone to NaN does
+not strip the other paths of their Levy areas.
 
 ### Ensembles
 
 `StochasticEnsemble` (DEQ-32) steps a `(paths, n)` array of states at once with
-`(paths, m)` increments, by Euler-Maruyama or by Milstein for commuting noise, and
+`(paths, m)` increments, by Euler-Maruyama or by Milstein (with Levy areas when the
+noise does not commute), and
 returns the final states plus samples kept every `k` steps - not a `Curve` per
 path. One member driven by the same `WienerSource` as a per-path solver is that
 solver's path hex for hex (diagonal noise) or to the last bit (matrix noise). The

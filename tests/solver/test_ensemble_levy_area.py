@@ -1,6 +1,6 @@
-"""The Milstein ensemble with Levy areas: non-commuting noise, every path at once (DEQ-65).
+"""The Milstein ensemble with Levy areas: non-commuting noise, all paths at once.
 
-Three yardsticks, the ticket's.
+Three yardsticks, DEQ-65's.
 
 * Path by path against :class:`MilsteinSolver` given the same increments and
   areas, to rounding: each member driven through a source of its own Brownian
@@ -231,8 +231,7 @@ class TestPathByPathAgainstThePerPathSolver:
         )
         generator = np.random.default_rng(17)
         increments = [
-            generator.standard_normal(2) * np.sqrt(_STEP)
-            for _ in range(config.n_steps)
+            generator.standard_normal(2) * np.sqrt(_STEP) for _ in range(config.n_steps)
         ]
 
         # Act
