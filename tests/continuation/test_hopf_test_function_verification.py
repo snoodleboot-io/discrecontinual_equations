@@ -114,6 +114,17 @@ class TestMainBialternateSignError(TestCase):
         assert abs(determinant - (-4.0)) < 1.0e-12
         assert abs(bialternate_test_value(matrix) - (-math.sqrt(2.0))) < 1.0e-12
 
+    def test_real_eigenvalue_through_zero_beside_a_damped_pair_is_not_hopf(self):
+        # Eigenvalues -1 +- i and mu: det(2A (.) I) = -2((mu - 1)^2 + 1) < 0 for
+        # every mu. The original entry rule changed sign at mu = 0 (a spurious
+        # Hopf at a simple zero eigenvalue).
+        def family(mu: float) -> np.ndarray:
+            return np.array([[-1.0, 0.0, 1.0], [0.0, mu, 0.0], [-1.0, 0.0, -1.0]])
+
+        for mu in (-0.1, -0.01, 0.01, 0.1):
+            assert bialternate_test_value(family(mu)) < 0.0
+            assert np.linalg.det(bialternate_from_definition(family(mu))) < 0.0
+
 
 class TestSignAgainstExactSpectra(TestCase):
     def assert_sign(self, spectrum: KnownSpectrum) -> None:
