@@ -65,3 +65,20 @@ same order-agnostic invariance solve that is certified for the first quantity wi
 feedback and for the second quantity without feedback, together with the verified
 planar recursion. A future `n`-dimensional second-Lyapunov reference (the analogue
 of the Kuznetsov `l₁` check) would close that gap.
+
+## Codim-2 normal forms
+
+The Bogdanov-Takens, zero-Hopf and Hopf-Hopf points have center manifolds of
+dimension two, three and four. Their coefficients are computed in
+`codim2_normal_form.py` by Kuznetsov's projection method, which solves the center
+manifold and the normalising transformation together from the same homological
+equation, with bordered solves and exact joint (state, parameter) multilinear forms
+from jets (`critical_forms.py`). The Hopf coefficient it returns satisfies
+`eta4 = l1 / 4` against the reduction above. The methods, conventions, validation
+(including a discrepancy in Kuznetsov's 1999 worked example) and limits are on the
+docs page `docs/api/center-manifold.md`.
+
+The focal values above depend on the scale of the center basis the eigenvector
+split produces (`eta4` with its square, `eta6` with its fourth power), so their
+raw values change with the ambient dimension and coordinates while their signs do
+not; `eta6` is invariant only where `eta4 = 0`.

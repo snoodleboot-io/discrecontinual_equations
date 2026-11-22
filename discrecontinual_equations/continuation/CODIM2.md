@@ -33,6 +33,15 @@ whose sign change brackets one codim-2 type:
 New events are added by registering another test function; the analyzer and driver
 do not change.
 
+## Classification by normal-form coefficients
+
+Each detected point is also given the case its normal form decides
+(`Codim2Point.classification`, with the coefficients in
+`Codim2Point.coefficients`): `s=+1`/`s=-1` at a Bogdanov-Takens point
+(`s = sign(ab)`); `s`, the sign of `theta` and `torus` at a zero-Hopf;
+`simple`/`difficult` (or `resonant k:l`) at a Hopf-Hopf; the sign of `c` at a cusp.
+See `codim2_normal_form.py` and `docs/api/center-manifold.md`.
+
 ## Usage
 
 ```python

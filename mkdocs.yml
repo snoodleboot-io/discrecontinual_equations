@@ -47,6 +47,7 @@ nav:
       - Stochastic Solvers: api/stochastic-solvers.md
       - Plotting: api/plotting.md
       - Continuation: api/continuation.md
+      - Center Manifolds and Normal Forms: api/center-manifold.md
   - Development:
       - Contributing: development/contributing.md
       - Testing: development/testing.md
