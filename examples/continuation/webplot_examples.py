@@ -206,6 +206,7 @@ except ImportError:  # run as a script path: only this directory is on sys.path
 
 try:  # python -m examples.continuation.webplot_examples
     from examples.continuation import stage_bogdanov_takens as bt
+    from examples.continuation import stage_canard as canard
     from examples.continuation import stage_extended_bautin as bautin
     from examples.continuation import stage_ferroelectric_ring as ring
     from examples.continuation import stage_fold_of_cycles as fold
@@ -219,6 +220,7 @@ try:  # python -m examples.continuation.webplot_examples
     from examples.continuation import stage_zero_hopf as zerohopf
 except ImportError:  # run as a script path: only this directory is on sys.path
     import stage_bogdanov_takens as bt
+    import stage_canard as canard
     import stage_extended_bautin as bautin
     import stage_ferroelectric_ring as ring
     import stage_fold_of_cycles as fold
@@ -400,6 +402,7 @@ def _stages() -> tuple[tuple, ...]:
             shilnikov.STAGE_ENTRY,
         ),
         (noisy.noisy_hopf_stage, noisy.STAGE_FILENAME, noisy.STAGE_ENTRY),
+        (canard.canard_stage, canard.STAGE_FILENAME, canard.STAGE_ENTRY),
     )
 
 
