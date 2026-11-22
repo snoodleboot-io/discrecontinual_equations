@@ -10,12 +10,12 @@ onto an equilibrium must wind onto a periodic orbit.
 
 import numpy as np
 
+from discrecontinual_equations.continuation.noise import jacobian_at
 from discrecontinual_equations.function.function import Function
 
 _NEWTON_TOLERANCE = 1.0e-11
 _NEWTON_ITERATIONS = 80
 _RESIDUAL_CEILING = 1.0e-8
-_STEP = 1.0e-7
 _DEDUP = 1.0e-5
 _IMAGINARY = 1.0e-7
 _CYCLE_HORIZON = 6000
@@ -33,14 +33,12 @@ def _evaluate(field: Function, state: np.ndarray) -> np.ndarray:
 
 
 def _jacobian(field: Function, state: np.ndarray) -> np.ndarray:
-    base = _evaluate(field, state)
-    dimension = state.size
-    columns = np.empty((dimension, dimension))
-    for j in range(dimension):
-        shifted = state.copy()
-        shifted[j] += _STEP
-        columns[:, j] = (_evaluate(field, shifted) - base) / _STEP
-    return columns
+    """The shared Jacobian, stepped by the size of each component.
+
+    An absolute step would round away entirely on an equilibrium far from the
+    origin, and Newton would be handed a zero matrix.
+    """
+    return jacobian_at(field, state)
 
 
 def find_equilibria(
