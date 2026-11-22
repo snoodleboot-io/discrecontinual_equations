@@ -159,7 +159,16 @@ bifurcation, which is then localized by bisection:
   sign.
 - **Hopf**: the determinant of the bialternate product `2A (.) I` of the state
   Jacobian `A` changes sign, which happens exactly when `A` has a pair of
-  eigenvalues summing to zero (a purely imaginary pair).
+  eigenvalues summing to zero (a purely imaginary pair). The eigenvalues of
+  `2A (.) I` are the pairwise sums `lambda_i + lambda_j` (`i < j`), so the
+  determinant is never formed: its sign is read from one eigenvalue solve, in
+  `O(n^3)`, and the value returned is that sign times the smallest
+  `|lambda_i + lambda_j|`. That cannot overflow or underflow, as the determinant
+  of the `n(n-1)/2`-square product did once `n` reached a few dozen (already at
+  `n = 24` with eigenvalues near `-0.01`), and it equals the trace for a planar
+  system. A real pair `+-r` also sums to zero, so a *neutral
+  saddle* changes the sign too and is reported as `hopf`, as before; the
+  eigenvalues at the point tell the two apart.
 
 Stability at each point is read from the eigenvalues of the state Jacobian.
 
@@ -202,6 +211,9 @@ planar Hopf, van der Pol, and the Selkov glycolysis model).
   problems" (1977).
 - Kuznetsov, Y. A. *Elements of Applied Bifurcation Theory* (bialternate product
   and codim-1 normal forms).
+- Guckenheimer, J., Myers, M. and Sturmfels, B. "Computing Hopf bifurcations I",
+  SIAM J. Numer. Anal. 34 (1997) (the entries of `2A (.) I`, eq. (9), and its
+  eigenvalues `lambda_i + lambda_j`, Theorem 3.1).
 - Allgower, E. L. and Georg, K. *Numerical Continuation Methods* (1990).
 
 ## Builder vs. factory, and how strategies are resolved
