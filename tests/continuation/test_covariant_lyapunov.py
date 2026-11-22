@@ -292,6 +292,26 @@ class TestPlanarMaps(TestCase):
         )
         return result, result.angles(0, 1)
 
+    def test_henon_vectors_are_carried_by_the_analytic_jacobian(self):
+        result = covariant_lyapunov_vectors(
+            MapTangent(_function(HenonMap, 2)),
+            np.array([0.1, 0.1]),
+            settings=CovariantLyapunovSettings(200, 200, 100),
+        )
+        for n in range(199):
+            x, y = result.states[n]
+            assert np.allclose(
+                result.states[n + 1],
+                [1.0 - 1.4 * x * x + y, 0.3 * x],
+                atol=1.0e-12,
+            )
+            jacobian = np.array([[-2.8 * x, 1.0], [0.3, 0.0]])
+            for j in range(2):
+                carried = jacobian @ result.vectors[n][:, j]
+                assert _aligned(carried, result.vectors[n + 1][:, j]) > 1.0 - 1.0e-9
+                growth = math.log(np.linalg.norm(carried))
+                assert growth == pytest.approx(result.growth[n, j], abs=1.0e-5)
+
     def test_henon_has_near_tangencies(self):
         result, angles = self._angles(HenonMap)
         assert abs(result.exponents[0] - 0.4192) < 0.02
