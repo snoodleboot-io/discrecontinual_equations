@@ -20,6 +20,7 @@ from scipy.integrate import solve_ivp
 
 from discrecontinual_equations.continuation.covariant_lyapunov import (
     AngleDistribution,
+    CovariantLyapunov,
     CovariantLyapunovSettings,
     FiniteTimeExponents,
     FlowTangent,
@@ -444,3 +445,37 @@ class TestSummaries(TestCase):
         assert np.allclose(finite.fraction_positive(), [2.0 / 3.0, 0.0])
         assert np.allclose(finite.quantile(0.0), [-1.0, -4.0])
         assert finite.window == 2.0
+
+    def test_angles_ignore_the_arbitrary_sign_of_a_vector(self):
+        # A covariant vector is a direction: v and -v are the same one, so the
+        # angle lies in [0, pi/2] (Ginelli et al. 2007, Eq. 4).
+        tilt = 0.3
+        vectors = np.array(
+            [[[1.0, -math.cos(tilt)], [0.0, math.sin(tilt)]]],
+        )
+        result = CovariantLyapunov(
+            np.zeros((1, 2)),
+            vectors,
+            np.zeros(2),
+            np.zeros((1, 2)),
+            1.0,
+        )
+        assert result.angles(0, 1).values == pytest.approx([tilt])
+        assert result.splitting_angles(1).values == pytest.approx([tilt])
+
+    def test_the_splitting_angle_is_the_smallest_principal_angle(self):
+        # span(e1, e2) against span(cos a e1 + sin a e3, e4): principal angles
+        # a and pi/2, and the splitting is as close to tangency as its closest
+        # pair, so the answer is a.
+        tilt = 0.2
+        basis = np.zeros((4, 4))
+        basis[0, 0] = basis[1, 1] = basis[3, 3] = 1.0
+        basis[0, 2], basis[2, 2] = math.cos(tilt), math.sin(tilt)
+        result = CovariantLyapunov(
+            np.zeros((1, 4)),
+            basis[None],
+            np.zeros(4),
+            np.zeros((1, 4)),
+            1.0,
+        )
+        assert result.splitting_angles(2).values == pytest.approx([tilt])
