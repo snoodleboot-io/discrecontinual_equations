@@ -126,7 +126,10 @@ method is planar and time-independent and needs `D` non-singular at every grid
 point. With the straight base of OLIM-MID (`update_order="midpoint"`) it is
 first order in the spacing, the bound the method's authors give; the default
 parabolic base measured second order on the rotating test problems. The update
-radius defaults to the authors' rule of thumb, growing with the grid.
+radius is 8 cells on every grid unless `update_radius` is given;
+`default_radius(grid)` in `continuation.quasipotential` is the authors' rule
+of thumb, growing with the grid, which pays on a strongly rotating drift and
+costs three to four times the error on one that is nearly a gradient.
 `GeometricMinimumAction` needs a constant `D`. The module
 docstring of `continuation/quasipotential.py` has the measured errors.
 

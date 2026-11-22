@@ -100,9 +100,10 @@ _ROTATING_LEVEL = 1.5
 _GRADIENT_ORDER = 1.7
 _ROTATING_ORDER = 1.8
 # The convergence tests hold the radius at 8 cells as the grid is refined, so
-# that they measure the update itself; the default radius grows with the grid
-# (Dahiya and Cameron's Eq. (28)), which trades the two error terms differently
-# for each problem (see TestDefaultRadius and the module docstring).
+# that they measure the update itself. It is the default too; default_radius,
+# Dahiya and Cameron's Eq. (28), grows with the grid and trades the two error
+# terms differently for each problem (see TestDefaultRadius and the module
+# docstring).
 _FIXED_RADIUS = 8
 
 
@@ -655,8 +656,10 @@ class TestMaierStein(TestCase):
     """Maier-Stein at beta = 10, where the escape path leaves the symmetry axis."""
 
     def test_the_barrier_converges_to_the_independent_minimum(self):
-        # Measured 0.341561, 0.340604 against 0.340042: errors 1.52e-3,
-        # 5.6e-4, order 1.44 (1.39 on to 321 x 257). The on-axis path costs 1/2.
+        # Measured 0.340175, 0.340084 against 0.340042 with the parabolic base
+        # at radius 8: errors 1.33e-4, 4.16e-5, order 1.68. OLIM-MID: 0.341561,
+        # 0.340604, errors 1.52e-3, 5.6e-4, order 1.44. The on-axis path
+        # costs 1/2.
         errors = [
             abs(_maier_stein_field(scale)[2].at(SADDLE) - MAIER_STEIN_BARRIER)
             for scale in (2, 4)
@@ -690,7 +693,8 @@ class TestMaierStein(TestCase):
         ).path(np.linspace(WELL, target, 81))
         assert traced.arrived
         assert relaxed.converged
-        # Measured 0.25920 (grid), 0.25879 (trace), 0.25875 (gMAM).
+        # Measured 0.25883 on the grid with the parabolic base at radius 8;
+        # with OLIM-MID 0.25920 (grid), 0.25879 (trace), 0.25875 (gMAM).
         assert abs(field.at(target) - relaxed.action) < 1.0e-3
         assert abs(traced.action - relaxed.action) < 3.0e-4
         distance = cKDTree(relaxed.states).query(traced.states)[0]
@@ -1052,8 +1056,8 @@ class TestQuadraticUpdate(TestCase):
     """``U`` a parabola along the triangle's base, through a third front point."""
 
     def test_the_rotating_case_converges_at_second_order(self):
-        # Measured 1.70e-4, 4.25e-5, 1.06e-5 at 41, 81, 161 (radius 8, 8, 10):
-        # orders 2.00, 2.00. The midpoint update: 2.27e-3, 9.68e-4, 3.12e-4.
+        # Measured 1.70e-4, 4.25e-5, 1.16e-5 at 41, 81, 161 (radius 8): orders
+        # 2.00, 1.87. The midpoint update: 2.27e-3, 9.68e-4, 5.00e-4.
         errors = [_rotating_error_by_order(count, QUADRATIC) for count in _COUNTS]
         assert errors[2] < 2.0e-5
         assert min(_orders(errors)) > 1.8

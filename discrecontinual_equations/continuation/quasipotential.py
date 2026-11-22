@@ -102,28 +102,37 @@ then each point's error feeds the next. On the rotating case at 41 points the
 median ``grad U`` was off by 25% from the chord and 80% by reflection, and ``U``
 by 0.32. Dahiya and Cameron also warn that ``U`` need not be smooth across the
 front (arXiv 1806.05321, Sec. 3.3.2); the parabola uses accepted values only.
-At 321 points, radius 14 by the rule below, the max errors on the sets above:
-rotating Ornstein-Uhlenbeck 9.30e-5 straight, 2.15e-6 parabolic (orders 2.00,
-2.00, 2.30 from 41 points); their SDE (21) 2.55e-4 and 1.16e-5; the non-normal
-linear system 1.04e-4 and 9.26e-5 (3.33e-4 and 1.17e-4 at 161); Maier-Stein's
-barrier at 161 x 129 points 5.6e-4 and 2.0e-5. Where the quadrature term
-dominates - the double well, the anisotropic gradient, SDE (24) - it changes
-little (9.05e-3, 7.44e-3 and 1.84e-2 straight; 9.05e-3, 7.52e-3 and 1.85e-2
-parabolic), and on the noisy Hopf film's grid, near its singular origin,
-the worst frame moves from 0.054 to 0.056. It costs about 1.8 times the march's
-time. ``update_order="midpoint"`` is OLIM-MID as published.
+At 321 points, radius 14 (:func:`default_radius`, below), the max errors on
+the sets above: rotating Ornstein-Uhlenbeck 9.30e-5 straight, 2.15e-6 parabolic
+(orders 2.00, 2.00, 2.30 from 41 points); their SDE (21) 2.55e-4 and 1.16e-5;
+the non-normal linear system 1.04e-4 and 9.26e-5 (3.33e-4 and 1.17e-4 at 161);
+Maier-Stein's barrier at 161 x 129 points 5.6e-4 and 2.0e-5. Where the
+quadrature term dominates - the double well, the anisotropic gradient, SDE (24)
+- it changes little (9.05e-3, 7.44e-3 and 1.84e-2 straight; 9.05e-3, 7.52e-3
+and 1.85e-2 parabolic), and on the noisy Hopf film's grid, near its singular
+origin, the worst frame moves from 0.054 to 0.056. At the default radius of 8,
+at 321 points: rotating Ornstein-Uhlenbeck 3.34e-4 and 3.41e-6; SDE (21) 1.34e-3 and
+3.73e-4; non-normal 2.36e-4 and 9.26e-5; double well 2.85e-3 both; anisotropic
+gradient 2.09e-3 and 2.15e-3; SDE (24) 4.66e-3 and 5.15e-3. It costs about 1.8
+times the march's time. ``update_order="midpoint"`` is OLIM-MID as published.
 
-*Radius.* The default radius follows the grid: Dahiya and Cameron's rule of thumb
-``K = 10 + 4 (round(log2 N) - 7)`` (their Eq. (28), for ``2^7 <= N <= 2^12``), ``N``
-the longer side, held at 8 below 128 points (:func:`default_radius`). It trades
-the two terms above, and the trade is not the same everywhere. At 321 points
-against a radius held at 8, the straight base: rotating Ornstein-Uhlenbeck 3.34e-4
-to 9.30e-5, SDE (21) 1.34e-3 to 2.55e-4, non-normal 2.36e-4 to 1.04e-4 - but the
-double well 2.85e-3 to 9.05e-3, the anisotropic gradient 2.09e-3 to 7.44e-3 and
-SDE (24) 4.66e-3 to 1.84e-2, where the longer updates' quadrature error grows
-like ``K^2`` and nothing is gained from reaching further. A radius chosen from
-the drift's rotation-to-gradient ratio (below) would serve both; for a field that
-is nearly a gradient, pass ``update_radius=8``.
+*Radius.* The radius is 8 cells on every grid unless ``update_radius`` says
+otherwise. Dahiya and Cameron's rule of thumb ``K = 10 + 4 (round(log2 N) -
+7)`` (their Eq. (28), for ``2^7 <= N <= 2^12``), ``N`` the longer side, held at
+8 below 128 points, is :func:`default_radius`, to opt into. It trades the two
+terms above, and the trade is not the same everywhere. At 321 points, radius 14
+against 8, the straight base: rotating Ornstein-Uhlenbeck 9.30e-5 against
+3.34e-4, SDE (21) 2.55e-4 against 1.34e-3, non-normal 1.04e-4 against 2.36e-4
+- but the double well 9.05e-3 against 2.85e-3, the anisotropic gradient
+7.44e-3 against 2.09e-3 and SDE (24) 1.84e-2 against 4.66e-3, where the longer
+updates' quadrature error grows like ``K^2`` and nothing is gained from
+reaching further. With the parabolic base the linear cases gain less (SDE (21)
+1.16e-5 against 3.73e-4, the others within a factor of two) and the
+gradient-dominated ones lose as much. So the default is 8, and
+``update_radius=default_radius(grid)`` is for a drift whose
+rotation-to-gradient ratio ``a`` (below) is near or above 8 - SDE (21) has
+``a = 10`` - on a grid of 128 points or more; a ratio well above the radius
+calls for a radius at least that large whatever the grid.
 
 *What the radius must cover.* Below a threshold the radius does not merely cost
 accuracy: the error stops converging. Near the attractor the drift is a gradient
@@ -224,7 +233,8 @@ from discrecontinual_equations.function.function import Function
 _PLANE = 2
 # f_x, f_y, A_xx, A_xy, A_yy per half-lattice point.
 _COLUMNS = 5
-# The least default radius, and Dahiya and Cameron's rule above it (Eq. (28)).
+# The solver's radius on every grid, and Dahiya and Cameron's rule (Eq. (28)),
+# which default_radius offers to opt into.
 _DEFAULT_RADIUS = 8
 _RULE_BASE, _RULE_SLOPE, _RULE_START = 10, 4, 7
 MIDPOINT, QUADRATIC = "midpoint", "quadratic"
@@ -266,9 +276,12 @@ def default_radius(grid: DensityGrid) -> int:
 
     Dahiya and Cameron's rule of thumb (their Eq. (28)) for ``N`` points per
     side, ``2^7 <= N <= 2^12``, with ``N`` the larger side here. Below 128
-    points it would fall under 8, the fixed radius the method used before, and
-    the radius must stay comparable to the drift's rotation-to-gradient ratio
-    (see the module docstring), so it is held there.
+    points it would fall under 8, and the radius must stay comparable to the
+    drift's rotation-to-gradient ratio (see the module docstring), so it is
+    held there. It is not the solver's default, which is 8 on every grid: pass
+    it as ``update_radius`` for a strongly rotating drift on a fine grid, where
+    it pays, and not for one that is nearly a gradient, where it costs (the
+    module docstring's *Radius*).
     """
     sides = max(grid.shape)
     rule = _RULE_BASE + _RULE_SLOPE * (round(np.log2(sides)) - _RULE_START)
@@ -986,8 +999,10 @@ def _action(step_x, step_y, coefficients):
 class OrderedLineIntegral:
     """The quasipotential of a planar ``dx = f dt + G dW`` by ordered line integrals.
 
-    ``update_radius`` is the stencil radius in cells (``K`` in the paper), by
-    default :func:`default_radius` of the grid. It must be comparable to the
+    ``update_radius`` is the stencil radius in cells (``K`` in the paper), 8 by
+    default on every grid; :func:`default_radius` gives Dahiya and Cameron's
+    rule, which grows with the grid, for a strongly rotating drift (see the
+    module docstring for when it pays). It must be comparable to the
     drift's rotation-to-gradient ratio on the region asked about, or the error
     does not converge as the grid is refined. ``update_order`` is
     :data:`QUADRATIC` (``U`` a parabola along the front, the default) or
@@ -1022,7 +1037,7 @@ class OrderedLineIntegral:
         self._grid = grid
         self._quadratic = update_order == QUADRATIC
         if update_radius is None:
-            update_radius = default_radius(grid)
+            update_radius = _DEFAULT_RADIUS
         self.update_radius = update_radius
         reach = np.arange(-update_radius, update_radius + 1)
         first, second = np.meshgrid(reach, reach, indexing="ij")
