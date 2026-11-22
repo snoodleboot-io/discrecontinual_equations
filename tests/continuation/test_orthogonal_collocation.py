@@ -14,11 +14,14 @@ from unittest import TestCase
 import numpy as np
 import pytest
 from scipy.integrate import solve_ivp
+from scipy.optimize import root
 
 from discrecontinual_equations.continuation.cycle_continuation import (
     CycleContinuation,
     CycleSeed,
     _Arc,
+    _jacobian_monodromy,
+    _multiplier_disagreement,
 )
 from discrecontinual_equations.differential_equation import DifferentialEquation
 from tests.continuation.fields import (
@@ -26,8 +29,10 @@ from tests.continuation.fields import (
     BetaOne,
     BetaTwo,
     BogdanovTakensField,
+    FoldOfCyclesField,
     HopfField,
     NeimarkSackerField,
+    PeriodDoublingField,
     State,
     Time,
     VanDerPolField,
@@ -443,3 +448,282 @@ class TestSingularBlock(TestCase):
         assert np.all(np.isnan(point.multipliers))
         assert point.floquet_error == math.inf
         assert not point.resolved()
+
+
+def _gauss_nodes(points: int) -> np.ndarray:
+    """Gauss-Legendre nodes on [0, 1] by Golub-Welsch, not by ``leggauss``."""
+    k = np.arange(1, points)
+    off = k / np.sqrt(4.0 * k * k - 1.0)
+    return 0.5 * (np.linalg.eigvalsh(np.diag(off, 1) + np.diag(off, -1)) + 1.0)
+
+
+def _lagrange(grid: np.ndarray, at: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Lagrange basis on ``grid`` and its derivative at ``at``, by products."""
+    values = np.ones((at.size, grid.size))
+    slopes = np.zeros((at.size, grid.size))
+    for j, node in enumerate(grid):
+        others = np.delete(grid, j)
+        scale = np.prod(node - others)
+        for i, z in enumerate(at):
+            values[i, j] = np.prod(z - others) / scale
+            slopes[i, j] = (
+                sum(np.prod(z - np.delete(others, k)) for k in range(others.size))
+                / scale
+            )
+    return values, slopes
+
+
+def _van_der_pol_field(mu: float):
+    def flow(_t: float, state: np.ndarray) -> list[float]:
+        return [state[1], mu * (1.0 - state[0] ** 2) * state[1] - state[0]]
+
+    return flow
+
+
+def _van_der_pol_reference(mu: float):
+    """Period and dense orbit, starting where ``y`` falls through zero, by DOP853."""
+    flow = _van_der_pol_field(mu)
+    settled = solve_ivp(
+        flow,
+        [0.0, 100.0],
+        [2.0, 0.0],
+        method="DOP853",
+        rtol=1.0e-12,
+        atol=1.0e-13,
+    ).y[:, -1]
+
+    def section(_t: float, state: np.ndarray) -> float:
+        return float(state[1])
+
+    section.direction = -1.0  # type: ignore[attr-defined] (solve_ivp reads it)
+    run = solve_ivp(
+        flow,
+        [0.0, 30.0],
+        settled,
+        method="DOP853",
+        rtol=1.0e-13,
+        atol=1.0e-14,
+        events=section,
+        dense_output=True,
+    )
+    start, end = run.t_events[0][0], run.t_events[0][1]
+    period = float(end - start)
+    return period, lambda fraction: run.sol(start + fraction * period).T
+
+
+def _van_der_pol_point(points: int, intervals: int, mu: float = 1.0):
+    period, orbit = _van_der_pol_reference(mu)
+    continuation = CycleContinuation(
+        _equation(VanDerPolField, 2, mu),
+        0,
+        intervals,
+        phase_index=1,
+        collocation="gauss_legendre",
+        collocation_points=points,
+    )
+    seed = CycleSeed(orbit(np.linspace(0.0, 1.0, intervals + 1)), period, mu)
+    trace, _ = continuation.trace(seed, 0.05, 0)
+    return continuation, trace[0], period, orbit
+
+
+class TestIndependentDiscretisation(TestCase):
+    """The scheme against one built here from scratch, on van der Pol at mu = 1.
+
+    Nodes by Golub-Welsch rather than ``leggauss``, the basis by products rather
+    than a Vandermonde inverse: if the two agree, the nodes, the basis, the
+    local time scaling ``h T`` and the interval windows are all what AUTO's
+    collocation says they are.
+    """
+
+    # An odd count, so that a sign flipped in every transfer matrix shows.
+    _POINTS, _INTERVALS, _MU = 3, 7, 1.0
+
+    def _scheme(self):
+        nodes = _gauss_nodes(self._POINTS)
+        values, slopes = _lagrange(np.linspace(0.0, 1.0, self._POINTS + 1), nodes)
+        return values, slopes, 1.0 / self._INTERVALS, _van_der_pol_field(self._MU)
+
+    def test_its_solution_satisfies_the_independent_collocation_equations(self):
+        _, point, _, _ = _van_der_pol_point(self._POINTS, self._INTERVALS)
+        values, slopes, step, flow = self._scheme()
+        states, period = point.solution.states, point.solution.period
+        defects = []
+        for i in range(self._INTERVALS):
+            window = states[i * self._POINTS : (i + 1) * self._POINTS + 1]
+            for value, slope in zip(values @ window, slopes @ window, strict=True):
+                defects.append(slope - step * period * np.array(flow(0.0, value)))
+        assert np.max(np.abs(defects)) < 1.0e-9
+
+    def test_condensed_monodromy_is_the_derivative_of_the_discrete_period_map(self):
+        # The map is stepped here interval by interval, each step a nonlinear
+        # solve for the interval's other points, and differentiated by central
+        # differences - nothing of the branch's Jacobian is used.
+        continuation, point, _, _ = _van_der_pol_point(self._POINTS, self._INTERVALS)
+        values, slopes, step, flow = self._scheme()
+        states, period = point.solution.states, point.solution.period
+        width = self._POINTS
+
+        def advance(start: np.ndarray) -> np.ndarray:
+            current = start
+            for i in range(self._INTERVALS):
+
+                def defect(rest: np.ndarray, left=current) -> np.ndarray:
+                    window = np.vstack([left, rest.reshape(width, 2)])
+                    return np.concatenate(
+                        [
+                            slope - step * period * np.array(flow(0.0, value))
+                            for value, slope in zip(
+                                values @ window,
+                                slopes @ window,
+                                strict=True,
+                            )
+                        ],
+                    )
+
+                guess = states[i * width + 1 : (i + 1) * width + 1] + (
+                    current - states[i * width]
+                )
+                current = root(defect, guess.ravel(), tol=1.0e-14).x[-2:]
+            return current
+
+        shift = 1.0e-6
+        differenced = np.column_stack(
+            [
+                (advance(states[0] + shift * e) - advance(states[0] - shift * e))
+                / (2.0 * shift)
+                for e in np.eye(2)
+            ],
+        )
+        unknowns = np.concatenate([states.ravel(), [period], [self._MU]])
+        continuation._blocks(unknowns, states.shape[0])  # noqa: SLF001
+        assembled = continuation._assembled  # noqa: SLF001 (the cached blocks)
+        assert assembled is not None
+        condensed = _jacobian_monodromy(assembled[1], 2)
+        assert np.max(np.abs(condensed - differenced)) < 1.0e-7
+
+
+class TestSuperconvergence(TestCase):
+    """De Boor and Swartz: order ``2m`` at the mesh points, ``m + 1`` between.
+
+    Against van der Pol at mu = 1 by DOP853 at rtol 1e-13, with ``m = 3``. The
+    gap between the two is the whole point of collocating at Gauss points: the
+    polynomial in between is only as good as its degree, but its values at the
+    mesh are those of the ``m``-stage Gauss Runge-Kutta method. Measured 3.5e-9
+    and 1.35e-5 on 80 intervals, orders 5.94 and 3.79 from 40.
+    """
+
+    def _errors(self, intervals: int) -> tuple[float, float]:
+        points = 3
+        _, point, period, orbit = _van_der_pol_point(points, intervals)
+        states = point.solution.states
+        mesh_error = float(
+            np.max(np.abs(states[::points] - orbit(point.mesh[::points]))),
+        )
+        fine = np.linspace(0.0, 1.0, 21)
+        values, _ = _lagrange(np.linspace(0.0, 1.0, points + 1), fine)
+        uniform = 0.0
+        for i in range(intervals):
+            polynomial = values @ states[i * points : (i + 1) * points + 1]
+            exact = orbit((i + fine) / intervals)
+            uniform = max(uniform, float(np.max(np.abs(polynomial - exact))))
+        assert abs(point.solution.period - period) < 1.0e-6
+        return mesh_error, uniform
+
+    def test_mesh_points_converge_at_2m_and_the_polynomial_at_m_plus_one(self):
+        coarse, fine = self._errors(40), self._errors(80)
+        mesh_order = math.log2(coarse[0] / fine[0])
+        uniform_order = math.log2(coarse[1] / fine[1])
+        assert mesh_order > 5.5, (coarse, fine)
+        assert 3.4 < uniform_order < 4.6, (coarse, fine)
+        assert fine[0] < 1.0e-3 * fine[1]
+
+
+class TestExactBranches(TestCase):
+    """Whole continued branches whose multipliers are known in closed form.
+
+    The fold-of-cycles normal form has ``r^2 = s`` with ``mu = s^2 - s``, period
+    2 pi, and nontrivial multiplier ``exp(4 pi s (1 - 2 s))``: the branch must
+    round the fold at ``mu = -1/4`` by pseudo-arclength, every multiplier must be
+    right along the way, and the point's error must cover it. The four-
+    dimensional fields add a complex pair ``exp(2 pi (nu +- i omega))``.
+    """
+
+    def _circle_states(self, radius: float, intervals: int, extra: int):
+        return np.column_stack(
+            [_circle(radius, intervals), np.zeros((intervals + 1, extra))],
+        )
+
+    def test_rounds_the_fold_with_exact_multipliers_and_a_covering_error(self):
+        intervals, mu = 8, -0.1
+        radius = math.sqrt((1.0 + math.sqrt(1.0 + 4.0 * mu)) / 2.0)
+        continuation = CycleContinuation(
+            _equation(FoldOfCyclesField, 2, mu),
+            0,
+            intervals,
+            phase_index=1,
+            collocation="gauss_legendre",
+            collocation_points=4,
+        )
+        seed = CycleSeed(_circle(radius, intervals), 2.0 * math.pi, mu)
+        points, bifurcations = continuation.trace(seed, 0.06, 60, direction=-1.0)
+        lower = 0
+        for point in points:
+            squared = float(np.max(np.sum(point.solution.states**2, axis=1)))
+            root_ = math.sqrt(max(1.0 + 4.0 * point.parameter, 0.0))
+            s = (1.0 + root_) / 2.0 if squared > 0.5 else (1.0 - root_) / 2.0
+            lower += squared < 0.5
+            assert abs(squared - s) < 1.0e-6
+            exact = np.array([1.0, math.exp(4.0 * math.pi * s * (1.0 - 2.0 * s))])
+            error = _multiplier_disagreement(point.multipliers, exact)
+            assert error < 1.0e-5
+            assert error < point.floquet_error
+        assert lower > 10  # it went round the fold onto the unstable cycles
+        folds = [b.parameter for b in bifurcations if b.kind == "fold_of_cycles"]
+        assert len(folds) == 1
+        assert abs(folds[0] + 0.25) < 2.0e-4
+
+    def test_complex_multipliers_of_the_torus_and_flip_fields(self):
+        for field_type, rotation, kind in (
+            (NeimarkSackerField, 0.3, "neimark_sacker"),
+            (PeriodDoublingField, 0.5, "period_doubling"),
+        ):
+            intervals = 8
+            continuation = CycleContinuation(
+                _equation(field_type, 4, -0.1),
+                0,
+                intervals,
+                phase_index=1,
+                collocation="gauss_legendre",
+                collocation_points=4,
+            )
+            states = self._circle_states(math.sqrt(0.5), intervals, 2)
+            points, bifurcations = continuation.trace(
+                CycleSeed(states, 2.0 * math.pi, -0.1),
+                0.04,
+                12,
+            )
+            for point in points:
+                nu = point.parameter
+                exact = np.array(
+                    [
+                        1.0,
+                        math.exp(-2.0 * math.pi),
+                        np.exp(2.0 * math.pi * complex(nu, rotation)),
+                        np.exp(2.0 * math.pi * complex(nu, -rotation)),
+                    ],
+                )
+                assert _multiplier_disagreement(point.multipliers, exact) < 1.0e-7
+            assert [b.kind for b in bifurcations] == [kind]
+            assert abs(bifurcations[0].parameter) < 2.0e-3
+
+
+class TestMultiplierDisagreement(TestCase):
+    """Relative to the larger of one and the multiplier, absolute below one."""
+
+    def test_is_relative_for_a_large_multiplier(self):
+        gap = _multiplier_disagreement(np.array([140.0, 1.0]), np.array([1.0, 140.14]))
+        assert abs(gap - 1.0e-3) < 1.0e-12
+
+    def test_is_absolute_for_a_small_one(self):
+        gap = _multiplier_disagreement(np.array([1.0e-3, 1.0]), np.array([1.0, 2.0e-3]))
+        assert abs(gap - 1.0e-3) < 1.0e-15
