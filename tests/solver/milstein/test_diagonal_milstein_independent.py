@@ -101,10 +101,10 @@ def _exact_products(x: np.ndarray, coupling: float) -> np.ndarray:
     return b[:, None] * jacobian.T
 
 
-def _coupling_at_ratio(ratio: float) -> float:
+def _coupling_at_ratio(ratio: float, start: np.ndarray = _START) -> float:
     """The ``c`` whose cross product is ``ratio`` times the largest product at start."""
-    scale = float(np.max(np.abs(_b(_START) * _db(_START))))
-    return ratio * scale / float(_b(_START[1]))
+    scale = float(np.max(np.abs(_b(start) * _db(start))))
+    return ratio * scale / float(_b(start[1]))
 
 
 def _noise(coupling: float, *, declared: bool = False) -> type[CoupledNoise]:
@@ -315,12 +315,19 @@ def test_a_one_path_ensemble_is_the_per_path_step_bit_for_bit(calculus, coupling
     ]
 
 
-def test_ensemble_refuses_coupling_just_above_the_tolerance():
+# The last component at zero, where b vanishes: the products of the last direction
+# are all zero, so a commutativity scale read from it alone, rather than from every
+# direction, is zero and waves the coupling through.
+_LAST_AT_ZERO = np.array([0.5, 1.0, 0.0])
+
+
+@pytest.mark.parametrize("start", [_START, _LAST_AT_ZERO], ids=["start", "last-zero"])
+def test_ensemble_refuses_coupling_just_above_the_tolerance(start):
     config = MilsteinConfig(start_time=0.0, end_time=_STEP, step_size=_STEP)
     with pytest.raises(ValueError, match="commuting noise"):
         StochasticEnsemble(config, scheme="milstein").solve(
-            _equation(_noise(_coupling_at_ratio(2.0 * _TOLERANCE)), 3),
-            _START,
+            _equation(_noise(_coupling_at_ratio(2.0 * _TOLERANCE, start)), 3),
+            start,
             paths=2,
         )
 
