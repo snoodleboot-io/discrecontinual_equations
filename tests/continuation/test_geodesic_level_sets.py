@@ -207,10 +207,13 @@ class TestLinearSaddle(TestCase):
 
     def test_a_resonant_chart_falls_back_to_the_tangent_plane(self):
         # Eigenvalues -1 and -2 exactly: the monomial theta_1^2 decays at
-        # rate -2, which is in the spectrum, and the chart's solve is singular.
+        # rate -2, which is in the spectrum, and x^2 forces it, so no chart
+        # term of degree two can cancel it. (Unforced, as in the linear
+        # field, the resonant term is simply zero.) The plane z = 0 is still
+        # invariant and the stable manifold.
         class Resonant(DeterministicFunction):
             def eval(self, point, time=None):  # noqa: ARG002 (base signature)
-                return [-point[0], -2.0 * point[1], point[2]]
+                return [-point[0], -2.0 * point[1] + point[0] * point[0], point[2]]
 
         function = _field(Resonant)
         mesh = GeodesicLevelSets(GeodesicSettings(0.1, 0.1, (0.05, 0.15))).compute(

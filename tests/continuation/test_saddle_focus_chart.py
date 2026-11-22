@@ -172,11 +172,13 @@ class TestCurvedSaddleFocus(TestCase):
 
     def test_a_resonance_is_refused(self):
         # All three eigenvalues are stable, and lambda + conj(lambda) = -2 is
-        # the third: the z conj(z) coefficient has no equation to solve.
+        # within 1e-10 of the third: the z conj(z) coefficient's equation is
+        # singular in all but rounding, which solves it to a coefficient of
+        # 1e10 rather than failing.
         class Resonant(DeterministicFunction):
             def eval(self, point, time=None):  # noqa: ARG002 (base signature)
                 x, y, z = point[0], point[1], point[2]
-                return [-x + 2.0 * y, -2.0 * x - y, -2.0 * z + x * x]
+                return [-x + 2.0 * y, -2.0 * x - y, -(2.0 + 1.0e-10) * z + x * x]
 
         with pytest.raises(np.linalg.LinAlgError):
             _chart(Resonant, 3)

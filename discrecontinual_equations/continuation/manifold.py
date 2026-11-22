@@ -10,9 +10,19 @@ whenever ``k . lambda`` is not in the spectrum of the Jacobian ``A``
 (non-resonance). This reuses the multivariate-series field expansion; selecting the
 unstable spectrum yields ``W^u`` and the stable spectrum ``W^s``.
 
-The current implementation covers manifolds spanned by real eigenvalues (saddle
-type). Complex (spiral) manifolds need the conjugate-coordinate variant and are
-deferred; see ``ROADMAP.md``.
+A complex pair ``lambda, conj(lambda)`` - a saddle-focus, whose manifold spirals
+- is solved in the complex coordinates ``(z, conj(z))`` of the pair, with
+eigenvectors ``v / 2`` and ``conj(v) / 2``: the coefficient of ``z^a conj(z)^b``
+solves ``(A - (a lambda + b conj(lambda)) I) P = -N``, a complex system, and
+the coefficient of ``z^b conj(z)^a`` comes out as its conjugate, so the chart
+is real on ``z = u + i w``. Its real coordinates ``(u, w)`` start along
+``Re v`` and ``-Im v``. (Cabre, Fontich and de la Llave, Indiana Univ. Math. J.
+52, 2003; Haro, Canadell, Figueras, Luque and Mondelo, *The Parameterization
+Method for Invariant Manifolds*, Springer 2016, Sec. 2.2 on complex
+eigenvalues.) A resonance - a rate within ``_RESONANCE`` of the spectrum - is
+solved by least squares when the remainder lies in the range it leaves, and
+otherwise raises :class:`numpy.linalg.LinAlgError`: no chart of that order
+exists.
 """
 
 from abc import ABC, abstractmethod
@@ -24,6 +34,12 @@ from discrecontinual_equations.function.function import Function
 
 _IMAGINARY = 1.0e-9
 _LINEAR_DEGREE = 2
+# A monomial's rate this close to an eigenvalue, relative to its size, is a
+# resonance: its homological equation has no solution worth the name.
+_RESONANCE = 1.0e-8
+# A resonant monomial's least-squares term must cancel its remainder to this,
+# relative to the remainder, or the resonance is an obstruction.
+_UNFORCED = 1.0e-9
 
 
 class ManifoldSelection(ABC):
@@ -50,21 +66,28 @@ class StableManifold(ManifoldSelection):
 
 
 class ManifoldChart:
-    """A Taylor parameterization of an invariant manifold."""
+    """A Taylor parameterization of an invariant manifold.
 
-    __slots__ = ["_coefficients", "_eigenvalues", "_equilibrium", "_order"]
+    Its coordinates are real. A complex pair's two coordinates ``(u, w)`` are
+    the real and imaginary parts of the pair's complex coordinate ``z``; the
+    series itself is in ``(z, conj(z))`` and real on that diagonal.
+    """
+
+    __slots__ = ["_coefficients", "_eigenvalues", "_equilibrium", "_order", "_pairs"]
 
     def __init__(
         self,
         coefficients: list[Multivariate],
-        eigenvalues: list[float],
+        eigenvalues: list[complex],
         equilibrium: np.ndarray,
         order: int,
+        pairs: list[int] | None = None,
     ) -> None:
         self._coefficients = coefficients
         self._eigenvalues = eigenvalues
         self._equilibrium = equilibrium
         self._order = order
+        self._pairs = pairs or []
 
     @property
     def dimension(self) -> int:
@@ -72,9 +95,15 @@ class ManifoldChart:
         return len(self._eigenvalues)
 
     @property
-    def eigenvalues(self) -> list[float]:
-        """Restricted linear eigenvalues, in coordinate order."""
-        return self._eigenvalues
+    def eigenvalues(self) -> list[complex]:
+        """Restricted linear eigenvalues, in coordinate order.
+
+        Real numbers where the manifold is spanned by real eigenvalues; a
+        complex pair appears as ``lambda, conj(lambda)``.
+        """
+        if all(abs(complex(value).imag) <= _IMAGINARY for value in self._eigenvalues):
+            return [float(complex(value).real) for value in self._eigenvalues]
+        return list(self._eigenvalues)
 
     @property
     def order(self) -> int:
@@ -88,27 +117,43 @@ class ManifoldChart:
         evaluation starts from zero. Starting from the equilibrium as well used to
         add it twice, which every chart of an equilibrium at the origin hid.
         """
-        result = np.zeros(len(self._coefficients))
-        for i, series in enumerate(self._coefficients):
-            for key, value in series.coefficients.items():
-                monomial = 1.0
-                for axis, power in enumerate(key):
-                    monomial *= coordinates[axis] ** power
-                result[i] += complex(value).real * monomial
-        return result
+        return self._evaluate(self._complex(coordinates))
 
     def flow_image(self, coordinates: list[float], time: float) -> np.ndarray:
         """The chart point whose coordinates have flowed for ``time``.
 
         On the true manifold ``P(theta)`` maps to ``P(e^{Lambda t} theta)`` under
         the flow, so this is what integrating the field from ``point(theta)`` must
-        reproduce - the invariance test.
+        reproduce - the invariance test. A complex coordinate turns as it
+        shrinks or grows: ``z e^{lambda t}``.
         """
         flowed = [
-            coordinates[axis] * np.exp(self._eigenvalues[axis] * time)
-            for axis in range(self.dimension)
+            value * np.exp(complex(rate) * time)
+            for value, rate in zip(
+                self._complex(coordinates),
+                self._eigenvalues,
+                strict=True,
+            )
         ]
-        return self.point(flowed)
+        return self._evaluate(flowed)
+
+    def _complex(self, coordinates: list[float]) -> list[complex]:
+        """The series' own coordinates: ``(u + i w, u - i w)`` for each pair."""
+        values = [complex(value) for value in coordinates]
+        for first in self._pairs:
+            u, w = values[first], values[first + 1]
+            values[first], values[first + 1] = u + 1j * w, u - 1j * w
+        return values
+
+    def _evaluate(self, values: list[complex]) -> np.ndarray:
+        result = np.zeros(len(self._coefficients), dtype=complex)
+        for i, series in enumerate(self._coefficients):
+            for key, value in series.coefficients.items():
+                monomial = complex(1.0)
+                for axis, power in enumerate(key):
+                    monomial *= values[axis] ** power
+                result[i] += complex(value) * monomial
+        return result.real
 
 
 class TaylorManifold:
@@ -128,20 +173,11 @@ class TaylorManifold:
     ) -> ManifoldChart:
         """Return the Taylor chart of the selected invariant manifold."""
         values, vectors = np.linalg.eig(jacobian)
-        chosen = selection.indices(values)
-        eigenvalues = [float(values[i].real) for i in chosen]
-        basis = np.column_stack([vectors[:, i].real for i in chosen])
-        # A complex pair's plane is spanned by the real and imaginary parts of
-        # one eigenvector; the real parts of both are one vector twice
-        # (DEQ-71). Its higher orders need complex coordinates, so the chart of
-        # a pair stops at the tangent plane.
-        spiral = any(abs(values[i].imag) > _IMAGINARY for i in chosen)
-        if spiral:
-            basis = _real_basis(vectors, values, chosen)
-        dimension = len(chosen)
+        eigenvalues, basis, pairs = _modes(values, vectors, selection.indices(values))
+        dimension = len(eigenvalues)
         state = jacobian.shape[0]
         coefficients = self._seed(equilibrium, basis, state, dimension)
-        for degree in range(_LINEAR_DEGREE, 1 if spiral else self._order + 1):
+        for degree in range(_LINEAR_DEGREE, self._order + 1):
             self._solve_degree(
                 function,
                 jacobian,
@@ -152,7 +188,7 @@ class TaylorManifold:
         series = [
             Multivariate(coefficients[i], self._order, dimension) for i in range(state)
         ]
-        return ManifoldChart(series, eigenvalues, equilibrium, self._order)
+        return ManifoldChart(series, eigenvalues, equilibrium, self._order, pairs)
 
     def _seed(
         self,
@@ -176,7 +212,7 @@ class TaylorManifold:
         self,
         function: Function,
         jacobian: np.ndarray,
-        eigenvalues: list[float],
+        eigenvalues: list[complex],
         coefficients: list[dict[tuple[int, ...], complex]],
         degree: int,
     ) -> None:
@@ -185,17 +221,32 @@ class TaylorManifold:
         point = [
             Multivariate(coefficients[i], self._order, dimension) for i in range(state)
         ]
-        field = function.eval(point=point, time=None)
+        field = function.eval(point=point, time=None)  # type: ignore[arg-type]
         identity = np.eye(state)
+        spectrum = np.linalg.eigvals(jacobian)
         for monomial in self._monomials(degree, dimension):
             rate = sum(monomial[axis] * eigenvalues[axis] for axis in range(dimension))
             remainder = np.array(
                 [
-                    complex(field[i].coefficients.get(monomial, 0.0)).real
+                    complex(field[i].coefficients.get(monomial, 0.0))
                     for i in range(state)
                 ],
             )
-            solution = np.linalg.solve(jacobian - rate * identity, -remainder)
+            gap = float(np.min(np.abs(spectrum - rate)))
+            matrix = jacobian - rate * identity
+            if gap <= _RESONANCE * max(1.0, abs(rate)):
+                # A resonance: solvable only if the remainder has no part
+                # along the resonant eigenvector - unforced, as in a linear
+                # field, or forced only in other directions - and then the
+                # least-squares solution is a chart term. Otherwise no term
+                # of this degree can cancel it.
+                solution = np.linalg.lstsq(matrix, -remainder, rcond=_RESONANCE)[0]
+                defect = np.max(np.abs(matrix @ solution + remainder))
+                if defect > _UNFORCED * max(1.0, float(np.max(np.abs(remainder)))):
+                    message = f"resonance: the rate of {monomial} is {rate}"
+                    raise np.linalg.LinAlgError(message)
+            else:
+                solution = np.linalg.solve(matrix, -remainder)
             for i in range(state):
                 coefficients[i][monomial] = complex(solution[i])
 
@@ -211,17 +262,34 @@ class TaylorManifold:
         return monomials
 
 
-def _real_basis(
-    vectors: np.ndarray,
+def _modes(
     values: np.ndarray,
+    vectors: np.ndarray,
     chosen: list[int],
-) -> np.ndarray:
-    """A real basis of the chosen eigenspace: ``Re v, Im v`` for a pair."""
+) -> tuple[list[complex], np.ndarray, list[int]]:
+    """The chart's rates and linear terms, and where its complex pairs start.
+
+    A real eigenvalue contributes its real eigenvector. A complex pair
+    contributes ``v / 2`` and ``conj(v) / 2`` for ``lambda`` (imaginary part
+    positive) and ``conj(lambda)``, so that on ``z = u + i w`` the linear term
+    ``(v z + conj(v z)) / 2 = u Re v - w Im v`` is real and spans the pair's
+    plane. Taking the real part of both eigenvectors instead - what this did
+    before (DEQ-71) - gives the same vector twice, a rank-one "plane".
+    """
+    rates: list[complex] = []
     columns: list[np.ndarray] = []
+    pairs: list[int] = []
     for index in chosen:
-        vector = vectors[:, index]
-        if abs(values[index].imag) <= _IMAGINARY:
-            columns.append(vector.real)
-        elif values[index].imag > 0.0:
-            columns.extend([vector.real, vector.imag])
-    return np.column_stack(columns)
+        value = complex(values[index])
+        if abs(value.imag) <= _IMAGINARY:
+            rates.append(complex(value.real))
+            columns.append(vectors[:, index].real.astype(complex))
+        elif value.imag > 0.0:
+            pairs.append(len(rates))
+            half = vectors[:, index] / 2.0
+            rates.extend([value, value.conjugate()])
+            columns.extend([half, half.conjugate()])
+    if len(rates) != len(chosen):
+        message = "the selection takes one of a complex pair without the other"
+        raise ValueError(message)
+    return rates, np.column_stack(columns), pairs
