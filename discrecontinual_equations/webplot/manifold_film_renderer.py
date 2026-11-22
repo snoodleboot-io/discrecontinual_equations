@@ -122,7 +122,8 @@ _BODY_FILM = """  <div class="mast">
   </details>
 """
 
-_BODY_FOOT = """  <p class="foot">__NOTE__</p>
+_BODY_FOOT = """  <p class="foot" id="growth"></p>
+  <p class="foot">__NOTE__</p>
 </div>
 """
 
@@ -327,6 +328,18 @@ document.getElementById("csv").addEventListener("click", () => {
   link.download = (D.title || "manifold").replace(/\W+/g, "_") + "_pattern.csv";
   link.click();
 });
+
+// ---------- how the growth ended ----------
+// Whether it reached the distance asked for or stopped short, and why: the
+// grower's own words, so the page never claims more than was computed.
+const ended = D.stopped
+  ? `Growth stopped at r = ${RD[NR - 1].toFixed(2)}: ${D.stopped}.`
+  : `Grown to r = ${RD[NR - 1].toFixed(2)}, the distance asked for.`;
+const lost = D.lost ? ` ${D.lost} landing${D.lost === 1 ? "" : "s"} lost.` : "";
+const warned = D.warnings.length ? ` ${D.warnings.length} ring${
+  D.warnings.length === 1 ? "" : "s"} accepted at the smallest step (${
+  D.warnings.join("; ")}).` : "";
+document.getElementById("growth").textContent = ended + lost + warned;
 
 // ---------- interaction ----------
 let pending = false;
