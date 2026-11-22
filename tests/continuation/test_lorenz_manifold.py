@@ -23,8 +23,13 @@ What is checked, and where each number comes from - all measured here:
   along the level set (``|f . t| / |f| = 0.9993``): continued in the flight
   time from zero, as the paper does, the landing there moves out to 0.0755
   from its centre and turns back inside the ring, so the first crossing of
-  the smallest step is inside (at -0.0937) and no outward landing near the
-  centre exists at any step the growth may take. The ring before was
+  the smallest step is inside (at -0.0937). The outward landing does exist:
+  the continuation, followed further (independently, DOP853), goes 18.7
+  inside and comes round to it at tau = 0.263 - some 400 steps of
+  Delta / 4, where the grower gives a row up after 200. Allowed 2,000 steps
+  it lands both and the growth reaches 162.72 (stopping on 4 of 1,216
+  landings, five rings accepted at the smallest step turning by up to
+  0.93), 16 times slower. The ring before was
   accepted at the smallest step with a warning (it turned by 0.52). (It
   stopped at 157.16 before failed landings were retried alone, and at 142.87
   before the back-trace stopped counting false crossings far from the ring.)

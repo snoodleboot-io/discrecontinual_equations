@@ -40,7 +40,13 @@ level-set grower seeds a spiral manifold on its tangent plane meanwhile). The
 strict Lorenz growth stops at distance 157.4 (step 1.5, spacing 1.5 to 4.5) and
 says so in `GeodesicMesh.stopped`: at two symmetric points the flow runs along
 the level set and the landings continued from the ring turn back inside it
-before reaching the smallest step, 0.094. With `loss` it goes on, with holes.
+before reaching the smallest step, 0.094. The outward landings exist there:
+the continuation comes round to them after an 18.7-long inward detour, past
+its 200-step budget; with 2,000 steps the growth reaches 162.7, 16 times
+slower. With `loss` it goes on, with holes. At the papers' settings it stops
+short of their distances: 150.75 at the SIADS spacing (0.25 to 1.0; published
+151.75) and 152.75 at the survey's (0.67 to 2.0; published 154.75), on 7 and 4
+landings at the smallest step 0.01.
 Krauskopf and Osinga reached 151.75 (SIADS 2003, Sec. 4.5) and 154.75 (IJBC
 2005 survey, Sec. 2.3).
 

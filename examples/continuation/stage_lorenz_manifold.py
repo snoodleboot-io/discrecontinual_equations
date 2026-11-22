@@ -146,10 +146,12 @@ def lorenz_manifold_film() -> ManifoldFilm:
             f"(Nonlinearity 17, 2004; Math. Intelligencer 26, 2004). This "
             f"growth stops at 100 so the page turns smoothly; the same settings "
             f"grow it, strictly, to 157.4, where the flow runs along the "
-            f"level set and no orbit from the ring lands beyond it there; "
-            f"Krauskopf and Osinga reached 151.75 (SIADS 2003) and 154.75 "
-            f"(IJBC 2005), and at their settings this grower matches their "
-            f"rings. By then the scrolls around C+ and C- have formed."
+            f"level set and the landings beyond it are reached only after a "
+            f"long detour the grower does not follow; Krauskopf and Osinga "
+            f"reached 151.75 (SIADS 2003) and 154.75 (IJBC 2005), and at "
+            f"their settings this grower's rings fall at their distances "
+            f"but stop 1 to 2 short. By then the scrolls around C+ and C- "
+            f"have formed."
         ),
     )
     film.curves.extend(_unstable_branches(function, jacobian))
