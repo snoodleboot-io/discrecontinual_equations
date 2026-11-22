@@ -481,4 +481,6 @@ stage draws this distribution behind the exponent.
 
 ::: discrecontinual_equations.continuation.network_continuation
 
+::: discrecontinual_equations.continuation.network_stability
+
 ::: discrecontinual_equations.continuation.residence

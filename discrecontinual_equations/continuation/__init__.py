@@ -140,6 +140,13 @@ from discrecontinual_equations.continuation.network_continuation import (
     NetworkContinuation,
     NetworkPoint,
 )
+from discrecontinual_equations.continuation.network_stability import (
+    CycleStability,
+    NetworkCompetition,
+    f_index,
+    stability_indices,
+    transition_matrices,
+)
 from discrecontinual_equations.continuation.noise import (
     NoiseMatrix,
     NoiseMatrixFunction,
@@ -242,6 +249,7 @@ __all__ = [
     "CyclePoint",
     "CycleSeed",
     "CycleSpectrum",
+    "CycleStability",
     "DeflatedSolver",
     "DeflationSettings",
     "DensityGrid",
@@ -285,6 +293,7 @@ __all__ = [
     "MeanTopExponent",
     "MeshSpec",
     "MinimumActionPath",
+    "NetworkCompetition",
     "NetworkConnection",
     "NetworkContinuation",
     "NetworkPoint",
@@ -335,6 +344,7 @@ __all__ = [
     "cyclic_action",
     "diffusion_matrix",
     "equivariance_defect",
+    "f_index",
     "field_at",
     "fourier_reduce",
     "jacobian_at",
@@ -342,9 +352,11 @@ __all__ = [
     "matrix_noise_lyapunov",
     "noise_matrix_from",
     "resolved_branch",
+    "stability_indices",
     "state_drift_shift",
     "stochastic_finite_time_exponents",
     "stochastic_lyapunov",
     "stratonovich_factor",
+    "transition_matrices",
     "variational_drift_shift",
 ]

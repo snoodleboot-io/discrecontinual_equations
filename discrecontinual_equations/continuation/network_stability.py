@@ -41,6 +41,14 @@ then its transverse eigenvectors). For a cycle of type B they match in order; fo
 type C the contracting line arrives as a transverse one, which is the permutation
 of Podvigina and Ashwin's ``[[b, 1], [a, 0]]``. A cycle whose directions do not
 match one-to-one fails Assumption A and is refused rather than guessed at.
+
+Directions are compared through orthogonal complements, which is exact when the
+subspaces' complements are orthogonal - fixed-point subspaces of an orthogonal
+symmetry group, i.e. every simple cycle in its natural coordinates. In oblique
+coordinates a type B cycle still comes out unchanged (its contracting and
+expanding lines coincide, and the rest is their complement), but a type C cycle
+is refused, as is a node whose repeated transverse eigenvalue leaves its
+eigenvectors undetermined.
 """
 
 import math
@@ -117,14 +125,12 @@ def stability_indices(matrices: list[np.ndarray]) -> np.ndarray:
     if not negative:
         attracting = float(np.max(np.abs(np.linalg.eigvals(returns[0])))) > 1.0
         return np.full(count, math.inf if attracting else -math.inf)
-    leading = [_leading_pair(matrix) for matrix in returns]
-    if any(pair is None for pair in leading):
+    leading = [pair for pair in (_leading_pair(matrix) for matrix in returns) if pair]
+    if len(leading) < count:
         return np.full(count, -math.inf)
     indices = []
-    for j in range(count):
-        pair = leading[j]
-        assert pair is not None  # noqa: S101 (narrowed above for mypy)
-        candidates = [f_index(_rounded(pair[1]))]
+    for j, (_, row) in enumerate(leading):
+        candidates = [f_index(_rounded(row))]
         for node in negative:
             product = _partial_product(matrices, node, j)
             candidates.extend(f_index(_rounded(row)) for row in product)
@@ -421,8 +427,10 @@ def _leading_pair(matrix: np.ndarray) -> tuple[float, np.ndarray] | None:
     ``lambda_max`` is the eigenvalue of largest modulus; it must be real and above
     one, with an eigenvector ``w`` whose components share a sign. (Lemma 3.2 takes
     the largest modulus other than one; when the largest is one or below, the
-    eigenvalue it would take is below one too, and the conditions fail either way.) ``v_max`` is the left eigenvector scaled so ``v . w = 1`` with ``w > 0``:
-    the row of the inverse eigenvector matrix that gives ``w``'s coefficient.
+    eigenvalue it would take is below one too, and the conditions fail either
+    way.) ``v_max`` is the left eigenvector scaled so ``v . w = 1`` with
+    ``w > 0``: the row of the inverse eigenvector matrix that gives ``w``'s
+    coefficient.
     """
     values, vectors = np.linalg.eig(matrix)
     top = int(np.argmax(np.abs(values)))
