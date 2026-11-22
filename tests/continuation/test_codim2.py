@@ -324,6 +324,49 @@ class TestNormalFormCoefficients(TestCase):
             l1 = first_lyapunov(problem, state, 1.0, epsilon, omega)
             assert abs(l1 - expected) < 1.0e-10 * abs(expected)
 
+    def test_first_lyapunov_does_not_depend_on_the_sign_of_omega(self):
+        # -omega names the same Hopf pair, so l1 is the same; Kuznetsov's formula
+        # assumes omega > 0, and Re G21 / (2 omega) at -omega has the wrong sign.
+        problem = self._problem(VanDerPolFastSlow, 2, 1.0, 0.05)
+        state = np.array([1.0, -2.0 / 3.0])
+        expected = -1.0 / (2.0 * np.sqrt(0.05) * 1.05)
+        for omega in (np.sqrt(0.05), -np.sqrt(0.05)):
+            l1 = first_lyapunov(problem, state, 1.0, 0.05, omega)
+            assert abs(l1 - expected) < 1.0e-10 * abs(expected)
+
+    def test_first_lyapunov_on_the_hopf_curve_past_bogdanov_takens(self):
+        # On the Hopf curve of x' = y, y' = b1 + b2 y + x^2 - x y the equilibrium
+        # is (b2, 0) with b1 = -b2^2 and omega^2 = -2 b2. In u = x - b2,
+        # Y = -y / omega it is u' = -omega Y, Y' = omega u - u^2 / omega - u Y, so
+        # Guckenheimer-Holmes gives a = -1 / (8 omega^2) and, with the unit
+        # eigenvector (1, i omega) / sqrt(1 + omega^2),
+        # l1 = -1 / (2 omega^3 (1 + omega^2)). Past the Bogdanov-Takens point the
+        # continuation comes back along the same curve with omega < 0.
+        equation = _equation(BogdanovTakensNormalForm, 2, first=-0.25, second=-0.5)
+        seed = CurveSeed(state=[-0.5, 0.0], parameter_a=-0.25, frequency=1.0)
+        config = Codim2Config(
+            continuation_parameter_index=0,
+            second_parameter_index=1,
+            curve="hopf",
+            initial_parameter=-0.5,
+            direction=1,
+            parameter_lower_bound=-0.6,
+            parameter_upper_bound=0.05,
+        )
+        result = Codim2Driver.run(config, equation, seed)
+        problem = self._problem(BogdanovTakensNormalForm, 2, -0.25, -0.5)
+        negative = 0
+        for parameter_a, parameter_b, omega in result.curve_parameters:
+            if omega is None or abs(omega) < 0.1:
+                continue
+            state = np.array([parameter_b, 0.0])
+            frequency = abs(omega)
+            expected = -1.0 / (2.0 * frequency**3 * (1.0 + frequency**2))
+            l1 = first_lyapunov(problem, state, parameter_a, parameter_b, omega)
+            assert abs(l1 - expected) < 1.0e-6 * abs(expected)
+            negative += omega < 0.0
+        assert negative >= 10
+
     def test_first_lyapunov_under_non_normal_similarity(self):
         # F(x) = S^-1 N(S x), with N the Hopf normal form y' = J y + b |y|^2 y. Its
         # l1 is 2 b / omega for the unit eigenvector (1, -i, 0...) / sqrt(2) of N,
