@@ -18,8 +18,16 @@ Validation. Flow-invariance: integrating the field from ``P(theta)`` reproduces
 3e-14 at orders 3, 5, 7). For the Hamiltonian saddle the unstable manifold is the
 homoclinic loop, and the chart lies on the exact level set ``H = 0`` to 1e-6.
 
-Remaining: complex (spiral) manifolds need the conjugate-coordinate variant; global
-growth beyond the local polynomial chart (arclength/geodesic level sets).
+Global growth of a two-dimensional manifold beyond the chart is
+`geodesic_level_sets.py` (DEQ-30): Krauskopf and Osinga's geodesic level sets,
+seeded on the chart, each new point an orbit-segment BVP. Exact on a plane (rings
+are circles of their radius to 1e-8), second order on the tilted homoclinic
+cylinder, and the Lorenz manifold to geodesic distance 100 in about 5 s.
+
+Remaining: complex (spiral) manifolds need the conjugate-coordinate variant (the
+level-set grower seeds a spiral manifold on its tangent plane meanwhile); the
+Lorenz growth beyond distance ~105, where the flow runs along the level sets and
+some BVPs have no nearby solution.
 
 ## 2. Connecting orbits - ORBIT SOLVER IMPLEMENTED, continuation pending
 
