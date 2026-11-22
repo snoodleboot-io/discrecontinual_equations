@@ -44,7 +44,7 @@ python examples/build_sites.py --list            # names and rough timings
 ```
 
 Three kinds of example are handled. Those that write self-contained HTML (the
-continuation atlas and its eleven stage films) are handed the output
+continuation atlas and its twelve stage films) are handed the output
 directory; those that write PNG and HTML beside their own source have the
 figures they just wrote harvested into a gallery page; and those that only
 print have their console output made into a page.
@@ -74,7 +74,7 @@ name:
 uv run python -m examples.continuation.stage_hopf plots
 ```
 
-Swap the module for any of the eleven. Roughly how long each takes, and what it
+Swap the module for any of the twelve. Roughly how long each takes, and what it
 is for:
 
 | Module | Seconds | What it shows |
@@ -90,6 +90,12 @@ is for:
 | `stage_shilnikov` | 143 | A saddle-focus whose saddle index crosses one |
 | `stage_hopf_hopf` | 157 | Four eigenvalues on the clock, one pair crossing |
 | `stage_ferroelectric_ring` | 169 | A unidirectionally coupled ring of three cells |
+| `stage_rossler_cascade` | 2300* | Rössler doubling its period five times; Feigenbaum's delta from the gaps |
+
+\* Measured on a machine carrying a load of thirty to fifty on twelve cores, so
+slow in absolute terms; it also writes `rossler_cascade.html`, the six-doubling
+table. Its cost is the deep branches: the period-32 cycle is traced on 640
+Gauss–Legendre intervals.
 
 What costs the time has changed, and the order of that table is now the reverse
 of what it used to be. Cycle branches used to dominate: `CycleContinuation` built
@@ -122,7 +128,7 @@ solves of the stationary Fokker-Planck equation, one per frame with a density,
 and on sixty quasipotential marches, which add about two to three seconds a
 frame (measured at a load of five; the table's figure predates the panel).
 
-`build_sites.py` builds all eleven as part of the `continuation` example, along
+`build_sites.py` builds all twelve as part of the `continuation` example, along
 with the rest of the atlas.
 
 ## Running Examples
