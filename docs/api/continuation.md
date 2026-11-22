@@ -436,3 +436,11 @@ of `O(h)` rather than the error.
 ## Connecting orbits
 
 ::: discrecontinual_equations.continuation.connecting_orbit
+
+## Heteroclinic networks
+
+::: discrecontinual_equations.continuation.heteroclinic_network
+
+::: discrecontinual_equations.continuation.network_continuation
+
+::: discrecontinual_equations.continuation.residence

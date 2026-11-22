@@ -179,9 +179,43 @@ solver returns the same near-optimal result as the uniform mesh (no regression).
   is reliable only on the smoother segment away from the tangle. Robustly resolving
   the tangle would need a locator that tracks a specific homoclinic branch rather
   than bisecting the return gap.
-- **Heteroclinic networks** among three or more saddles: still open. The
-  connecting-orbit BVP and shooting machinery are in place, but a clean oracle for a
-  three-saddle connection cycle is the missing piece.
+- **Heteroclinic networks (RESOLVED, starting from robust equivariant cycles).**
+  `HeteroclinicNetwork` (`continuation/heteroclinic_network.py`) holds saddles,
+  connections in flow-invariant subspaces, and the elementary cycles they form; each
+  connection is solved by the projection BVP in the full space, and each cycle's
+  eigenvalues are classified per node into radial, contracting, expanding and
+  transverse (Krupa and Melbourne 1995, section 2.3). The oracles, all in
+  `tests/continuation/test_heteroclinic_network.py`:
+
+  - *Guckenheimer-Holmes cycle* (Krupa 1997, eq. 2.1, `lam = 1`, `a = (-1, -1.5,
+    -0.6)`): seeded 1e-2 off its plane, each connection returns to it to 7e-14;
+    saddles and spectra match eq. 2.2 to 1e-12; `prod c_j > prod e_j` agrees with
+    `2 a1 > a2 + a3` (Theorem 1) on a nine-point grid; at the resonance
+    `a2 + a3 = 2 a1` the connection is the exact arc `u = R^2 / (1 + e^{kt})`, and
+    the BVP converges to it 4.00x per mesh doubling (9.07e-5, 2.27e-5, 5.67e-6).
+  - *Residence times* (Gaunersdorfer 1992, Lemma 1): integrated with scipy DOP853
+    in log coordinates, successive differences of the passage times grow by
+    1.2500001 against `c/e = 1.25`; with the cyclic symmetry broken
+    (`lam_2 = 0.85`) the three per-step ratios match `c_j / e_{j+1}` =
+    (1.0204, 0.6875, 2.6) to 1e-8, and the May-Leonard system with
+    `alpha = a2/a1`, `beta = a3/a1` grows by the same ratio.
+  - *Symmetry-broken network*: lowering `lam_2` keeps every plane invariant but
+    breaks `Z3`. `NetworkContinuation` follows the network, re-solving every
+    connection from the last, with `rho` matching the closed form to 1e-9; `rho`
+    falls through one between `lam_2 = 0.72` and `0.70`, and the continuation then
+    locates the first break - `xi1 -> xi2`, its target ceasing to attract in the
+    plane - at `lam_2 = 2/3` to 1.6e-11, ahead of the source-side break at 0.6.
+  - *Kirk-Silber network* (two cycles sharing `xi1 -> xi2` in `R^4`): the roles at
+    a shared saddle differ per cycle as they must, and the winner predicted by the
+    signs of Castro and Lohse's `delta` (2014, Proposition 5.3) is the cycle
+    simulation follows in both cases tested - including one where it has the
+    smaller stability ratio.
+
+  Headroom: connections are solved where the symmetry already guarantees them, so
+  there is no search for connections not lying in a known subspace; cycles whose
+  nodes are periodic orbits or chaotic sets are not covered; and the competition
+  between cycles is checked against a published criterion rather than computed by
+  the library (stability indices, Podvigina and Ashwin 2011, are the general tool).
 
 ## 3. Further refinements (optional)
 - **Stochastic nD Lyapunov** is implemented and validated on a bounded chaotic
@@ -201,6 +235,6 @@ solver returns the same near-optimal result as the uniform mesh (no regression).
   Open: whether the films should switch, and an arclength norm that means the
   same step under every scheme (an `m`-point scheme's step covers about
   `1/sqrt(m)` of the parameter).
-- **Heteroclinic networks** among three or more saddles (see section 2) are the main
-  substantial item still fully open, blocked on a clean oracle for a three-saddle
-  connection cycle rather than on machinery.
+- **Heteroclinic networks** among three or more saddles (see section 2) are
+  resolved for robust cycles between equilibria; stability indices for cycles
+  inside networks are the natural next step.

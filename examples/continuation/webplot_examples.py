@@ -99,6 +99,11 @@ except ImportError:  # run as a script path: only this directory is on sys.path
     )
 
 try:  # python -m examples.continuation.webplot_examples
+    from examples.continuation.pages_network import _network_entries
+except ImportError:  # run as a script path: only this directory is on sys.path
+    from pages_network import _network_entries
+
+try:  # python -m examples.continuation.webplot_examples
     from examples.continuation.pages_cycles import (
         _adaptive_mesh,
         _collocation_convergence,
@@ -250,6 +255,10 @@ _EQUATIONS = {
     "shilnikov_loop.html": r"\dot{x}=y,\ \dot{y}=z,\ \dot{z}=-a z - y + x - x^2",
     "homoclinic_return.html": r"\dot{x} = y,\quad \dot{y} = x - x^2 + \mu y",
     "heteroclinic_cycle.html": r"\dot{x} = y,\quad \dot{y} = -x + x^3",
+    "heteroclinic_network.html": r"\dot{x}_i = x_i(\lambda + a_1 x_i^2 "
+    r"+ a_2 x_{i+1}^2 + a_3 x_{i+2}^2)",
+    "residence_time_growth.html": r"\dot{x}_i = x_i(\lambda + a_1 x_i^2 "
+    r"+ a_2 x_{i+1}^2 + a_3 x_{i+2}^2)",
     "saddle_focus_onset.html": r"\dot{x}=\sigma(y-x),\ "
     r"\dot{y}=x(\rho-z)-y,\ \dot{z}=xy-\beta z",
     "adaptive_mesh.html": r"\dot{x}=y,\quad \dot{y}=\mu(1-x^2)y - x",
@@ -345,6 +354,7 @@ def _raw_catalogue() -> list[tuple[str, Scene]]:
         ("sevencell_exploration.html", _sevencell_exploration()),
         ("manifolds.html", _manifolds()),
         *_connecting_orbit_entries(),
+        *_network_entries(),
         ("stochastic_density.html", _density_family()),
         ("stochastic_lyapunov.html", _lyapunov()),
     ]
