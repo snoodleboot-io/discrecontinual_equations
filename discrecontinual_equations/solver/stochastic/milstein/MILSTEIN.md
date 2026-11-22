@@ -230,6 +230,42 @@ at 1 for `dt >= 2^-5`, and with `n` fixed the global error goes like `dt^(1/2)`
 like `dt^(-1/2)`, which the ceiling does only in steps. The rest is that for
 `n <= 5` the sampler's error falls more slowly than `1 / n`.
 
+### Diagonal Noise and the `diagonal_noise` Declaration
+
+A vector diffusion is stepped from the `n x n` Jacobian of `b` rather than the
+`n x n x n` array of products (DEQ-48): the products are `P[j, k] = b_j db_k/dx_j`,
+commutativity is "every off-diagonal `|P[j, k]|` within `1e-6` of the largest", and
+the term in component `k` is `(1/2) dW_k sum_j P[j, k] dW_j - (1/2) dt P[k, k]`, the
+general step to rounding. Reading the Jacobian still takes `2 n` evaluations of `b`
+a step, each moving one component.
+
+A function can promise more by setting the class attribute
+`diagonal_noise = True` on its `StochasticFunction`: that `diffusion` returns the
+vector form and that `b_i` reads `x_i` (and `t`) alone. The solvers then read every
+`db_i/dx_i` from two evaluations that move all components at once, so a step costs
+three evaluations of `b` whatever `n` is. Measured on one path at `n = 128`
+(a loaded machine): 1270 ms a step before DEQ-48, 38 ms found automatically, 1.9 ms
+declared. The ensemble and the Stratonovich drift correction of every solver take
+the same shortcut.
+
+```python
+class IndependentNoise(StochasticFunction):
+    diagonal_noise = True  # b_i depends on x_i alone
+
+    def diffusion(self, point, time=None):
+        return [0.3 * math.sin(x) + 0.2 * x for x in point]
+```
+
+A wrong promise would make a wrong step - `cos(y), cos(x)` declared diagonal falls
+from strong order 0.99 to 0.51 - so it is checked once per solve, at the first
+state it is used, which is the initial state: the full Jacobian of `b` there,
+`1 + 2 n` evaluations. An off-diagonal slope beyond `1e-6` of the largest (or a
+NaN) withdraws the declaration with a `UserWarning` naming the function, and that
+solve runs exactly as if nothing had been declared, bit for bit. **The check sees
+only the initial state:** a `b_i` whose dependence on another component vanishes
+there - `x_0 * x_1` started at `x_0 = 0`, say - is not caught and still makes a
+wrong step. Declare diagonal noise only when it holds everywhere.
+
 ## Algorithm Details
 
 ### Single Time Step Implementation
