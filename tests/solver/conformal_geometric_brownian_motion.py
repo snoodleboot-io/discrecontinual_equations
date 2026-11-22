@@ -19,7 +19,6 @@ two-channel Brownian path, as :mod:`tests.solver.geometric_brownian_motion`
 explains.
 """
 
-
 # system need not use)
 
 from dataclasses import dataclass
@@ -44,7 +43,9 @@ class ConformalGeometricBrownianMotion(StochasticFunction):
             time,
         )
 
-    def eval(self, point: list[float], time: float | None = None) -> list[float]:  # noqa: ARG002
+    def eval(
+        self, point: list[float], time: float | None = None  # noqa: ARG002
+    ) -> list[float]:
         a = self.parameters[0].value
         return [a * point[0], a * point[1]]
 
@@ -57,7 +58,9 @@ class ConformalGeometricBrownianMotion(StochasticFunction):
         x, y = point
         return [[sigma * x, -sigma * y], [sigma * y, sigma * x]]
 
-    def eval_batch(self, points: np.ndarray, time: float | None = None) -> np.ndarray:  # noqa: ARG002
+    def eval_batch(
+        self, points: np.ndarray, time: float | None = None  # noqa: ARG002
+    ) -> np.ndarray:
         return self.parameters[0].value * points
 
     def diffusion_batch(

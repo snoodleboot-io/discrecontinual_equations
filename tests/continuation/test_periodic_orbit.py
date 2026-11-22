@@ -420,10 +420,13 @@ class TestAdaptivePeriodicOrbit(TestCase):
             if solution is None:
                 return None, 1.0
             true_error = abs(solution.period - period) / period
-            return orbit.estimate_period_error(
-                solution.states,
-                solution.period,
-            ), true_error
+            return (
+                orbit.estimate_period_error(
+                    solution.states,
+                    solution.period,
+                ),
+                true_error,
+            )
 
         coarse_estimate, coarse_error = estimate(coarse)
         # Either it cannot be refined at all, or refining moves it a long way.

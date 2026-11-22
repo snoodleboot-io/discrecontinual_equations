@@ -58,7 +58,9 @@ class NoiseConvention(ABC):
 class Ito(NoiseConvention):
     """The Ito interpretation; the drift is already the Ito drift."""
 
-    def drift_correction(self, diffusion: float, diffusion_slope: float) -> float:  # noqa: ARG002
+    def drift_correction(
+        self, diffusion: float, diffusion_slope: float  # noqa: ARG002
+    ) -> float:
         return 0.0
 
 

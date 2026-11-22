@@ -208,7 +208,8 @@ class TestStatisticalOracles:
         ensemble_seconds = time.perf_counter() - started
         started = time.perf_counter()
         EulerMaruyamaSolver(config).solve(
-            equation(RotatingOrnsteinUhlenbeck), [0.0, 0.0],
+            equation(RotatingOrnsteinUhlenbeck),
+            [0.0, 0.0],
         )
         single_seconds = time.perf_counter() - started
         assert relative_deviation(np.cov(result.final.T), exact) < 0.03

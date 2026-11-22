@@ -45,10 +45,14 @@ class OrnsteinUhlenbeck(StochasticFunction):
             time,
         )
 
-    def eval(self, point: list[float], time: float | None = None) -> list[float]:  # noqa: ARG002
+    def eval(
+        self, point: list[float], time: float | None = None  # noqa: ARG002
+    ) -> list[float]:
         return [-point[0]]
 
-    def diffusion(self, point: list[float], time: float | None = None) -> list[float]:  # noqa: ARG002
+    def diffusion(
+        self, point: list[float], time: float | None = None  # noqa: ARG002
+    ) -> list[float]:
         return [self.parameters[0].value]
 
 

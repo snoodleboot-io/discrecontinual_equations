@@ -975,9 +975,9 @@ class CycleContinuation:
             self._phase_index,
             self._phase_value,
         )
-        self._equation.derivative.parameters[
-            self._parameter_index
-        ].value = seed.parameter
+        self._equation.derivative.parameters[self._parameter_index].value = (
+            seed.parameter
+        )
         solved = orbit.solve(seed.states, seed.period)
         if solved is None:
             return None
