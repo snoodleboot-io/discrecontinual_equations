@@ -444,3 +444,103 @@ class TestChunkedCellAreas:
         tracemalloc.stop()
         # Nine terms at 2^-12: all cells' X alone would be 590 kB.
         assert peak - areas.nbytes < 9 * 2**10 * 8, peak
+
+
+class TestAccuracySetting:
+    """DEQ-67: the constant ``c1`` of the truncation rule, ``L2 error <= c1 h^(3/2)``.
+
+    ``n = ceil(sqrt(m / (12 pi^2)) / (c1 sqrt(h)))`` (Kastner and Rossler (67)).
+    With ``c1 = 1`` the rule keeps ``n`` at 1 for ``h >= 2^-5`` and the sampler's
+    error falls more slowly than ``1 / n`` for ``n <= 5``, so the global error over
+    ``h = 2^-3 ... 2^-10`` measures a slope of about 0.75; ``c1 = 0.05`` keeps ``n``
+    at 8 or more there, and the slope is 0.975 in theory (Mrongowius and Rossler,
+    Theorem 4.4 (i), summed over ``1 / h`` independent steps).
+    """
+
+    def test_terms_scale_with_the_accuracy(self):
+        for step, dimension, accuracy in [
+            (2.0**-3, 2, 0.05),
+            (2.0**-10, 2, 0.05),
+            (2.0**-8, 5, 0.3),
+            (1e-6, 3, 2.0),
+        ]:
+            expected = int(
+                np.ceil(
+                    np.sqrt(dimension / (12 * np.pi**2)) / (accuracy * np.sqrt(step)),
+                ),
+            )
+            assert LevyAreaSampler.terms(step, dimension, accuracy) == expected
+        assert LevyAreaSampler.terms(2.0**-3, 2, 0.05) == 8
+        assert LevyAreaSampler.terms(2.0**-10, 2, 0.05) == 84
+        assert LevyAreaSampler.terms(2.0**-6, 2) == LevyAreaSampler.terms(
+            2.0**-6,
+            2,
+            1.0,
+        )
+
+    @pytest.mark.parametrize("accuracy", [0.0, -1.0])
+    def test_accuracy_must_be_positive(self, accuracy):
+        with pytest.raises(ValueError, match="accuracy"):
+            LevyAreaSampler(np.random.default_rng(0), accuracy=accuracy)
+
+    @pytest.mark.parametrize("accuracy", [1.0, 0.05])
+    def test_sampler_draws_the_terms_of_its_accuracy(self, accuracy):
+        step = 2.0**-6
+        delta_w = np.sqrt(step) * np.random.default_rng(1).standard_normal((5, 2))
+        terms = LevyAreaSampler.terms(step, 2, accuracy)
+        expected = LevyAreaSampler(np.random.default_rng(2)).sample(
+            delta_w,
+            step,
+            terms=terms,
+        )
+        sampler = LevyAreaSampler(np.random.default_rng(2), accuracy=accuracy)
+        assert np.array_equal(sampler.sample(delta_w, step), expected)
+        cells = LevyAreaSampler(np.random.default_rng(2), accuracy=accuracy)
+        assert np.array_equal(cells.sample_cells(delta_w, step), expected)
+
+    @pytest.mark.parametrize("step", [2.0**-6, 2.0**-12])
+    def test_default_sampler_is_the_order_one_rule(self, step):
+        # At 2^-12 the bound is 8.3 terms: 9 at c1 = 1, 10 at any c1 <= 0.92.
+        delta_w = np.sqrt(step) * np.random.default_rng(1).standard_normal((5, 2))
+        expected = LevyAreaSampler(np.random.default_rng(2)).sample(
+            delta_w,
+            step,
+            terms=LevyAreaSampler.terms(step, 2),
+        )
+        sampler = LevyAreaSampler(np.random.default_rng(2))
+        assert np.array_equal(sampler.sample(delta_w, step), expected)
+
+    @staticmethod
+    def _global_errors(accuracy: float) -> dict[float, float]:
+        # The global L2 error over [0, 1] of sampler-driven Milstein on the
+        # iterated-integral oracle is sqrt(1 / h) times the per-step error.
+        generator = np.random.default_rng(17)
+        errors = {}
+        for exponent in range(3, 11):
+            step = 2.0**-exponent
+            terms = LevyAreaSampler.terms(step, 2, accuracy)
+            delta_w = np.sqrt(step) * generator.standard_normal((4000, 2))
+            approximation, reference = coupled_areas(
+                generator,
+                delta_w,
+                step,
+                terms,
+                reference_terms=16 * terms,
+            )
+            per_step = np.sqrt(np.mean((approximation - reference)[:, 0, 1] ** 2))
+            errors[step] = float(np.sqrt(1.0 / step) * per_step)
+        return errors
+
+    def test_small_accuracy_gives_order_one_at_moderate_steps(self):
+        errors = self._global_errors(0.05)
+        order = np.polyfit(np.log(list(errors)), np.log(list(errors.values())), 1)[0]
+        assert order > 0.95, errors
+        assert all(error < 0.05 * step for step, error in errors.items()), errors
+
+    def test_default_accuracy_measures_the_plateau(self):
+        # What DEQ-67 was raised for, kept as the default: within the bound but
+        # of slope about 0.75 over these steps.
+        errors = self._global_errors(1.0)
+        order = np.polyfit(np.log(list(errors)), np.log(list(errors.values())), 1)[0]
+        assert 0.65 < order < 0.85, errors
+        assert all(error < step for step, error in errors.items()), errors

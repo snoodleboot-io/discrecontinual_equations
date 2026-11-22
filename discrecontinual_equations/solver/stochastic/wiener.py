@@ -150,22 +150,35 @@ class LevyAreaSampler:
     :meth:`sample_cells` draws a fine path's every cell in bounded memory.
     """
 
-    __slots__ = ["_generator"]
+    __slots__ = ["_accuracy", "_generator"]
 
-    def __init__(self, generator: np.random.Generator) -> None:
+    def __init__(self, generator: np.random.Generator, accuracy: float = 1.0) -> None:
+        if not accuracy > 0.0:
+            message = f"accuracy must be positive, got {accuracy}"
+            raise ValueError(message)
         self._generator = generator
+        self._accuracy = float(accuracy)
 
     @staticmethod
-    def terms(step: float, dimension: int) -> int:
-        """The truncation ``n`` that keeps the L2 error per step below ``h^(3/2)``.
+    def terms(step: float, dimension: int, accuracy: float = 1.0) -> int:
+        """The truncation ``n`` that keeps the L2 error per step below ``c1 h^(3/2)``.
 
         From Mrongowius and Rossler's (36), ``max E|I^(n) - I|^2 <= m h^2 / (12
-        pi^2 n^2)``; asking for ``h^(3/2)`` (Kastner and Rossler,
-        arXiv:2201.08424, (64) with ``gamma = 1``, ``c1 = 1``) gives ``n >=
-        sqrt(m / (12 pi^2)) / sqrt(h)`` (their (67)), which is ``O(h^(-1/2))`` -
-        against ``O(h^(-1))`` for the Fourier series without the remainder terms.
+        pi^2 n^2)``; asking for ``c1 h^(3/2)`` (Kastner and Rossler,
+        arXiv:2201.08424, (64) with ``gamma = 1``) gives ``n >= sqrt(m / (12
+        pi^2)) / (c1 sqrt(h))`` (their (67)), which is ``O(h^(-1/2))`` - against
+        ``O(h^(-1))`` for the Fourier series without the remainder terms.
+
+        ``accuracy`` is ``c1``. Any constant gives strong order 1.0 as ``h -> 0``;
+        the default 1 (Kastner and Rossler's ``epsilon = h^(3/2)``) keeps ``n``
+        at 1 for ``h >= 2^-5`` with two channels, and the sampler's error falls
+        more slowly than ``1 / n`` for small ``n``, so sampler-driven Milstein
+        measures a slope of about 0.75 over ``h = 2^-3 ... 2^-10`` (within the
+        bound: at most ``0.4 h``).
+        ``0.05`` measures 0.96 to 0.98 there, for 8 to 17 times the terms
+        (DEQ-67).
         """
-        bound = np.sqrt(dimension / (12.0 * np.pi**2)) / np.sqrt(step)
+        bound = np.sqrt(dimension / (12.0 * np.pi**2)) / (accuracy * np.sqrt(step))
         return max(1, int(np.ceil(bound)))
 
     @staticmethod
@@ -214,12 +227,12 @@ class LevyAreaSampler:
     ) -> np.ndarray:
         """Draw the areas for increments ``delta_w`` of shape ``(..., m)``.
 
-        ``terms`` defaults to :meth:`terms` for the step; the ``2 m n + m + m (m -
-        1) / 2`` normals are drawn in the order ``X``, ``Y``, ``Psi_1``,
-        ``Psi_2``.
+        ``terms`` defaults to :meth:`terms` for the step at this sampler's
+        accuracy; the ``2 m n + m + m (m - 1) / 2`` normals are drawn in the order
+        ``X``, ``Y``, ``Psi_1``, ``Psi_2``.
         """
         dimension = delta_w.shape[-1]
-        count = self.terms(step, dimension) if terms is None else terms
+        count = self._count(step, dimension, terms)
         streams = [self._generator] * 4
         return self._draw(streams, delta_w, step, count)
 
@@ -247,7 +260,7 @@ class LevyAreaSampler:
         normals of one kind a chunk draws.
         """
         cells, dimension = delta_w.shape
-        count = self.terms(step, dimension) if terms is None else terms
+        count = self._count(step, dimension, terms)
         budget = _CHUNK_NORMALS if chunk_normals is None else chunk_normals
         chunk = max(1, budget // (count * dimension))
         pairs = dimension * (dimension - 1) // 2
@@ -267,6 +280,12 @@ class LevyAreaSampler:
             cut = slice(begin, begin + chunk)
             areas[cut] = self._draw(streams, delta_w[cut], step, count)
         return areas
+
+    def _count(self, step: float, dimension: int, terms: int | None) -> int:
+        """``terms`` if given, else the rule's at this sampler's accuracy."""
+        if terms is not None:
+            return terms
+        return self.terms(step, dimension, self._accuracy)
 
     def _draw(
         self,

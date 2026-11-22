@@ -374,3 +374,83 @@ class TestCommutingCaseUnchanged:
             solver.solve(case.equation(), [1.0, 0.0])
         final = [float(r.discretization[-1]).hex() for r in solver.solution.results]
         assert final == _CONFORMAL_HEX[(calculus, source)]
+
+
+# Recorded at 0f43b4c (DEQ-70), before the accuracy setting existed: the default
+# must not change by a single bit (DEQ-67).
+_DEFAULT_HEX = {
+    ("iterated", "generator"): ["-0x1.38c20203854a6p+0", "0x1.2865129180357p-1"],
+    ("iterated", "gaussian"): ["0x1.ec4e59b07641ep-1", "-0x1.efcd9a088d8efp-1"],
+    ("cross", "generator"): ["-0x1.536cb7e3ace7cp-1", "-0x1.267545b983348p-1"],
+    ("cross", "gaussian"): ["0x1.6ea5448c29b27p-1", "-0x1.4f95b385e055bp-2"],
+}
+
+
+class TestLevyAreaAccuracy:
+    """DEQ-67: ``levy_area_accuracy`` is the sampler's ``c1``, default 1."""
+
+    @pytest.mark.parametrize(("noise", "source"), list(_DEFAULT_HEX))
+    def test_default_is_hex_identical_to_before(self, noise, source):
+        function_type = {"iterated": IteratedIntegralNoise, "cross": CrossCosineNoise}
+        config = MilsteinConfig(
+            end_time=1.0,
+            step_size=2**-5,
+            random_seed=7 if source == "generator" else None,
+        )
+        wiener = None if source == "generator" else GaussianWienerSource(17)
+        solver = MilsteinSolver(config, wiener=wiener)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            solver.solve(_equation(function_type[noise]), [0.3, -0.2])
+        final = [float(r.discretization[-1]).hex() for r in solver.solution.results]
+        assert final == _DEFAULT_HEX[(noise, source)]
+
+    @pytest.mark.parametrize("accuracy", [1.0, 0.05])
+    def test_own_sampler_draws_at_the_configured_accuracy(self, accuracy):
+        # On dx = dW_1, dy = x dW_2 the step adds x dW_2 + I_(1,2), so y(T) is
+        # sum W_1 dW_2 + (1/2) dW_1 dW_2 + A_(1,2) over the steps: rebuilt here
+        # from the solver's two streams, with the areas a sampler of that
+        # accuracy draws.
+        step = 2.0**-4
+        seed = 5
+        config = MilsteinConfig(
+            end_time=1.0,
+            step_size=step,
+            random_seed=seed,
+            levy_area_accuracy=accuracy,
+        )
+        final = _final_of(MilsteinSolver(config), IteratedIntegralNoise)
+        increments = np.random.default_rng(seed)
+        sequence = np.random.SeedSequence(seed)
+        sampler = LevyAreaSampler(
+            np.random.default_rng(sequence.spawn(1)[0]),
+            accuracy=accuracy,
+        )
+        w1 = y = 0.0
+        for _ in range(16):
+            delta_w = increments.normal(0, np.sqrt(step), size=2)
+            area = sampler.sample(delta_w, step)
+            y += w1 * delta_w[1] + 0.5 * delta_w[0] * delta_w[1] + area[0, 1]
+            w1 += delta_w[0]
+        assert final[0] == pytest.approx(w1, abs=1e-12)
+        assert final[1] == pytest.approx(y, abs=1e-9)
+
+    def test_default_accuracy_is_one(self):
+        assert MilsteinConfig().levy_area_accuracy == 1.0
+
+    @pytest.mark.parametrize("accuracy", [0.0, -0.5])
+    def test_accuracy_must_be_positive(self, accuracy):
+        with pytest.raises(ValueError, match="levy_area_accuracy"):
+            MilsteinConfig(levy_area_accuracy=accuracy)
+
+    def test_warning_names_the_accuracy(self):
+        config = MilsteinConfig(end_time=0.1, step_size=0.01, levy_area_accuracy=0.05)
+        with pytest.warns(UserWarning, match=r"c1 = 0\.05"):
+            MilsteinSolver(config).solve(_equation(CrossCosineNoise), [0.3, -0.2])
+
+
+def _final_of(solver: MilsteinSolver, function_type) -> np.ndarray:
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        solver.solve(_equation(function_type), [0.0, 0.0])
+    return np.array([r.discretization[-1] for r in solver.solution.results])

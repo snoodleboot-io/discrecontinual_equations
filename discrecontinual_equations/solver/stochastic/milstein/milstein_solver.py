@@ -62,8 +62,9 @@ class MilsteinSolver(Solver):
     sampler on a stream spawned from ``random_seed``, so the increments a seeded
     run draws are the ones Euler-Maruyama draws with that seed. That costs
     ``2 m n + m (m + 1) / 2`` extra normals a step with ``n = ceil(0.092 sqrt(m /
-    Δt))`` Fourier terms (``LevyAreaSampler.terms``), which is why a warning says
-    so once per solve;
+    Δt) / c1)`` Fourier terms (``LevyAreaSampler.terms``, ``c1`` the config's
+    ``levy_area_accuracy``, default 1), which is why a warning says so once per
+    solve;
     before DEQ-36 such noise was refused. A vector diffusion is ``G = diag(b)``:
     with each ``b_i`` depending only on ``x_i`` the noise commutes and the term is
     the familiar per-component ``(1/2) b_i b_i' (ΔW_i² - Δt)``. That case is
@@ -92,6 +93,26 @@ class MilsteinSolver(Solver):
     to grow like ``Δt^(-1/2)``, which the ceiling only does in steps. The rest is
     that for ``n <= 5`` the sampler's error falls more slowly than ``1 / n``. For
     ``Δt = 2^-14 ... 2^-20`` the slope is 0.98.
+
+    **The accuracy setting (DEQ-67).** ``levy_area_accuracy`` is ``c1`` in the
+    rule's per-step bound ``c1 Δt^(3/2)`` (Kastner and Rossler (64)-(67)); ``n``
+    grows like ``1 / c1``. Sampler-driven on the same equation, ``Δt = 2^-3 ...
+    2^-10``, 300-400 paths against a reference coupled to ``16 n`` terms
+    (bootstrap standard error of the slope 0.01): ``c1 = 1`` slope 0.75, error
+    at most ``0.40 Δt``, ``n = 1 ... 5``; ``0.2``: 0.91, ``0.10 Δt``, ``n = 2
+    ... 21``; ``0.1``: 0.96, ``0.05 Δt``, ``n = 4 ... 42``; ``0.05``: 0.96,
+    ``0.026 Δt``, ``n = 8 ... 84`` (0.975 from the closed form of Mrongowius
+    and Rossler's Theorem 4.4 (i); ``0.02`` gives 0.99 there). The extra cost
+    is ``2 m`` normals per extra term: at ``Δt = 2^-10`` 339 normals a step at
+    ``0.05`` against 23 at 1, the sampler alone 1.8 times slower, a two-driver
+    solve no slower within timing noise (the per-step Python work dominates).
+    The default stays 1: it has order 1.0 as ``Δt -> 0`` and is within its bound
+    at every ``Δt``, the normals grow like ``m^(3/2) / c1`` and so matter at
+    fine steps and many drivers, and changing it would change every seeded
+    non-commuting run. Wiktorsson's tail approximation (2001) is not an option
+    to add: Mrongowius and Rossler's second remainder is its refinement, with an
+    error constant ``sqrt(5)`` times smaller for the same ``n`` (Kastner and
+    Rossler, Theorem 2 (iii), (iv)), and it is used at every ``n``.
 
     References:
     - Milstein, Grigori N. "Numerical Integration of Stochastic Differential Equations"
@@ -129,7 +150,10 @@ class MilsteinSolver(Solver):
         # Levy areas for non-commuting noise when no source is given, on a stream of
         # their own so that drawing them leaves the increment stream untouched.
         sequence = np.random.SeedSequence(solver_config.random_seed)
-        self._areas = LevyAreaSampler(np.random.default_rng(sequence.spawn(1)[0]))
+        self._areas = LevyAreaSampler(
+            np.random.default_rng(sequence.spawn(1)[0]),
+            accuracy=solver_config.levy_area_accuracy,
+        )
 
     def solve(
         self,
@@ -175,7 +199,7 @@ class MilsteinSolver(Solver):
             else:
                 commuting = True
             if not commuting and not warned:
-                self._warn_cost(drivers)
+                self._warn_cost(drivers, self.solver_config.levy_area_accuracy)
                 warned = True
 
             # Generate Wiener increment: delta_w ~ N(0, dt), one per driver, and
@@ -330,12 +354,13 @@ class MilsteinSolver(Solver):
         return scale == 0.0 or asymmetry <= _COMMUTATIVITY_TOLERANCE * scale
 
     @staticmethod
-    def _warn_cost(drivers: int) -> None:
+    def _warn_cost(drivers: int, accuracy: float) -> None:
         message = (
             "MilsteinSolver: the noise does not commute ((dG_k/dx) G_j differs from "
             "(dG_j/dx) G_k), so every such step draws the Levy areas between its "
             f"{drivers} drivers: 2 m n + m (m + 1) / 2 extra normals a step with "
-            "n = ceil(0.092 sqrt(m / dt)) Fourier terms (DEQ-36). "
+            f"n = ceil(0.092 sqrt(m / dt) / c1) Fourier terms, c1 = {accuracy:g} "
+            "(levy_area_accuracy; DEQ-36, DEQ-67). "
             "EulerMaruyamaSolver needs none, at strong order 0.5."
         )
         warnings.warn(message, UserWarning, stacklevel=3)
