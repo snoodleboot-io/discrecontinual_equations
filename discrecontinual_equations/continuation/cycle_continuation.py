@@ -1500,9 +1500,11 @@ class CycleContinuation:
         back; trapezoidal's first step is itself 148 long, but it recovers. The
         trapezoidal cycle is within its own ``O(h^2)`` error of the fourth-order
         one, and from there the correction converges in a few quadratic steps.
-        It is also the cheap way round: the correction uses the analytic sparse
-        Jacobian, where a dense fourth-order orbit solve would cost seconds at
-        160 nodes and dominate a short trace.
+        Both stages are sparse and cost ``O(N)`` field calls per Newton
+        iteration (DEQ-49): the orbit solver differences its Jacobian a column
+        group at a time, and the correction uses the analytic blocks. On van
+        der Pol at 160 nodes the seed takes no longer than one continuation
+        step.
         """
         orbit = PeriodicOrbit(
             self._equation.derivative,

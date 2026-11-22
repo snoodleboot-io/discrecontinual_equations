@@ -14,9 +14,12 @@ is a fold of cycles, ``-1`` a period-doubling, a complex conjugate pair on the u
 circle a Neimark-Sacker torus bifurcation).
 """
 
+import functools
+import warnings
+
 import numpy as np
-from scipy.sparse import coo_matrix
-from scipy.sparse.linalg import spsolve
+from scipy.sparse import coo_matrix, csc_matrix
+from scipy.sparse.linalg import MatrixRankWarning, spsolve
 
 from discrecontinual_equations.continuation.derivative_provider import (
     AutomaticDifferentiation,
@@ -187,6 +190,89 @@ def _certified(levels: list[ResolutionLevel], tolerance: float) -> float | None:
     return max(agreement for agreement in agreements if agreement is not None)
 
 
+def _column_groups(rows: np.ndarray, columns: np.ndarray, size: int) -> np.ndarray:
+    """Group the columns of a sparse Jacobian so one difference fills each group.
+
+    Curtis, Powell and Reid (IMA J. Appl. Math. 13, 1974): two columns with no
+    row in common can be perturbed together, because each row then sees only
+    one of the two perturbations, and the difference of the residual separates
+    back into both columns exactly. This is their sequential grouping: each
+    column, in order, joins the first group none of whose columns shares a row
+    with it. Coleman and More (SIAM J. Numer. Anal. 20, 1983) show the problem
+    is graph colouring and that the order can matter; on the bordered banded
+    patterns here the natural order already finds a handful of groups.
+
+    ``rows`` and ``columns`` are the structurally nonzero entries; the result
+    holds each column's group.
+    """
+    order = np.argsort(columns, kind="stable")
+    rows, columns = rows[order], columns[order]
+    bounds = np.searchsorted(columns, np.arange(size + 1))
+    groups = np.full(size, -1)
+    occupied: list[np.ndarray] = []
+    height = int(rows.max()) + 1 if rows.size else 0
+    for column in range(size):
+        touched = rows[bounds[column] : bounds[column + 1]]
+        index = next(
+            (place for place, mask in enumerate(occupied) if not mask[touched].any()),
+            len(occupied),
+        )
+        if index == len(occupied):
+            occupied.append(np.zeros(height, dtype=bool))
+        occupied[index][touched] = True
+        groups[column] = index
+    return groups
+
+
+@functools.cache
+def _difference_pattern(
+    nodes: int,
+    dimension: int,
+    phase_index: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Where the residual's Jacobian can be nonzero, and its column groups.
+
+    ``(rows, columns, groups)``. Interval ``i``'s equations read nodes ``i`` and
+    ``i+1`` - every component, since the field couples them - and the period;
+    periodicity row ``d`` reads component ``d`` of the first and last nodes; the
+    phase row reads one component of the first. That holds for every scheme
+    here that couples an interval only to its own two nodes. Cached, because it
+    depends only on the shape and the grouping is a Python loop over columns.
+    """
+    intervals = nodes - 1
+    span = np.arange(dimension)
+    # Each interval's rows against both its nodes' columns, then the period.
+    rows = (np.arange(intervals)[:, None] * dimension + span)[:, :, None]
+    columns = np.arange(intervals)[:, None, None] * dimension + np.arange(
+        2 * dimension,
+    )
+    shape = (intervals, dimension, 2 * dimension)
+    collocation = intervals * dimension
+    periodic = collocation + span
+    all_rows = np.concatenate(
+        [
+            np.broadcast_to(rows, shape).ravel(),
+            np.arange(collocation),
+            periodic,
+            periodic,
+            [collocation + dimension],
+        ],
+    )
+    all_columns = np.concatenate(
+        [
+            np.broadcast_to(columns, shape).ravel(),
+            np.full(collocation, nodes * dimension),
+            collocation + span,
+            span,
+            [phase_index],
+        ],
+    )
+    groups = _column_groups(all_rows, all_columns, nodes * dimension + 1)
+    for shared in (all_rows, all_columns, groups):
+        shared.setflags(write=False)  # cached: every caller sees the same arrays
+    return all_rows, all_columns, groups
+
+
 def _hermite_positions(
     ends: np.ndarray,
     slopes: np.ndarray,
@@ -348,6 +434,61 @@ class PeriodicOrbit:
         """Solve on the refined mesh. Overridden where ``solve`` resets the mesh."""
         return refined.solve(states, period)
 
+    def _difference_jacobian(
+        self,
+        unknowns: np.ndarray,
+        nodes: int,
+        dimension: int,
+        residual: np.ndarray,
+    ) -> csc_matrix:
+        """The forward-difference Jacobian, one residual per column group.
+
+        Columns that share no row are perturbed together (:func:`_column_groups`),
+        so the cost is a few residuals - about three per state component, and one
+        for the period - however many nodes there are, where perturbing every
+        unknown alone cost ``nodes * dimension + 1`` of them. Each entry is the
+        same number the one-column difference gives, to the last bit: a row
+        reads only the nodes it depends on, so the other columns in the group do
+        not reach it. Only the solve differs.
+        """
+        rows, columns, groups = _difference_pattern(
+            nodes,
+            dimension,
+            self._phase_index,
+        )
+        size = unknowns.size
+        differences = np.empty((int(groups.max()) + 1, residual.size))
+        for group in range(differences.shape[0]):
+            shifted = unknowns.copy()
+            shifted[groups == group] += _STEP
+            differences[group] = (
+                self._residual(shifted, nodes, dimension) - residual
+            ) / _STEP
+        values = differences[groups[columns], rows]
+        return csc_matrix((values, (rows, columns)), shape=(residual.size, size))
+
+    def _newton_update(
+        self,
+        unknowns: np.ndarray,
+        nodes: int,
+        dimension: int,
+        residual: np.ndarray,
+    ) -> np.ndarray:
+        """One Newton update, by a sparse LU on the grouped-difference Jacobian.
+
+        Where the Jacobian is singular the LU yields a non-finite update rather
+        than raising, and the dense least-squares solve every step used to make
+        takes over, on the very same matrix.
+        """
+        jacobian = self._difference_jacobian(unknowns, nodes, dimension, residual)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", MatrixRankWarning)
+            update = spsolve(jacobian, -residual)
+        if np.all(np.isfinite(update)):
+            return update
+        fallback, *_ = np.linalg.lstsq(jacobian.toarray(), -residual, rcond=None)
+        return fallback
+
     def solve(
         self,
         seed_states: np.ndarray,
@@ -363,15 +504,12 @@ class PeriodicOrbit:
             residual = self._residual(unknowns, nodes, dimension)
             if np.linalg.norm(residual) < _TOLERANCE:
                 break
-            jacobian = np.empty((residual.size, unknowns.size))
-            for j in range(unknowns.size):
-                shifted = unknowns.copy()
-                shifted[j] += _STEP
-                jacobian[:, j] = (
-                    self._residual(shifted, nodes, dimension) - residual
-                ) / _STEP
-            update, *_ = np.linalg.lstsq(jacobian, -residual, rcond=None)
-            unknowns = unknowns + update
+            unknowns = unknowns + self._newton_update(
+                unknowns,
+                nodes,
+                dimension,
+                residual,
+            )
         if np.linalg.norm(self._residual(unknowns, nodes, dimension)) >= _TOLERANCE:
             return None
         states = unknowns[: nodes * dimension].reshape(nodes, dimension)
@@ -487,14 +625,7 @@ class RobustPeriodicOrbit(PeriodicOrbit):
             norm = float(np.linalg.norm(residual))
             if norm < _TOLERANCE:
                 break
-            jacobian = np.empty((residual.size, unknowns.size))
-            for j in range(unknowns.size):
-                shifted = unknowns.copy()
-                shifted[j] += _STEP
-                jacobian[:, j] = (
-                    self._residual(shifted, nodes, dimension) - residual
-                ) / _STEP
-            update, *_ = np.linalg.lstsq(jacobian, -residual, rcond=None)
+            update = self._newton_update(unknowns, nodes, dimension, residual)
             unknowns = self._guarded_step(
                 unknowns,
                 update,
@@ -582,12 +713,12 @@ _AUTODIFF = AutomaticDifferentiation()
 class AnalyticPeriodicOrbit(PeriodicOrbit):
     """A limit-cycle solver whose Newton Jacobian is assembled analytically.
 
-    The base solver builds the Newton Jacobian by finite-differencing the whole
-    residual, which costs O(N^2) field evaluations and carries finite-difference
-    noise. This solver assembles the same (banded) Jacobian block by block from the
-    exact state Jacobian of the field, obtained by forward-mode automatic
-    differentiation (Taylor jets). The cost drops to O(N) field-Jacobian evaluations
-    and the Jacobian is exact, which is the prerequisite for an affordable adaptive
+    The base solver builds the Newton Jacobian by finite differences, a column
+    group at a time, which costs O(N) field evaluations but carries
+    finite-difference noise. This solver assembles the same (banded) Jacobian block
+    by block from the exact state Jacobian of the field, obtained by forward-mode
+    automatic differentiation (Taylor jets): O(N) field-Jacobian evaluations, and
+    the Jacobian is exact, which is the prerequisite for an affordable adaptive
     mesh and for analytic Floquet analysis. The field must be analytic (polynomial or
     rational); transcendental fields should use the base solver.
     """
