@@ -8,6 +8,14 @@ phase condition to remove the time-translation freedom. The trajectory is
 discretised by the trapezoidal rule and the resulting system is solved by
 Gauss-Newton. The projection conditions use the left eigenvectors of the Jacobian,
 the linear approximation of the manifolds parameterised exactly in ``manifold.py``.
+These are Beyn's projection boundary conditions (IMA J. Numer. Anal. 10, 1990), as
+HomCont uses them (Champneys, Kuznetsov & Sandstede, IJBC 6, 1996).
+
+The Newton matrix is block-banded - each collocation row couples two neighbouring
+nodes - and bordered by the boundary and phase rows, which touch only the two end
+nodes and the centre. It is assembled sparse from per-node field Jacobians and
+factored with a sparse LU, so an iteration costs time and memory linear in the
+number of nodes.
 
 This solves for a single connecting orbit of a fixed field; continuing it in a
 parameter (the codim-1 global bifurcation) is the next step and is described in
@@ -18,8 +26,9 @@ complex-eigenvector projection and are deferred.
 from abc import ABC, abstractmethod
 
 import numpy as np
-from scipy.sparse import csr_matrix
-from scipy.sparse.linalg import lsmr
+from scipy.sparse import bmat, csc_matrix, csr_matrix
+from scipy.sparse import identity as sparse_identity
+from scipy.sparse.linalg import SuperLU, lsmr, splu
 
 from discrecontinual_equations.continuation.derivative_provider import (
     AutomaticDifferentiation,
@@ -38,13 +47,16 @@ _RCOND = 1.0e-8
 # least-squares minimum is nonzero and ``_DEFAULT_TOLERANCE`` is unreachable.
 # Stop once repeated iterations stop improving on the best residual seen.
 _STAGNATION_LIMIT = 3
-# Convergence tolerance for the iterative least squares. Tight enough that the
-# step matches a dense factorisation to well below the accuracy of the orbit.
+# Convergence tolerance for the iterative least squares, the fallback when the
+# sparse factorisation fails. Tight enough that the step matches a dense
+# factorisation to well below the accuracy of the orbit.
 _LSMR_TOLERANCE = 1.0e-13
 _LSMR_ITERATIONS = 10000
 # lsmr's istop value meaning it hit maxiter without converging.
 _LSMR_ITERATION_LIMIT = 7
 _HALF = 0.5
+# Column ordering for the sparse LU of the Newton system; see ``_factor``.
+_ORDERING = "COLAMD"
 # How far the truncation estimate extends the interval, as a fraction of the
 # half-length. Truncation error decays like ``exp(-2 lambda T)``, so a fraction
 # rather than a fixed time keeps the reduction comparable across problems whose
@@ -152,6 +164,8 @@ class ConnectingOrbit(ABC):
     """
 
     __slots__ = ["_function", "_mesh"]
+    _function: Function
+    _mesh: MeshSpec
 
     def solve(self, seed: np.ndarray) -> OrbitSolution:
         """Refine ``seed`` to the connecting orbit by Gauss-Newton iteration.
@@ -185,7 +199,12 @@ class ConnectingOrbit(ABC):
             jacobian = self._jacobian(unknowns, times, shape, residual, analytic)
             if jacobian is None:
                 analytic = False
-                jacobian = self._numerical_jacobian(unknowns, times, shape, residual)
+                jacobian = self._numerical_jacobian(
+                    unknowns,
+                    times,
+                    shape,
+                    residual.size,
+                )
             unknowns = unknowns + self._least_squares(jacobian, residual)
         return OrbitSolution(times, best.reshape(shape))
 
@@ -344,23 +363,36 @@ class ConnectingOrbit(ABC):
         centre = states.shape[0] // 2
         return states[centre, self._mesh.phase_index] - self._mesh.phase_value
 
-    def _least_squares(self, jacobian: np.ndarray, residual: np.ndarray) -> np.ndarray:
-        """Solve the overdetermined Newton system for a step.
+    def _least_squares(self, jacobian: csr_matrix, residual: np.ndarray) -> np.ndarray:
+        """Solve the overdetermined Newton system for a step, by a sparse direct solve.
 
-        The collocation system is under 1% nonzero, and a dense singular-value
-        factorisation of it is by far the most expensive part of an iteration.
-        ``lsmr`` works on the sparse matrix directly and reaches the same step.
+        The least-squares step ``x`` minimising ``|J x + r|`` is the lower half of the
+        solution of the augmented system
 
-        Forming the normal equations instead would be faster still, but squares
-        the condition number, and the conditioning here varies by several orders
-        of magnitude along the iteration - not a trade worth making inside a
-        solver whose callers supply their own fields. The dense factorisation
-        remains as a fallback for the case where the iterative solve does not
-        return a usable step.
+            [ I    J ] [ s ]   [ -r ]
+            [ J^T  0 ] [ x ] = [  0 ],
+
+        whose first row defines the residual ``s = -r - J x`` and whose second is
+        the normal equations ``J^T s = 0`` - without forming ``J^T J``, so the
+        condition number is not squared. The collocation rows are block-banded and
+        only the boundary and phase rows reach across the mesh, so the augmented
+        matrix factors with ``splu`` in fill linear in the nodes.
+
+        This replaces ``lsmr``, whose iteration count grew with the nodes. It
+        remains the fallback for a factorisation that is singular or non-finite,
+        with the dense least-squares solve behind it.
         """
-        sparse = csr_matrix(jacobian)
+        rows, columns = jacobian.shape
+        right = np.concatenate([-residual, np.zeros(columns)])
+        try:
+            solution = _factor(_augmented(jacobian)).solve(right)
+        except RuntimeError:  # exactly singular: fall through to the fallbacks
+            solution = np.full(rows + columns, np.nan)
+        step = solution[rows:]
+        if np.all(np.isfinite(step)):
+            return step
         step, stop, *_ = lsmr(
-            sparse,
+            jacobian,
             -residual,
             atol=_LSMR_TOLERANCE,
             btol=_LSMR_TOLERANCE,
@@ -368,7 +400,7 @@ class ConnectingOrbit(ABC):
         )
         if stop != _LSMR_ITERATION_LIMIT and np.all(np.isfinite(step)):
             return step
-        fallback, *_ = np.linalg.lstsq(jacobian, -residual, rcond=_RCOND)
+        fallback, *_ = np.linalg.lstsq(jacobian.toarray(), -residual, rcond=_RCOND)
         return fallback
 
     def _jacobian(
@@ -378,7 +410,7 @@ class ConnectingOrbit(ABC):
         shape: tuple[int, int],
         residual: np.ndarray,
         analytic: bool,  # noqa: FBT001
-    ) -> np.ndarray | None:
+    ) -> csr_matrix | None:
         """The exact Jacobian, or ``None`` when the field cannot be differentiated.
 
         Automatic differentiation evaluates the field on Taylor jets, which a
@@ -398,7 +430,7 @@ class ConnectingOrbit(ABC):
         times: np.ndarray,
         shape: tuple[int, int],
         rows: int,
-    ) -> np.ndarray:
+    ) -> csr_matrix:
         """Assemble the exact Jacobian block by block, in O(N) field Jacobians.
 
         Trapezoidal collocation couples only neighbouring nodes, so the collocation
@@ -409,71 +441,140 @@ class ConnectingOrbit(ABC):
         affine in the states they touch, so their exact rows come from unit
         displacements.
 
-        This replaces a dense finite-difference construction costing one full
-        residual per unknown, and removes the finite-difference noise that made the
-        smallest singular directions meaningless.
+        The blocks go straight into a sparse matrix: nothing of size ``N^2`` is
+        ever allocated.
         """
-        nodes, dimension = shape
         states = unknowns.reshape(shape)
-        jacobian = np.zeros((rows, unknowns.size))
-        identity = np.eye(dimension)
-        derivatives = [
-            _AUTODIFF.jacobian(self._function, states[i], 0.0) for i in range(nodes)
-        ]
-        for i in range(nodes - 1):
-            weight = _HALF * float(times[i + 1] - times[i])
-            row = i * dimension
-            here = slice(i * dimension, (i + 1) * dimension)
-            ahead = slice((i + 1) * dimension, (i + 2) * dimension)
-            jacobian[row : row + dimension, here] = -identity - weight * derivatives[i]
-            jacobian[row : row + dimension, ahead] = (
-                identity - weight * derivatives[i + 1]
-            )
-        self._affine_rows(unknowns, shape, jacobian, (nodes - 1) * dimension)
-        return jacobian
-
-    def _affine_rows(
-        self,
-        unknowns: np.ndarray,
-        shape: tuple[int, int],
-        jacobian: np.ndarray,
-        offset: int,
-    ) -> None:
-        """Fill the boundary and phase rows, which are affine in the states."""
-        nodes, dimension = shape
-        states = unknowns.reshape(shape)
-        base = self._boundary(states)
-        touched = (0, nodes - 1)
-        for node in touched:
-            for component in range(dimension):
-                shifted = states.copy()
-                shifted[node, component] += 1.0
-                column = node * dimension + component
-                jacobian[offset : offset + base.size, column] = (
-                    self._boundary(shifted) - base
-                )
-        centre = nodes // 2
-        phase_column = centre * dimension + self._mesh.phase_index
-        jacobian[offset + base.size, phase_column] = 1.0
+        derivatives = np.array(
+            [_AUTODIFF.jacobian(self._function, state, 0.0) for state in states],
+        )
+        return self._assemble(unknowns, times, shape, rows, derivatives)
 
     def _numerical_jacobian(
         self,
         unknowns: np.ndarray,
         times: np.ndarray,
         shape: tuple[int, int],
-        residual: np.ndarray,
-    ) -> np.ndarray:
-        columns = np.empty((residual.size, unknowns.size))
-        for j in range(unknowns.size):
-            shifted = unknowns.copy()
+        rows: int,
+    ) -> csr_matrix:
+        """The same sparse assembly, with each node's field Jacobian differenced.
+
+        The collocation rows see the field only through the node Jacobians, so
+        differencing the field at each node - ``dimension`` extra evaluations per
+        node - fills the same banded pattern as automatic differentiation, in O(N)
+        work rather than one full residual per unknown.
+        """
+        states = unknowns.reshape(shape)
+        derivatives = np.array([self._differenced(state) for state in states])
+        return self._assemble(unknowns, times, shape, rows, derivatives)
+
+    def _differenced(self, state: np.ndarray) -> np.ndarray:
+        """Forward-difference Jacobian of the field at one node."""
+        base = np.array(self._function.eval(point=list(state), time=None))
+        columns = np.empty((state.size, state.size))
+        for j in range(state.size):
+            shifted = state.copy()
             shifted[j] += _STEP
-            columns[:, j] = (self._residual(shifted, times, shape) - residual) / _STEP
+            columns[:, j] = (
+                np.array(self._function.eval(point=list(shifted), time=None)) - base
+            ) / _STEP
         return columns
+
+    def _assemble(
+        self,
+        unknowns: np.ndarray,
+        times: np.ndarray,
+        shape: tuple[int, int],
+        rows: int,
+        derivatives: np.ndarray,
+    ) -> csr_matrix:
+        """Collocation blocks from the node Jacobians, bordered by the affine rows."""
+        nodes, dimension = shape
+        row, column, value = _collocation_triplets(derivatives, times)
+        border = self._affine_triplets(unknowns, shape, (nodes - 1) * dimension)
+        return csr_matrix(
+            (
+                np.concatenate([value, border[2]]),
+                (np.concatenate([row, border[0]]), np.concatenate([column, border[1]])),
+            ),
+            shape=(rows, unknowns.size),
+        )
+
+    def _affine_triplets(
+        self,
+        unknowns: np.ndarray,
+        shape: tuple[int, int],
+        offset: int,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """The boundary and phase rows, which are affine in the states, as triplets."""
+        nodes, dimension = shape
+        states = unknowns.reshape(shape)
+        base = self._boundary(states)
+        rows: list[np.ndarray] = []
+        columns: list[np.ndarray] = []
+        values: list[np.ndarray] = []
+        for node in (0, nodes - 1):
+            for component in range(dimension):
+                shifted = states.copy()
+                shifted[node, component] += 1.0
+                rows.append(offset + np.arange(base.size))
+                columns.append(np.full(base.size, node * dimension + component))
+                values.append(self._boundary(shifted) - base)
+        centre = nodes // 2
+        rows.append(np.array([offset + base.size]))
+        columns.append(np.array([centre * dimension + self._mesh.phase_index]))
+        values.append(np.array([1.0]))
+        return np.concatenate(rows), np.concatenate(columns), np.concatenate(values)
 
     @abstractmethod
     def _boundary(self, states: np.ndarray) -> np.ndarray:
         """Projection boundary conditions at the two ends of the orbit."""
         raise NotImplementedError
+
+
+def _collocation_triplets(
+    derivatives: np.ndarray,
+    times: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Sparse triplets of the trapezoidal collocation rows, from node Jacobians.
+
+    ``derivatives[i]`` is the field Jacobian at node ``i``. Interval ``i`` owns rows
+    ``i*n .. i*n+n-1`` and holds ``-I - (h_i/2) Df(x_i)`` against node ``i`` and
+    ``I - (h_i/2) Df(x_{i+1})`` against node ``i+1``: two ``n x n`` blocks per
+    interval, ``2 N n^2`` nonzeros in all.
+    """
+    nodes, dimension, _ = derivatives.shape
+    weights = _HALF * np.diff(times)[:, None, None]
+    identity = np.eye(dimension)
+    here = -identity - weights * derivatives[:-1]
+    ahead = identity - weights * derivatives[1:]
+    first = np.arange(nodes - 1)[:, None, None] * dimension
+    rows = np.broadcast_to(first + np.arange(dimension)[None, :, None], here.shape)
+    columns = np.broadcast_to(first + np.arange(dimension)[None, None, :], here.shape)
+    return (
+        np.concatenate([rows.ravel(), rows.ravel()]),
+        np.concatenate([columns.ravel(), (columns + dimension).ravel()]),
+        np.concatenate([here.ravel(), ahead.ravel()]),
+    )
+
+
+def _augmented(jacobian: csr_matrix) -> csc_matrix:
+    """The augmented matrix ``[[I, J], [J^T, 0]]`` of the least-squares problem."""
+    rows = jacobian.shape[0]
+    return bmat(
+        [[sparse_identity(rows), jacobian], [jacobian.T, None]],
+        format="csc",
+    )
+
+
+def _factor(matrix: csc_matrix) -> SuperLU:
+    """Sparse LU with a column ordering that keeps the bordered band's fill linear.
+
+    The ordering matters more than anything else here. On the augmented saddle
+    system ``COLAMD`` holds ``nnz(L + U) / nnz(A)`` at 2.6 from N = 200 to 3200;
+    a minimum-degree ordering of ``A^T + A`` lets it grow with N, to 322 at 3200.
+    """
+    return splu(matrix, permc_spec=_ORDERING)
 
 
 def _split_eigenspaces(

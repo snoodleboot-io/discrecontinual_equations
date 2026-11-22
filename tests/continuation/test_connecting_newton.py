@@ -192,7 +192,7 @@ class TestConnectingOrbitNewton(TestCase):
             unknowns,
             times,
             seed.shape,
-            residual,
+            residual.size,
         )
         assert issparse(numerical)
         analytic_solver, _, _ = _saddle_problem(40)
@@ -276,7 +276,6 @@ class TestHomoclinicCurveNewton(TestCase):
         jacobian = curve._jacobian(  # noqa: SLF001
             unknowns,
             times,
-            nodes,
             dimension,
             sweep,
             residual(unknowns),
@@ -300,7 +299,6 @@ class TestHomoclinicCurveNewton(TestCase):
         jacobian = curve._jacobian(  # noqa: SLF001
             unknowns,
             times,
-            nodes,
             dimension,
             sweep,
             residual,
@@ -330,7 +328,6 @@ class TestHomoclinicCurveNewton(TestCase):
             jacobian = curve._jacobian(  # noqa: SLF001
                 unknowns,
                 times,
-                nodes,
                 dimension,
                 sweep,
                 residual,
