@@ -1,6 +1,7 @@
 from discrecontinual_equations.curve import Curve
 from discrecontinual_equations.differential_equation import DifferentialEquation
 from discrecontinual_equations.solver.solver_config import SolverConfig
+from discrecontinual_equations.variable import Variable
 
 
 class Solver:
@@ -19,7 +20,10 @@ class Solver:
     The solver workflow:
     1. Initialize with solver configuration
     2. Call solve() with equation and initial conditions
-    3. Access results through the solution attribute
+    3. Use the curve solve() returns, which is also kept as the solution attribute
+
+    Each solve builds a curve of its own and leaves the equation unchanged, so an
+    equation can be solved any number of times, by one solver or several (DEQ-45).
     """
 
     solution: Curve | None = None
@@ -46,7 +50,7 @@ class Solver:
         Solve the differential equation with given initial conditions.
 
         This method must be implemented by all concrete solver subclasses.
-        The solution will be stored in the 'solution' attribute.
+        The solution is returned and also stored in the 'solution' attribute.
 
         Args:
             equation: The differential equation to solve, containing
@@ -57,3 +61,31 @@ class Solver:
             NotImplementedError: This is an abstract method.
         """
         raise NotImplementedError
+
+    @staticmethod
+    def _new_solution(equation: DifferentialEquation) -> Curve:
+        """An empty curve for one solve, on variables of its own.
+
+        The time and state variables are copies of the equation's, named alike
+        but with an empty discretization, so appending a run never writes into
+        the equation: a solver that appended to the equation's own ``Variable``
+        objects handed back every run so far, concatenated, from the second
+        solve on (DEQ-45). This is what the ensemble solver has always done with
+        its ``EnsembleResult``. The results are ``Integral of <name>``, as before.
+        """
+        variables = equation.derivative.variables
+        time = equation.derivative.time
+        return Curve(
+            time=None if time is None else _empty_copy(time),
+            variables=[_empty_copy(variable) for variable in variables],
+            results=[
+                Variable(name=f"Integral of {variable.name}") for variable in variables
+            ],
+        )
+
+
+def _empty_copy(variable: Variable) -> Variable:
+    """``variable`` with its type, name and abbreviation, and nothing recorded."""
+    return variable.model_copy(
+        update={"discretization": [], "range": list(variable.range)},
+    )

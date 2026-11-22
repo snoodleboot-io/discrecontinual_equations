@@ -4,7 +4,6 @@ from discrecontinual_equations.solver.deterministic.adams_bashforth2.adams_bashf
     AdamsBashforth2Config,
 )
 from discrecontinual_equations.solver.solver import Solver
-from discrecontinual_equations.variable import Variable
 
 
 class AdamsBashforth2Solver(Solver):
@@ -24,16 +23,12 @@ class AdamsBashforth2Solver(Solver):
     def __init__(self, solver_config: AdamsBashforth2Config):
         super().__init__(solver_config=solver_config)
 
-    def solve(self, equation: DifferentialEquation, initial_values: list[float]):
-        results = [
-            Variable(name=f"Integral of {variable.name}")
-            for variable in equation.derivative.variables
-        ]
-        self.solution = Curve(
-            time=equation.derivative.time,
-            variables=equation.derivative.variables,
-            results=results,
-        )
+    def solve(
+        self,
+        equation: DifferentialEquation,
+        initial_values: list[float],
+    ) -> Curve:
+        self.solution = self._new_solution(equation)
 
         # Store derivatives for multi-step method
         derivatives = []
@@ -83,3 +78,4 @@ class AdamsBashforth2Solver(Solver):
                 derivatives.append(current_derivative)
 
             increment += 1
+        return self.solution

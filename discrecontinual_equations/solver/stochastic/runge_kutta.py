@@ -21,7 +21,6 @@ from discrecontinual_equations.solver.stochastic.wiener import (
     WienerIncrements,
     WienerSource,
 )
-from discrecontinual_equations.variable import Variable
 
 
 class StochasticRungeKuttaSolver(Solver):
@@ -41,16 +40,12 @@ class StochasticRungeKuttaSolver(Solver):
         # Brownian path fixed in advance, which is what a convergence study needs.
         self._wiener = wiener or GaussianWienerSource(solver_config.random_seed)
 
-    def solve(self, equation: DifferentialEquation, initial_values: list[float]):
-        results = [
-            Variable(name=f"Integral of {variable.name}")
-            for variable in equation.derivative.variables
-        ]
-        self.solution = Curve(
-            time=equation.derivative.time,
-            variables=equation.derivative.variables,
-            results=results,
-        )
+    def solve(
+        self,
+        equation: DifferentialEquation,
+        initial_values: list[float],
+    ) -> Curve:
+        self.solution = self._new_solution(equation)
         config = self.solver_config
         coefficients = ItoCoefficients(equation, config.calculus)
 
@@ -65,6 +60,7 @@ class StochasticRungeKuttaSolver(Solver):
             increments = self._wiener.increments(t_current, dt, len(y))
             y = self._step(y, t_current, dt, coefficients, increments)
             self.solution.append([config.times[i + 1], [0] * len(y), y.tolist()])
+        return self.solution
 
     def _check_dimension(self, dimension: int) -> None:
         """Refuse systems a scheme was not derived for; the default accepts all."""

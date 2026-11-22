@@ -6,7 +6,6 @@ from discrecontinual_equations.solver.deterministic.fehlberg.fehlberg_config imp
     FehlbergConfig,
 )
 from discrecontinual_equations.solver.solver import Solver
-from discrecontinual_equations.variable import Variable
 
 
 class FehlbergSolver(Solver):
@@ -48,16 +47,12 @@ class FehlbergSolver(Solver):
 
         self.c = np.array([0, 1 / 4, 3 / 8, 12 / 13, 1, 1 / 2])
 
-    def solve(self, equation: DifferentialEquation, initial_values: list[float]):
-        results = [
-            Variable(name=f"Integral of {variable.name}")
-            for variable in equation.derivative.variables
-        ]
-        self.solution = Curve(
-            time=equation.derivative.time,
-            variables=equation.derivative.variables,
-            results=results,
-        )
+    def solve(
+        self,
+        equation: DifferentialEquation,
+        initial_values: list[float],
+    ) -> Curve:
+        self.solution = self._new_solution(equation)
 
         # Initialize
         t = self.solver_config.start_time
@@ -87,6 +82,7 @@ class FehlbergSolver(Solver):
                 h = max(h_new, self.solver_config.min_step_size)
                 if h < self.solver_config.min_step_size:
                     raise RuntimeError("Step size became too small")
+        return self.solution
 
     def _step(self, equation: DifferentialEquation, t: float, y: np.ndarray, h: float):
         """Perform one Fehlberg step."""

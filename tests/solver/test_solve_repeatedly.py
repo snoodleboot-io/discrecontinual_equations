@@ -116,10 +116,18 @@ class _MultiplicativeNoise(StochasticFunction):
             time,
         )
 
-    def eval(self, point: list[float], time: float | None = None) -> list[float]:  # noqa: ARG002
+    def eval(
+        self,
+        point: list[float],
+        time: float | None = None,  # noqa: ARG002
+    ) -> list[float]:
         return [-point[0]]
 
-    def diffusion(self, point: list[float], time: float | None = None) -> list[float]:  # noqa: ARG002
+    def diffusion(
+        self,
+        point: list[float],
+        time: float | None = None,  # noqa: ARG002
+    ) -> list[float]:
         return [self.parameters[0].value * point[0]]
 
 
@@ -154,7 +162,8 @@ _ADAPTIVE = {"start_time": 0.0, "end_time": 1.0, "initial_step_size": 0.1}
 _SEEDED = {**_FIXED, "random_seed": _SEED}
 
 # (name, equation factory, solver factory): every per-path solver family
-_FAMILIES: list[tuple[str, Callable[[], DifferentialEquation], Callable[[], Solver]]] = [
+_Family = tuple[str, Callable[[], DifferentialEquation], Callable[[], Solver]]
+_FAMILIES: list[_Family] = [
     ("euler", _ordinary, lambda: EulerSolver(EulerConfig(**_FIXED))),
     (
         "adams_bashforth2",
