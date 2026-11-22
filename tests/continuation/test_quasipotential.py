@@ -810,13 +810,15 @@ class TestErrorEstimate(TestCase):
     def test_the_start_slides_to_where_u_plus_the_action_is_least(self):
         # Started half a radian round the surface from the traced crossing, the
         # secant must still bring the start to the stationary point: anywhere
-        # else U + S is larger, by the square of the distance.
-        grid = DensityGrid.box([-1.5, -1.5], [1.5, 1.5], [81, 81])
-        drift, noise = rotating_drift(), constant_noise(rotating_noise_matrix())
-        solver = OrderedLineIntegral(drift, noise, grid)
-        field = solver.solve(EquilibriumAttractor([0.0, 0.0]))
-        target = np.array([0.8, -0.3])
-        surface = field.attractor.start(grid, drift, noise, target)
+        # else U + S is larger, by the square of the distance. About the
+        # nonlinear well the surface is not a level set of U, so only the root
+        # of (grad U - p) . t is that point (on a linear system grad U . t
+        # vanishes on the surface and (grad U + p) . t has the same root).
+        solver, field, _checked_field, _indices, _true = _checked("gradient")
+        drift = system(AnisotropicGradientField)
+        noise = constant_noise(ANISOTROPIC_AMPLITUDE)
+        target = np.array([-1.5, -0.8])
+        surface = field.attractor.start(field.grid, drift, noise, target)
         chain, parameter = _guide(
             surface,
             solver.minimum_action_path(field, target).states,
@@ -824,8 +826,8 @@ class TestErrorEstimate(TestCase):
         )
         gmam = GeometricMinimumAction(drift, noise, tolerance=1.0e-8)
         value, _chain, _place = _relax_from(gmam, surface, (chain, parameter + 0.5))
-        exact = float(rotating_quasipotential(target[None, :])[0])
-        assert abs(value - exact) < 3.0e-5
+        exact = float(_gradient_exact(target[None, :])[0])
+        assert abs(value - exact) < 1.0e-4
 
     def test_a_field_without_its_attractor_cannot_be_checked(self):
         _solver, field, _checked_field, _indices, _true = _checked("gradient")
