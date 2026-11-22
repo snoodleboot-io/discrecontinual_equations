@@ -1016,7 +1016,20 @@ class TestDefaultRadius(TestCase):
     """
 
     def test_the_radius_follows_the_paper_rule_on_larger_grids(self):
-        expected = {41: 8, 88: 8, 90: 8, 128: 10, 161: 10, 256: 14, 321: 14, 513: 18}
+        # log2 rounds: 182 is 7.51 and 200 is 7.64, nearer 8 than 7; 181 is 7.4998.
+        expected = {
+            41: 8,
+            88: 8,
+            90: 8,
+            128: 10,
+            161: 10,
+            181: 10,
+            182: 14,
+            200: 14,
+            256: 14,
+            321: 14,
+            513: 18,
+        }
         for count, radius in expected.items():
             grid = DensityGrid.box([-1.0, -1.0], [1.0, 1.0], [count, count])
             assert default_radius(grid) == radius, count
@@ -1123,6 +1136,22 @@ class TestQuadraticUpdate(TestCase):
         assert bends(2, 2, [(3, 2)])[0] == pytest.approx(spacing**2)
         status[4, 2] = 0  # neither: the straight base
         assert bends(2, 2, [(3, 2)])[0] == 0.0
+
+    def test_the_point_behind_x0_is_preferred_when_both_are_accepted(self):
+        # U = x^3 along a row, where the two fits differ: through x0 - e the
+        # bend is (U(-1) - 2 U0 + U1) / 2, through x1 + e it is (U(2) - U0 -
+        # 2 dU) / 2. With all four points accepted the first is taken.
+        grid = DensityGrid.box([0.0, 0.0], [1.0, 1.0], [5, 5])
+        lattice = _HalfLattice(grid, double_well(), constant_noise(_IDENTITY))
+        march = _March(grid, lattice, (np.array([1]), np.array([0])), quadratic=True)
+        values = grid.axis(0) ** 3
+        march.values[:] = values[:, None]
+        march._status[1:5, 2] = _ACCEPTED  # noqa: SLF001 (the fit itself)
+        behind = 0.5 * (values[1] - 2.0 * values[2] + values[3])
+        beyond = 0.5 * (values[4] - values[2] - 2.0 * (values[3] - values[2]))
+        assert abs(behind - beyond) > 1.0e-3
+        bend = march._bends(2, 2, [(3, 2)])[0]  # noqa: SLF001
+        assert bend == pytest.approx(behind)
 
     def test_an_unknown_order_is_refused(self):
         grid = DensityGrid.box([-1.0, -1.0], [1.0, 1.0], [11, 11])
