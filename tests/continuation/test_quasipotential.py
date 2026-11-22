@@ -72,6 +72,7 @@ from tests.continuation.quasipotential_systems import (
     AnisotropicGradientField,
     DoubleWellField,
     MaierSteinField,
+    MultiplicativeField,
     NonNormalField,
     PaperCycleField,
     PaperLinearField,
@@ -79,6 +80,7 @@ from tests.continuation.quasipotential_systems import (
     constant_noise,
     double_well,
     kronecker_covariance,
+    multiplicative_noise,
     potential,
     rotating_drift,
     rotating_noise_matrix,
@@ -317,14 +319,18 @@ class TestMinimumActionPath(TestCase):
         assert np.all(np.isfinite(paths[0].states))
         assert abs(paths[0].action - paths[1].action) < 1.0e-6
 
-    def test_gmam_refuses_a_state_dependent_diffusion(self):
-        parameters = [Alpha(value=1.0), Sigma(value=0.7)]
-        gmam = GeometricMinimumAction(
-            HopfField([State(), State()], parameters, [State(), State()], None),
-            _conformal(parameters),
-        )
-        with pytest.raises(ValueError, match="constant"):
-            gmam.path(np.linspace([0.5, 0.0], [1.2, 0.0], 21))
+    def test_gmam_follows_a_state_dependent_diffusion(self):
+        # The conformal noise of the noisy Hopf, D = s^2 r^2 I, about its cycle:
+        # the grid-free reference relaxes gMAM in its general form from the
+        # band's edge, against U = (r^2 - mu - mu log(r^2 / mu)) / s^2.
+        _grid, solver, field = _hopf_cycle_field(1.0)
+        target = np.array([1.35, 0.85])
+        squared = float(target @ target)
+        exact = (squared - 1.0 - math.log(squared)) / 0.7**2
+        value, own = solver.reference(field, target)
+        assert abs(value - exact) < 1.0e-3
+        assert abs(value - exact) <= own
+        assert abs(value - exact) < abs(field.at(target) - exact)
 
 
 def _conformal(parameters):
@@ -1341,3 +1347,86 @@ class TestBatchedFields(TestCase):
             EquilibriumAttractor(WELL),
         )
         assert np.array_equal(batched.values, single.values)
+
+
+# --- State-dependent noise (DEQ-59) ------------------------------------------
+
+
+@functools.cache
+def _multiplicative_field(count):
+    grid = DensityGrid.box([-2.0, -1.5], [1.0, 1.5], [count, count])
+    solver = OrderedLineIntegral(
+        system(MultiplicativeField),
+        multiplicative_noise(),
+        grid,
+    )
+    return grid, solver, solver.solve(EquilibriumAttractor(WELL))
+
+
+def _multiplicative_error(count):
+    grid, _solver, field = _multiplicative_field(count)
+    points = grid.points()
+    exact = _gradient_exact(points)
+    inside = (points[:, 0] < -0.5) & (exact <= _GRADIENT_LEVEL)
+    return float(np.max(np.abs(field.values.ravel()[inside] - exact[inside])))
+
+
+class TestMultiplicativeNoise(TestCase):
+    """``f = -D(x) grad V + c R grad V`` with a state-dependent ``D``: ``U = 2 V``."""
+
+    def test_the_construction_solves_the_hamilton_jacobi_equation(self):
+        # Checked here rather than trusted: grad U . f + (1/2) grad U^T D grad U
+        # at U = 2 (V - V_min) vanishes to rounding at random states.
+        drift, noise = system(MultiplicativeField), multiplicative_noise()
+        rng = np.random.default_rng(4)
+        for state in rng.uniform([-2.0, -1.5], [1.0, 1.5], (50, 2)):
+            slope = 2.0 * np.array([state[0] ** 3 - state[0], state[1]])
+            diffusion = noise.columns_at(state).T @ noise.columns_at(state)
+            residual = slope @ np.array(drift.eval(list(state))) + 0.5 * (
+                slope @ diffusion @ slope
+            )
+            assert abs(residual) < 1.0e-12
+
+    def test_the_cubic_term_sees_the_varying_noise(self):
+        # U = 2 (V - V_min) whatever D(x) is, so U3 = -2 (x + 1)^3 here too;
+        # without the D1 term of the cubic equation it is not.
+        coefficients = _cubic_coefficients(
+            system(MultiplicativeField),
+            multiplicative_noise(),
+            np.array(WELL),
+            np.diag([2.0, 1.0]),
+        )
+        assert np.allclose(coefficients, [-2.0, 0.0, 0.0, 0.0], atol=1.0e-5)
+
+    def test_the_grid_converges_to_twice_the_potential(self):
+        # Measured 0.160, 0.0398, 0.0205 at the default radius (8, 8, 10):
+        # orders 2.00 and 0.95, the second held down by the radius growing to
+        # 10, as for the double well.
+        errors = [_multiplicative_error(count) for count in (41, 81, 161)]
+        assert errors[0] > errors[1] > errors[2]
+        assert min(_orders(errors)) > 0.9
+
+    def test_gmam_converges_to_twice_the_potential(self):
+        gmam = GeometricMinimumAction(
+            system(MultiplicativeField),
+            multiplicative_noise(),
+        )
+        target = np.array([-0.6, 0.5])
+        exact = float(_gradient_exact(target[None, :])[0])
+        # Measured 1.36e-4, 3.11e-5, 1.04e-5: orders 2.12, 1.58.
+        errors = [
+            abs(gmam.path(np.linspace(WELL, target, nodes)).action - exact)
+            for nodes in (41, 81, 161)
+        ]
+        assert errors[2] < 2.0e-5
+        assert min(_orders(errors)) > 1.0
+
+    def test_gmam_agrees_with_the_grid_within_its_error_estimate(self):
+        grid, solver, field = _multiplicative_field(81)
+        index = np.ravel_multi_index(grid.nearest([-0.6, 0.5]), grid.shape)
+        checked = solver.check(field, [index])
+        target = grid.points()[index]
+        value, _own = solver.reference(field, target)
+        assert abs(field.values.ravel()[index] - value) <= checked.errors.ravel()[index]
+        exact = float(_gradient_exact(target[None, :])[0])
+        assert abs(value - exact) < abs(field.values.ravel()[index] - exact)
