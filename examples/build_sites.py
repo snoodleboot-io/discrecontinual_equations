@@ -93,7 +93,7 @@ EXAMPLES: tuple[Example, ...] = (
         "Self-contained pages for equilibrium branches, codimension-1, -2 and "
         "-3 bifurcations, parameter-family surfaces, exploration trees and "
         "connecting orbits, plus {films} scrubbable films.",
-        19.0,
+        25.0,
     ),
     Example(
         "lorenz",
