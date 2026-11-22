@@ -96,7 +96,11 @@ def _central_differences(residual, unknowns: np.ndarray) -> np.ndarray:
     return columns
 
 
-def _bogdanov_takens_problem(intervals: int, field_type=BogdanovTakensField):
+def _bogdanov_takens_problem(
+    intervals: int,
+    field_type=BogdanovTakensField,
+    continuation_index: int = 0,
+):
     parameters = [BetaOne(value=0.0), BetaTwo(value=0.0)]
     equation = DifferentialEquation(
         variables=[State(), State()],
@@ -121,7 +125,12 @@ def _bogdanov_takens_problem(intervals: int, field_type=BogdanovTakensField):
             epsilon**3 * 3.0 * math.sqrt(2.0) * profile * np.tanh(scaled),
         ],
     )
-    curve = HomoclinicCurve(equation, 0, 1, MeshSpec(half, intervals, 1, 0.0))
+    curve = HomoclinicCurve(
+        equation,
+        continuation_index,
+        1 - continuation_index,
+        MeshSpec(half, intervals, 1, 0.0),
+    )
     unknowns = np.concatenate(
         [orbit.flatten(), [epsilon**2, 0.0], [-(epsilon**4)]],
     )
@@ -261,7 +270,21 @@ class TestConnectingOrbitNewton(TestCase):
 
 class TestHomoclinicCurveNewton(TestCase):
     def test_jacobian_is_sparse_square_and_matches_differences(self):
-        curve, times, unknowns, sweep = _bogdanov_takens_problem(30)
+        """Either parameter may be the free one.
+
+        ``b1`` enters the field as a constant, so its column cannot tell which
+        nodes an interval averages; ``b2`` multiplies ``y``, so it can.
+        """
+        for continuation_index in (0, 1):
+            with self.subTest(continuation_index=continuation_index):
+                self._check_against_differences(continuation_index)
+
+    @staticmethod
+    def _check_against_differences(continuation_index: int) -> None:
+        curve, times, unknowns, sweep = _bogdanov_takens_problem(
+            30,
+            continuation_index=continuation_index,
+        )
         nodes, dimension = times.size, 2
 
         def residual(values):
