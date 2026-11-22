@@ -356,7 +356,9 @@ class CovariantLyapunov:
     def angles(self, first: int, second: int) -> AngleDistribution:
         """``arccos |v_first . v_second|`` at every sample (Ginelli et al., Eq. 4)."""
         cosines = np.abs(
-            np.einsum("ni,ni->n", self._vectors[:, :, first], self._vectors[:, :, second]),
+            np.einsum(
+                "ni,ni->n", self._vectors[:, :, first], self._vectors[:, :, second]
+            ),
         )
         return AngleDistribution(np.arccos(np.clip(cosines, 0.0, 1.0)))
 
@@ -495,18 +497,17 @@ def stochastic_finite_time_exponents(
     if windows < 1:
         message = "at least one window is needed"
         raise ValueError(message)
-    rows = []
-    for index in range(windows):
-        rows.append(
-            matrix_noise_lyapunov(
-                system,
-                start,
-                settings=StochasticLyapunovSettings(
-                    dt=control.dt,
-                    horizon=window,
-                    transient=control.transient,
-                    seed=control.seed + index,
-                ),
-            ).exponents,
-        )
+    rows = [
+        matrix_noise_lyapunov(
+            system,
+            start,
+            settings=StochasticLyapunovSettings(
+                dt=control.dt,
+                horizon=window,
+                transient=control.transient,
+                seed=control.seed + index,
+            ),
+        ).exponents
+        for index in range(windows)
+    ]
     return FiniteTimeExponents(np.array(rows), window * control.dt)

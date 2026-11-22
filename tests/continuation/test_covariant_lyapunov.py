@@ -79,7 +79,9 @@ def _matrix_field(matrix):
 
 def _aligned(vector, reference):
     """``|cos|`` of the angle between two directions, signs ignored."""
-    return abs(vector @ reference) / (np.linalg.norm(vector) * np.linalg.norm(reference))
+    return abs(vector @ reference) / (
+        np.linalg.norm(vector) * np.linalg.norm(reference)
+    )
 
 
 def _lorenz_jacobian(state):
@@ -215,7 +217,9 @@ class TestLorenz(TestCase):
             np.array([1.0, 1.0, 1.0]),
             settings=LyapunovSettings(dt=0.01, horizon=20000, transient=1000),
         ).exponents
-        assert np.all(np.abs(self.result.exponents - benettin) < np.array([0.1, 0.05, 0.2]))
+        assert np.all(
+            np.abs(self.result.exponents - benettin) < np.array([0.1, 0.05, 0.2])
+        )
 
     def test_vectors_are_covariant_under_an_independent_integration(self):
         # The expanding and neutral vectors are carried forward from sample n
@@ -237,15 +241,16 @@ class TestLorenz(TestCase):
                         backward,
                     )
                     assert np.allclose(end, result.states[n + lag], atol=1.0e-3)
-                    assert _aligned(carried, result.vectors[target][:, j]) > 1.0 - 1.0e-8
+                    assert (
+                        _aligned(carried, result.vectors[target][:, j]) > 1.0 - 1.0e-8
+                    )
 
     def test_the_neutral_vector_is_the_flow_direction(self):
         # Wolfe and Samelson (2007, Sec. 4.1) found 0.02 degrees.
         lorenz = _function(LorenzField, 3)
         field = np.array([lorenz.eval(list(x)) for x in self.result.states])
         cosines = [
-            _aligned(field[n], self.result.vectors[n][:, 1])
-            for n in range(len(field))
+            _aligned(field[n], self.result.vectors[n][:, 1]) for n in range(len(field))
         ]
         angles = np.degrees(np.arccos(np.clip(cosines, 0.0, 1.0)))
         assert np.median(angles) < 0.02
@@ -269,7 +274,7 @@ class TestLorenz(TestCase):
         short = self.result.finite_time_exponents(10)
         # Over one time unit the leading exponent is often negative; over ten
         # it is not, and the spread shrinks with the window.
-        assert 0.05 < 1.0 - short.fraction_positive()[0]
+        assert 1.0 - short.fraction_positive()[0] > 0.05
         longer = self.result.finite_time_exponents(100)
         assert longer.spread[0] < 0.5 * short.spread[0]
 
@@ -340,7 +345,9 @@ class TestNoisyPitchfork(TestCase):
         # 60 draws: the sample spread is within 25 percent of the truth at
         # better than three standard errors.
         assert abs(finite.spread[0] - expected) < 0.25 * expected
-        assert abs(finite.mean[0] - (0.1 - 0.5 * self._SIGMA**2)) < 3.0 * expected / math.sqrt(60)
+        assert abs(
+            finite.mean[0] - (0.1 - 0.5 * self._SIGMA**2)
+        ) < 3.0 * expected / math.sqrt(60)
 
     def test_the_median_crosses_zero_at_the_dynamical_threshold(self):
         exact = 0.5 * self._SIGMA**2
@@ -411,7 +418,9 @@ class TestSummaries(TestCase):
         assert angles.median == pytest.approx(0.25)
         assert angles.fraction_below(0.25) == pytest.approx(0.5)
         assert angles.quantile(1.0) == pytest.approx(0.4)
-        finite = FiniteTimeExponents(np.array([[1.0, -2.0], [-1.0, -4.0], [3.0, 0.0]]), 2.0)
+        finite = FiniteTimeExponents(
+            np.array([[1.0, -2.0], [-1.0, -4.0], [3.0, 0.0]]), 2.0
+        )
         assert np.allclose(finite.median, [1.0, -2.0])
         assert np.allclose(finite.mean, [1.0, -2.0])
         assert np.allclose(finite.fraction_positive(), [2.0 / 3.0, 0.0])

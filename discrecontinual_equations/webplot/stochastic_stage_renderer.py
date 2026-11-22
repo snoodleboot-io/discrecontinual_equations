@@ -133,8 +133,8 @@ __QUASIPOTENTIAL_PANEL__\
           <span><i style="border-color:var(--hopf)"></i>estimate (Benettin, common
             random numbers)</span>
           <span><i class="dash" style="border-color:var(--faint)"></i>closed form</span>
-          <span id="ft-legend" hidden><i style="border-color:var(--hopf);opacity:.4"></i>finite-time
-            exponent: median, 25-75% and 10-90% over windows of
+          <span id="ft-legend" hidden><i style="border-color:var(--hopf);opacity:.4">
+            </i>finite-time exponent: median, 25-75% and 10-90% over windows of
             <span id="ft-window"></span></span>
         </div>
       </section>
