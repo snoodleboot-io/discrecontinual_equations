@@ -24,6 +24,7 @@ plain Euclidean norm of the whole unknown vector, not AUTO's integral phase
 condition and weighted ``L2`` norm.
 """
 
+import warnings
 from collections.abc import Callable, Sequence
 from itertools import pairwise
 from numbers import Integral
@@ -95,6 +96,11 @@ _SEED_EXTENT_RATIO = 2.0
 # Imaginary parts this many machine epsilons per factor of a multiplier's size
 # are the complex arithmetic's rounding, not a conjugate pair.
 _REAL_TOLERANCE = 64.0 * float(np.finfo(float).eps)
+# How a point's multipliers were read (:attr:`CyclePoint.multipliers_method`).
+_HERMITE_MONODROMY = "hermite_monodromy"
+_PERIODIC_QR = "periodic_qr"
+_EXPLICIT_PRODUCT = "explicit_product"
+_UNREAD = "none"
 # The damped seed correction: as many iterations as the adaptive orbit solver
 # allows, halving each step at most thirty times, the period kept above a tenth
 # of the seed's - the floor :class:`RobustPeriodicOrbit` uses.
@@ -541,27 +547,37 @@ def _jacobian_monodromy(block: np.ndarray, dimension: int) -> np.ndarray:
     return monodromy
 
 
-def _product_multipliers(transfers: np.ndarray) -> np.ndarray:
+def _product_multipliers(transfers: np.ndarray) -> tuple[np.ndarray, str]:
     """Eigenvalues of the transfer product by periodic QR, never forming it.
 
     A multiplier far below the largest keeps its own relative accuracy this
     way (see :mod:`periodic_schur`): on van der Pol at ``mu = 5`` the explicit
     product read the 7.7e-38 multiplier as 1e-15 noise. Should the iteration
-    not converge, the product's eigenvalues are the fallback, as before. A
-    spectrum whose imaginary parts are all at rounding level comes back real,
-    as :func:`numpy.linalg.eigvals` would return it.
+    not converge, the product's eigenvalues are the fallback, as before - with
+    a :class:`RuntimeWarning`, since they are then accurate only relative to
+    the largest. A spectrum whose imaginary parts are all at rounding level
+    comes back real, as :func:`numpy.linalg.eigvals` would return it.
+
+    Returns the multipliers and how they were read: ``"periodic_qr"`` or
+    ``"explicit_product"`` (see :attr:`CyclePoint.multipliers_method`).
     """
     try:
         values = periodic_eigenvalues(transfers)
-    except PeriodicSchurError:
+    except PeriodicSchurError as failure:
+        warnings.warn(
+            f"{failure}; the Floquet multipliers come from the explicit product, "
+            "accurate only relative to the largest",
+            RuntimeWarning,
+            stacklevel=2,
+        )
         product = np.eye(transfers.shape[1])
         for transfer in transfers:
             product = transfer @ product
-        return np.linalg.eigvals(product)
+        return np.linalg.eigvals(product), _EXPLICIT_PRODUCT
     rounding = _REAL_TOLERANCE * transfers.shape[0] * np.abs(values)
     if np.all(np.abs(values.imag) <= rounding):
-        return values.real.copy()
-    return values
+        return values.real.copy(), _PERIODIC_QR
+    return values, _PERIODIC_QR
 
 
 class _DifferentiatedOrbit(PeriodicOrbit):
@@ -617,21 +633,30 @@ class CyclePoint:
     multiplier cannot say it (see :attr:`floquet_error`); ``None`` means it can.
     """
 
-    __slots__ = ["_error", "_mesh", "_multipliers", "_parameter", "_solution"]
+    __slots__ = [
+        "_error",
+        "_mesh",
+        "_method",
+        "_multipliers",
+        "_parameter",
+        "_solution",
+    ]
 
-    def __init__(
+    def __init__(  # noqa: PLR0913 (the point's readings, all optional)
         self,
         parameter: float,
         solution: PeriodicOrbitSolution,
         multipliers: np.ndarray,
         mesh: np.ndarray | None = None,
         error: float | None = None,
+        method: str = _HERMITE_MONODROMY,
     ) -> None:
         self._parameter = parameter
         self._solution = solution
         self._multipliers = multipliers
         self._mesh = mesh
         self._error = error
+        self._method = method
 
     @property
     def parameter(self) -> float:
@@ -647,6 +672,18 @@ class CyclePoint:
     def multipliers(self) -> np.ndarray:
         """Floquet multipliers of the cycle."""
         return self._multipliers
+
+    @property
+    def multipliers_method(self) -> str:
+        """How :attr:`multipliers` were read.
+
+        ``"hermite_monodromy"`` under the one-wide schemes; under
+        Gauss-Legendre ``"periodic_qr"``, or ``"explicit_product"`` where the
+        periodic QR iteration did not converge - those multipliers are accurate
+        only relative to the largest, and a :class:`RuntimeWarning` said so -
+        or ``"none"`` where an interval block could not be solved.
+        """
+        return self._method
 
     @property
     def mesh(self) -> np.ndarray:
@@ -1481,11 +1518,17 @@ class CycleContinuation:
             point.mesh,
         )
 
-    def _jacobian_multipliers(self, unknowns: np.ndarray, nodes: int) -> np.ndarray:
+    def _jacobian_multipliers(
+        self,
+        unknowns: np.ndarray,
+        nodes: int,
+    ) -> tuple[np.ndarray, str]:
         """Floquet multipliers off the collocation Jacobian at ``unknowns``.
 
         The blocks are the ones the tangent solve just assembled at this very
         point whenever :meth:`trace` asks, and are only rebuilt otherwise.
+        Returned with how they were read (:func:`_product_multipliers`), or
+        ``nan`` and ``"none"`` where a block could not be solved.
         """
         assembled = self._assembled
         if assembled is None or not np.array_equal(assembled[0], unknowns):
@@ -1497,9 +1540,9 @@ class CycleContinuation:
         try:
             transfers = _transfer_matrices(assembled[1], self._dimension)
         except np.linalg.LinAlgError:
-            return np.full(self._dimension, np.nan)
+            return np.full(self._dimension, np.nan), _UNREAD
         if not np.all(np.isfinite(transfers)):
-            return np.full(self._dimension, np.nan)
+            return np.full(self._dimension, np.nan), _UNREAD
         return _product_multipliers(transfers)
 
     def _doubled_multipliers(
@@ -1546,7 +1589,7 @@ class CycleContinuation:
         corrected = fine._correct(unknowns, nodes, _Arc(unknowns, fixed_parameter, 0.0))
         if corrected is None:
             return np.full(self._dimension, np.nan)
-        return fine._jacobian_multipliers(corrected, nodes)
+        return fine._jacobian_multipliers(corrected, nodes)[0]
 
     def _solve_seed(self, seed: CycleSeed, nodes: int) -> np.ndarray | None:
         """The first point on the branch, or ``None`` if no believable one is found.
@@ -1831,7 +1874,7 @@ class CycleContinuation:
         # The point keeps every point of the solution, interior ones included,
         # with where each sits: the Hermite cross-check, asked for, walks them.
         positions = self._collocation.grid(self._mesh)
-        multipliers = self._jacobian_multipliers(unknowns, nodes)
+        multipliers, method = self._jacobian_multipliers(unknowns, nodes)
         if np.all(np.isfinite(multipliers)):
             doubled = self._doubled_multipliers(states, period, parameter)
             refinement = (
@@ -1850,4 +1893,5 @@ class CycleContinuation:
             multipliers,
             positions,
             error,
+            method,
         )

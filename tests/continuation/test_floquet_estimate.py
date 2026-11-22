@@ -186,7 +186,9 @@ class TestEstimateReadings(TestCase):
             dimension = continuation._dimension  # noqa: SLF001
             unknowns = np.concatenate([states.ravel(), [period], [parameter]])
             nodes = unknowns.size // dimension - 1
-            return continuation._jacobian_multipliers(unknowns, nodes)  # noqa: SLF001
+            reading = continuation._jacobian_multipliers  # noqa: SLF001
+            multipliers, _ = reading(unknowns, nodes)
+            return multipliers
 
         _, point = self._trace(agreeing)
         drift = float(np.min(np.abs(point.multipliers - 1.0)))
