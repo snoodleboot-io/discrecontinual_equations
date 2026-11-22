@@ -43,6 +43,12 @@ files = ["discrecontinual_equations"]
 module = ["plotly", "plotly.*"]
 ignore_missing_imports = true
 
+# scipy ships no py.typed; scipy-stubs exists but rejects the open branches' sparse calls
+# (bmat, splu) on overloads, so adopting it is its own change
+[[tool.mypy.overrides]]
+module = ["scipy", "scipy.*"]
+ignore_missing_imports = true
+
 # Baseline of type errors that predate mypy running against the installed project in CI
 # (DEQ-64). Each entry disables only the codes that module already reports, so new code
 # elsewhere is fully checked. Remove an entry when its module is fixed.
@@ -173,7 +179,7 @@ disable_error_code = ["attr-defined"]
 
 [[tool.mypy.overrides]]
 module = ["discrecontinual_equations.webplot.stage_builder"]
-disable_error_code = ["assignment", "attr-defined", "misc"]
+disable_error_code = ["assignment", "attr-defined"]
 
 [[tool.mypy.overrides]]
 module = ["discrecontinual_equations.webplot.stage_renderer"]
@@ -274,6 +280,9 @@ ignore = [
     "EM101", "TRY003",
     # A named result before `return` (h_new, y_new) mirrors the formula it implements
     "RET504",
+    # PLR0913 already bounds the argument count, and is what long numerical signatures
+    # carry a reasoned `# noqa: PLR0913` for; PLR0917 would ask for a second one
+    "PLR0917",
 ]
 
 [tool.ruff.lint.per-file-ignores]
@@ -294,7 +303,7 @@ ignore = [
 # Library: the α ∈ (1, 2) stability range is the method's definition, not a magic number
 "discrecontinual_equations/solver/stochastic/gottwald_melbourne/**/*" = ["PLR2004", "SIM108"]
 # Library: `dW` is the Wiener-increment notation of the method's paper
-"discrecontinual_equations/solver/stochastic/zhan_duan_li_li/**/*" = ["N803", "N806", "PLR0913", "PLR0917"]
+"discrecontinual_equations/solver/stochastic/zhan_duan_li_li/**/*" = ["N803", "N806", "PLR0913"]
 # Library: plots build plotly kwargs with dict(), use os.path, import lazily, and print where they saved
 "discrecontinual_equations/plot/**/*" = ["C408", "PTH", "PLC0415", "T20", "ERA001"]
 # Long lines black cannot split (strings, comments, dotted imports) that predate this config;
@@ -306,7 +315,7 @@ ignore = [
 # Standalone scripts from the first release, not library code: unused `time` in Function
 # implementations, os.path, dict() kwargs, long main()s, no __init__.py, shebangs without +x
 "examples/{brownian_motion,ccefs,complex_ode_system,geometric_brownian_motion,lorenz,quartic,thaler,zhan_duan_li_li}/**/*" = [
-    "ARG002", "PTH", "C408", "ERA001", "INP001", "EXE001", "PLR0913", "PLR0915", "PLR0917",
+    "ARG002", "PTH", "C408", "ERA001", "INP001", "EXE001", "PLR0913", "PLR0915",
     "PLR2004", "N806", "NPY002", "RUF015", "E501",
 ]
 # Examples can use print statements and imports
@@ -339,5 +348,4 @@ dev = [
     "mypy==2.4.1",
     "pymdown-extensions>=10.19.1",
     "ruff==0.17.6",
-    "scipy-stubs==1.18.1.1",
 ]
