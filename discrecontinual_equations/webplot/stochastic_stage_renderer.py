@@ -36,8 +36,7 @@ deterministic scene handed to this renderer comes out byte for byte as
 :class:`~.stage_renderer.StageRenderer` renders it.
 """
 
-import json
-
+from discrecontinual_equations.webplot.escaping import escape_text, script_json
 from discrecontinual_equations.webplot.latex import latex_to_svg
 from discrecontinual_equations.webplot.stage import StageScene, stage_payload
 from discrecontinual_equations.webplot.stage_renderer import (
@@ -50,7 +49,6 @@ from discrecontinual_equations.webplot.stage_renderer import (
     _SCRIPT_SKELETON,
     _STYLE,
     StageRenderer,
-    _escape,
 )
 
 
@@ -73,12 +71,12 @@ class StochasticStageRenderer(StageRenderer):
             # for one.
             _TEMPLATE.replace("__QUASIPOTENTIAL_PANEL__", panel)
             .replace("__QUASIPOTENTIAL_TOGGLE__", toggle)
-            .replace("__TITLE__", _escape(system.title))
-            .replace("__SUBTITLE__", _escape(system.subtitle))
-            .replace("__NOTE__", _escape(system.note or ""))
+            .replace("__TITLE__", escape_text(system.title))
+            .replace("__SUBTITLE__", escape_text(system.subtitle))
+            .replace("__NOTE__", escape_text(system.note or ""))
             .replace("__EQUATION__", equation)
             .replace("__D3_SOURCE__", self._library)
-            .replace("__STAGE_JSON__", json.dumps(stage_payload(scene)))
+            .replace("__STAGE_JSON__", script_json(stage_payload(scene)))
         )
 
 

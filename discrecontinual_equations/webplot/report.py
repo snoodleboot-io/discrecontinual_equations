@@ -7,6 +7,7 @@ links them, so a set of analyses becomes a small browsable site.
 
 from pathlib import Path
 
+from discrecontinual_equations.webplot.escaping import escape_text
 from discrecontinual_equations.webplot.renderer import HtmlRenderer
 
 
@@ -72,14 +73,10 @@ def _card(entry: AtlasEntry) -> str:
     classes = "card stage" if stage else "card"
     tag = '<span class="tag">&#9654; play</span>' if stage else ""
     return (
-        f'<a class="{classes}" href="{entry.filename}">'
-        f"{tag}<h2>{_escape(entry.title)}</h2>"
-        f"<p>{_escape(entry.subtitle)}</p></a>"
+        f'<a class="{classes}" href="{escape_text(entry.filename)}">'
+        f"{tag}<h2>{escape_text(entry.title)}</h2>"
+        f"<p>{escape_text(entry.subtitle)}</p></a>"
     )
-
-
-def _escape(text: str) -> str:
-    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
 _ATLAS_TEMPLATE = """<!DOCTYPE html>

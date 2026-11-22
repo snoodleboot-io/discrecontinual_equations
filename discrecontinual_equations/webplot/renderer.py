@@ -8,10 +8,14 @@ and haloed markers; the drawing script is render-agnostic over the series, so it
 handles bifurcation diagrams and parameter-plane curves alike.
 """
 
-import json
 from abc import ABC, abstractmethod
 from pathlib import Path
 
+from discrecontinual_equations.webplot.escaping import (
+    ESCAPE_JS,
+    escape_text,
+    script_json,
+)
 from discrecontinual_equations.webplot.latex import latex_to_svg
 from discrecontinual_equations.webplot.scene import Scene
 
@@ -36,10 +40,10 @@ class D3Renderer(HtmlRenderer):
         self._library = library if library is not None else _ASSET.read_text()
 
     def render(self, scene: Scene) -> str:
-        payload = json.dumps(_scene_payload(scene))
+        payload = script_json(_scene_payload(scene))
         equation = latex_to_svg(scene.equation) if scene.equation else ""
         return (
-            _TEMPLATE.replace("__TITLE__", _escape(scene.title))
+            _TEMPLATE.replace("__TITLE__", escape_text(scene.title))
             .replace("__D3_SOURCE__", self._library)
             .replace("__EQUATION__", equation)
             .replace("__SCENE_JSON__", payload)
@@ -130,10 +134,6 @@ def _surface_payload(surface) -> dict | None:
         "y_label": surface.y_label,
         "z_label": surface.z_label,
     }
-
-
-def _escape(text: str) -> str:
-    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
 _DRAW = """
@@ -358,8 +358,8 @@ markers.forEach(s=>{
       dot.transition().delay(650).duration(360).ease(d3.easeBackOut).attr("r",6.5);
     dot.on("mousemove",(ev)=>tip.style("opacity",1)
         .style("left",(ev.pageX+12)+"px").style("top",(ev.pageY-10)+"px")
-        .html(`<b>${s.label}</b><br>${scene.xLabel} ${p[0].toFixed(4)}<br>`+
-              `${scene.yLabel} ${p[1].toFixed(4)}`))
+        .html(`<b>${esc(s.label)}</b><br>${esc(scene.xLabel)} ${
+              p[0].toFixed(4)}<br>${esc(scene.yLabel)} ${p[1].toFixed(4)}`))
       .on("mouseleave",()=>tip.style("opacity",0));
   });
   const f = s.points[0];
@@ -810,6 +810,7 @@ _TEMPLATE = (
 <script>document.getElementById("subtitle").textContent =
   window.__SCENE__.subtitle;</script>
 <script>"""
+    + ESCAPE_JS
     + _DRAW
     + """</script>
 </body>

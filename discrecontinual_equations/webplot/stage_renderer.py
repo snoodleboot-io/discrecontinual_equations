@@ -11,9 +11,9 @@ fetched from Google Fonts when a network is available and fall back to the
 system stacks when it is not.
 """
 
-import json
 from pathlib import Path
 
+from discrecontinual_equations.webplot.escaping import escape_text, script_json
 from discrecontinual_equations.webplot.latex import latex_to_svg
 from discrecontinual_equations.webplot.renderer import HtmlRenderer
 from discrecontinual_equations.webplot.stage import StageScene, stage_payload
@@ -33,17 +33,13 @@ class StageRenderer(HtmlRenderer):
         system = scene.system
         equation = latex_to_svg(system.equation) if system.equation else ""
         return (
-            _TEMPLATE.replace("__TITLE__", _escape(system.title))
-            .replace("__SUBTITLE__", _escape(system.subtitle))
-            .replace("__NOTE__", _escape(system.note or ""))
+            _TEMPLATE.replace("__TITLE__", escape_text(system.title))
+            .replace("__SUBTITLE__", escape_text(system.subtitle))
+            .replace("__NOTE__", escape_text(system.note or ""))
             .replace("__EQUATION__", equation)
             .replace("__D3_SOURCE__", self._library)
-            .replace("__STAGE_JSON__", json.dumps(stage_payload(scene)))
+            .replace("__STAGE_JSON__", script_json(stage_payload(scene)))
         )
-
-
-def _escape(text: str) -> str:
-    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
 _STYLE = """
