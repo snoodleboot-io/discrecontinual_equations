@@ -190,6 +190,24 @@ class TestLinearSaddle(TestCase):
     def test_the_seed_is_the_taylor_chart(self):
         assert self.mesh.seed == "taylor"
 
+    def test_a_resonant_chart_falls_back_to_the_tangent_plane(self):
+        # Eigenvalues -1 and -2 exactly: the monomial theta_1^2 decays at
+        # rate -2, which is in the spectrum, and the chart's solve is singular.
+        class Resonant(DeterministicFunction):
+            def eval(self, point, time=None):  # noqa: ARG002 (base signature)
+                return [-point[0], -2.0 * point[1], point[2]]
+
+        function = _field(Resonant)
+        mesh = GeodesicLevelSets(GeodesicSettings(0.1, 0.1, (0.05, 0.15))).compute(
+            function,
+            np.zeros(3),
+            _jacobian(function, np.zeros(3)),
+            StableManifold(),
+            distance=0.5,
+        )
+        assert mesh.seed == "eigenspace"
+        assert float(np.max(np.abs(mesh.vertices[:, 2]))) < 1.0e-12
+
     def test_the_unstable_manifold_of_a_curve_is_refused(self):
         function = _field(LinearSaddle)
         with pytest.raises(ValueError, match="two-dimensional"):

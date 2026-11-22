@@ -43,6 +43,7 @@ import math
 from collections.abc import Callable
 
 import numpy as np
+from scipy.spatial import cKDTree
 
 from discrecontinual_equations.continuation.manifold import (
     ManifoldSelection,
@@ -102,6 +103,16 @@ class GeodesicSettings:
     conditions are met to it. ``integration_steps`` is the number of RK4 steps
     per orbit segment, and ``max_vertices`` stops a growth that has become
     larger than anyone will draw.
+
+    ``loss`` is the fraction of a ring's points whose BVP may fail before
+    ``Delta`` is shrunk and the ring recomputed. It is zero by default: a
+    lost point is a hole the next ring has to bridge. Where the flow runs
+    along a level set - on the Lorenz manifold beyond a geodesic distance of
+    about 105, measured - the orbits that land beside a point start far
+    along the ring and some BVPs have no nearby solution at any ``Delta``,
+    so a strict growth stalls there with ``Delta`` at its floor and the
+    rings multiplying. A small ``loss`` lets it go on, at the price of
+    those holes.
     """
 
     __slots__ = [
@@ -109,6 +120,7 @@ class GeodesicSettings:
         "initial_points",
         "initial_radius",
         "integration_steps",
+        "loss",
         "max_vertices",
         "spacing",
         "step",
@@ -127,6 +139,7 @@ class GeodesicSettings:
         integration_steps: int = 24,
         max_vertices: int = 250_000,
         initial_points: int | None = None,
+        loss: float = 0.0,
     ) -> None:
         self.initial_radius = initial_radius
         self.step = step
@@ -137,6 +150,7 @@ class GeodesicSettings:
         self.integration_steps = integration_steps
         self.max_vertices = max_vertices
         self.initial_points = initial_points
+        self.loss = loss
 
 
 class CrochetRound:
@@ -176,7 +190,8 @@ class GeodesicMesh:
     residual of any BVP solved, ``lost`` the number of points whose BVP did
     not converge and were dropped, and ``seed`` says what the first ring came
     from: ``"taylor"`` for the parameterisation-method chart, ``"eigenspace"``
-    for the tangent plane of a complex pair, which the chart does not cover.
+    for the tangent plane where the chart does not exist (a complex pair, or a
+    resonance).
     """
 
     __slots__ = [
@@ -278,7 +293,8 @@ class GeodesicLevelSets:
             ring = _advance(field, sense, growth.front, delta, settings)
             turn = ring.turn
             low, high = settings.step_range
-            if (ring.lost or turn > settings.angles[1]) and delta > low * (1 + 1e-9):
+            lost = ring.lost > settings.loss * len(growth.front.points)
+            if (lost or turn > settings.angles[1]) and delta > low * (1 + 1e-9):
                 step = max(low, _SHRINK * delta)
                 continue
             radius += delta
@@ -300,33 +316,11 @@ class GeodesicLevelSets:
         arclength is the radius - the chart's own curvature, not its tangent
         plane - and the rays are spread evenly in an orthonormal frame of the
         tangent plane, since the chart's coordinates need not be orthogonal.
-        A complex pair spans a plane the Taylor chart does not parameterise
-        (see :mod:`~.manifold`), so there the tangent plane itself is the
-        chart, which is first-order accurate.
+        Where there is no Taylor chart the tangent plane stands in for it
+        (see :meth:`_chart`).
         """
         settings = self._settings
-        values, vectors = np.linalg.eig(jacobian)
-        chosen = selection.indices(values)
-        if any(abs(values[i].imag) > _COMPLEX for i in chosen):
-            first = vectors[:, chosen[0]]
-            frame = np.column_stack([first.real, first.imag])
-
-            def chart(theta: np.ndarray) -> np.ndarray:
-                return equilibrium + frame @ theta
-
-            seed = "eigenspace"
-        else:
-            taylor = TaylorManifold(order=self._order).compute(
-                function,
-                equilibrium,
-                jacobian,
-                selection,
-            )
-
-            def chart(theta: np.ndarray) -> np.ndarray:
-                return np.asarray(taylor.point(list(theta)), dtype=float)
-
-            seed = "taylor"
+        chart, seed = self._chart(function, equilibrium, jacobian, selection)
         linear = np.column_stack(
             [
                 (chart(_DIFFERENCE * axis) - chart(-_DIFFERENCE * axis))
@@ -361,6 +355,50 @@ class GeodesicLevelSets:
             outward = velocity(rho)
             directions.append(outward / np.linalg.norm(outward))
         return np.array(points), np.array(directions), seed
+
+
+    def _chart(
+        self,
+        function: Function,
+        equilibrium: np.ndarray,
+        jacobian: np.ndarray,
+        selection: ManifoldSelection,
+    ) -> tuple[Callable[[np.ndarray], np.ndarray], str]:
+        """The Taylor chart, or the tangent plane where there is none.
+
+        A complex pair spans a plane the Taylor chart does not parameterise
+        (see :mod:`~.manifold`), and a resonance - an exact ``k . lambda`` in
+        the spectrum - leaves its order-by-order solve singular. Either way the
+        tangent plane is the chart, which is first-order accurate, so the seed
+        radius should then be small.
+        """
+        values, vectors = np.linalg.eig(jacobian)
+        chosen = selection.indices(values)
+        if all(abs(values[i].imag) <= _COMPLEX for i in chosen):
+            try:
+                taylor = TaylorManifold(order=self._order).compute(
+                    function,
+                    equilibrium,
+                    jacobian,
+                    selection,
+                )
+            except np.linalg.LinAlgError:
+                pass
+            else:
+
+                def curved(theta: np.ndarray) -> np.ndarray:
+                    return np.asarray(taylor.point(list(theta)), dtype=float)
+
+                return curved, "taylor"
+            frame = np.column_stack([vectors[:, i].real for i in chosen])
+        else:
+            first = vectors[:, chosen[0]]
+            frame = np.column_stack([first.real, first.imag])
+
+        def flat(theta: np.ndarray) -> np.ndarray:
+            return equilibrium + frame @ theta
+
+        return flat, "eigenspace"
 
 
 def _batched(
@@ -511,6 +549,109 @@ def _interpolate(
     return 0.5 * (point_a + point_b), _unit(tangent_a + tangent_b)
 
 
+# Steps the back-trace takes, and how many first-guess flight times it may
+# run for before giving up on finding the ring.
+_TRACE_STEPS = 48
+_TRACE_SPAN = 4.0
+
+
+def _first_guess(  # noqa: PLR0913 (the BVP's data)
+    field: Callable[[np.ndarray], np.ndarray],
+    sense: float,
+    front: "_Front",
+    centres: np.ndarray,
+    keys: np.ndarray,
+    outward: np.ndarray,
+    delta: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Where on the ring each orbit starts, and how long it flows: a guess.
+
+    Traced back from ``delta`` straight out where that crosses the ring;
+    otherwise the centre's own place and the time the outward part of the
+    field would take to cover ``delta``.
+    """
+    speed = sense * field(centres)
+    radial = np.einsum("ij,ij->i", speed, outward)
+    norm = np.linalg.norm(speed, axis=1)
+    times = delta / np.maximum(radial, _OUTWARD_FLOOR * norm)
+    places = keys.astype(float).copy()
+    traced, crossing, flight = _trace_back(
+        field,
+        sense,
+        front,
+        centres + delta * outward,
+        times,
+    )
+    places[traced] = crossing[traced]
+    times[traced] = flight[traced]
+    return places, times
+
+
+def _trace_back(
+    field: Callable[[np.ndarray], np.ndarray],
+    sense: float,
+    front: "_Front",
+    targets: np.ndarray,
+    times: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Flow each target back to the ring: where it crosses it, and after how long.
+
+    Returns which targets crossed, the ring parameter at the crossing and the
+    flight time. A crossing is where the signed distance outside the ring -
+    measured along the nearest ring point's outward direction - changes sign.
+    """
+    ring, outward = front.points, front.directions
+    count, rows = len(ring), len(targets)
+    tree = cKDTree(ring)
+    dt = (_TRACE_SPAN * times / _TRACE_STEPS)[:, None]
+    state = targets.copy()
+    nearest = tree.query(state)[1]
+    side = np.einsum("ij,ij->i", state - ring[nearest], outward[nearest])
+    crossed = np.zeros(rows, dtype=bool)
+    start = np.zeros(rows)
+    flight = np.zeros(rows)
+    with np.errstate(over="ignore", invalid="ignore"):
+        for step in range(1, _TRACE_STEPS + 1):
+            k1 = -sense * field(state)
+            k2 = -sense * field(state + 0.5 * dt * k1)
+            k3 = -sense * field(state + 0.5 * dt * k2)
+            k4 = -sense * field(state + dt * k3)
+            moved = state + dt / 6.0 * (k1 + 2.0 * k2 + 2.0 * k3 + k4)
+            moved = np.where(np.isfinite(moved), moved, state)
+            near = tree.query(moved)[1]
+            now = np.einsum("ij,ij->i", moved - ring[near], outward[near])
+            hit = ~crossed & (side > 0.0) & (now <= 0.0)
+            if np.any(hit):
+                fraction = side[hit] / (side[hit] - now[hit])
+                point = state[hit] + fraction[:, None] * (moved[hit] - state[hit])
+                start[hit] = _ring_parameter(ring, near[hit], point)
+                flight[hit] = (step - 1.0 + fraction) * dt[hit, 0]
+                crossed |= hit
+            state, side = moved, now
+    return crossed & (flight > 0.0), start % count, flight
+
+
+def _ring_parameter(
+    ring: np.ndarray,
+    near: np.ndarray,
+    points: np.ndarray,
+) -> np.ndarray:
+    """The fractional ring index of each point, from its nearest ring point."""
+    count = len(ring)
+    best = near.astype(float)
+    closest = np.linalg.norm(points - ring[near], axis=1)
+    for first in (near - 1, near):
+        a, b = ring[first % count], ring[(first + 1) % count]
+        segment = b - a
+        length = np.maximum(np.einsum("ij,ij->i", segment, segment), 1e-300)
+        t = np.clip(np.einsum("ij,ij->i", points - a, segment) / length, 0.0, 1.0)
+        distance = np.linalg.norm(a + t[:, None] * segment - points, axis=1)
+        better = distance < closest
+        best = np.where(better, first + t, best)
+        closest = np.minimum(closest, distance)
+    return best
+
+
 class _Landing:
     """Where the orbits from one ring land, and how well."""
 
@@ -532,7 +673,7 @@ class _Landing:
 def _land(  # noqa: PLR0913 (the BVP's data)
     field: Callable[[np.ndarray], np.ndarray],
     sense: float,
-    ring: np.ndarray,
+    front: "_Front",
     centres: np.ndarray,
     tangents: np.ndarray,
     keys: np.ndarray,
@@ -542,13 +683,21 @@ def _land(  # noqa: PLR0913 (the BVP's data)
 ) -> _Landing:
     """Solve each centre's BVP: the orbit from the ring that lands at ``delta``.
 
-    The unknowns are ``s``, where along the ring the orbit
-    starts, and ``tau``, how long it flows; the conditions are that it ends in
+    The unknowns are ``s``, where along the ring the orbit starts, and
+    ``tau``, how long it flows; the conditions are that it ends in
     the plane through the centre normal to the ring's tangent, and at distance
     ``delta`` from the centre. Newton's method on that two-by-two shooting map
     starts from the centre's own place on the ring and the time the outward
     part of the field would take to cover ``delta``, with the s-derivative by
     a finite difference along the ring and the tau-derivative the field.
+
+    Where the flow runs along the ring rather than out of it - near the
+    Lorenz origin, where the strong stable rate is 8.6 times the weak one -
+    the orbit that lands beside a centre starts far from it along the ring,
+    and Newton from the centre's own place does not find it. So the first
+    guess is traced: the point ``delta`` straight out from the centre is
+    flowed back until it crosses the ring, and where and when it crosses is
+    where Newton starts.
 
     The ring between its points is the same circular-arc interpolation the
     centres are placed with, not its chords. A chord cuts inside a curved ring
@@ -556,64 +705,73 @@ def _land(  # noqa: PLR0913 (the BVP's data)
     homoclinic system's cylinder the energy is conserved, so an orbit started
     off the manifold by a chord's sagitta stays off it by that much for good.
     """
+    ring = front.points
     count, rows = len(ring), len(centres)
-    speed = sense * field(centres)
-    radial = np.einsum("ij,ij->i", speed, outward)
-    norm = np.linalg.norm(speed, axis=1)
-    times = delta / np.maximum(radial, _OUTWARD_FLOOR * norm)
-    s = keys.astype(float).copy()
+    s, times = _first_guess(field, sense, front, centres, keys, outward, delta)
     points = centres.copy()
     residual = np.full(rows, np.inf)
     valid = np.zeros(rows, dtype=bool)
     active = np.arange(rows)
-    for _ in range(_NEWTON_ITERATIONS):
-        if active.size == 0:
-            break
-        place = np.mod(s[active], count)
-        start, _ = _interpolate(ring, place)
-        nudged, _ = _interpolate(ring, place + _RING_STEP)
-        ends = _flow(
-            field,
-            sense,
-            np.vstack([start, nudged]),
-            np.concatenate([times[active], times[active]]),
-            settings.integration_steps,
-        )
-        end, shifted = ends[: active.size], ends[active.size :]
-        # An orbit Newton has sent the wrong way overflows rather than lands;
-        # that point is lost, not the ring.
-        finite = np.all(np.isfinite(ends[: active.size]), axis=1) & np.all(
-            np.isfinite(shifted),
-            axis=1,
-        )
-        end = np.where(finite[:, None], end, centres[active])
-        shifted = np.where(finite[:, None], shifted, centres[active])
-        offset = end - centres[active]
-        length = np.linalg.norm(offset, axis=1)
-        plane = np.einsum("ij,ij->i", offset, tangents[active])
-        reach = length - delta
-        points[active] = end
-        residual[active] = np.maximum(np.abs(plane), np.abs(reach))
-        done = residual[active] < settings.tolerance
-        valid[active[done]] = True
-        direction = offset / np.maximum(length, 1.0e-300)[:, None]
-        along = (shifted - end) / _RING_STEP
-        flow = sense * field(end)
-        a11 = np.einsum("ij,ij->i", along, tangents[active])
-        a12 = np.einsum("ij,ij->i", flow, tangents[active])
-        a21 = np.einsum("ij,ij->i", along, direction)
-        a22 = np.einsum("ij,ij->i", flow, direction)
-        det = a11 * a22 - a12 * a21
-        singular = np.abs(det) < _SINGULAR
-        det = np.where(singular, 1.0, det)
-        ds = np.clip((plane * a22 - a12 * reach) / det, -_RING_JUMP, _RING_JUMP)
-        dt = (a11 * reach - a21 * plane) / det
-        current = times[active]
-        updated = np.clip(current - dt, _TIME_FLOOR * current, current / _TIME_FLOOR)
-        keep = ~done & ~singular & finite
-        s[active[keep]] -= ds[keep]
-        times[active[keep]] = updated[keep]
-        active = active[keep]
+    # A row Newton has sent the wrong way can overflow; it is dropped below,
+    # so its arithmetic is not worth a warning.
+    with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
+        for _ in range(_NEWTON_ITERATIONS):
+            if active.size == 0:
+                break
+            place = np.mod(s[active], count)
+            start, _ = _interpolate(ring, place)
+            nudged, _ = _interpolate(ring, place + _RING_STEP)
+            ends = _flow(
+                field,
+                sense,
+                np.vstack([start, nudged]),
+                np.concatenate([times[active], times[active]]),
+                settings.integration_steps,
+            )
+            end, shifted = ends[: active.size], ends[active.size :]
+            # An orbit Newton has sent the wrong way overflows rather than lands;
+            # that point is lost, not the ring.
+            finite = np.all(np.isfinite(ends[: active.size]), axis=1) & np.all(
+                np.isfinite(shifted),
+                axis=1,
+            )
+            end = np.where(finite[:, None], end, centres[active])
+            shifted = np.where(finite[:, None], shifted, centres[active])
+            offset = end - centres[active]
+            length = np.linalg.norm(offset, axis=1)
+            plane = np.einsum("ij,ij->i", offset, tangents[active])
+            reach = length - delta
+            points[active] = end
+            residual[active] = np.maximum(np.abs(plane), np.abs(reach))
+            done = residual[active] < settings.tolerance
+            valid[active[done]] = True
+            direction = offset / np.maximum(length, 1.0e-300)[:, None]
+            along = (shifted - end) / _RING_STEP
+            flow = sense * field(end)
+            a11 = np.einsum("ij,ij->i", along, tangents[active])
+            a12 = np.einsum("ij,ij->i", flow, tangents[active])
+            a21 = np.einsum("ij,ij->i", along, direction)
+            a22 = np.einsum("ij,ij->i", flow, direction)
+            det = a11 * a22 - a12 * a21
+            singular = np.abs(det) < _SINGULAR
+            det = np.where(singular, 1.0, det)
+            ds = (plane * a22 - a12 * reach) / det
+            dt = (a11 * reach - a21 * plane) / det
+            current = times[active]
+            # One damping factor for both unknowns, so the step stays a
+            # Newton direction: clipping s alone and not tau sent tau
+            # downhill until it reached zero wherever the flow ran along the
+            # ring and the start had to be found more than a segment away.
+            damping = np.minimum(1.0, _RING_JUMP / np.maximum(np.abs(ds), 1e-300))
+            shrink = (1.0 - _TIME_FLOOR) * current / np.maximum(dt, 1e-300)
+            stretch = (1.0 / _TIME_FLOOR - 1.0) * current / np.maximum(-dt, 1e-300)
+            damping = np.minimum(damping, np.where(dt > 0.0, shrink, stretch))
+            ds = damping * ds
+            updated = current - damping * dt
+            keep = ~done & ~singular & finite & np.isfinite(ds) & np.isfinite(updated)
+            s[active[keep]] -= ds[keep]
+            times[active[keep]] = updated[keep]
+            active = active[keep]
     return _Landing(points, times, residual, valid)
 
 
@@ -682,7 +840,7 @@ def _solve(  # noqa: PLR0913 (the BVP's data)
     landing = _land(
         field,
         sense,
-        front.points,
+        front,
         centres,
         tangents,
         keys,
