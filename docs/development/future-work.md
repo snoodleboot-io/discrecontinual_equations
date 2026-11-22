@@ -228,20 +228,31 @@ following the *repelling* slow manifold `S_r`. Forward integration cannot follow
   to 1e-14; Desroches et al. report 0.993491 for the explosion at this `eps`.
 - Against `a_c = 1 - eps/8 - 3 eps^2/32 - 173 eps^3/1024 - 7593 eps^4/16384 -
   436777 eps^5/262144 - ...` the error of the series truncated after `eps^k` falls
-  with log-log slope `k + 1` for `k = 1 .. 4` over `eps` in [0.01, 0.04] (table
-  below), and what is left after `eps^5` is the next term, `-15340159 eps^6 /
+  with log-log slope `k + 1` for `k = 1 .. 4` over `eps` in [0.01, 0.04] (the
+  table), and what is left after `eps^5` is the next term, `-15340159 eps^6 /
   2097152`, to 5% at `eps = 0.01` - a residual of 7.7e-12. The coefficients come
   from a symbolic expansion of the canard as a graph `y(x)` regular at the fold;
   the first is Krupa and Szmolyan's (SIAM J. Math. Anal. 2001, Thm 3.1, eq. 3.8)
   with `A = -1`. Their JDE paper (the canard explosion, 2001) could not be fetched
-  (publisher captcha), so the `eps^2` term and beyond are checked against the
-  symbolic expansion, not that paper. A published `-75/1024` for the `eps^3` term
-  (arXiv 1209.1109) disagrees with `-173/1024`; the BVP sides with `-173/1024`
-  (slope 4.0 for the `eps^3` truncation).
+  (publisher captcha); through `eps^3` the series is the one Brons (arXiv
+  1209.1109, eq. 9) quotes from Zvonkin and Shubin (Russian Math. Surveys 39,
+  1984) for exactly this system. His own iterative scheme gets `-75/1024` at
+  `eps^3`, which he notes agrees with (9) only to `eps^2`; the BVP sides with
+  `-173/1024` (slope 4.09 for the `eps^3` truncation).
+
+  | truncated after | `eps = 0.04` | `0.02` | `0.01` | slope (7 points) |
+  |---|---|---|---|---|
+  | `eps^1` | 1.6e-4 | 3.9e-5 | 9.6e-6 | 2.04 |
+  | `eps^2` | 1.2e-5 | 1.4e-6 | 1.7e-7 | 3.07 |
+  | `eps^3` | 1.4e-6 | 8.0e-8 | 4.8e-9 | 4.09 |
+  | `eps^4` | 2.1e-7 | 5.9e-9 | 1.7e-10 | 5.11 |
+
+  The located values move by 9e-13 between `solve_bvp` tolerances 1e-9 and 1e-10.
 - The explosion itself, `CycleContinuation` on 160 Hermite-Simpson intervals,
   against a shooting continuation parametrised by the cycle's leftmost point:
   periods agree to 3e-5 relative, amplitudes to 3e-4, and `a` to 5e-10 through the
-  whole explosion; every cycle that follows `S_r` past `x = -0.3` sits within 3e-10
+  whole explosion (1.7e-8 in the relaxation tail, where `a` steepens in `m` and the
+  readout of `m` limits it); every cycle that follows `S_r` past `x = -0.3` sits within 3e-10
   of the slow-manifold canard.
 
 **The film** (`examples/continuation/stage_canard.py`) scrubs `s` with

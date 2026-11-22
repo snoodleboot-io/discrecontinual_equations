@@ -10,7 +10,9 @@ Every oracle here is computed independently of the code under test:
   different graph, solved a different way, from the series under test;
 * the canard parameter ``a_c = 1 - eps/8 - 3 eps^2/32 - 173 eps^3/1024 -
   7593 eps^4/16384 - ...`` comes from the same symbolic expansion with ``a`` solved
-  order by order for regularity at the fold; its first term is Krupa and
+  order by order for regularity at the fold; through ``eps^3`` it is the
+  series Brons (arXiv 1209.1109, eq. 9) quotes from Zvonkin and Shubin (1984)
+  for this system, and its first term is Krupa and
   Szmolyan's (3.8) with ``A = -1`` for this system, and its value at
   ``eps = 0.05`` is the ``0.993491`` of Desroches et al. (2012), Fig. 3;
 * trajectories are checked against SciPy's DOP853 at tolerance ``1e-13``.
