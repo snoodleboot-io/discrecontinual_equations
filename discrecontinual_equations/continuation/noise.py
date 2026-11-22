@@ -85,7 +85,11 @@ def jacobians_along(
     return jacobians
 
 
-def jacobian_at(function: Function, state: np.ndarray) -> np.ndarray:
+def jacobian_at(
+    function: Function,
+    state: np.ndarray,
+    base: np.ndarray | None = None,
+) -> np.ndarray:
     """Forward-difference Jacobian of a vector field, stepped relative to the state.
 
     The step is scaled by the size of the component it perturbs, floored at one. A
@@ -97,8 +101,12 @@ def jacobian_at(function: Function, state: np.ndarray) -> np.ndarray:
     and the Jacobian comes back as a zero matrix. Nothing raises; the exponent just
     quietly stops depending on the parameter. Scaling the step keeps it meaningful at
     any magnitude.
+
+    ``base`` is the field at ``state`` when the caller has it already, which saves
+    one evaluation.
     """
-    base = field_at(function, state)
+    if base is None:
+        base = field_at(function, state)
     dimension = state.size
     steps = _JACOBIAN_STEP * np.maximum(np.abs(state), 1.0)
     columns = np.empty((base.size, dimension))

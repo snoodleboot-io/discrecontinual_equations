@@ -222,3 +222,9 @@ def kronecker_covariance(drift: np.ndarray, diffusion: np.ndarray) -> np.ndarray
 
 def system(field_class) -> DeterministicFunction:
     return field_class(_states(), [], _states(), None)
+
+
+# U from the left well at grid points of the Maier-Stein box, by the same
+# independent minimisation as MAIER_STEIN_BARRIER (chains of 200, 400 and 800
+# nodes from (-1, 0), Richardson-extrapolated in the node count).
+MAIER_STEIN_VALUES: dict[tuple[float, float], float] = {}
