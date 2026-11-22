@@ -8,21 +8,21 @@ whenever the derivative provider is automatic differentiation.
 - ``cusp_coefficient`` is the quadratic fold coefficient ``a`` (zero at a cusp).
 - ``first_lyapunov`` is the first Lyapunov coefficient ``l1`` at a Hopf point
   (Kuznetsov's invariant formula; zero at a generalized Hopf / Bautin point).
-- ``cubic_fold_coefficient`` is the next fold coefficient ``b`` (zero at a
-  swallowtail on the cusp curve).
+- ``cubic_fold_coefficient`` is the next fold coefficient ``b`` on the center
+  manifold (zero at a swallowtail on the cusp curve).
 """
 
 import math
 
 import numpy as np
 
+from discrecontinual_equations.continuation.codim2_normal_form import cusp_normal_form
 from discrecontinual_equations.continuation.two_parameter_problem import (
     TwoParameterProblem,
 )
 
 _HALF = 0.5
 _MINIMUM_DENOMINATOR = 1.0e-9
-_SIX = 6.0
 
 
 class MultilinearForms:
@@ -193,14 +193,15 @@ def cubic_fold_coefficient(
     parameter_a: float,
     parameter_b: float,
 ) -> float:
-    """Cubic fold coefficient ``b = (1/6) <p, C(q, q, q)>`` (zero at swallowtail)."""
-    jacobian = problem.state_jacobian(state, parameter_a, parameter_b)
-    right_null = _null_vector(jacobian)
-    left_null = _null_vector(jacobian.T)
-    left_null = left_null / (left_null @ right_null)
-    forms = MultilinearForms(problem, state, parameter_a, parameter_b)
-    form = forms.trilinear(right_null, right_null, right_null)
-    return float(((left_null @ form) / _SIX).real)
+    """Cubic fold coefficient ``b`` on the center manifold (zero at a swallowtail).
+
+    ``b = <p, C(q, q, q) + 3 B(q, h2)> / 6``, the cusp normal-form coefficient of
+    :func:`.codim2_normal_form.cusp_normal_form` (Kuznetsov 1999, section 5). The
+    ``3 B(q, h2)`` share is the center manifold's curvature; it vanishes in one
+    dimension but not in general, so ``<p, C(q, q, q)> / 6`` alone puts the
+    swallowtail in the wrong place once the critical mode is coupled.
+    """
+    return cusp_normal_form(problem, state, parameter_a, parameter_b).c
 
 
 def first_lyapunov(

@@ -108,9 +108,9 @@ independent of scaling convention.
 points; the curve is chosen by `codim3_curve`.
 
 - `cusp` continues the **cusp curve** (the fold system augmented with `a = 0`) and
-  detects the **swallowtail**, where the cubic fold coefficient
-  `b = (1/6) <p, C(q, q, q)>` changes sign. Verified against the swallowtail normal
-  form.
+  detects the **swallowtail**, where the cubic fold coefficient on the center
+  manifold, `b = (1/6) <p, C(q, q, q) + 3 B(q, h2)>` (the cusp normal form's `c`),
+  changes sign. Verified against the swallowtail normal form.
 - `generalized_hopf` continues the **generalized-Hopf (Bautin) curve** (the Hopf
   system augmented with `l1 = 0`) and detects the **degenerate Bautin**, where the
   second Lyapunov quantity `l2` changes sign. Verified against an extended Bautin

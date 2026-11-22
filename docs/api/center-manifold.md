@@ -155,9 +155,6 @@ model, is unchanged.
 - The second Lyapunov coefficient comes from `TaylorCenterManifold`'s focal value,
   not from Kuznetsov's `G32`; the `r^6` coefficient at a degenerate Bautin point is
   not computed.
-- `normal_form.cubic_fold_coefficient` (the swallowtail test) omits the center
-  manifold's `3 B(q, h2)` term that `cusp_normal_form` includes; it is exact only in
-  one dimension.
 
 ## References
 

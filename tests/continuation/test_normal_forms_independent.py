@@ -35,6 +35,7 @@ from discrecontinual_equations.continuation.codim2_normal_form import (
 from discrecontinual_equations.continuation.derivative_provider import (
     AutomaticDifferentiation,
 )
+from discrecontinual_equations.continuation.normal_form import cubic_fold_coefficient
 from discrecontinual_equations.continuation.two_parameter_problem import (
     TwoParameterProblem,
 )
@@ -240,6 +241,32 @@ class TestTensorPoincareDulac(TestCase):
             }
             for name, value in expected.items():
                 assert _close(getattr(result, name), value), (seed, name)
+
+    def test_cubic_fold_coefficient_at_a_dense_cusp(self):
+        # DEQ-83: the swallowtail test function against the reduction. The quadratic
+        # tensor is projected so that <p, B(q, q)> = 0 (a cusp); the cubic left on
+        # the critical row is then the restricted field's ``c w^3``.
+        for seed in (501, 502, 503):
+            block = np.diag([0.0, -0.7, -1.3, -2.1])
+            block[1, 2], block[2, 1] = 0.9, 0.1
+            linear, quadratic, cubic = _dense_system(block, seed)
+            values, vectors = np.linalg.eig(linear)
+            order = np.argsort(np.abs(values))
+            values, vectors = values[order].real, vectors[:, order].real
+            q = vectors[:, 0] / np.linalg.norm(vectors[:, 0])
+            p = np.linalg.inv(vectors)[0] * np.linalg.norm(vectors[:, 0])
+            quadratic = quadratic - np.einsum(
+                "i,j,k->ijk",
+                q,
+                q,
+                q,
+            ) * (p @ np.einsum("iab,a,b->i", quadratic, q, q))
+            tensors = (linear, quadratic, cubic)
+            problem = _problem(_tensor_field(*tensors), 4)
+            value = cubic_fold_coefficient(problem, np.zeros(4), 0.0, 0.0)
+            basis = np.column_stack([q, *vectors[:, 1:].T])
+            _, third = _poincare_dulac(tensors, basis, values)
+            assert _close(value, _coefficient(third, 0, (0, 0, 0)).real), seed
 
     def test_zero_hopf_invariants_survive_a_similarity_and_two_stable_modes(self):
         omega = 0.9
