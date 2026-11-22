@@ -160,6 +160,40 @@ class TestKnownSpectra(TestCase):
             _worst_relative(np.linalg.eigvals(_product(np.array(factors))), exact) > 1.0
         )
 
+    def test_a_complex_pair_beyond_the_square_root_of_the_range(self):
+        """A conjugate pair of modulus below 1e-154, or above 1e154, converges.
+
+        The shift comes from the trailing ``2 x 2`` of the product, whose
+        determinant is the pair's squared modulus: 1e-340 underflows to zero,
+        1e340 overflows, and an unscaled shift then never converges - the
+        caller silently falls back to the explicit product, which loses
+        exactly the multipliers this algorithm is for. A strongly contracting
+        focus of a three-dimensional cycle has such a pair.
+        """
+        for logarithm in (-200.0, -170.0, 170.0, 200.0):
+            rng = np.random.default_rng(int(abs(logarithm)))
+            count = 40
+            frames = [
+                np.linalg.qr(rng.standard_normal((3, 3)))[0] for _ in range(count)
+            ]
+            exact = np.ones(3, dtype=complex)
+            factors = []
+            for index in range(count):
+                angle = rng.uniform(0.0, 0.2)
+                radius = 10.0 ** (logarithm / count) * rng.uniform(0.9, 1.1)
+                block = np.zeros((3, 3))
+                block[:2, :2] = radius * np.array(
+                    [[np.cos(angle), -np.sin(angle)], [np.sin(angle), np.cos(angle)]],
+                )
+                block[2, 2] = rng.uniform(0.5, 2.0)
+                block[:2, 2] = rng.standard_normal(2)
+                exact[0] *= radius * np.exp(1j * angle)
+                exact[2] *= block[2, 2]
+                factors.append(frames[(index + 1) % count] @ block @ frames[index].T)
+            exact[1] = np.conj(exact[0])
+            computed = periodic_eigenvalues(np.array(factors))
+            assert _worst_relative(computed, exact) < 1e-9, logarithm
+
     def test_one_factor_is_the_ordinary_eigenproblem(self):
         rng = np.random.default_rng(4)
         matrix = rng.standard_normal((6, 6))
