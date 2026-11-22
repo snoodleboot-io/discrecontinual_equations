@@ -4,12 +4,33 @@ Run with ``python -m examples.continuation.webplot_examples [output_dir]``. It
 continues equilibrium branches and their codim-1, codim-2, and codim-3
 bifurcations, renders each with the D3 renderer using the system's own parameter
 notation, and writes an atlas linking them.
+
+The atlas is built in parallel. Each catalogue entry and each film is one unit,
+built in a fresh worker process of its own, so no unit sees another's parameter
+values or registry, and each writes only its own page. The index is written in
+registry order, not the order the units finish in, so the atlas is the same
+bytes however many workers built it::
+
+    python examples/continuation/webplot_examples.py plots --jobs 12
+    python examples/continuation/webplot_examples.py plots --only hopf cusp
 """
 
-import sys
+import argparse
+import ast
+import inspect
+import os
+import tempfile
+import textwrap
+import time
+from collections.abc import Callable, Iterator, Sequence
+from concurrent.futures import Future, ProcessPoolExecutor, as_completed
+from contextlib import contextmanager
+from dataclasses import dataclass
+from multiprocessing import get_context
 
 import numpy as np
 
+from discrecontinual_equations.webplot.latex import use_disk_cache
 from discrecontinual_equations.webplot.manifold_film_renderer import (
     ManifoldFilmRenderer,
 )
@@ -298,14 +319,6 @@ _EQUATIONS = {
 }
 
 
-def _catalogue() -> list[tuple[str, Scene]]:
-    entries = _raw_catalogue()
-    return [
-        (name, with_equation(scene, _EQUATIONS[name]) if name in _EQUATIONS else scene)
-        for name, scene in entries
-    ]
-
-
 def _raw_catalogue() -> list[tuple[str, Scene]]:
     return [
         ("saddle_node.html", _saddle_node()),
@@ -360,19 +373,6 @@ def _raw_catalogue() -> list[tuple[str, Scene]]:
     ]
 
 
-def main(output_dir: str = "plots") -> None:
-    """Render every scene to ``output_dir`` and write the atlas."""
-    ensure_registry()
-    report = PlotReport(D3Renderer(), output_dir)
-    entries: list[AtlasEntry] = []
-    for filename, scene in _catalogue():
-        report.write(scene, filename)
-        entries.append(AtlasEntry(filename, scene.title, scene.subtitle))
-    entries.extend(_stage_entries(output_dir))
-    entries.extend(_film_entries(output_dir))
-    report.write_atlas(entries)
-
-
 def _stages() -> tuple[tuple, ...]:
     """Every stage example: what builds it, what it is called, and its card."""
     return (
@@ -398,18 +398,293 @@ def _stages() -> tuple[tuple, ...]:
     )
 
 
-def _stage_entries(output_dir: str) -> list[AtlasEntry]:
-    """Write the playable pages with their own renderer; they share the atlas.
+# How the atlas is split into units and spread over worker processes.
+
+# The thread counts the common BLAS and OpenMP builds read when they load. Every
+# worker runs one unit on one core, so a multithreaded BLAS would only fight the
+# other workers for cores - and could change how a reduction is summed.
+_BLAS_THREADS = (
+    "OPENBLAS_NUM_THREADS",
+    "OMP_NUM_THREADS",
+    "MKL_NUM_THREADS",
+    "VECLIB_MAXIMUM_THREADS",
+    "NUMEXPR_NUM_THREADS",
+)
+
+# (filename, title, subtitle, kind): an atlas card, as a worker sends it back.
+type _Card = tuple[str, str, str, str]
+
+
+@dataclass(frozen=True, slots=True)
+class _PageUnit:
+    """One catalogue entry: the builder it calls and the page it names.
+
+    ``filename`` is ``None`` for a ``*_builder()`` entry, which expands to
+    several pages and names them itself.
+    """
+
+    builder: str
+    filename: str | None
+
+    @property
+    def label(self) -> str:
+        """What ``--only`` calls this entry."""
+        return (self.filename or self.builder).removesuffix(".html").lstrip("_")
+
+
+@dataclass(frozen=True, slots=True)
+class _Unit:
+    """One piece of work for a worker: a catalogue entry or a film."""
+
+    kind: str
+    index: int
+    label: str
+
+
+@dataclass(frozen=True, slots=True)
+class _Built:
+    """What a worker did with one unit, and what it cost."""
+
+    cards: tuple[_Card, ...]
+    seconds: float
+    wall: float
+
+
+def _film_kinds() -> dict[str, tuple[Callable[[], tuple[tuple, ...]], Callable]]:
+    """Every kind of film: what lists them, and the renderer that draws them.
 
     The stochastic renderer draws a deterministic stage exactly as the stage
-    renderer does, so one renderer serves every film.
+    renderer does, so one renderer serves every stage film. A manifold film's
+    scrub bar is geodesic distance, not a parameter, and it has a renderer of its
+    own.
     """
-    report = PlotReport(StochasticStageRenderer(), output_dir)
-    entries = []
-    for build, filename, entry in _stages():
-        report.write(build(), filename)
-        entries.append(entry)
-    return entries
+    return {
+        "stage": (_stages, StochasticStageRenderer),
+        "manifold": (_films, ManifoldFilmRenderer),
+    }
+
+
+def _page_units() -> list[_PageUnit]:
+    """Every catalogue entry, read from ``_raw_catalogue`` without running it.
+
+    Calling the catalogue builds every scene in it, one after another, so the
+    driver reads which builder each entry calls and a worker calls just that
+    one. The catalogue stays a plain list of ``(filename, _builder())`` and
+    ``*_builder()`` entries, and an entry added to it is a unit of its own with
+    no change here.
+    """
+    tree = ast.parse(textwrap.dedent(inspect.getsource(_raw_catalogue)))
+    returned = next(node for node in ast.walk(tree) if isinstance(node, ast.Return))
+    if not isinstance(returned.value, ast.List):
+        message = "_raw_catalogue must return a list of catalogue entries"
+        raise TypeError(message)
+    return [_page_unit(element) for element in returned.value.elts]
+
+
+def _page_unit(element: ast.expr) -> _PageUnit:
+    """The unit one catalogue entry describes, or why it cannot be split off."""
+    if isinstance(element, ast.Starred):
+        builder = _builder_name(element.value)
+        if builder:
+            return _PageUnit(builder, None)
+    if isinstance(element, ast.Tuple) and len(element.elts) == 2:  # noqa: PLR2004
+        name, call = element.elts
+        builder = _builder_name(call)
+        if isinstance(name, ast.Constant) and isinstance(name.value, str) and builder:
+            return _PageUnit(builder, name.value)
+    message = (
+        f"catalogue entry {ast.unparse(element)} is neither "
+        f'("name.html", _builder()) nor *_builder(), so it cannot be built alone'
+    )
+    raise ValueError(message)
+
+
+def _builder_name(node: ast.expr) -> str | None:
+    """The function a bare ``_builder()`` call names, or ``None``."""
+    bare = isinstance(node, ast.Call) and not node.args and not node.keywords
+    if bare and isinstance(node.func, ast.Name):
+        return node.func.id
+    return None
+
+
+def _units() -> list[_Unit]:
+    """Every unit of the atlas, in the order the index lists them."""
+    units = [
+        _Unit("page", index, unit.label) for index, unit in enumerate(_page_units())
+    ]
+    for kind, (listing, _) in _film_kinds().items():
+        units.extend(
+            _Unit(kind, index, filename.removesuffix(".html"))
+            for index, (_, filename, _) in enumerate(listing())
+        )
+    return units
+
+
+def _schedule(units: Sequence[_Unit]) -> list[_Unit]:
+    """The order units are handed to workers: films first, then pages.
+
+    The build cannot finish before its largest unit does, and the largest are
+    films - the ferroelectric ring alone costs more than half of all the pages
+    together. Started first, they run alongside each other while the pages
+    fill in the workers that come free.
+    """
+    return sorted(units, key=lambda unit: unit.kind == "page")
+
+
+def _chosen(units: list[_Unit], only: Sequence[str] | None) -> list[_Unit]:
+    """The units ``only`` names, in registry order; all of them without it."""
+    if not only:
+        return units
+    known = {unit.label for unit in units}
+    unknown = sorted(set(only) - known)
+    if unknown:
+        message = f"unknown atlas unit(s) {unknown}; choose from {sorted(known)}"
+        raise SystemExit(message)
+    return [unit for unit in units if unit.label in only]
+
+
+@contextmanager
+def _single_threaded_blas() -> Iterator[None]:
+    """One BLAS thread in every process started inside this block."""
+    saved = {name: os.environ.get(name) for name in _BLAS_THREADS}
+    os.environ.update(dict.fromkeys(_BLAS_THREADS, "1"))
+    try:
+        yield
+    finally:
+        for name, value in saved.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+
+
+def _start_worker(latex_cache: str) -> None:
+    """Fill a fresh worker's registry and share the build's typeset equations."""
+    ensure_registry()
+    use_disk_cache(latex_cache)
+
+
+def _build_unit(kind: str, index: int, output_dir: str) -> _Built:
+    """Build one unit, write its pages, and return their atlas cards."""
+    started, cpu = time.perf_counter(), time.process_time()
+    if kind == "page":
+        cards = _build_page(index, output_dir)
+    else:
+        cards = _build_film(kind, index, output_dir)
+    return _Built(
+        tuple(cards),
+        time.process_time() - cpu,
+        time.perf_counter() - started,
+    )
+
+
+def _build_page(index: int, output_dir: str) -> list[_Card]:
+    """Build one catalogue entry and write its page, or pages."""
+    unit = _page_units()[index]
+    built = globals()[unit.builder]()
+    scenes = list(built) if unit.filename is None else [(unit.filename, built)]
+    report = PlotReport(D3Renderer(), output_dir)
+    cards = []
+    for filename, scene in scenes:
+        if filename in _EQUATIONS:
+            scene = with_equation(scene, _EQUATIONS[filename])  # noqa: PLW2901
+        report.write(scene, filename)
+        cards.append((filename, scene.title, scene.subtitle, "plot"))
+    return cards
+
+
+def _build_film(kind: str, index: int, output_dir: str) -> list[_Card]:
+    """Build one film and write its playable page."""
+    listing, renderer = _film_kinds()[kind]
+    build, filename, entry = listing()[index]
+    PlotReport(renderer(), output_dir).write(build(), filename)
+    return [(entry.filename, entry.title, entry.subtitle, entry.kind)]
+
+
+def _build_all(
+    units: Sequence[_Unit],
+    output_dir: str,
+    workers: int,
+) -> dict[_Unit, _Built]:
+    """Build every unit, each in a fresh process, ``workers`` at a time.
+
+    A worker process is spawned for each unit and ends with it, so no unit
+    inherits another's parameter values, registry or caches - only the
+    equations typeset so far, which are the same bytes either way.
+    """
+    built: dict[_Unit, _Built] = {}
+    with (
+        tempfile.TemporaryDirectory(prefix="atlas-latex-") as latex_cache,
+        _single_threaded_blas(),
+        ProcessPoolExecutor(
+            max_workers=workers,
+            mp_context=get_context("spawn"),
+            initializer=_start_worker,
+            initargs=(latex_cache,),
+            max_tasks_per_child=1,
+        ) as pool,
+    ):
+        futures: dict[Future[_Built], _Unit] = {
+            pool.submit(_build_unit, unit.kind, unit.index, output_dir): unit
+            for unit in _schedule(units)
+        }
+        for future in as_completed(futures):
+            unit = futures[future]
+            try:
+                built[unit] = future.result()
+            except BaseException:
+                pool.shutdown(cancel_futures=True)
+                raise
+            cost = built[unit]
+            print(
+                f"  {unit.label:<34} {cost.seconds:7.1f} CPU-s {cost.wall:7.1f} s",
+                flush=True,
+            )
+    return built
+
+
+def main(
+    output_dir: str = "plots",
+    jobs: int | None = None,
+    only: Sequence[str] | None = None,
+) -> None:
+    """Render every scene and film to ``output_dir`` and write the atlas.
+
+    ``jobs`` worker processes build the units, one per CPU by default; one job
+    builds them one after another. ``only`` names the units to build, and the
+    atlas then links just those.
+    """
+    units = _chosen(_units(), only)
+    workers = max(1, min(jobs or os.process_cpu_count() or 1, len(units)))
+    started = time.perf_counter()
+    built = _build_all(units, output_dir, workers)
+    entries = [AtlasEntry(*card) for unit in units for card in built[unit].cards]
+    PlotReport(D3Renderer(), output_dir).write_atlas(entries)
+    wall = time.perf_counter() - started
+    largest = max(units, key=lambda unit: built[unit].seconds)
+    print(
+        f"{len(units)} units on {workers} worker(s): {wall:.1f} s wall, "
+        f"{sum(cost.seconds for cost in built.values()):.1f} CPU-s in the units; "
+        f"largest {largest.label} at {built[largest].seconds:.1f} CPU-s",
+    )
+
+
+def _arguments() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Build the continuation atlas.")
+    parser.add_argument("output_dir", nargs="?", default="plots")
+    parser.add_argument(
+        "--jobs",
+        type=int,
+        default=None,
+        help="worker processes (default: one per CPU; 1 builds serially)",
+    )
+    parser.add_argument(
+        "--only",
+        nargs="+",
+        metavar="NAME",
+        help="build just these pages or films, e.g. hopf ferroelectric_ring",
+    )
+    return parser.parse_args()
 
 
 _HOMOCLINIC_FILENAME = "three_dimensional_homoclinic.html"
@@ -430,15 +705,6 @@ def _films() -> tuple[tuple, ...]:
     )
 
 
-def _film_entries(output_dir: str) -> list[AtlasEntry]:
-    """Write the manifold films, whose scrub bar is distance, not a parameter."""
-    report = PlotReport(ManifoldFilmRenderer(), output_dir)
-    entries = []
-    for build, filename, entry in _films():
-        report.write(build(), filename)
-        entries.append(entry)
-    return entries
-
-
 if __name__ == "__main__":
-    main(sys.argv[1] if len(sys.argv) > 1 else "plots")
+    arguments = _arguments()
+    main(arguments.output_dir, arguments.jobs, arguments.only)
