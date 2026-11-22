@@ -21,6 +21,7 @@ from unittest import TestCase
 
 import numpy as np
 import pytest
+from scipy.spatial import cKDTree
 
 from discrecontinual_equations.continuation.fokker_planck import (
     DensityGrid,
@@ -44,15 +45,26 @@ from tests.continuation.fields import (
     State,
 )
 from tests.continuation.quasipotential_systems import (
+    ANISOTROPIC_AMPLITUDE,
+    MAIER_STEIN_BARRIER,
+    NON_NORMAL_AMPLITUDE,
+    NON_NORMAL_DRIFT,
     OTHER_WELL,
     SADDLE,
     WELL,
+    AnisotropicGradientField,
+    MaierSteinField,
+    NonNormalField,
+    PaperCycleField,
+    PaperLinearField,
     constant_noise,
     double_well,
+    kronecker_covariance,
     potential,
     rotating_drift,
     rotating_noise_matrix,
     rotating_quasipotential,
+    system,
 )
 
 _IDENTITY = np.eye(2)
@@ -392,3 +404,181 @@ class TestTriangleUpdate(TestCase):
         kept = moving & ~degenerate
         assert kept.sum() > count // 2
         assert np.max(cost(fraction)[kept] - brute[kept]) < 1.0e-9
+
+
+# --- Independent references --------------------------------------------------
+#
+# Each oracle below is computed without the library: the published closed forms
+# of Dahiya and Cameron, a gradient drift whose noise is anisotropic, a Lyapunov
+# covariance by a Kronecker solve, and a Maier-Stein barrier from an L-BFGS
+# minimisation of the discretised geometric action done outside the library.
+# Numbers quoted in comments were measured on this branch.
+
+
+@functools.cache
+def _maier_stein_field(scale):
+    """Maier-Stein about the left well, on a box of spacing ``0.05 / scale``."""
+    grid = DensityGrid.box([-1.6, -0.8], [0.4, 0.8], [40 * scale + 1, 32 * scale + 1])
+    solver = OrderedLineIntegral(
+        system(MaierSteinField),
+        constant_noise(_IDENTITY),
+        grid,
+    )
+    return grid, solver, solver.solve(EquilibriumAttractor(WELL))
+
+
+def _paper_cycle_error(count):
+    grid = DensityGrid.box([-2.0, -2.0], [2.0, 2.0], [count, count])
+    angle = np.linspace(0.0, 2.0 * math.pi, 400, endpoint=False)
+    field = OrderedLineIntegral(
+        system(PaperCycleField),
+        constant_noise(_IDENTITY),
+        grid,
+    ).solve(CycleAttractor(np.column_stack([np.cos(angle), np.sin(angle)])))
+    points = grid.points()
+    squared = np.sum(points * points, axis=1)
+    exact = 0.5 * (squared - 1.0) ** 2
+    # {U <= 4.5} is the disc r <= 2, which the box contains; 1.9 keeps a margin.
+    inside = squared <= 1.9**2
+    return float(np.max(np.abs(field.values.ravel()[inside] - exact[inside])))
+
+
+def _anisotropic_gradient_error(count):
+    grid = DensityGrid.box([-2.0, -1.5], [1.0, 1.5], [count, count])
+    field = OrderedLineIntegral(
+        system(AnisotropicGradientField),
+        constant_noise(ANISOTROPIC_AMPLITUDE),
+        grid,
+    ).solve(EquilibriumAttractor(WELL))
+    points = grid.points()
+    exact = 2.0 * (potential(points[:, 0], points[:, 1]) - potential(*WELL))
+    inside = (points[:, 0] < -0.5) & (exact <= _GRADIENT_LEVEL)
+    return float(np.max(np.abs(field.values.ravel()[inside] - exact[inside])))
+
+
+class TestPublishedCases(TestCase):
+    """The two test problems of Dahiya and Cameron (2018), Section 3."""
+
+    def test_the_linear_sde_21_reaches_the_published_accuracy(self):
+        # Their Table 4 fits OLIM-MID's max error on SDE (21) by 0.817 N^-1.39,
+        # 9.5e-4 at N = 129, with K = 10 by their rule of thumb (28). Here
+        # 1.14e-3 on the sublevel set the box contains (their march stops at
+        # the boundary of the mesh, so it is the same set).
+        grid = DensityGrid.box([-1.0, -1.0], [1.0, 1.0], [129, 129])
+        field = OrderedLineIntegral(
+            system(PaperLinearField),
+            constant_noise(_IDENTITY),
+            grid,
+            update_radius=10,
+        ).solve(EquilibriumAttractor([0.0, 0.0]))
+        points = grid.points()
+        exact = 2.0 * points[:, 0] ** 2 + points[:, 1] ** 2
+        inside = exact <= 0.9
+        error = np.abs(field.values.ravel()[inside] - exact[inside])
+        assert np.max(error) < 1.5e-3
+
+    def test_u_about_the_cycle_of_sde_24_converges_at_second_order(self):
+        # Additive noise, unlike the conformal case above: U = (r^2 - 1)^2 / 2.
+        # Measured 0.0899, 0.0221 (and 0.00453 at 321): orders 2.02, 2.29.
+        errors = [_paper_cycle_error(count) for count in (81, 161)]
+        assert errors[1] < 3.0e-2
+        assert min(_orders(errors)) > 1.8
+
+    def test_the_stencil_reaches_its_full_radius(self):
+        # Radius 1 is the four axis neighbours, the points exactly one cell
+        # away; a stencil that stopped short of its radius would have none and
+        # leave every point but the attractor's at infinity.
+        grid = DensityGrid.box([-2.0, -1.5], [1.0, 1.5], [41, 41])
+        field = OrderedLineIntegral(
+            double_well(),
+            constant_noise(_IDENTITY),
+            grid,
+            update_radius=1,
+        ).solve(EquilibriumAttractor(WELL))
+        assert np.all(np.isfinite(field.values))
+        barrier = 2.0 * (potential(*SADDLE) - potential(*WELL))
+        assert abs(field.at(SADDLE) - barrier) < 2.0e-2
+
+
+class TestAnisotropicReferences(TestCase):
+    """``D`` that is not a multiple of the identity, against independent forms."""
+
+    def test_a_gradient_drift_in_the_noise_metric_has_u_twice_the_potential(self):
+        # f = -D grad V: the density is exp(-2 V) for any constant D, so a
+        # solver that used D for D^-1, or G^T G for G G^T, misses it by O(1).
+        # Measured 0.0391, 0.00867: order 2.17 (quadrature-dominated, as the
+        # double well with D = I).
+        errors = [_anisotropic_gradient_error(count) for count in (81, 161)]
+        assert errors[1] < 1.2e-2
+        assert min(_orders(errors)) > 1.8
+
+    def test_a_non_normal_linear_drift_has_the_kronecker_lyapunov_form(self):
+        grid = DensityGrid.box([-1.5, -1.5], [1.5, 1.5], [81, 81])
+        field = OrderedLineIntegral(
+            system(NonNormalField),
+            constant_noise(NON_NORMAL_AMPLITUDE),
+            grid,
+        ).solve(EquilibriumAttractor([0.0, 0.0]))
+        diffusion = NON_NORMAL_AMPLITUDE @ NON_NORMAL_AMPLITUDE.T
+        inverse = np.linalg.inv(kronecker_covariance(NON_NORMAL_DRIFT, diffusion))
+        points = grid.points()
+        exact = 0.5 * np.einsum("ki,ij,kj->k", points, inverse, points)
+        # The level 0.9 x the least U on the box's edge, so the sublevel set is
+        # inside the box. Measured max error 8.98e-4 at 81 points.
+        edge = np.linspace(-1.5, 1.5, 301)
+        ring = np.concatenate(
+            [np.column_stack([edge, np.full_like(edge, side)]) for side in (-1.5, 1.5)]
+            + [
+                np.column_stack([np.full_like(edge, side), edge])
+                for side in (-1.5, 1.5)
+            ],
+        )
+        level = 0.9 * np.min(np.einsum("ki,ij,kj->k", ring, 0.5 * inverse, ring))
+        inside = exact <= level
+        assert np.max(np.abs(field.values.ravel()[inside] - exact[inside])) < 1.2e-3
+
+
+class TestMaierStein(TestCase):
+    """Maier-Stein at beta = 10, where the escape path leaves the symmetry axis."""
+
+    def test_the_barrier_converges_to_the_independent_minimum(self):
+        # Measured 0.341561, 0.340604 against 0.340042: errors 1.52e-3,
+        # 5.6e-4, order 1.44 (1.39 on to 321 x 257). The on-axis path costs 1/2.
+        errors = [
+            abs(_maier_stein_field(scale)[2].at(SADDLE) - MAIER_STEIN_BARRIER)
+            for scale in (2, 4)
+        ]
+        assert errors[1] < 1.0e-3
+        assert min(_orders(errors)) > 1.2
+
+    def test_gmam_finds_the_off_axis_path_and_its_action(self):
+        gmam = GeometricMinimumAction(
+            system(MaierSteinField),
+            constant_noise(_IDENTITY),
+        )
+        fraction = np.linspace(0.0, 1.0, 161)
+        initial = np.column_stack([-1.0 + fraction, 0.4 * np.sin(math.pi * fraction)])
+        path = gmam.path(initial)
+        assert path.converged
+        # 0.3400577; the independent chain gives 0.340042 to 0.340052.
+        assert abs(path.action - MAIER_STEIN_BARRIER) < 1.0e-4
+        assert 0.28 < np.max(np.abs(path.states[:, 1])) < 0.34
+
+    def test_the_grid_the_trace_and_gmam_agree_on_a_point(self):
+        # Three estimates of U at one point by three routes - the march, the
+        # action along the traced characteristic, and the relaxed chain - and
+        # the traced path lies on the chain to within a cell.
+        _grid, solver, field = _maier_stein_field(4)
+        target = np.array([-0.4, 0.3])
+        traced = solver.minimum_action_path(field, target, end=WELL)
+        relaxed = GeometricMinimumAction(
+            system(MaierSteinField),
+            constant_noise(_IDENTITY),
+        ).path(np.linspace(WELL, target, 81))
+        assert traced.arrived
+        assert relaxed.converged
+        # Measured 0.25920 (grid), 0.25879 (trace), 0.25875 (gMAM).
+        assert abs(field.at(target) - relaxed.action) < 1.0e-3
+        assert abs(traced.action - relaxed.action) < 3.0e-4
+        distance = cKDTree(relaxed.states).query(traced.states)[0]
+        assert np.max(distance) < _grid.spacings[0]

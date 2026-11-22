@@ -109,3 +109,116 @@ def rotating_quasipotential(points: np.ndarray) -> np.ndarray:
     )
     inverse = np.linalg.inv(covariance)
     return 0.5 * np.einsum("ki,ij,kj->k", points, inverse, points)
+
+
+# --- Independent references (verification of DEQ-31) -------------------------
+#
+# None of these reuses the library's own formulas: the Lyapunov covariance below
+# is a Kronecker-product solve rather than scipy's Bartels-Stewart, and the
+# Maier-Stein barrier was computed outside the library by minimising the
+# discretised geometric action with L-BFGS (see ``MAIER_STEIN_BARRIER``).
+
+# Dahiya and Cameron, J. Sci. Comput. 2018 (arXiv 1706.07509), SDE (21) with
+# a = 10: dx = (-2x - a y) dt + dw1, dy = (2a x - y) dt + dw2, U = 2x^2 + y^2.
+PAPER_ROTATION = 10.0
+
+
+class PaperLinearField(DeterministicFunction):
+    """``b = (-2x - a y, 2a x - y)``, their Eq. (21); ``U = 2 x^2 + y^2`` (22)."""
+
+    def eval(
+        self,
+        point: list[float],
+        time: float | None = None,  # noqa: ARG002 (base signature)
+    ) -> list[float]:
+        x, y = point[0], point[1]
+        return [-2.0 * x - PAPER_ROTATION * y, 2.0 * PAPER_ROTATION * x - y]
+
+
+class PaperCycleField(DeterministicFunction):
+    """Their Eq. (24): ``b = (y + x (1 - r^2), -x + y (1 - r^2))``, ``D = I``.
+
+    The unit circle is the cycle and ``U = (1/2) (r^2 - 1)^2`` (their Eq. (25),
+    with the correction of its footnote).
+    """
+
+    def eval(
+        self,
+        point: list[float],
+        time: float | None = None,  # noqa: ARG002 (base signature)
+    ) -> list[float]:
+        x, y = point[0], point[1]
+        shrink = 1.0 - x * x - y * y
+        return [y + x * shrink, -x + y * shrink]
+
+
+# f = -D grad V with an anisotropic constant D: the stationary density is
+# exp(-2 V) whatever D is, so U = 2 (V - V_min) on the left well's basin. The
+# basin is no longer x < 0 - the separatrix is the stable manifold of the saddle,
+# tilted by D - but it contains every point with x < -1/2 of the box below
+# (integrating the flow from a 301 x 301 grid, the right basin reaches x = -0.46).
+ANISOTROPIC_AMPLITUDE = np.array([[1.0, 0.0], [0.4, 0.6]])
+
+
+class AnisotropicGradientField(DeterministicFunction):
+    """``f = -D grad V`` for the double well and ``D = G G^T`` above."""
+
+    def eval(
+        self,
+        point: list[float],
+        time: float | None = None,  # noqa: ARG002 (base signature)
+    ) -> list[float]:
+        x, y = point[0], point[1]
+        diffusion = ANISOTROPIC_AMPLITUDE @ ANISOTROPIC_AMPLITUDE.T
+        return list(-(diffusion @ np.array([x**3 - x, y])))
+
+
+# The Maier-Stein model b = (x - x^3 - beta x y^2, -(1 + x^2) y), D = I, at
+# beta = 10 > 4: the minimum action path from (-1, 0) to the saddle (0, 0) leaves
+# the x axis (max |y| = 0.313) and its action is below the on-axis 1/2.
+MAIER_STEIN_BETA = 10.0
+# Minimising sum |b_m| |dx| - b_m . dx (midpoint rule) over chains of 200, 400
+# and 800 nodes with L-BFGS, re-spaced to equal arc length between rounds:
+# 0.340052, 0.340044, 0.340042. The on-axis start converges to 0.500000.
+MAIER_STEIN_BARRIER = 0.340042
+
+
+class MaierSteinField(DeterministicFunction):
+    """``b = (x - x^3 - beta x y^2, -(1 + x^2) y)``."""
+
+    def eval(
+        self,
+        point: list[float],
+        time: float | None = None,  # noqa: ARG002 (base signature)
+    ) -> list[float]:
+        x, y = point[0], point[1]
+        return [x - x**3 - MAIER_STEIN_BETA * x * y * y, -(1.0 + x * x) * y]
+
+
+# A non-normal drift (A A^T != A^T A: real eigenvalues -1 and -2 but strongly
+# sheared eigenvectors) with a coupled G.
+NON_NORMAL_DRIFT = np.array([[-1.0, 4.0], [0.0, -2.0]])
+NON_NORMAL_AMPLITUDE = np.array([[1.0, 0.0], [0.7, 0.5]])
+
+
+class NonNormalField(DeterministicFunction):
+    """``f = A x`` for the non-normal ``A`` above."""
+
+    def eval(
+        self,
+        point: list[float],
+        time: float | None = None,  # noqa: ARG002 (base signature)
+    ) -> list[float]:
+        return list(NON_NORMAL_DRIFT @ np.asarray(point, dtype=float))
+
+
+def kronecker_covariance(drift: np.ndarray, diffusion: np.ndarray) -> np.ndarray:
+    """``S`` with ``A S + S A^T + D = 0``, by ``(I (x) A + A (x) I) vec S = -vec D``."""
+    identity = np.eye(drift.shape[0])
+    operator = np.kron(identity, drift) + np.kron(drift, identity)
+    vector = np.linalg.solve(operator, -diffusion.reshape(-1, order="F"))
+    return vector.reshape(drift.shape, order="F")
+
+
+def system(field_class) -> DeterministicFunction:
+    return field_class(_states(), [], _states(), None)
