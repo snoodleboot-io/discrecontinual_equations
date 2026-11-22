@@ -367,6 +367,18 @@ class TestFirstLanding(TestCase):
             1.0e-12
         )
 
+    def test_a_small_delta_still_reaches_the_outward_crossing(self):
+        # At Delta = 0.005 the continuation goes inward for up to 0.4 before
+        # it comes round, 4 x 0.4 / 0.005 = 320 steps of Delta / 4: more than
+        # its 200, and 5 of the 11 outward-flowing rows were given up,
+        # though each has its landing at exactly 1.005 r.
+        outward = np.einsum("ij,ij->i", _swirl(self.ring), self.ring) > 0.0
+        landing = self._land(0.005)
+        assert np.all(landing.valid)
+        assert np.max(np.abs(landing.points[outward] - 1.005 * self.ring[outward])) < (
+            1.0e-12
+        )
+
     def test_a_landing_the_first_guess_misses_is_retried_alone(self):
         # Two first guesses in seven are spoiled - half the ring away, which
         # Newton, a ring segment a step, cannot cross - or not a number. The
