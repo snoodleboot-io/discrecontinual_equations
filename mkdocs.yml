@@ -66,6 +66,7 @@ nav:
   - Development:
       - Contributing: development/contributing.md
       - Testing: development/testing.md
+      - Complexity: development/complexity.md
       - Future Work: development/future-work.md
 
 extra:
