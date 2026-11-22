@@ -5,9 +5,17 @@ from discrecontinual_equations.systems.coupled_ring import (
     FluxgateRing,
     UnidirectionalRing,
 )
+from discrecontinual_equations.systems.reflection_cubic import (
+    ReflectionCubic,
+    guckenheimer_holmes,
+    reflection_cubic,
+)
 
 __all__ = [
     "FerroelectricRing",
     "FluxgateRing",
+    "ReflectionCubic",
     "UnidirectionalRing",
+    "guckenheimer_holmes",
+    "reflection_cubic",
 ]

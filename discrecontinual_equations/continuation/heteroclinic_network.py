@@ -76,7 +76,12 @@ class NetworkSaddle:
 
     __slots__ = ["equilibrium", "jacobian", "name"]
 
-    def __init__(self, name: str, equilibrium: np.ndarray, jacobian: np.ndarray) -> None:
+    def __init__(
+        self,
+        name: str,
+        equilibrium: np.ndarray,
+        jacobian: np.ndarray,
+    ) -> None:
         self.name = name
         self.equilibrium = equilibrium
         self.jacobian = jacobian

@@ -174,7 +174,7 @@ class TestGuckenheimerHolmesCycle(TestCase):
             spectrum = network.spectrum(_NAMES)
             ratio = ((a2 - _A1) / (_A1 - a3)) ** 3
             assert abs(spectrum.stability_ratio - ratio) < 1.0e-10 * ratio
-            closed_form = 2.0 * _A1 > a2 + a3
+            closed_form = a2 + a3 < 2.0 * _A1
             assert spectrum.is_asymptotically_stable == closed_form
             verdicts.append(closed_form)
         assert any(verdicts)
@@ -386,7 +386,7 @@ class TestKirkSilberCompetition(TestCase):
         assert sorted(cycles) == [("xi1", "xi2", "xi3"), ("xi1", "xi2", "xi4")]
 
     def test_roles_follow_the_cycle_not_the_saddle(self):
-        """At xi2 the x4 direction expands for one cycle and is transverse to the other."""
+        """At xi2 the x4 direction expands for one cycle and is transverse to one."""
         eigenvalues = self._CASES[0][0]
         _, network = _kirk_silber(eigenvalues)
         three = network.spectrum(("xi1", "xi2", "xi3"))

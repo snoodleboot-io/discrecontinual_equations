@@ -16,6 +16,8 @@ the previous one. :meth:`NetworkContinuation.locate_break` marches until a margi
 changes sign and bisects on that margin.
 """
 
+import itertools
+
 import numpy as np
 
 from discrecontinual_equations.continuation.heteroclinic_network import (
@@ -131,7 +133,7 @@ class NetworkContinuation:
                 message = f"a connection is already broken at the start value {start}"
                 raise ValueError(message)
             values = np.linspace(start, stop, steps + 1)
-            for low, high in zip(values[:-1], values[1:], strict=True):
+            for low, high in itertools.pairwise(values):
                 self._set(float(high))
                 if self._weakest()[0] > 0.0:
                     continue

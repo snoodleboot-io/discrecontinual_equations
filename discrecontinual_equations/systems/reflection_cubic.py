@@ -55,7 +55,7 @@ class ReflectionCubic(DeterministicFunction):
     ) -> list[float]:
         """The derivative; written with ``*`` and ``+`` only so jets pass through."""
         size = len(point)
-        values = [parameter.value for parameter in self.parameters]
+        values = [_value(parameter) for parameter in self.parameters]
         squares = [point[j] * point[j] for j in range(size)]
         derivative = []
         for i in range(size):
@@ -64,6 +64,13 @@ class ReflectionCubic(DeterministicFunction):
                 rate = rate + values[size + i * size + j] * squares[j]
             derivative.append(point[i] * rate)
         return derivative
+
+
+def _value(parameter: Parameter) -> float:
+    if parameter.value is None:
+        message = f"parameter {parameter.name!r} has no value"
+        raise ValueError(message)
+    return float(parameter.value)
 
 
 def reflection_cubic(growth: np.ndarray, interaction: np.ndarray) -> ReflectionCubic:

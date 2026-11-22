@@ -56,8 +56,8 @@ class Itinerary:
             distance = np.linalg.norm(states - np.asarray(saddle), axis=1) - radius
             inside = distance < 0.0
             changes = np.flatnonzero(np.diff(inside.astype(int)))
-            entries = [k for k in changes if not inside[k]]
-            exits = [k for k in changes if inside[k]]
+            entries = [int(k) for k in changes if not inside[k]]
+            exits = [int(k) for k in changes if inside[k]]
             for entry in entries:
                 later = [k for k in exits if k > entry]
                 if not later:

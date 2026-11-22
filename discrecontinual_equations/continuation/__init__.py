@@ -90,6 +90,14 @@ from discrecontinual_equations.continuation.geodesic_level_sets import (
     GeodesicMesh,
     GeodesicSettings,
 )
+from discrecontinual_equations.continuation.heteroclinic_network import (
+    ConnectionOrbit,
+    CycleSpectrum,
+    HeteroclinicNetwork,
+    NetworkConnection,
+    NetworkSaddle,
+    coordinate_plane,
+)
 from discrecontinual_equations.continuation.homoclinic_curve import (
     HomoclinicCurve,
     HomoclinicCurvePoint,
@@ -115,6 +123,11 @@ from discrecontinual_equations.continuation.manifold import (
     StableManifold,
     TaylorManifold,
     UnstableManifold,
+)
+from discrecontinual_equations.continuation.network_continuation import (
+    ConnectionBreak,
+    NetworkContinuation,
+    NetworkPoint,
 )
 from discrecontinual_equations.continuation.noise import (
     NoiseMatrix,
@@ -145,6 +158,7 @@ from discrecontinual_equations.continuation.quasipotential import (
     MinimumActionPath,
     OrderedLineIntegral,
 )
+from discrecontinual_equations.continuation.residence import Itinerary, Visit
 from discrecontinual_equations.continuation.shilnikov import (
     SaddleFocus,
     classify_saddle_focus,
@@ -197,6 +211,8 @@ __all__ = [
     "Codim3Result",
     "Codim3Seed",
     "ConnectingOrbit",
+    "ConnectionBreak",
+    "ConnectionOrbit",
     "ContinuationComponents",
     "ContinuationConfig",
     "ContinuationPoint",
@@ -209,6 +225,7 @@ __all__ = [
     "CycleContinuation",
     "CyclePoint",
     "CycleSeed",
+    "CycleSpectrum",
     "DeflatedSolver",
     "DeflationSettings",
     "DensityGrid",
@@ -232,11 +249,13 @@ __all__ = [
     "GridDensity",
     "GridQuasipotential",
     "HermiteSimpsonOrbit",
+    "HeteroclinicNetwork",
     "HeteroclinicOrbit",
     "HomoclinicCurve",
     "HomoclinicCurvePoint",
     "HomoclinicOrbit",
     "HomoclinicShooting",
+    "Itinerary",
     "Ito",
     "LyapunovExponent",
     "LyapunovSettings",
@@ -247,6 +266,10 @@ __all__ = [
     "MeanTopExponent",
     "MeshSpec",
     "MinimumActionPath",
+    "NetworkConnection",
+    "NetworkContinuation",
+    "NetworkPoint",
+    "NetworkSaddle",
     "NoiseConvention",
     "NoiseMatrix",
     "OrbitSolution",
@@ -282,9 +305,11 @@ __all__ = [
     "ThresholdCurve",
     "ThresholdPoint",
     "UnstableManifold",
+    "Visit",
     "characterize_snic",
     "classify_saddle_focus",
     "classify_transition",
+    "coordinate_plane",
     "cyclic_action",
     "diffusion_matrix",
     "equivariance_defect",
