@@ -35,6 +35,7 @@ from discrecontinual_equations.continuation.geodesic_level_sets import (
     GeodesicSettings,
     _advance,
     _Front,
+    _thin,
     _trace_back,
 )
 from discrecontinual_equations.continuation.manifold import (
@@ -673,6 +674,16 @@ def _graph_geodesic_distance(point: np.ndarray, guess: float) -> float:
     return float(solution.x[1])
 
 
+def _dense_ring(points: np.ndarray) -> np.ndarray:
+    """A periodic cubic spline through a ring's points, densely sampled."""
+    closed = np.vstack([points, points[:1]])
+    knots = np.concatenate(
+        [[0.0], np.cumsum(np.linalg.norm(np.diff(closed, axis=0), axis=1))],
+    )
+    spline = CubicSpline(knots, closed, bc_type="periodic", axis=0)
+    return spline(np.linspace(0.0, knots[-1], 60 * len(points), endpoint=False))
+
+
 def _ring_gaps(mesh) -> list[float]:
     """How far each ring's points are from the ring before, less the step between.
 
@@ -686,13 +697,7 @@ def _ring_gaps(mesh) -> list[float]:
         pairwise(mesh.ring_distances),
         strict=False,
     ):
-        points = mesh.vertices[inner]
-        closed = np.vstack([points, points[:1]])
-        knots = np.concatenate(
-            [[0.0], np.cumsum(np.linalg.norm(np.diff(closed, axis=0), axis=1))],
-        )
-        spline = CubicSpline(knots, closed, bc_type="periodic", axis=0)
-        dense = spline(np.linspace(0.0, knots[-1], 60 * len(points), endpoint=False))
+        dense = _dense_ring(mesh.vertices[inner])
         distance, _ = cKDTree(dense).query(mesh.vertices[outer])
         gaps.append(float(np.max(np.abs(distance - (far - near)))) / (far - near))
     return gaps
@@ -758,3 +763,92 @@ class TestCurvedGraph(TestCase):
 
     def test_each_ring_is_its_step_from_the_ring_before(self):
         assert max(_ring_gaps(self.mesh)) < 3.0e-3
+
+
+def _turns(mesh) -> list[float]:
+    """Per ring from the third on: how sharply the approximate geodesics turn.
+
+    Each point is followed back to its foot on the ring before and that foot
+    to its foot on the ring before that (both rings splined), and the angle
+    is the one between the two steps - the grower's ``alpha``, rebuilt from
+    the mesh alone.
+    """
+    angles = []
+    for older, inner, outer in zip(
+        mesh.rings,
+        mesh.rings[1:],
+        mesh.rings[2:],
+        strict=False,
+    ):
+        feet = _dense_ring(mesh.vertices[inner])
+        before = _dense_ring(mesh.vertices[older])
+        points = mesh.vertices[outer]
+        foot = feet[cKDTree(feet).query(points)[1]]
+        heel = before[cKDTree(before).query(foot)[1]]
+        out, back = points - foot, foot - heel
+        cosine = np.einsum("ij,ij->i", out, back) / (
+            np.linalg.norm(out, axis=1) * np.linalg.norm(back, axis=1)
+        )
+        angles.append(float(np.max(np.arccos(np.clip(cosine, -1.0, 1.0)))))
+    return angles
+
+
+class TestStepControl(TestCase):
+    """Delta is halved where the geodesics turn and grown only where they don't.
+
+    Krauskopf and Osinga accept a ring only if every ``alpha_r`` is below
+    ``alpha_max`` and grow Delta only if every one is below ``alpha_min``
+    (SIADS 2003, Sec. 3.2). Both are checked here on the turning angles
+    rebuilt from the mesh, not on the grower's own.
+    """
+
+    def test_no_accepted_step_turns_more_than_the_upper_angle(self):
+        # Measured 0.238 against the bound 0.3; never shrinking, or shrinking
+        # on the mean turn rather than the largest, gives 0.342.
+        function = _field(TiltedHomoclinicField)
+        mesh = GeodesicLevelSets(
+            GeodesicSettings(0.05, 0.6, (0.05, 0.15)),
+        ).compute(
+            function,
+            np.zeros(3),
+            _jacobian(function, np.zeros(3)),
+            StableManifold(),
+            distance=1.2,
+        )
+        assert max(_turns(mesh)) < 0.3
+        assert min(np.diff(mesh.ring_distances)) < 0.6
+
+    def test_delta_grows_only_after_a_straight_step(self):
+        # Measured: Delta grew after turns of 0.049, 0.074 and 0.089, all
+        # below the lower angle 0.1; growing regardless, or on the mean turn,
+        # grows it after turns of up to 0.199 and 0.157.
+        function = _field(GraphSaddle)
+        mesh = GeodesicLevelSets(
+            GeodesicSettings(0.1, 0.05, (0.05, 0.15), step_range=(0.01, 1.0)),
+        ).compute(
+            function,
+            np.zeros(3),
+            _jacobian(function, np.zeros(3)),
+            StableManifold(),
+            distance=2.0,
+        )
+        steps = np.diff(mesh.ring_distances)
+        turns = _turns(mesh)
+        grown = [
+            turns[i - 1]
+            for i in range(1, len(steps) - 1)
+            if steps[i + 1] > 1.01 * steps[i]
+        ]
+        assert grown
+        assert max(grown) < 0.1
+
+
+def test_thinning_never_opens_a_gap_wider_than_the_spacing():
+    # Removing the middle point would leave 0.18 between its neighbours,
+    # wider than the 0.15 allowed, so it stays though it is 0.04 from one.
+    points = np.array(
+        [[0.0, 0.0, 0.0], [0.04, 0.0, 0.0], [0.18, 0.0, 0.0]]
+        + [[0.18 + 0.1 * k, 0.1 * (k % 2), 0.0] for k in range(1, 8)],
+    )
+    keep = _thin(points, 0.05, 0.15)
+    assert keep[1]

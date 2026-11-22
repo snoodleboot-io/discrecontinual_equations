@@ -322,8 +322,8 @@ class TestLorenzManifoldIsOnTheManifold(TestCase):
     The z-axis tests above are exact but see only the axis. Here four points
     of the ring at distance 20 are each held to the stable manifold through
     them, found by flowing the line along the mesh normal into the origin
-    (see :func:`_off_manifold`). Measured: within 7.6e-3 at step 1.5 and
-    spacing (1.5, 4.5), within 9.2e-4 at half of both - the error of the
+    (see :func:`_off_manifold`). Measured: within 6.6e-3 at step 1.5 and
+    spacing (1.5, 4.5), within 8.4e-4 at half of both - the error of the
     ring's interpolation the next orbits start from, falling faster than
     the square of the spacing. On the film's own mesh (step 1.5, out to 100)
     the same probe measured a median 1e-3 and a worst 0.23 (at r = 74.5),
