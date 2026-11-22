@@ -425,20 +425,21 @@ ended). `steps * arclength` is the arclength budget. A step longer than the base
 across which a multiplier crosses the circle is retaken at the base step, so the
 crossing is bracketed as before.
 
-The films opt in where their frames allow it. Measured, interleaved with the
-pre-DEQ-75 build (CPU seconds of `trace`, then of the whole film build):
+The films opt in where their frames allow it. Measured best of five builds,
+interleaved with the pre-DEQ-75 build (CPU seconds of `trace`, then of the
+whole film build):
 
 | film | traced points | trace CPU | film CPU |
 |---|---|---|---|
-| Bogdanov–Takens (step x4) | 802 → 206 | 54.6 → 1.8 | 74.5 → 22.2 |
-| ferroelectric ring (x4) | 762 → 196 | 114.6 → 2.4 | 288.0 → 168.4 |
-| van der Pol (x4) | 401 → 103 | 28.9 → 1.0 | 29.4 → 1.4 |
-| fold of cycles (x2) | 602 → 305 | 42.0 → 2.1 | 42.4 → 2.5 |
-| SNIC (x2; field branches) | 442 → 224 | 36.9 → 12.9 | 62.2 → 37.1 |
-| Hopf (fixed) | 87 | 7.8 → 0.9 | 8.2 → 1.3 |
-| extended Bautin (fixed) | 167 | 17.6 → 1.7 | 18.1 → 2.2 |
-| Hopf–Hopf (fixed) | 102 | 21.7 → 2.3 | 243.3 → 222.0 |
-| zero-Hopf (fixed) | 184 | 20.5 → 2.0 | 189.8 → 176.6 |
+| Bogdanov–Takens (step x4) | 802 → 206 | 48.9 → 1.6 | 66.5 → 19.1 |
+| ferroelectric ring (x4) | 762 → 196 | 111.3 → 2.2 | 279.7 → 168.3 |
+| van der Pol (x4) | 401 → 103 | 25.2 → 0.7 | 25.7 → 1.1 |
+| fold of cycles (x2) | 602 → 305 | 43.1 → 1.7 | 43.6 → 2.1 |
+| SNIC (x2; field branches) | 442 → 224 | 32.7 → 12.8 | 53.1 → 33.0 |
+| Hopf (fixed) | 87 | 7.8 → 0.8 | 8.1 → 1.1 |
+| extended Bautin (fixed) | 167 | 16.9 → 1.7 | 17.3 → 2.2 |
+| Hopf–Hopf (fixed) | 102 | 20.2 → 2.1 | 233.6 → 211.2 |
+| zero-Hopf (fixed) | 184 | 18.2 → 1.9 | 181.5 → 166.4 |
 
 On the fixed-step films every traced orbit is bit for bit the old one and every
 located bifurcation the same to `2e-14`. On the adaptive ones every point is a
