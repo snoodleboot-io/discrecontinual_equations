@@ -65,6 +65,14 @@ _AUTODIFF = AutomaticDifferentiation()
 # cycle this sits between what 160 and 320 trapezoidal nodes buy (8.9% at 80, 2.5%
 # at 160, 0.6% at 320); Hermite-Simpson is under it on the whole branch at 80.
 _FLOQUET_TOLERANCE = 2.0e-2
+# What a Gauss-Legendre point's gap to the same cycle on the doubled mesh is
+# multiplied by to bound its own error. If doubling the mesh at least halves the
+# error, then e_N <= |mu_N - mu_2N| + e_2N <= |mu_N - mu_2N| + e_N / 2, so
+# e_N <= 2 |mu_N - mu_2N|. Any convergent order gives that once resolved; order
+# 2m gives it with room to spare (the gap is then (1 - 4^-m) e_N, read 2/(1 -
+# 4^-m) ~ 2.1 times high at m = 2). The Hermite cross-check alone could not
+# bound the error at m = 2, where both readings are fourth order and cancel.
+_DOUBLING_SAFETY = 2.0
 
 
 class _VectorField:
@@ -351,12 +359,12 @@ class _GaussLegendre(_Collocation):
         # Column j of this holds the monomial coefficients of the j-th Lagrange
         # basis polynomial on the equally spaced grid.
         self._coefficients = np.linalg.inv(grid[:, None] ** powers[None, :])
-        self._values = self._basis(gauss)
+        self._values = self.basis(gauss)
         self._derivatives = (
             powers[None, 1:] * gauss[:, None] ** powers[None, :-1]
         ) @ self._coefficients[1:]
 
-    def _basis(self, fractions: np.ndarray) -> np.ndarray:
+    def basis(self, fractions: np.ndarray) -> np.ndarray:
         """The Lagrange basis at positions in ``[0, 1]``: one row per position."""
         powers = np.arange(self.width + 1)
         return (fractions[:, None] ** powers[None, :]) @ self._coefficients
@@ -613,33 +621,38 @@ class CyclePoint:
         6.0e-6. That is asymptotic, not a rule: on the Brusselator at ``b = 3``
         the drift was the *larger* error, 2.9e-8 against 5.7e-12 with ``m = 4``
         on 80 intervals. Neither can stand for the other, so for those points
-        this is the larger of the trivial drift and the relative disagreement
-        between the Jacobian's multipliers and the Hermite monodromy's - two
-        independent readings of one cycle (see :func:`_multiplier_disagreement`).
+        this is the largest of three readings: the trivial drift; the relative
+        disagreement between the Jacobian's multipliers and the Hermite
+        monodromy's (see :func:`_multiplier_disagreement`); and twice the
+        disagreement with the same cycle re-solved on twice the intervals (see
+        ``_DOUBLING_SAFETY`` for why twice).
 
-        For ``m >= 3`` that makes it a *bound*, and a loose one, not the error:
-        the cross-check is fourth order whatever ``m`` is, so once resolved the
-        reading is the cross-check's own error, and the multipliers are far
-        better than it says. Against an exact reference - the planar nontrivial
-        multiplier is ``exp`` of the divergence integrated over the period, here
-        by DOP853 at ``rtol = 1e-12`` - with ``m = 4`` on 80 intervals it read
-        4.7e-9 against a true 9.6e-15 on van der Pol at ``mu = 1``, and 1.87e-7
-        against 1.28e-10 on the Bogdanov-Takens orbit at b1 = -0.4554 (8.1e-5
-        against 1.34e-5 on 20 intervals). Over-reading has a cost: on van der
-        Pol at ``mu = 6`` with ``m = 4`` on 80 intervals it reads 4.65e-2
-        against a true 6.25e-3, so :meth:`resolved` refuses at the default 2e-2
-        a cycle that Hermite-Simpson on 320 nodes (true 6.05e-3) is let through
-        on. For ``m >= 3`` it under-read only where the mesh was far from
-        resolving the orbit - van der Pol at ``mu = 3`` on 10 intervals, 0.15
-        against 0.32; the fold-of-cycles normal form on 3 intervals with ``m =
-        3``, up to six times low, letting one cycle with a true 3.4e-2 under the
-        default 2e-2. At ``m = 2`` it is not a bound at all: both readings are
-        fourth order and can partly cancel. On that fold branch it read up to
-        2.5 times low on every mesh from 4 to 24 intervals (true 1.4e-4 against
-        5.5e-5 on 16), and on 4 intervals let two cycles with true errors 3.1e-2
-        and 3.4e-2 under the default 2e-2; van der Pol at ``mu = 3`` on 20
-        intervals read 1.1 against 3.0. An estimate that inherits the
-        collocation order is the open follow-up.
+        The Hermite reading alone did not bound the error. At ``m = 2`` it and
+        the Jacobian are both fourth order and their errors partly cancel: on
+        the fold-of-cycles normal form it read up to 2.5 times low on every mesh
+        from 4 to 24 intervals and on 4 intervals let two cycles with true
+        errors 3.1e-2 and 3.4e-2 under the default 2e-2; at ``m = 3`` on 3
+        intervals it read up to six times low. With the doubled-mesh reading,
+        against closed-form or DOP853 references on 1391 cycles - van der Pol
+        at ``mu`` from 0.5 to 10, the Brusselator at ``b`` from 2.5 to 4, that
+        fold branch; ``m`` from 1 to 4 on 3 to 160 intervals - the error never
+        exceeded the estimate (worst ratio 0.75 at ``m = 1``, 0.61 at 2, 0.54
+        at 3, 0.50 at 4) and no cycle above 2e-2 passed. That is a measurement,
+        not a proof: it holds wherever doubling the mesh at least halves the
+        error, which every resolved mesh measured did.
+
+        It over-reads by about two where the doubled-mesh term dominates
+        (median 2.3 at ``m = 2``) and by far more where the fourth-order
+        Hermite term does (median 5 at ``m = 3``, 140 at ``m = 4``): with
+        ``m = 4`` on 80 intervals 4.7e-9 against a true 9.6e-15 on van der Pol
+        at ``mu = 1``, and 1.87e-7 against 1.24e-10 on the Bogdanov-Takens orbit
+        at b1 = -0.4554 (8.1e-5 against 1.34e-5 on 20 intervals). That has a
+        cost: on van der Pol at ``mu = 6`` with ``m = 4`` on 80 intervals it
+        reads 4.65e-2 against a true 6.25e-3, so :meth:`resolved` refuses at
+        the default 2e-2 a cycle that Hermite-Simpson on 320 nodes (true
+        6.05e-3) is let through on. The Hermite term is kept anyway: without
+        it, one ``m = 1`` cycle on 3 intervals read eight times low. An
+        estimate that is tight at every ``m`` is the open follow-up.
 
         A point whose states have collapsed onto one another reads infinite
         under every scheme. Every collocation admits that degenerate solution -
@@ -668,10 +681,10 @@ class CyclePoint:
         whereas the trivial multiplier's exact value is known in advance, so this
         measurement arrives with the point. Under the one-wide schemes it costs
         nothing more. Under Gauss-Legendre it costs the Hermite cross-check
-        monodromy for every point, and for ``m >= 3`` it is conservative: the
-        error it compares is a fourth-order bound, so it can refuse a cycle
-        whose multipliers are good enough. At ``m = 2`` it is an estimate that
-        can read low (see :attr:`floquet_error`).
+        monodromy and a re-solve on the doubled mesh for every point - a point
+        takes 1.3 to 1.5 times as long - and it is conservative: no cycle
+        measured passed with a true error above the tolerance, and it can refuse
+        a cycle whose multipliers are good enough (see :attr:`floquet_error`).
         """
         return self.floquet_error < tolerance
 
@@ -849,9 +862,8 @@ def resolved_branch(
     find. Nothing in the residual can catch that, and the trivial multiplier can -
     under the one-wide schemes. Under Gauss-Legendre the trivial multiplier can sit
     at one however wrong the rest are, and what is gated on is the point's explicit
-    error - for ``m >= 3`` a conservative fourth-order bound that may refuse more of
-    a branch than its multipliers deserve, for ``m = 2`` an estimate that can read
-    low (see :attr:`CyclePoint.floquet_error`).
+    error, a conservative estimate that may refuse more of a branch than its
+    multipliers deserve (see :attr:`CyclePoint.floquet_error`).
 
     An unbroken run and not a filter, because :func:`classify_transition` compares
     *adjacent* points: a branch with holes punched in it would have it interpolating a
@@ -946,8 +958,12 @@ class CycleContinuation:
     intervals of four points are 81 states - the Bogdanov-Takens bound is
     8.0e-5 (true 1.3e-5 on that orbit) and the ring does not improve (2.4e-3,
     which there is the trivial drift itself: its period-35 wave has
-    ``T h = 1.7`` per interval). It is not the default: a step costs about
-    four times as much on 80 intervals, and with ``m`` times the unknowns one
+    ``T h = 1.7`` per interval). These worst-error figures predate the
+    doubled-mesh reading in the estimate; on the worst Bogdanov-Takens orbit it
+    leaves them unchanged (1.87e-7 on 80 intervals, 8.06e-5 on 20), the
+    Hermite term being the larger at ``m = 4``. It is not the default: a step
+    costs about four times as much on 80 intervals, and the doubled-mesh
+    reading another 1.3 to 1.5 times per point, and with ``m`` times the unknowns one
     arclength step covers about ``1/sqrt(m)`` of the parameter, so a caller
     after the same span passes about ``sqrt(m)`` times the step - the figures
     above doubled it, and then reached further along both branches.
@@ -1407,6 +1423,52 @@ class CycleContinuation:
             return np.full(self._dimension, np.nan)
         return np.linalg.eigvals(monodromy)
 
+    def _doubled_multipliers(
+        self,
+        states: np.ndarray,
+        period: float,
+        parameter: float,
+    ) -> np.ndarray:
+        """The same cycle's multipliers re-solved on twice the intervals.
+
+        The Gauss-Legendre error estimate's second reading (see
+        :data:`_DOUBLING_SAFETY`). Each interval's polynomial is evaluated at
+        the doubled mesh's points, which puts the start within the coarse
+        solution's own error of the fine one, and the cycle is corrected there
+        with the parameter held fixed, as :meth:`_solve_seed` does. A fine
+        solve that fails returns ``nan``, which the caller's disagreement turns
+        into an infinite error, so the point is refused rather than believed.
+        """
+        width = self._collocation.width
+        if not isinstance(self._collocation, _GaussLegendre):
+            message = "the doubled-mesh reading is for Gauss-Legendre only"
+            raise TypeError(message)
+        basis = self._collocation.basis(np.arange(2 * width) / (2 * width))
+        pieces = [
+            basis @ states[i * width : (i + 1) * width + 1]
+            for i in range(self._intervals)
+        ]
+        fine = CycleContinuation(
+            self._equation,
+            self._parameter_index,
+            2 * self._intervals,
+            self._phase_index,
+            self._phase_value,
+            collocation=_GaussLegendre.name,
+            collocation_points=width,
+        )
+        fine._dimension = self._dimension
+        unknowns = np.concatenate(
+            [np.vstack([*pieces, states[-1:]]).ravel(), [period], [parameter]],
+        )
+        nodes = 2 * self._intervals * width + 1
+        fixed_parameter = np.zeros(unknowns.size)
+        fixed_parameter[-1] = 1.0
+        corrected = fine._correct(unknowns, nodes, _Arc(unknowns, fixed_parameter, 0.0))
+        if corrected is None:
+            return np.full(self._dimension, np.nan)
+        return fine._jacobian_multipliers(corrected, nodes)
+
     def _solve_seed(self, seed: CycleSeed, nodes: int) -> np.ndarray | None:
         """The first point on the branch: the seed, solved at its own parameter.
 
@@ -1530,9 +1592,16 @@ class CycleContinuation:
         multipliers = self._jacobian_multipliers(unknowns, nodes)
         if np.all(np.isfinite(multipliers)):
             hermite = self._multipliers(states, period, parameter, positions)
+            doubled = self._doubled_multipliers(states, period, parameter)
+            refinement = (
+                _DOUBLING_SAFETY * _multiplier_disagreement(multipliers, doubled)
+                if np.all(np.isfinite(doubled))
+                else float("inf")
+            )
             error = max(
                 float(np.min(np.abs(multipliers - 1.0))),
                 _multiplier_disagreement(multipliers, hermite),
+                refinement,
             )
         else:
             # An interval block too singular to solve: no multipliers to read,

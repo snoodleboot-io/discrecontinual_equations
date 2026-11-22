@@ -270,32 +270,50 @@ cross-check takes `df/dx` by automatic differentiation, because the forward
 difference floors it at 3e-5 on the Bogdanov–Takens orbit nearest the homoclinic
 however fine the mesh.
 
-**That `floquet_error` is a conservative bound, not the `2m`-order error.** Once the
-mesh resolves the orbit it reads the fourth-order cross-check's own error, and the
-multipliers are far better than it says. Against an exact reference - a planar
-cycle's nontrivial multiplier is `exp` of the divergence integrated over the period,
-here by DOP853 at `rtol = 1e-12` - with `m = 4`:
+**`floquet_error` is a conservative estimate, not the `2m`-order error.** It is the
+largest of three readings: the trivial drift, the relative disagreement with the
+Hermite cross-check, and twice the disagreement with the same cycle re-solved on
+twice the intervals. The factor two is what bounds the error whenever doubling the
+mesh at least halves it: `e_N <= |mu_N - mu_2N| + e_2N <= |mu_N - mu_2N| + e_N / 2`.
 
-| cycle | intervals | `floquet_error` (bound) | true error |
+The doubled-mesh reading is there because the Hermite one alone did not bound the
+error. At `m = 2` the Jacobian's multipliers and the cross-check are both fourth
+order and their errors partly cancel: on the fold-of-cycles normal form it read up
+to 2.5 times low on every mesh from 4 to 24 intervals, and on 4 intervals passed two
+cycles whose true errors were 3.1e-2 and 3.4e-2 under the default 2e-2; at `m = 3`
+on 3 intervals it read up to six times low. With all three readings, against
+closed-form or DOP853 references on 1391 cycles (van der Pol at `mu` from 0.5 to 10,
+the Brusselator at `b` from 2.5 to 4, the fold branch; `m` from 1 to 4 on 3 to 160
+intervals) the true error never exceeded the estimate and no cycle above 2e-2
+passed:
+
+| `m` | cycles | worst true / estimate | median estimate / true |
 |---|---|---|---|
-| van der Pol, `mu = 1` | 80 | 4.7e-9 | 9.6e-15 |
-| Bogdanov–Takens, b1 = -0.4554 | 80 | 1.9e-7 | 1.3e-10 |
+| 1 | 300 | 0.75 | 34 |
+| 2 | 482 | 0.61 | 2.3 |
+| 3 | 297 | 0.54 | 5.1 |
+| 4 | 296 | 0.50 | 140 |
+
+Where the fourth-order Hermite term dominates - large `m`, fine meshes - it
+over-reads a great deal. Against an exact reference (a planar cycle's nontrivial
+multiplier is `exp` of the divergence integrated over the period, here by DOP853 at
+`rtol = 1e-12`) with `m = 4`:
+
+| cycle | intervals | `floquet_error` | true error |
+|---|---|---|---|
+| van der Pol, `mu = 1` | 80 | 4.7e-9 | 4.9e-15 |
+| Bogdanov–Takens, b1 = -0.4554 | 80 | 1.9e-7 | 1.2e-10 |
 | Bogdanov–Takens, b1 = -0.4554 | 20 | 8.1e-5 | 1.3e-5 |
 | van der Pol, `mu = 6` | 80 | 4.65e-2 | 6.25e-3 |
 
 The last row is a false refusal: `resolved()` at the default 2e-2 refuses that
 cycle, where Hermite–Simpson on 320 nodes, true error 6.05e-3, is let through. The
-bound under-read only where the mesh was far from resolving the orbit (van der Pol
-at `mu = 3` on 10 intervals, 0.15 against 0.32; the fold-of-cycles normal form on 3
-intervals with `m = 3`, up to six times low). At `m = 2` the Jacobian's multipliers
-and the cross-check are both fourth order and their errors can partly cancel, so
-`floquet_error` is an estimate, not a bound: on the fold-of-cycles normal form it
-read up to 2.5 times low on every mesh from 4 to 24 intervals, and on 4 intervals
-passed two cycles whose true errors were 3.1e-2 and 3.4e-2 under the default 2e-2.
-An estimate that inherits the collocation order is open.
+Hermite term is kept regardless, because without it one `m = 1` cycle on 3 intervals
+read eight times low. The doubled-mesh solve makes a point cost 1.3 to 1.5 times as
+much. An estimate that is tight at every `m` is open.
 
 On the two films the fourth-order schemes could not take below 0.01%, worst
-`floquet_error` over the branch - for Gauss–Legendre that is the bound above, so the
+`floquet_error` over the branch - for Gauss–Legendre that is the estimate above, so the
 true errors are smaller still (on the worst Bogdanov–Takens orbit, 1.3e-10 at 80
 intervals and 1.3e-5 at 20) (Hermite–Simpson as shipped, against
 Gauss–Legendre with `m = 4`; "80 intervals" has four times the unknowns, "20
@@ -307,7 +325,11 @@ intervals" the same 81 states as 80 nodes):
 | Gauss–Legendre, 80 intervals | 4.8e-5% (604) | 4.6e-3% (761) |
 | Gauss–Legendre, 20 intervals | 8.0e-3% (605) | 0.24% (761) |
 
-On 80 intervals both films are under the 0.01% bar by orders of magnitude, bound
+The Gauss–Legendre rows were recorded before the doubled-mesh reading joined the
+estimate. On the worst Bogdanov–Takens orbit it leaves them unchanged (1.87e-7 on 80
+intervals, 8.06e-5 on 20): at `m = 4` the Hermite term is the larger.
+
+On 80 intervals both films are under the 0.01% bar by orders of magnitude, estimate
 and all. On
 Hermite–Simpson's own unknowns Bogdanov–Takens is under it and the ring is not: its
 period-35 wave has `T h = 1.7` per interval at 20 intervals, and four points to an
