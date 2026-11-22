@@ -106,6 +106,21 @@ def _step(
     return new_state, new_frame
 
 
+def _advance(function: Function, state: np.ndarray, dt: float) -> np.ndarray:
+    """The state half of :func:`_step`, operation for operation, without the frame.
+
+    The transient only has to carry the state onto the attractor; the frame starts
+    afresh where it ends. Leaving out the four Jacobians makes a transient step cost
+    four field evaluations instead of ``4 (n + 2)``, and because the state never
+    depended on the frame it lands on the same state bit for bit.
+    """
+    f1 = field_at(function, state)
+    f2 = field_at(function, state + 0.5 * dt * f1)
+    f3 = field_at(function, state + 0.5 * dt * f2)
+    f4 = field_at(function, state + dt * f3)
+    return state + dt / 6.0 * (f1 + 2.0 * f2 + 2.0 * f3 + f4)
+
+
 def lyapunov_spectrum(
     function: Function,
     start: np.ndarray,
@@ -118,6 +133,12 @@ def lyapunov_spectrum(
     advanced through the transient first so it settles onto the attractor, then the
     exponents are accumulated over the horizon with periodic QR renewal. The
     reference orbit must stay bounded, as it does on any attractor.
+
+    The tangent frame starts at the identity when the transient ends, so the
+    transient advances the state alone. That gives the same limit: the exponents are
+    properties of the orbit, the same for almost every initial frame (Oseledets; Skokos,
+    Lect. Notes Phys. 790, 2010, Theorem 2), and where the frame starts moves only
+    the ``O(1/t)`` term of the finite-time estimate (ibid., eq. 63).
     """
     control = settings if settings is not None else LyapunovSettings()
     dt = control.dt
@@ -125,7 +146,7 @@ def lyapunov_spectrum(
     dimension = state.size
     directions = dimension if count is None else count
     for _ in range(control.transient):
-        state, _frame = _step(function, state, np.eye(dimension)[:, :directions], dt)
+        state = _advance(function, state, dt)
     frame = np.eye(dimension)[:, :directions]
     totals = np.zeros(directions)
     elapsed = 0.0
@@ -176,27 +197,52 @@ class StochasticSystem:
         self.convention = convention
 
 
-class _Coefficients:
-    """Drift/diffusion values and Jacobians at a state, plus convention factor."""
+def _scalar_state_drift(
+    system: "StochasticSystem",
+    state: np.ndarray,
+    diffusion: np.ndarray,
+    half: float,
+    slope: np.ndarray | None = None,
+) -> np.ndarray:
+    """Ito-equivalent drift of the reference (Stratonovich adds g_x g / 2).
 
-    __slots__ = ["diffusion", "diffusion_jacobian", "drift", "drift_jacobian", "half"]
+    Under Ito the shift is skipped rather than formed and multiplied by zero, and the
+    diffusion Jacobian is taken only when the shift needs it and no ``slope`` is given.
+    """
+    drift = field_at(system.drift, state)
+    if half == 0.0:
+        return drift
+    if slope is None:
+        slope = jacobian_at(system.diffusion, state)
+    return drift + half * (slope @ diffusion)
+
+
+class _Coefficients:
+    """Everything one horizon step needs at a state, each field evaluated once.
+
+    A transient step needs only :func:`_scalar_state_drift`: the drift Jacobian
+    feeds nothing but the tangent frame, which does not exist yet.
+    """
+
+    __slots__ = ["diffusion", "diffusion_jacobian", "reference", "variational"]
 
     def __init__(self, system: "StochasticSystem", state: np.ndarray) -> None:
-        self.half = system.convention.drift_correction(1.0, 1.0)
-        self.drift = field_at(system.drift, state)
+        half = system.convention.drift_correction(1.0, 1.0)
         self.diffusion = field_at(system.diffusion, state)
-        self.drift_jacobian = jacobian_at(system.drift, state)
         self.diffusion_jacobian = jacobian_at(system.diffusion, state)
-
-    def reference_drift(self) -> np.ndarray:
-        """Ito-equivalent drift of the reference (Stratonovich adds g_x g / 2)."""
-        return self.drift + self.half * (self.diffusion_jacobian @ self.diffusion)
-
-    def variational_drift(self) -> np.ndarray:
-        """Ito-equivalent variational drift matrix (adds g_x^2 / 2 for Stratonovich)."""
-        return self.drift_jacobian + self.half * (
-            self.diffusion_jacobian @ self.diffusion_jacobian
+        self.reference = _scalar_state_drift(
+            system,
+            state,
+            self.diffusion,
+            half,
+            self.diffusion_jacobian,
         )
+        # The variational drift, with g_x^2 / 2 added for Stratonovich only.
+        self.variational = jacobian_at(system.drift, state)
+        if half != 0.0:
+            self.variational = self.variational + half * (
+                self.diffusion_jacobian @ self.diffusion_jacobian
+            )
 
 
 def stochastic_lyapunov(
@@ -221,14 +267,12 @@ def stochastic_lyapunov(
     state = np.asarray(start, dtype=float).copy()
     dimension = state.size
     directions = dimension if count is None else count
+    half = system.convention.drift_correction(1.0, 1.0)
     for _ in range(control.transient):
-        coefficients = _Coefficients(system, state)
+        diffusion = field_at(system.diffusion, state)
+        reference = _scalar_state_drift(system, state, diffusion, half)
         increment = root_dt * generator.standard_normal()
-        state = (
-            state
-            + coefficients.reference_drift() * dt
-            + coefficients.diffusion * increment
-        )
+        state = state + reference * dt + diffusion * increment
     frame = np.eye(dimension)[:, :directions]
     totals = np.zeros(directions)
     elapsed = 0.0
@@ -236,16 +280,8 @@ def stochastic_lyapunov(
         coefficients = _Coefficients(system, state)
         increment = root_dt * generator.standard_normal()
         variation = coefficients.diffusion_jacobian @ frame
-        frame = (
-            frame
-            + coefficients.variational_drift() @ frame * dt
-            + variation * increment
-        )
-        state = (
-            state
-            + coefficients.reference_drift() * dt
-            + coefficients.diffusion * increment
-        )
+        frame = frame + coefficients.variational @ frame * dt + variation * increment
+        state = state + coefficients.reference * dt + coefficients.diffusion * increment
         if (i + 1) % _RENORMALISE_EVERY == 0:
             frame, upper = np.linalg.qr(frame)
             totals += np.log(np.abs(np.diag(upper)))
@@ -270,8 +306,32 @@ class MatrixNoiseSystem:
         self.convention = convention
 
 
+def _matrix_state_drift(
+    system: "MatrixNoiseSystem",
+    state: np.ndarray,
+    columns: np.ndarray,
+    factor: float,
+    jacobians: np.ndarray | None = None,
+) -> np.ndarray:
+    """Ito-equivalent drift of the reference, the matrix twin of the scalar one.
+
+    Under Ito the ``O(K n^2)`` shift is skipped, and the column Jacobians are taken
+    only when the shift needs them and none are given.
+    """
+    drift = field_at(system.drift, state)
+    if factor == 0.0:
+        return drift
+    if jacobians is None:
+        jacobians = system.noise.jacobians_at(state)
+    return drift + state_drift_shift(jacobians, columns, factor)
+
+
 class _MatrixCoefficients:
-    """The Ito-equivalent drifts at one state, with each field evaluated once."""
+    """The Ito-equivalent drifts at one state, with each field evaluated once.
+
+    A transient step needs only :func:`_matrix_state_drift`. Under Ito neither
+    Stratonovich shift is formed, the variational one being ``O(K n^3)``.
+    """
 
     __slots__ = ["columns", "jacobians", "reference", "variational"]
 
@@ -283,15 +343,19 @@ class _MatrixCoefficients:
     ) -> None:
         self.columns = system.noise.columns_at(state)
         self.jacobians = system.noise.jacobians_at(state)
-        self.reference = field_at(system.drift, state) + state_drift_shift(
-            self.jacobians,
+        self.reference = _matrix_state_drift(
+            system,
+            state,
             self.columns,
             factor,
-        )
-        self.variational = jacobian_at(system.drift, state) + variational_drift_shift(
             self.jacobians,
-            factor,
         )
+        self.variational = jacobian_at(system.drift, state)
+        if factor != 0.0:
+            self.variational = self.variational + variational_drift_shift(
+                self.jacobians,
+                factor,
+            )
 
 
 def matrix_noise_lyapunov(
@@ -326,21 +390,20 @@ def matrix_noise_lyapunov(
     dimension = state.size
     directions = dimension if count is None else count
     for _ in range(control.transient):
-        coefficients = _MatrixCoefficients(system, state, factor)
+        columns = system.noise.columns_at(state)
+        reference = _matrix_state_drift(system, state, columns, factor)
         increments = root_dt * generator.standard_normal(drivers)
-        state = state + coefficients.reference * dt + increments @ coefficients.columns
+        state = state + reference * dt + increments @ columns
     frame = np.eye(dimension)[:, :directions]
     totals = np.zeros(directions)
     elapsed = 0.0
     for i in range(control.horizon):
         coefficients = _MatrixCoefficients(system, state, factor)
         increments = root_dt * generator.standard_normal(drivers)
-        variation = np.einsum(
-            "k,kij,jl->il",
-            increments,
-            coefficients.jacobians,
-            frame,
-        )
+        # sum_k dW_k (dG_k/dx) Y, increments first: an O(K n^2) sum and one BLAS
+        # product. A three-operand einsum without a contraction path runs as one
+        # nested loop over all four indices, O(K n^2 k) with no BLAS.
+        variation = np.tensordot(increments, coefficients.jacobians, axes=1) @ frame
         frame = frame + coefficients.variational @ frame * dt + variation
         state = state + coefficients.reference * dt + increments @ coefficients.columns
         if (i + 1) % _RENORMALISE_EVERY == 0:

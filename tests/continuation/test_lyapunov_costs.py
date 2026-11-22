@@ -215,9 +215,43 @@ class TestStochasticCosts(TestCase):
         )
         np.testing.assert_allclose(estimated.exponents, reference, rtol=0, atol=1e-12)
 
+    def test_stratonovich_adds_both_shifts_in_the_transient_and_after(self):
+        # The diffusion is linear with a non-symmetric matrix B, so g_x = B and the
+        # shifts are B g / 2 = B^2 x / 2 and B^2 / 2: B^T in place of B is caught. The
+        # drift is Lorenz, so the state shift reaches the exponents through the drift
+        # Jacobian along the path; with a linear drift it could not.
+        drift = _lorenz()
+        noise_matrix = _random_matrix(5, 0.3)
+        diffusion = CountedLinearField(noise_matrix)
+        shift = 0.5 * noise_matrix @ noise_matrix
+        dt, horizon, transient, seed = 0.01, 400, 50, 3
+        generator = np.random.default_rng(seed)
+        state = np.ones(_DIMENSION)
+        frame, totals = np.eye(_DIMENSION), np.zeros(_DIMENSION)
+        for step in range(transient + horizon):
+            increment = np.sqrt(dt) * generator.standard_normal()
+            if step >= transient:
+                tangent = jacobian_at(drift, state) + shift
+                frame = frame + tangent @ frame * dt + noise_matrix @ frame * increment
+                frame = _accumulate(frame, totals, step - transient)
+            state = (
+                state
+                + (field_at(drift, state) + shift @ state) * dt
+                + noise_matrix @ state * increment
+            )
+        reference = np.sort(totals / (horizon * dt))[::-1]
+        estimated = self._estimate(
+            StochasticSystem(drift, diffusion, Stratonovich()),
+            transient,
+            horizon,
+        )
+        # The estimator's forward-difference Jacobian of the noise carries O(1e-7)
+        # relative error; the reference uses B itself.
+        np.testing.assert_allclose(estimated.exponents, reference, rtol=0, atol=1e-5)
+
 
 class TestMatrixNoiseCosts(TestCase):
-    """:func:`matrix_noise_lyapunov`: no Ito work, no transient Jacobians, BLAS noise."""
+    """:func:`matrix_noise_lyapunov`: no Ito shifts, no transient Jacobians, BLAS."""
 
     def _estimate(self, system, transient, horizon=20, seed=7):
         return matrix_noise_lyapunov(
@@ -288,32 +322,33 @@ class TestMatrixNoiseCosts(TestCase):
             drift, columns = _drift(), _columns(3)
             noise = NoiseMatrix(columns)
             factor = convention.drift_correction(1.0, 1.0)
-            dt, horizon, seed = 0.01, 400, 11
+            dt, horizon, transient, seed = 0.01, 400, 50, 11
             generator = np.random.default_rng(seed)
             state = np.ones(_DIMENSION)
             frame, totals = np.eye(_DIMENSION), np.zeros(_DIMENSION)
-            for i in range(horizon):
+            for step in range(transient + horizon):
                 values = noise.columns_at(state)
                 slopes = noise.jacobians_at(state)
                 increments = np.sqrt(dt) * generator.standard_normal(len(columns))
-                variational = jacobian_at(drift, state) + factor * np.einsum(
-                    "kij,kjl->il",
-                    slopes,
-                    slopes,
-                )
-                variation = np.einsum("k,kij,jl->il", increments, slopes, frame)
-                frame = frame + variational @ frame * dt + variation
+                if step >= transient:
+                    variational = jacobian_at(drift, state) + factor * np.einsum(
+                        "kij,kjl->il",
+                        slopes,
+                        slopes,
+                    )
+                    variation = np.einsum("k,kij,jl->il", increments, slopes, frame)
+                    frame = frame + variational @ frame * dt + variation
+                    frame = _accumulate(frame, totals, step - transient)
                 reference_drift = field_at(drift, state) + factor * np.einsum(
                     "kij,kj->i",
                     slopes,
                     values,
                 )
                 state = state + reference_drift * dt + increments @ values
-                frame = _accumulate(frame, totals, i)
             reference = np.sort(totals / (horizon * dt))[::-1]
             estimated = self._estimate(
                 MatrixNoiseSystem(drift, noise, convention),
-                0,
+                transient,
                 horizon,
                 seed,
             )

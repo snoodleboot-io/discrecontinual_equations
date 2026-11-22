@@ -127,5 +127,12 @@ def variational_drift_shift(jacobians: np.ndarray, factor: float) -> np.ndarray:
     The two shifts are the same sum over drivers seen from the state and from the
     tangent frame, and they must come from the same convention factor or the exponent
     and the density would be reported for two different systems.
+
+    The sum is one matrix product: the ``K`` Jacobians side by side, ``n x Kn``,
+    times the same Jacobians stacked, ``Kn x n``. A two-operand ``einsum`` would run
+    it as a loop without BLAS, several times slower at ``n = K = 64``.
     """
-    return factor * np.einsum("kij,kjl->il", jacobians, jacobians)
+    drivers, rows, _ = jacobians.shape
+    side_by_side = jacobians.transpose(1, 0, 2).reshape(rows, drivers * rows)
+    stacked = jacobians.reshape(drivers * rows, rows)
+    return factor * (side_by_side @ stacked)
