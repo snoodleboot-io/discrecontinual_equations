@@ -214,8 +214,11 @@ def first_lyapunov(
 
     ``A q = i omega q``, ``A^T p = -i omega p``, ``<p, q> = <q, q> = 1`` with
     ``<p, q> = conj(p) . q``, and ``l1 = Re G21 / (2 omega)``. MatCont prints
-    ``Re G21 / 2``, which is ``omega * l1``.
+    ``Re G21 / 2``, which is ``omega * l1``. The formula assumes ``omega > 0``;
+    ``-omega`` names the same eigenpair (a Hopf curve continued past a
+    Bogdanov-Takens point returns it), so the positive frequency is used.
     """
+    omega = abs(omega)
     jacobian = problem.state_jacobian(state, parameter_a, parameter_b)
     dimension = jacobian.shape[0]
     right = _eigenvector(jacobian, 1j * omega)
