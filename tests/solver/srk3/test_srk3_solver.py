@@ -74,3 +74,15 @@ class TestSRK3Refusals:
                 GeometricBrownianMotionCase(dimension=2).equation(),
                 [1.0, 1.0],
             )
+
+    def test_refusal_names_what_is_still_missing(self):
+        # Levy areas are sampled now (DEQ-36); what the order 1.5 scheme still
+        # lacks for several channels are the triple integrals I_(j,k,l) and a
+        # multi-channel form of the supporting values.
+        solver = SRK3Solver(SRK3Config(end_time=1.0, step_size=0.1, random_seed=1))
+        with pytest.raises(ValueError, match=r"I_\(j,k,l\)") as refusal:
+            solver.solve(
+                GeometricBrownianMotionCase(dimension=2).equation(),
+                [1.0, 1.0],
+            )
+        assert "cannot be sampled" not in str(refusal.value)
