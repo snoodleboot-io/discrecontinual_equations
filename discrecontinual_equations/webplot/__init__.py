@@ -14,6 +14,15 @@
 
 """Self-contained D3.js plotting for continuation and bifurcation results."""
 
+from discrecontinual_equations.webplot.manifold_film import (
+    FilmCurve,
+    FilmMarker,
+    ManifoldFilm,
+    film_payload,
+)
+from discrecontinual_equations.webplot.manifold_film_renderer import (
+    ManifoldFilmRenderer,
+)
 from discrecontinual_equations.webplot.renderer import D3Renderer, HtmlRenderer
 from discrecontinual_equations.webplot.report import AtlasEntry, PlotReport
 from discrecontinual_equations.webplot.scene import (
@@ -76,12 +85,16 @@ __all__ = [
     "D3Renderer",
     "Equilibrium",
     "Film",
+    "FilmCurve",
+    "FilmMarker",
     "Frame",
     "Gradient",
     "HtmlRenderer",
     "Lattice",
     "Locus",
     "Manifold",
+    "ManifoldFilm",
+    "ManifoldFilmRenderer",
     "PlotReport",
     "Region",
     "Scene",
@@ -108,6 +121,7 @@ __all__ = [
     "exploration_skeleton",
     "exploration_tree",
     "family_scene",
+    "film_payload",
     "stage_scene",
     "surface_scene",
     "with_equation",

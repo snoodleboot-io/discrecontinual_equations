@@ -356,7 +356,6 @@ class GeodesicLevelSets:
             directions.append(outward / np.linalg.norm(outward))
         return np.array(points), np.array(directions), seed
 
-
     def _chart(
         self,
         function: Function,
@@ -878,7 +877,9 @@ def _advance(
         if wide.size == 0:
             break
         upper = np.where(
-            wide == len(keys) - 1, keys[0] + count, keys[(wide + 1) % len(keys)],
+            wide == len(keys) - 1,
+            keys[0] + count,
+            keys[(wide + 1) % len(keys)],
         )
         middle = 0.5 * (keys[wide] + upper)
         middle = np.where(middle >= count, middle - count, middle)

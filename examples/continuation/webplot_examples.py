@@ -10,6 +10,9 @@ import sys
 
 import numpy as np
 
+from discrecontinual_equations.webplot.manifold_film_renderer import (
+    ManifoldFilmRenderer,
+)
 from discrecontinual_equations.webplot.renderer import D3Renderer
 from discrecontinual_equations.webplot.report import AtlasEntry, PlotReport
 from discrecontinual_equations.webplot.scene import Scene
@@ -180,6 +183,7 @@ try:  # python -m examples.continuation.webplot_examples
     from examples.continuation import stage_fold_of_cycles as fold
     from examples.continuation import stage_hopf as hopf
     from examples.continuation import stage_hopf_hopf as hopfhopf
+    from examples.continuation import stage_lorenz_manifold as lorenz
     from examples.continuation import stage_noisy_hopf as noisy
     from examples.continuation import stage_shilnikov as shilnikov
     from examples.continuation import stage_snic as snic
@@ -192,6 +196,7 @@ except ImportError:  # run as a script path: only this directory is on sys.path
     import stage_fold_of_cycles as fold
     import stage_hopf as hopf
     import stage_hopf_hopf as hopfhopf
+    import stage_lorenz_manifold as lorenz
     import stage_noisy_hopf as noisy
     import stage_shilnikov as shilnikov
     import stage_snic as snic
@@ -244,7 +249,6 @@ _EQUATIONS = {
     "symmetry_modes.html": r"\dot{x}_i = a x_i - x_i^3 - \lambda x_{i+1}",
     "shilnikov_loop.html": r"\dot{x}=y,\ \dot{y}=z,\ \dot{z}=-a z - y + x - x^2",
     "homoclinic_return.html": r"\dot{x} = y,\quad \dot{y} = x - x^2 + \mu y",
-    "three_dimensional_homoclinic.html": r"\dot{u}=v,\ \dot{v}=u-u^2,\ \dot{w}=-2w",
     "heteroclinic_cycle.html": r"\dot{x} = y,\quad \dot{y} = -x + x^3",
     "saddle_focus_onset.html": r"\dot{x}=\sigma(y-x),\ "
     r"\dot{y}=x(\rho-z)-y,\ \dot{z}=xy-\beta z",
@@ -309,7 +313,6 @@ def _raw_catalogue() -> list[tuple[str, Scene]]:
         ("symmetry_modes.html", _symmetry_modes()),
         ("shilnikov_loop.html", _shilnikov_loop()),
         ("homoclinic_return.html", _homoclinic_return()),
-        ("three_dimensional_homoclinic.html", _three_dimensional_homoclinic()),
         ("heteroclinic_cycle.html", _heteroclinic_cycle()),
         ("saddle_focus_onset.html", _saddle_focus_onset()),
         ("stochastic_bifurcation.html", _stochastic_bifurcation()),
@@ -356,6 +359,7 @@ def main(output_dir: str = "plots") -> None:
         report.write(scene, filename)
         entries.append(AtlasEntry(filename, scene.title, scene.subtitle))
     entries.extend(_stage_entries(output_dir))
+    entries.extend(_film_entries(output_dir))
     report.write_atlas(entries)
 
 
@@ -393,6 +397,34 @@ def _stage_entries(output_dir: str) -> list[AtlasEntry]:
     report = PlotReport(StochasticStageRenderer(), output_dir)
     entries = []
     for build, filename, entry in _stages():
+        report.write(build(), filename)
+        entries.append(entry)
+    return entries
+
+
+_HOMOCLINIC_FILENAME = "three_dimensional_homoclinic.html"
+_HOMOCLINIC_ENTRY = AtlasEntry(
+    _HOMOCLINIC_FILENAME,
+    "Three-dimensional homoclinic orbit",
+    "A homoclinic loop to a saddle with a two-dimensional stable manifold, "
+    "drawn on that manifold, grown ring by ring in geodesic distance.",
+    kind="stage",
+)
+
+
+def _films() -> tuple[tuple, ...]:
+    """Every manifold film: what builds it, what it is called, and its card."""
+    return (
+        (_three_dimensional_homoclinic, _HOMOCLINIC_FILENAME, _HOMOCLINIC_ENTRY),
+        (lorenz.lorenz_manifold_film, lorenz.FILENAME, lorenz.ENTRY),
+    )
+
+
+def _film_entries(output_dir: str) -> list[AtlasEntry]:
+    """Write the manifold films, whose scrub bar is distance, not a parameter."""
+    report = PlotReport(ManifoldFilmRenderer(), output_dir)
+    entries = []
+    for build, filename, entry in _films():
         report.write(build(), filename)
         entries.append(entry)
     return entries

@@ -10,6 +10,7 @@ from unittest import TestCase
 
 _PACKAGES = [
     "discrecontinual_equations.continuation",
+    "discrecontinual_equations.webplot",
 ]
 
 
