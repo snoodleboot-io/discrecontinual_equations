@@ -84,6 +84,12 @@ from discrecontinual_equations.continuation.fokker_planck import (
     GridDensity,
     StationaryFokkerPlanck,
 )
+from discrecontinual_equations.continuation.geodesic_level_sets import (
+    CrochetRound,
+    GeodesicLevelSets,
+    GeodesicMesh,
+    GeodesicSettings,
+)
 from discrecontinual_equations.continuation.homoclinic_curve import (
     HomoclinicCurve,
     HomoclinicCurvePoint,
@@ -197,6 +203,7 @@ __all__ = [
     "Continuer",
     "ContinuerBuilder",
     "CurveSeed",
+    "CrochetRound",
     "CycleAttractor",
     "CycleBifurcation",
     "CycleContinuation",
@@ -218,6 +225,9 @@ __all__ = [
     "FamilyDriver",
     "FamilySlice",
     "FourierReduction",
+    "GeodesicLevelSets",
+    "GeodesicMesh",
+    "GeodesicSettings",
     "GeometricMinimumAction",
     "GridDensity",
     "GridQuasipotential",
