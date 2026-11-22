@@ -19,7 +19,6 @@ from discrecontinual_equations.continuation.cycle_continuation import (
     CycleContinuation,
     CycleSeed,
     _Arc,
-    _equidistributed,
 )
 from discrecontinual_equations.differential_equation import DifferentialEquation
 from tests.continuation.fields import (
@@ -111,16 +110,6 @@ class TestSelection(TestCase):
                 collocation_points=3,
             )
 
-    def test_refuses_mesh_adaptation_on_a_scheme_that_cannot_use_it(self):
-        with pytest.raises(ValueError, match="adapt"):
-            CycleContinuation(
-                _equation(HopfField, 2, 0.5),
-                0,
-                10,
-                collocation="hermite_simpson",
-                adapt=3,
-            )
-
     def test_the_default_is_still_hermite_simpson(self):
         continuation = CycleContinuation(_equation(HopfField, 2, 0.5), 0, 10)
         assert continuation.collocation == "hermite_simpson"
@@ -153,7 +142,7 @@ class TestJacobian(TestCase):
         )
         continuation._dimension = dimension  # noqa: SLF001 (trace sets this)
         if mesh is not None:
-            continuation._mesh = mesh  # noqa: SLF001 (adaptation sets this)
+            continuation._mesh = mesh  # noqa: SLF001 (no public way to grade it)
         tangent = np.random.default_rng(11).standard_normal(unknowns.size)
         tangent /= np.linalg.norm(tangent)
         arc = _Arc(unknowns - 0.01 * tangent, tangent, 0.01)
@@ -172,6 +161,7 @@ class TestJacobian(TestCase):
             assert self._disagreement(points, None) < _JACOBIAN_AGREEMENT
 
     def test_matches_finite_differences_on_a_graded_mesh(self):
+        # The continuation runs it uniform, but nothing in the blocks assumes so.
         mesh = np.array([0.0, 0.05, 0.2, 0.3, 0.6, 0.85, 1.0])
         for points in (2, 4):
             assert self._disagreement(points, mesh) < _JACOBIAN_AGREEMENT
@@ -369,79 +359,26 @@ class TestBogdanovTakensOrbit(TestCase):
 
     _B1 = -0.4554
 
-    def _error(self, collocation: str, adapt: int, intervals: int = 80) -> float:
+    def _error(self, collocation: str, intervals: int = 80) -> float:
         equation = _bogdanov_takens(self._B1)
         states, period = _unstable_cycle(equation, self._B1, intervals)
-        extra = {"adapt": adapt} if adapt else {}
         continuation = CycleContinuation(
             equation,
             0,
             intervals,
             phase_index=1,
             collocation=collocation,
-            **extra,
         )
         trace, _ = continuation.trace(CycleSeed(states, period, self._B1), 0.02, 0)
         return trace[0].floquet_error
 
     def test_hermite_simpson_is_the_baseline(self):
-        assert self._error("hermite_simpson", 0) > 1.0e-4
+        assert self._error("hermite_simpson") > 1.0e-4
 
-    def test_gauss_legendre_on_an_equidistributed_mesh_meets_the_bar(self):
-        assert self._error("gauss_legendre", 1) < 1.0e-4
+    def test_gauss_legendre_on_80_intervals_meets_the_bar(self):
+        # 1.9e-7 measured, against 8.9e-4 under Hermite-Simpson.
+        assert self._error("gauss_legendre") < 1.0e-4
 
     def test_gauss_legendre_meets_it_on_hermite_simpsons_unknowns(self):
-        # 20 intervals of four points are the 81 mesh states of 80 nodes.
-        assert self._error("gauss_legendre", 0, intervals=20) < 1.0e-4
-
-
-class TestEquidistribution(TestCase):
-    """The Russell-Christiansen mesh, and a trace that moves its mesh as it goes."""
-
-    def test_puts_the_monitor_equally_into_every_interval(self):
-        mesh = np.linspace(0.0, 1.0, 9)
-        # A fourth derivative that jumps hard between the third and fourth
-        # intervals and is flat elsewhere: the monitor is large only there.
-        highest = np.zeros((8, 2))
-        highest[3:] = 1.0
-        moved = _equidistributed(mesh, highest, 4)
-        assert moved[0] == 0.0
-        assert moved[-1] == 1.0
-        assert np.all(np.diff(moved) > 0.0)
-        steps = np.diff(moved)
-        assert steps.min() < 0.5 * steps.max()
-
-    def test_a_round_cycle_keeps_a_nearly_uniform_mesh(self):
-        mu, intervals = 0.5, 12
-        continuation = CycleContinuation(
-            _equation(HopfField, 2, mu),
-            0,
-            intervals,
-            phase_index=1,
-            collocation="gauss_legendre",
-            collocation_points=3,
-            adapt=1,
-        )
-        seed = CycleSeed(_circle(math.sqrt(mu), intervals), 6.0, mu)
-        trace, _ = continuation.trace(seed, 0.05, 3)
-        assert len(trace) == 4
-        steps = np.diff(continuation.mesh)
-        assert steps.max() / steps.min() < 1.5
-        assert abs(trace[-1].solution.period - 2.0 * math.pi) < 1.0e-5
-
-    def test_grades_the_mesh_toward_the_saddle_on_bogdanov_takens(self):
-        b1 = -0.4554
-        equation = _bogdanov_takens(b1)
-        states, period = _unstable_cycle(equation, b1, 40)
-        continuation = CycleContinuation(
-            equation,
-            0,
-            40,
-            phase_index=1,
-            collocation="gauss_legendre",
-            adapt=1,
-        )
-        trace, _ = continuation.trace(CycleSeed(states, period, b1), 0.02, 0)
-        steps = np.diff(trace[0].mesh)
-        assert steps.max() / steps.min() > 2.0
-        assert trace[0].solution.states.shape == (40 * 4 + 1, 2)
+        # 20 intervals of four points are the 81 states of 80 nodes: 8.1e-5.
+        assert self._error("gauss_legendre", intervals=20) < 1.0e-4

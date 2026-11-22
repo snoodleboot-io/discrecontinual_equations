@@ -15,8 +15,7 @@ of a cycle:
 The orbit is discretised by collocation on a uniform mesh, and the scheme is a
 choice: fourth-order Hermite-Simpson by default, second-order trapezoidal on
 request, or AUTO's orthogonal collocation at ``m`` Gauss-Legendre points (order
-``2m``), the one scheme whose mesh may also be equidistributed as the branch is
-traced. See :class:`CycleContinuation` for why the order, and not the mesh, is
+``2m``). See :class:`CycleContinuation` for why the order, and not the mesh, is
 what decides whether the multipliers can be believed.
 """
 
@@ -55,8 +54,6 @@ _SIXTH = 6.0
 _EIGHTH = 8.0
 _MIDPOINT_WEIGHT = 4.0
 _AUTODIFF = AutomaticDifferentiation()
-# The least the mesh monitor may fall to, as a fraction of its largest value.
-_MONITOR_FLOOR = 1.0e-3
 # How far the trivial multiplier may drift from one before a cycle point is refused
 # as unresolved. A crossing of the unit circle is located by linearly interpolating
 # ``|mu| - 1`` between adjacent points, so an error of a couple of percent in ``|mu|``
@@ -317,8 +314,9 @@ class _GaussLegendre(_Collocation):
     so the pattern is still almost block diagonal, only with ``m`` rows per
     interval against ``m + 1`` points instead of one against two.
 
-    ``step`` is an array of the intervals' widths here, not a scalar, because
-    this scheme's mesh is the one :meth:`CycleContinuation.trace` can move.
+    ``step`` is an array of the intervals' widths here, not a scalar, so the
+    blocks are right on a graded mesh as well; the continuation runs it on the
+    uniform one, for the reason given in :class:`CycleContinuation`.
 
     Measured on the continued Hopf branch (``mu = 0.5``, period exactly 2 pi),
     period error and the order per mesh doubling, coarse meshes for large ``m``
@@ -333,7 +331,6 @@ class _GaussLegendre(_Collocation):
     from 4 to 64 intervals, 5.13, 5.82, 5.96 for ``m = 3`` from 4 to 32, and
     7.72, 7.94, 7.95 for ``m = 4`` from 3 to 24.
     """
-
 
     name = "gauss_legendre"
     jacobian_monodromy = True
@@ -427,38 +424,11 @@ class _GaussLegendre(_Collocation):
             parameter_values.reshape(intervals, width * dimension),
         )
 
-    def interpolate(
-        self,
-        states: np.ndarray,
-        mesh: np.ndarray,
-        positions: np.ndarray,
-    ) -> np.ndarray:
-        """The piecewise polynomial on ``mesh`` evaluated at ``positions`` in [0, 1]."""
-        windows = self._windows(states)
-        interval = np.clip(
-            np.searchsorted(mesh, positions, side="right") - 1,
-            0,
-            windows.shape[0] - 1,
-        )
-        fractions = (positions - mesh[interval]) / (mesh[interval + 1] - mesh[interval])
-        return np.einsum("pj,pjd->pd", self._basis(fractions), windows[interval])
-
     def grid(self, mesh: np.ndarray) -> np.ndarray:
         """Where the solution's points sit on ``mesh``: ``m`` per interval, then 1."""
         fractions = np.arange(self.width) / self.width
         inner = mesh[:-1, None] + fractions[None, :] * np.diff(mesh)[:, None]
         return np.append(inner.ravel(), mesh[-1])
-
-    def highest_derivative(self, states: np.ndarray, mesh: np.ndarray) -> np.ndarray:
-        """``d^m x / ds^m`` on each interval, where the polynomial makes it constant.
-
-        The ``m``-th forward difference of the interval's equally spaced points
-        over the spacing ``h / m`` to the ``m``.
-        """
-        windows = self._windows(states)
-        difference = np.diff(windows, n=self.width, axis=1)[:, 0]
-        spacing = np.diff(mesh) / self.width
-        return difference / (spacing**self.width)[:, None]
 
 
 _COLLOCATIONS: dict[str, _Collocation] = {
@@ -467,38 +437,6 @@ _COLLOCATIONS: dict[str, _Collocation] = {
 _SCHEMES = sorted([*_COLLOCATIONS, _GaussLegendre.name])
 # AUTO's default point count (its NCOL), and the most this scheme is tested at.
 _GAUSS_POINTS = 4
-# How many times the seed's uniform mesh is equidistributed before the first
-# point is recorded: the first move is the largest, and the monitor is read off
-# the solution it is moving, so it takes a few passes to settle.
-_SEED_ADAPTATIONS = 3
-
-
-def _equidistributed(
-    mesh: np.ndarray,
-    highest: np.ndarray,
-    width: int,
-) -> np.ndarray:
-    """A new mesh of as many intervals, with the Russell-Christiansen monitor equal.
-
-    ``highest`` is the ``m``-th derivative on each interval, constant there. Its
-    jump to each neighbour over the distance between their midpoints estimates
-    the ``(m+1)``-th, averaged over the two sides and wrapped round, since the
-    orbit is periodic; the local error of a degree-``m`` piece goes as
-    ``h^(m+1) |x^(m+1)|``, so ``|x^(m+1)|^(1/(m+1))`` integrated over each new
-    interval is made the same for all of them.
-    """
-    steps = np.diff(mesh)
-    gaps = _HALF * (steps + np.roll(steps, -1))
-    forward = np.linalg.norm(np.roll(highest, -1, axis=0) - highest, axis=1) / gaps
-    backward = np.roll(forward, 1)
-    monitor = (_HALF * (forward + backward)) ** (1.0 / (width + 1))
-    # A floor so a stretch where the monitor vanishes still gets intervals.
-    monitor = np.maximum(monitor, _MONITOR_FLOOR * float(np.max(monitor)))
-    cumulative = np.concatenate([[0.0], np.cumsum(monitor * steps)])
-    targets = np.linspace(0.0, cumulative[-1], mesh.size)
-    redistributed = np.interp(targets, cumulative, mesh)
-    redistributed[0], redistributed[-1] = 0.0, 1.0
-    return redistributed
 
 
 def _multiplier_disagreement(first: np.ndarray, second: np.ndarray) -> float:
@@ -588,9 +526,10 @@ class CyclePoint:
     """A cycle on the branch: its parameter, orbit, and Floquet multipliers.
 
     ``mesh`` is where the solution's states sit in rescaled time; ``None``, the
-    default, means the uniform mesh every scheme but an adapted Gauss-Legendre
-    one uses. ``error`` is the multipliers' accuracy where the trivial multiplier
-    cannot say it (see :attr:`floquet_error`); ``None`` means it can.
+    default, means uniformly spaced, which is where the one-wide schemes put
+    their nodes. A Gauss-Legendre point holds its interior points too and says
+    where they are. ``error`` is the multipliers' accuracy where the trivial
+    multiplier cannot say it (see :attr:`floquet_error`); ``None`` means it can.
     """
 
     __slots__ = ["_error", "_mesh", "_multipliers", "_parameter", "_solution"]
@@ -674,8 +613,9 @@ class CyclePoint:
         ``m`` from 2 to 4 and 10 to 80 intervals, and on the Bogdanov-Takens
         orbit at b1 = -0.4554 in every resolved case (``m = 4`` on 80 intervals:
         1.9e-7 against 5.4e-10; on 20: 8.1e-5 against 1.3e-5). The one case
-        under it is the badly resolved ``m = 2`` on 40 adapted intervals there,
-        1.0% against 1.9%: a factor two, where the trivial drift alone said 0.2%.
+        under it is the badly resolved ``m = 2`` on 40 equidistributed intervals
+        there, 1.0% against 1.9%: a factor two, where the trivial drift alone
+        said 0.2%.
         """
         if self._error is not None:
             return self._error
@@ -942,10 +882,39 @@ class CycleContinuation:
     is the default because a new caller should get the scheme whose multipliers
     can be believed without having to know this history. :func:`resolved_branch`
     remains the way a caller finds out whether the mesh it chose was enough.
+
+    ``"gauss_legendre"`` is AUTO's orthogonal collocation, order ``2m`` with
+    ``collocation_points`` (default 4) points to an interval - see
+    :class:`_GaussLegendre` for the measured orders. Its multipliers come off its
+    own Jacobian, and its points carry their error explicitly because the
+    trivial multiplier of that monodromy no longer measures it (see
+    :attr:`CyclePoint.floquet_error`). On 80 mesh intervals it takes the two
+    films the fourth-order schemes left at 0.09% far under 0.01%: worst error
+    over the branch 4.8e-7 on Bogdanov-Takens and 4.6e-5 on the ring, against
+    8.9e-4 and 8.8e-4 under Hermite-Simpson on 80 nodes. On Hermite-Simpson's
+    own unknowns - 20 intervals of four points are 81 states - Bogdanov-Takens
+    reaches 8.0e-5 and the ring does not improve (2.4e-3: its period-35 wave
+    has ``T h = 1.7`` per interval). It is not the default: a step costs about
+    four times as much on 80 intervals, and with ``m`` times the unknowns one
+    arclength step covers about ``1/sqrt(m)`` of the parameter, so a caller
+    after the same span passes about ``sqrt(m)`` times the step - the figures
+    above doubled it, and then reached further along both branches.
+
+    Mesh equidistribution was built for it and measured, and is left out. The
+    Russell-Christiansen monitor ``|x^(m+1)|^(1/(m+1))``, re-applied every step
+    with the polynomial and the tangent carried onto the new mesh and the point
+    re-solved there, graded the Bogdanov-Takens mesh by a factor of six. Over
+    the stretch of each branch both runs covered, the worst error with ``m = 4``
+    on 80 intervals went from 1.44e-7 to 1.43e-7 on Bogdanov-Takens and from
+    3.7e-6 to 4.3e-6 on the ring; on 20 intervals from 5.7e-5 to 4.5e-5 on
+    Bogdanov-Takens, ending a little sooner, and from 2.4e-3 to 1.6e-2 on the
+    ring. Under trapezoidal the mesh could not help because the order was the
+    limit; under this scheme it does not need to. The blocks take a graded mesh
+    all the same, and the implementation is in the history (DEQ-34) for
+    whoever finds an orbit that needs it.
     """
 
     __slots__ = [
-        "_adapt",
         "_assembled",
         "_collocation",
         "_dimension",
@@ -967,7 +936,6 @@ class CycleContinuation:
         *,
         collocation: str = "hermite_simpson",
         collocation_points: int | None = None,
-        adapt: int = 0,
     ) -> None:
         if collocation not in _SCHEMES:
             message = f"collocation must be one of {_SCHEMES}, got {collocation!r}"
@@ -985,22 +953,12 @@ class CycleContinuation:
                     f"{collocation!r} has one point per interval"
                 )
                 raise ValueError(message)
-            if adapt:
-                message = (
-                    f"adapt needs {_GaussLegendre.name!r}, whose mesh can move; "
-                    f"{collocation!r} runs on the uniform mesh"
-                )
-                raise ValueError(message)
             self._collocation = _COLLOCATIONS[collocation]
-        if adapt < 0:
-            message = f"adapt must be zero or a positive step count, got {adapt}"
-            raise ValueError(message)
         self._equation = equation
         self._parameter_index = parameter_index
         self._intervals = intervals
         self._phase_index = phase_index
         self._phase_value = phase_value
-        self._adapt = adapt
         self._mesh = np.linspace(0.0, 1.0, intervals + 1)
         self._dimension = 0
         # The last Jacobian blocks assembled and the unknowns they were taken
@@ -1017,16 +975,11 @@ class CycleContinuation:
         """Collocation points per interval: ``m`` for Gauss-Legendre, else one."""
         return self._collocation.width
 
-    @property
-    def mesh(self) -> np.ndarray:
-        """The current mesh on ``[0, 1]``; uniform unless ``adapt`` has moved it."""
-        return self._mesh
-
     def _step(self) -> float | np.ndarray:
         """The interval widths the scheme is handed.
 
-        A scalar for the one-wide schemes, exactly as before there was a mesh to
-        move, so that their arithmetic - and every film built on them - is the
+        A scalar for the one-wide schemes, exactly as before Gauss-Legendre
+        existed, so that their arithmetic - and every film built on them - is the
         same to the last bit; the widths themselves for Gauss-Legendre.
         """
         if self._collocation.width == 1:
@@ -1454,57 +1407,6 @@ class CycleContinuation:
         ]
         return np.vstack([*pieces, states[-1:]])
 
-    def _adapted(
-        self,
-        unknowns: np.ndarray,
-        tangent: np.ndarray,
-        nodes: int,
-    ) -> tuple[np.ndarray, np.ndarray]:
-        """Move the mesh to equidistribute the monitor, and re-solve the point there.
-
-        The piecewise polynomial is evaluated at the new mesh's points, and the
-        tangent with it - the map is linear, so the tangent of the moved branch
-        is the moved tangent - and the cycle is re-solved on the new mesh with
-        the arclength coordinate held where it was. A re-solve that fails keeps
-        the old mesh, so adapting never loses the branch.
-        """
-        scheme = self._collocation
-        if not isinstance(scheme, _GaussLegendre):  # pragma: no cover (__init__)
-            return unknowns, tangent
-        dimension = self._dimension
-        size = nodes * dimension
-        states = unknowns[:size].reshape(nodes, dimension)
-        previous = self._mesh
-        mesh = _equidistributed(
-            previous,
-            scheme.highest_derivative(states, previous),
-            scheme.width,
-        )
-        positions = scheme.grid(mesh)
-        moved = np.concatenate(
-            [
-                scheme.interpolate(states, previous, positions).ravel(),
-                unknowns[size:],
-            ],
-        )
-        direction = np.concatenate(
-            [
-                scheme.interpolate(
-                    tangent[:size].reshape(nodes, dimension),
-                    previous,
-                    positions,
-                ).ravel(),
-                tangent[size:],
-            ],
-        )
-        direction /= np.linalg.norm(direction)
-        self._mesh = mesh
-        corrected = self._correct(moved, nodes, _Arc(moved, direction, 0.0))
-        if corrected is None:
-            self._mesh = previous
-            return unknowns, tangent
-        return corrected, self._tangent(corrected, nodes, direction)
-
     def trace(
         self,
         seed: CycleSeed,
@@ -1526,12 +1428,9 @@ class CycleContinuation:
         seed_direction = np.zeros(unknowns.size)
         seed_direction[-1] = direction
         tangent = self._tangent(unknowns, nodes, seed_direction)
-        if self._adapt:
-            for _ in range(_SEED_ADAPTATIONS):
-                unknowns, tangent = self._adapted(unknowns, tangent, nodes)
         points = [self._point(unknowns, nodes)]
         bifurcations: list[CycleBifurcation] = []
-        for step in range(1, steps + 1):
+        for _ in range(steps):
             prediction = unknowns + arclength * tangent
             arc = _Arc(unknowns, tangent, arclength)
             corrected = self._correct(prediction, nodes, arc)
@@ -1539,8 +1438,6 @@ class CycleContinuation:
                 break
             tangent = self._tangent(corrected, nodes, tangent)
             unknowns = corrected
-            if self._adapt and step % self._adapt == 0:
-                unknowns, tangent = self._adapted(unknowns, tangent, nodes)
             point = self._point(unknowns, nodes)
             transition = classify_transition(points[-1], point)
             if transition is not None:

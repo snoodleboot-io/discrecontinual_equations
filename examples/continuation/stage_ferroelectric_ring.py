@@ -91,9 +91,13 @@ PLANES = (
         BOX,
     ),
 )
-# CycleContinuation still builds a dense finite-difference Jacobian (DEQ-15), so
-# the trace costs ~1 s/step at 80 nodes and ~8 s/step at 160; 80 keeps the
-# Floquet error near 3%, which the page reports beside the multipliers.
+# The page reports the mesh's own Floquet error beside the multipliers. At 80
+# Hermite-Simpson nodes the worst over the branch is 0.088% (DEQ-29). Under
+# collocation="gauss_legendre" with m = 4 (DEQ-34) it is 4.6e-3% on 80 intervals,
+# with the arclength doubled to cover the same span - which then follows the wave
+# down to a period of 62 at lambda = 0.370 - but 0.24% on 20 intervals, the same
+# 81 states: at T h = 1.7 per interval four points do not make up for the mesh.
+# The film ships under the default scheme.
 INTERVALS = 80
 ARCLENGTH = 0.04
 STEPS_DOWN, STEPS_UP = 700, 60

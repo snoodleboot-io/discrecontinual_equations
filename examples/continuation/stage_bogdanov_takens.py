@@ -62,6 +62,9 @@ BOX = ((-1.25, 0.9), (-0.85, 0.85))
 #    320 nodes                0.6%                  0.8%    801 cycles   143 s
 #   Hermite-Simpson
 #     80 nodes               0.00%                0.077%    605 cycles   101 s
+#   Gauss-Legendre, m = 4 (DEQ-34; arclength doubled at 80 for the same span)
+#     80 intervals                             4.8e-5%    604 cycles    86 s
+#     20 intervals (81 states)                 8.0e-3%    605 cycles    26 s
 #
 # The left column is the cycle DEQ-13 investigated - a representative orbit, and
 # what this comment used to quote. The right is the maximum over every cycle
@@ -92,6 +95,15 @@ BOX = ((-1.25, 0.9), (-0.85, 0.85))
 # residual was the orbit's all along - on the integrated cycle at 80 nodes the old
 # quadrature was already at 1e-4 - and the chord's error had been cancelling a
 # little of it. The lever here remains the orbit: nodes, or a higher-order scheme.
+#
+# DEQ-34 added that scheme, collocation="gauss_legendre", and the rows above are
+# its worst errors on this branch: under the 0.01% bar on 80 intervals by a
+# factor of 200, and on the same 81 states as 80 nodes as well. Re-run on today's
+# code, Hermite-Simpson's worst is 0.089% (the DEQ-29 figure), in 23 s. An
+# equidistributed mesh was measured on top and did not help (1.4e-5% worst over
+# the stretch both covered, with and without it), so it was left out. This film
+# still ships under the default: switching it changes the page, which is a
+# decision about the film and not a side effect of the scheme.
 INTERVALS = 80
 GRID = 36
 # The cycle continuation is seeded this far below the Hopf, where the cycle is
