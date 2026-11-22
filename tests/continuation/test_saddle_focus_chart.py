@@ -243,3 +243,152 @@ def test_the_stage_fan_starts_on_a_circle_not_a_line():
     assert len(fan) == 12
     assert len({tuple(np.round(start, 12)) for start in fan}) == 12
     assert np.linalg.matrix_rank(fan, tol=1.0e-9) == 2
+
+
+# A second focus, independent of the one above: lambda = -0.3 +- 5i and 0.6,
+# in a skewed frame, with a cubic radial term in the pair's plane:
+#   x' = -0.3 x - 5 y + x r^2,  y' = 5 x - 0.3 y + y r^2,  w' = 0.6 w + r^2.
+# Its stable manifold is the graph w = h(r^2) with h solving
+# 2 s (s - 0.3) h' = 0.6 h + s, which is not a polynomial:
+#   h(s) = (0.3 - s) / (2 s) * (-e / (1 - e) - log(1 - e)),  e = s / 0.3.
+_SKEW = np.array([[1.0, 0.5, -0.4], [0.3, 1.2, 0.6], [-0.7, 0.2, 0.9]])
+_UNSKEW = np.linalg.inv(_SKEW)
+
+
+def _skewed(rates):
+    """``x' = F g(F^-1 x)`` for ``g`` the base field ``rates`` returns."""
+
+    class Skewed(DeterministicFunction):
+        def eval(self, point, time=None):  # noqa: ARG002 (base signature)
+            base = [sum(_UNSKEW[i, j] * point[j] for j in range(3)) for i in range(3)]
+            image = rates(*base)
+            return [sum(_SKEW[i, j] * image[j] for j in range(3)) for i in range(3)]
+
+    return Skewed
+
+
+def _cubic_focus(x, y, w):
+    r2 = x * x + y * y
+    return [-0.3 * x - 5.0 * y + x * r2, 5.0 * x - 0.3 * y + y * r2, 0.6 * w + r2]
+
+
+def _height(s):
+    """h(s), summed as its series in e = s / 0.3, which avoids the cancellation."""
+    e = s / 0.3
+    n = np.arange(2, 400)
+    return (0.3 - s) / (2.0 * s) * -np.sum((1.0 - 1.0 / n) * e**n)
+
+
+def _off_the_log_surface(chart, rho):
+    errors = []
+    for angle in np.linspace(0.0, 2.0 * math.pi, 24, endpoint=False):
+        x, y, w = _UNSKEW @ chart.point([rho * math.cos(angle), rho * math.sin(angle)])
+        errors.append(abs(w - _height(x * x + y * y)))
+    return max(errors)
+
+
+class TestFocusOnANonPolynomialSurface(TestCase):
+    """Measured: the order-N chart is off the surface as rho^(N+1) for odd N
+    and rho^(N+2) for even N (the field is odd in the pair's plane, so the
+    surface is even in r): slopes 2.01, 4.01, 4.01, 5.99, 6.01, 7.99, 8.01,
+    9.98 for N = 1 to 8. Flowed by DOP853 for t = 1, the chart point lands on
+    the chart's own image within rho^(N+1): halving theta divides the error
+    by 2^2.00 ... 2^9.00 for N = 1 to 8."""
+
+    def setUp(self):
+        self.function = _field(_skewed(_cubic_focus))
+
+    def _chart(self, order):
+        jacobian = AutomaticDifferentiation().jacobian(self.function, np.zeros(3), 0.0)
+        return TaylorManifold(order=order).compute(
+            self.function,
+            np.zeros(3),
+            jacobian,
+            StableManifold(),
+        )
+
+    def test_the_error_falls_at_the_surfaces_order(self):
+        radii = np.array([0.05, 0.1, 0.2])
+        for order in range(1, 8):
+            chart = self._chart(order)
+            errors = [_off_the_log_surface(chart, rho) for rho in radii]
+            slope = np.polyfit(np.log(radii), np.log(errors), 1)[0]
+            expected = order + 1 if order % 2 else order + 2
+            assert abs(slope - expected) < 0.1, (order, slope)
+
+    def test_the_chart_is_invariant_under_the_true_flow(self):
+        for order in (1, 2, 4, 6):
+            chart = self._chart(order)
+            misses = []
+            for theta in ([0.05, 0.03], [0.025, 0.015]):
+                orbit = solve_ivp(
+                    lambda _t, u: self.function.eval(point=list(u)),
+                    (0.0, 1.0),
+                    chart.point(theta),
+                    method="DOP853",
+                    rtol=1.0e-13,
+                    atol=1.0e-16,
+                )
+                image = chart.flow_image(theta, 1.0)
+                misses.append(np.linalg.norm(orbit.y[:, -1] - image))
+            assert math.log2(misses[0] / misses[1]) == pytest.approx(order + 1, abs=0.1)
+
+
+def _resonant(forced_along_w, forced_in_plane):
+    """The focus -0.3 +- 5i with a stable third rate of exactly -0.6.
+
+    ``z conj(z)`` has the rate ``lambda + conj(lambda) = -0.6``: its
+    homological matrix is singular along ``w``. Forced along ``w`` there is
+    no chart; forced only in the pair's plane, which is the matrix's range,
+    the least-squares term is one.
+    """
+
+    def rates(x, y, w):
+        r2 = x * x + y * y
+        return [
+            -0.3 * x - 5.0 * y + forced_in_plane * r2,
+            5.0 * x - 0.3 * y,
+            -0.6 * w + forced_along_w * r2,
+        ]
+
+    return _field(_skewed(rates))
+
+
+def _resonant_chart(function):
+    jacobian = AutomaticDifferentiation().jacobian(function, np.zeros(3), 0.0)
+    return TaylorManifold(order=5).compute(
+        function,
+        np.zeros(3),
+        jacobian,
+        StableManifold(),
+    )
+
+
+class TestAResonanceThatCanBeSolved(TestCase):
+    """The least-squares branch: a resonance whose remainder is in range."""
+
+    def _miss(self, function, chart):
+        theta = [0.02, 0.01, 0.015]
+        orbit = solve_ivp(
+            lambda _t, u: function.eval(point=list(u)),
+            (0.0, 1.0),
+            chart.point(theta),
+            method="DOP853",
+            rtol=1.0e-13,
+            atol=1.0e-16,
+        )
+        return np.linalg.norm(orbit.y[:, -1] - chart.flow_image(theta, 1.0))
+
+    def test_an_unforced_resonance_charts_the_linear_flow(self):
+        # Measured: 7.9e-16.
+        function = _resonant(0.0, 0.0)
+        assert self._miss(function, _resonant_chart(function)) < 1.0e-13
+
+    def test_a_resonance_forced_in_its_range_is_charted(self):
+        # Measured: 1.0e-15.
+        function = _resonant(0.0, 1.0)
+        assert self._miss(function, _resonant_chart(function)) < 1.0e-13
+
+    def test_a_resonance_forced_along_its_kernel_is_refused(self):
+        with pytest.raises(np.linalg.LinAlgError, match=r"\(1, 1, 0\)"):
+            _resonant_chart(_resonant(1.0, 0.0))
