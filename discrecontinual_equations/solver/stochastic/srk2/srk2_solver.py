@@ -60,8 +60,9 @@ class SRK2Solver(StochasticRungeKuttaSolver):
     applied with one supporting value per channel, ``Y_bar_j = Y + a h + b_j e_j
     sqrt(h)``, which reproduces exactly the terms ``(1/2) b_j (d b_j / d x_j)`` of
     the diagonal Milstein scheme. What it omits are the cross terms ``b_k (d b_j /
-    d x_k) I_(k,j)`` for ``k != j``, which need the Levy areas ``I_(k,j)`` that have
-    no exact sampler. So for a system the measured order 1.0 holds when each ``b_j``
+    d x_k) I_(k,j)`` for ``k != j``, whose Levy areas this scheme does not read
+    (they are sampled since DEQ-36, and :class:`MilsteinSolver` uses them). So for a
+    system the measured order 1.0 holds when each ``b_j``
     depends only on ``x_j`` (the noise then commutes and the omitted terms are zero);
     if some ``b_j`` depends on another component, the omission costs a local error of
     order ``h`` and the strong order falls to 0.5, which is what Euler-Maruyama gives.

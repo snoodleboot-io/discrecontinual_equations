@@ -39,14 +39,14 @@ A third functional couples the channels: the Levy areas (DEQ-36),
   (Levy's formula); its law is not Gaussian and has no closed-form sampler.
 
 :class:`LevyAreaSampler` draws it by the algorithm of Mrongowius and Rossler
-(2022): the truncated Fourier series of the Brownian bridge (Milstein; Kloeden,
+(arXiv:2101.09542): the truncated Fourier series of the Brownian bridge (Milstein; Kloeden,
 Platen and Wright), with the part of the remainder that is linear in ``dW``
 simulated exactly and the rest replaced by a Gaussian of the right (diagonal,
 ``dW``-independent) covariance. Its first two moments are exact at any truncation
 and its pathwise L2 error falls like ``h / n`` in the number ``n`` of terms;
 :meth:`LevyAreaSampler.terms` picks ``n`` so that the error per step is at most
 ``h^(3/2)``, which is what a scheme of strong order 1.0 needs (Kastner and
-Rossler 2022, (64)-(67)). Areas are drawn only when a scheme asks
+Rossler, arXiv:2201.08424, (64)-(67)). Areas are drawn only when a scheme asks
 (``levy_area=True``), and from a stream of their own, so asking for them never
 changes the increments a seeded source gives.
 
@@ -62,6 +62,16 @@ path, reading each step's ``delta_w``, ``delta_z`` and Levy areas off a fine gri
 :class:`GaussianWienerSource` is the ordinary case, drawing fresh increments from
 a generator the solver owns - never ``np.random.seed``, which seeds the
 process-wide stream and lets one solver alter another's results.
+
+References:
+- Mrongowius, J. and Rossler, A. "On the approximation and simulation of iterated
+  stochastic integrals and the corresponding Levy areas in terms of a
+  multidimensional Brownian motion", arXiv:2101.09542 (2021).
+- Kastner, F. and Rossler, A. "An analysis of approximation algorithms for iterated
+  stochastic integrals and a Julia and Matlab simulation toolbox",
+  arXiv:2201.08424 (2022).
+- Levy's stochastic area and its characteristic functions, as quoted in
+  https://en.wikipedia.org/wiki/L%C3%A9vy%27s_stochastic_area.
 """
 
 from abc import ABC, abstractmethod
@@ -110,7 +120,7 @@ class LevyAreaSampler:
     With ``dW`` the increments over a step ``h`` of ``m`` independent Brownian
     motions and ``X_k, Y_k ~ N(0, I_m)``, ``k = 1..n``, ``Psi_1 ~ N(0, I_m)`` and
     ``Psi_2`` one standard normal per pair, all independent, the area of the pair
-    ``j < l`` is (Mrongowius and Rossler 2022, Section 5.1, steps 2-4)::
+    ``j < l`` is (Mrongowius and Rossler, arXiv:2101.09542, Section 5.1, steps 2-4)::
 
         A_(j,l) = h / (2 pi) sum_{k=1}^n (1/k) [X_jk (Y_lk - sqrt(2/h) dW_l)
                                               - X_lk (Y_jk - sqrt(2/h) dW_j)]
@@ -143,7 +153,7 @@ class LevyAreaSampler:
         """The truncation ``n`` that keeps the L2 error per step below ``h^(3/2)``.
 
         From Mrongowius and Rossler's (36), ``max E|I^(n) - I|^2 <= m h^2 / (12
-        pi^2 n^2)``; asking for ``h^(3/2)`` (Kastner and Rossler 2022, (64) with
+        pi^2 n^2)``; asking for ``h^(3/2)`` (Kastner and Rossler, arXiv:2201.08424, (64) with
         ``gamma = 1``, ``c1 = 1``) gives ``n >= sqrt(m / (12 pi^2)) / sqrt(h)``
         (their (67)), which is ``O(h^(-1/2))`` - against ``O(h^(-1))`` for the
         Fourier series without the remainder terms.
@@ -197,8 +207,9 @@ class LevyAreaSampler:
     ) -> np.ndarray:
         """Draw the areas for increments ``delta_w`` of shape ``(..., m)``.
 
-        ``terms`` defaults to :meth:`terms` for the step; the normals are drawn in
-        the order ``X``, ``Y``, ``Psi_1``, ``Psi_2``.
+        ``terms`` defaults to :meth:`terms` for the step; the ``2 m n + m + m (m -
+        1) / 2`` normals are drawn in the order ``X``, ``Y``, ``Psi_1``,
+        ``Psi_2``.
         """
         batch = delta_w.shape[:-1]
         dimension = delta_w.shape[-1]
@@ -206,7 +217,12 @@ class LevyAreaSampler:
         x = self._generator.standard_normal((*batch, count, dimension))
         y = self._generator.standard_normal((*batch, count, dimension))
         psi1 = self._generator.standard_normal((*batch, dimension))
-        psi2 = self._generator.standard_normal((*batch, dimension, dimension))
+        # One Psi_2 per pair j < l, in the row-major order of the upper triangle.
+        upper = np.triu_indices(dimension, 1)
+        psi2 = np.zeros((*batch, dimension, dimension))
+        psi2[..., upper[0], upper[1]] = self._generator.standard_normal(
+            (*batch, len(upper[0])),
+        )
         return self.assemble(delta_w, step, x, y, psi1, psi2)
 
 

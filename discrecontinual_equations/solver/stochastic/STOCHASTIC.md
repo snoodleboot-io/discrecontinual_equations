@@ -236,11 +236,20 @@ drivers the diffusion declares, below.
 | Returns | Meaning | Step | Accepted by |
 |---|---|---|---|
 | vector of `n` | diagonal noise: one Wiener process per component | `b * dW` | every solver |
-| `n x m` matrix `G` | `m` independent drivers, any coupling | `G @ dW` | Euler-Maruyama always; Milstein when the noise commutes; srk2-srk4 refuse |
+| `n x m` matrix `G` | `m` independent drivers, any coupling | `G @ dW` | Euler-Maruyama and Milstein always; srk2-srk4 refuse |
 
-The Milstein cross terms of a non-commuting matrix noise need Levy areas, which no
-Wiener source samples, so `MilsteinSolver` checks `(dG_k/dx) G_j = (dG_j/dx) G_k`
-at every step and raises `ValueError` naming Euler-Maruyama otherwise.
+The Milstein cross terms of a non-commuting matrix noise need the Levy areas
+`A_(j,k)` between drivers (DEQ-36). `LevyAreaSampler` in `wiener.py` draws them by
+the Mrongowius-Rossler algorithm (a truncated Fourier series with its remainder
+treated in two parts, `n = ceil(0.092 sqrt(m / dt))` terms for an L2 error of
+`dt^(3/2)` per step); `GaussianWienerSource` and `BrownianPath` hand them out when a
+scheme asks with `increments(..., levy_area=True)`, from a stream of their own so
+the increments do not change. `MilsteinSolver` checks `(dG_k/dx) G_j =
+(dG_j/dx) G_k` at every step: when it holds the step is the commuting one, bit for
+bit; when it does not the step adds `sum_{j,k} (dG_k/dx) G_j A_(j,k)` and a
+warning names the cost once per solve. Measured strong order on a nonlinear
+non-commuting noise: 0.96, against Euler-Maruyama's 0.51. The ensemble's Milstein
+scheme still refuses non-commuting noise.
 
 ### Ensembles
 
@@ -289,8 +298,9 @@ The measured slopes are from 100000 paths of geometric Brownian motion
 path; the tables are in each solver's docstring. Euler-Maruyama and Milstein
 measured 0.59 / 0.97 and 0.97 / 0.97 in the same run. For systems, SRK2's order
 1.0 needs each component's diffusion to depend only on that component; SRK3 and
-SRK4 refuse systems because the Levy areas their derivations need cannot be
-sampled.
+SRK4 refuse systems because their several-channel forms are not implemented (SRK3's
+would also need the triple integrals `I_(j,k,l)`, which are not sampled; the Levy
+areas are, since DEQ-36).
 
 ## Calculus Conversion Algorithm
 

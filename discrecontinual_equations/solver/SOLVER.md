@@ -128,7 +128,8 @@ the derivations are in Kloeden and Platen (1992).
 - **Scheme**: explicit order 1.0 strong scheme, Kloeden-Platen (11.1.7); the
   Milstein scheme with the diffusion derivative taken as a stage difference
 - **Noise**: diagonal; order 1.0 holds when each component's diffusion depends only
-  on that component (otherwise the omitted Levy areas reduce it to 0.5)
+  on that component (otherwise the omitted Levy areas reduce it to 0.5; Milstein
+  draws them, DEQ-36)
 - **Calculus**: Supports both Ito and Stratonovich
 
 #### SRK3 (three drift stages, six diffusion stages)

@@ -16,9 +16,10 @@ class MySDE(StochasticFunction):
 A vector from `diffusion()` is diagonal noise: one Wiener process per component.
 Return an `n x m` nested list instead and the noise is a full matrix `G` with `m`
 independent drivers, stepped as `G dW` - a rotation, a shear, one driver shared by
-several components. `EulerMaruyamaSolver` takes any `G`; `MilsteinSolver` takes a
-`G` whose columns commute and refuses one that does not; the `srk*` solvers take
-the vector form only.
+several components. `EulerMaruyamaSolver` takes any `G`; so does `MilsteinSolver`,
+at strong order 1.0: when the columns do not commute it draws the Levy areas
+between drivers (`LevyAreaSampler`, DEQ-36) and warns once about their cost; the
+`srk*` solvers take the vector form only.
 
 ```python
 class ConformalNoise(StochasticFunction):

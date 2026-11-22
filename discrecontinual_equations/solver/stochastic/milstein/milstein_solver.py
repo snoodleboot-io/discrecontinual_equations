@@ -44,10 +44,12 @@ class MilsteinSolver(Solver):
 
     **Systems and matrix noise (DEQ-28, DEQ-36).** For ``dX = a dt + G dW`` with
     ``m`` drivers the Milstein term is ``Σ_{j,k} (∂G_k/∂x) G_j I_(j,k)`` over pairs
-    of channels (Kloeden-Platen (10.3.3): ``L^j G_k I_(j,k)``), with ``I_(j,k) =
-    ∫∫ dW_j dW_k`` the iterated Ito integrals, ``j`` the inner one. Each is
-    ``(1/2)(ΔW_j ΔW_k - δ_jk Δt) + A_(j,k)`` with ``A`` the antisymmetric matrix of
-    Levy areas, which :class:`~.wiener.LevyAreaSampler` draws.
+    of channels (the Ito-Taylor ``L^j G_k I_(j,k)``), with ``I_(j,k) = ∫∫ dW_j
+    dW_k`` the iterated Ito integrals, ``j`` the inner one - the convention the
+    ``dx = dW_1, dy = x dW_2`` test pins, since the transpose is an order-0.5
+    error there. Each is ``(1/2)(ΔW_j ΔW_k - δ_jk Δt) + A_(j,k)`` with ``A`` the
+    antisymmetric matrix of Levy areas, which :class:`~.wiener.LevyAreaSampler`
+    draws.
 
     When the noise *commutes* - ``(∂G_k/∂x) G_j = (∂G_j/∂x) G_k`` for every pair -
     the areas cancel between ``(j, k)`` and ``(k, j)`` and the term is ``(1/2)
@@ -59,32 +61,39 @@ class MilsteinSolver(Solver):
     A_(j,k)``, with the areas from the Wiener source if one was given (a
     :class:`~.wiener.BrownianPath` reads them off its grid) and otherwise from a
     sampler on a stream spawned from ``random_seed``, so the increments a seeded
-    run draws are the ones Euler-Maruyama draws with that seed. That costs about
-    ``4 m n`` extra normals a step with ``n ≈ 0.09 sqrt(m / Δt)`` Fourier terms
-    (``LevyAreaSampler.terms``), which is why a warning says so once per solve;
+    run draws are the ones Euler-Maruyama draws with that seed. That costs
+    ``2 m n + m (m + 1) / 2`` extra normals a step with ``n = ceil(0.092 sqrt(m /
+    Δt))`` Fourier terms (``LevyAreaSampler.terms``), which is why a warning says
+    so once per solve;
     before DEQ-36 such noise was refused. A vector diffusion is ``G = diag(b)``:
     with each ``b_i`` depending only on ``x_i`` the noise commutes and the term is
     the familiar per-component ``(1/2) b_i b_i' (ΔW_i² - Δt)``.
 
     **Order with non-commuting noise.** Strong order 1.0, with the truncation
-    keeping the areas' L2 error at ``Δt^{3/2}`` per step. Measured on ``dx =
-    -x/2 dt + cos(y) dW_1``, ``dy = -y/2 dt + cos(x) dW_2`` against the scheme on
-    the path's own grid (``2^-10``, with exact-in-law cell areas), 30 paths: the
-    slope is about 1.0 against Euler-Maruyama's 0.5 (see
-    ``tests/solver/milstein/test_milstein_levy_area.py`` for the numbers). On
-    ``dx = dW_1, dy = x dW_2``, whose ``y(T)`` is the iterated integral itself, the
-    scheme reproduces a path's own ``I_(1,2)(0, T)`` to rounding at every step
-    size; driven by the sampler its error is the sampler's, below ``sqrt(T) Δt``.
+    keeping the areas' L2 error at ``Δt^{3/2}`` per step. Measured on ``dx = -x/2
+    dt + cos(y) dW_1``, ``dy = -y/2 dt + cos(x) dW_2``, ``(x, y)(0) = (0.3,
+    -0.2)``, over ``[0, 1]`` against the scheme on the path's own grid (``2^-11``,
+    whose cell areas have the exact law), 100 paths, ``Δt = 2^-2 ... 2^-7``: mean
+    error 1.11e-01 ... 4.00e-03, slope 0.96; Euler-Maruyama 1.54e-01 ... 2.60e-02,
+    slope 0.51. On ``dx = dW_1, dy = x dW_2``, whose ``y(T)`` is the iterated
+    integral ``I_(1,2)(0, T)`` itself, the scheme reproduces a path's own
+    ``I_(1,2)(0, T)`` at every step size (largest difference 3.8e-11 over 200
+    paths and ``Δt = 2^-2 ... 2^-8``, the central-difference Jacobians' error),
+    while Euler-Maruyama measures 0.49. Driven by the sampler, that equation's
+    error is the sampler's alone: below ``0.44 Δt`` for ``Δt = 2^-3 ... 2^-10``
+    (60 paths, against a reference coupled to 64 times as many Fourier terms),
+    with slope 0.78 there because ``n`` is at most 5 and the sampler's error falls
+    more slowly than ``1 / n`` for so few terms; for ``Δt = 2^-14 ... 2^-20`` the
+    slope is 0.98.
 
     References:
     - Milstein, Grigori N. "Numerical Integration of Stochastic Differential Equations"
       Kluwer Academic Publishers, 1995
     - Kloeden, P. E. and Platen, E. "Numerical Solution of Stochastic Differential
-      Equations", Springer, 1992, Section 10.3.
+      Equations", Springer, 1992 (the Milstein scheme for several drivers).
     - Mrongowius, J. and Rossler, A. "On the approximation and simulation of
       iterated stochastic integrals and the corresponding Levy areas in terms of a
-      multidimensional Brownian motion", Stoch. Anal. Appl. 40 (2022);
-      arXiv:2101.09542.
+      multidimensional Brownian motion", arXiv:2101.09542 (2021).
     """
 
     def __init__(
@@ -228,8 +237,8 @@ class MilsteinSolver(Solver):
         message = (
             "MilsteinSolver: the noise does not commute ((dG_k/dx) G_j differs from "
             "(dG_j/dx) G_k), so every such step draws the Levy areas between its "
-            f"{drivers} drivers, about 4 m n extra normals with n ~ 0.09 sqrt(m / dt) "
-            "Fourier terms (DEQ-36). EulerMaruyamaSolver needs none, at strong "
-            "order 0.5."
+            f"{drivers} drivers: 2 m n + m (m + 1) / 2 extra normals a step with "
+            "n = ceil(0.092 sqrt(m / dt)) Fourier terms (DEQ-36). "
+            "EulerMaruyamaSolver needs none, at strong order 0.5."
         )
         warnings.warn(message, UserWarning, stacklevel=3)
