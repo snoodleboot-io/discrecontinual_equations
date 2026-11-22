@@ -13,6 +13,10 @@ from discrecontinual_equations.continuation.connecting_orbit import (
     MeshSpec,
     Terminus,
 )
+from discrecontinual_equations.continuation.geodesic_level_sets import (
+    GeodesicLevelSets,
+    GeodesicSettings,
+)
 from discrecontinual_equations.continuation.homoclinic_shooting import (
     Departure,
     HomoclinicShooting,
@@ -27,6 +31,11 @@ from discrecontinual_equations.continuation.symmetry import fourier_reduce
 from discrecontinual_equations.function.deterministic import DeterministicFunction
 from discrecontinual_equations.systems import (
     FerroelectricRing,
+)
+from discrecontinual_equations.webplot.manifold_film import (
+    FilmCurve,
+    FilmMarker,
+    ManifoldFilm,
 )
 from discrecontinual_equations.webplot.scene import Scene
 from discrecontinual_equations.webplot.scene_builder import (
@@ -89,6 +98,14 @@ _IMAG_TOLERANCE = 1.0e-9
 _MODE_IMAG = 1.0e-6
 _SADDLE_JACOBIAN = np.array([[0.0, 1.0], [1.0, 0.0]])
 _PHASE_WINDOW = 2.2
+# The 3-D homoclinic's stable surface: fine enough to read as a surface and
+# to follow the loop's turn at its tip, which is the tightest curvature on it.
+_HOMOCLINIC_SURFACE = GeodesicSettings(
+    initial_radius=0.05,
+    step=0.05,
+    spacing=(0.04, 0.12),
+)
+_HOMOCLINIC_DISTANCE = 3.0
 
 
 def _saddle() -> DeterministicFunction:
@@ -331,7 +348,18 @@ def _homoclinic_return() -> Scene:
     )
 
 
-def _three_dimensional_homoclinic() -> Scene:
+def _three_dimensional_homoclinic() -> ManifoldFilm:
+    """The 3-D homoclinic loop, on the stable surface it returns along.
+
+    The saddle has eigenvalues {1, -1, -2}, so its stable manifold is a
+    surface, which the page used to leave out and show the loop alone in the
+    x-z plane. Grown as geodesic level sets it is the cylinder over the
+    planar system's zero-energy curve, and the loop - solved here by the
+    projection BVP as before - lies in it: it leaves along the unstable curve
+    and comes home across the surface. The surface stops short of the loop's
+    return to the origin, where the flow slows to nothing and the last rings
+    would need ever longer orbit segments.
+    """
     tilt = _homoclinic_tilt()
     half_length, intervals = 12.0, 240
     times = np.linspace(-half_length, half_length, intervals + 1)
@@ -364,18 +392,42 @@ def _three_dimensional_homoclinic() -> Scene:
         phase_value=float(exact[intervals // 2, 0]),
     )
     solution = HomoclinicOrbit(field, np.zeros(3), jacobian, mesh).solve(seed)
-    path = list(zip(solution.component(0), solution.component(2), strict=True))
-    lines = [("unstable", "homoclinic loop", path, None)]
-    markers = [("saddle", "saddle", [(0.0, 0.0)], None)]
-    return curve_scene(
-        lines,
-        markers,
-        ("x", "z"),
-        "Three-dimensional homoclinic orbit",
-        "A homoclinic loop to a saddle with a two-dimensional stable eigenspace, "
-        "solved by the projection boundary-value problem and shown projected onto the "
-        "x-z plane. The same machinery projects onto complex (spiral) eigenspaces.",
+    surface = GeodesicLevelSets(_HOMOCLINIC_SURFACE).compute(
+        field,
+        np.zeros(3),
+        jacobian,
+        StableManifold(),
+        distance=_HOMOCLINIC_DISTANCE,
     )
+    film = ManifoldFilm(
+        "Three-dimensional homoclinic orbit",
+        "A homoclinic loop to a saddle with a two-dimensional stable "
+        "eigenspace. The loop leaves along the one-dimensional unstable "
+        "manifold and returns across the two-dimensional stable one - drawn "
+        "here as the surface it is, grown ring by ring in geodesic distance.",
+        surface,
+        equation=r"\dot{u}=v,\ \dot{v}=u-u^2,\ \dot{w}=-2w",
+        note=(
+            "The system is u' = v, v' = u - u^2, w' = -2w turned into all three "
+            "axes by a fixed rotation. The loop is solved by the projection "
+            "boundary-value problem (HomoclinicOrbit). The stable manifold is "
+            "grown by GeodesicLevelSets from the TaylorManifold chart: "
+            f"{len(surface.rings)} level sets out to a geodesic distance of "
+            f"{surface.ring_distances[-1]:.1f}, {len(surface.vertices):,} "
+            f"vertices. It is the cylinder over the planar loop, so its "
+            "geodesic distance is sqrt(s^2 + w^2) with s the arclength along "
+            "the loop, which the test suite checks the rings against."
+        ),
+    )
+    film.curves.append(
+        FilmCurve(
+            "homoclinic loop",
+            "orbit",
+            np.column_stack([solution.component(i) for i in range(3)]),
+        ),
+    )
+    film.markers.append(FilmMarker("saddle", "saddle", np.zeros(3)))
+    return film
 
 
 def _heteroclinic_cycle() -> Scene:

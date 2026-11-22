@@ -18,8 +18,23 @@ Validation. Flow-invariance: integrating the field from ``P(theta)`` reproduces
 3e-14 at orders 3, 5, 7). For the Hamiltonian saddle the unstable manifold is the
 homoclinic loop, and the chart lies on the exact level set ``H = 0`` to 1e-6.
 
-Remaining: complex (spiral) manifolds need the conjugate-coordinate variant; global
-growth beyond the local polynomial chart (arclength/geodesic level sets).
+Global growth of a two-dimensional manifold beyond the chart is
+`geodesic_level_sets.py` (DEQ-30): Krauskopf and Osinga's geodesic level sets,
+seeded on the chart, each new point an orbit-segment BVP solved from its landing
+end. Exact on a plane for every linear saddle tried (rings are circles of their
+radius to 1e-11, stable-rate ratios up to 20, near-parallel eigenvectors),
+second order on the tilted homoclinic cylinder, and the Lorenz manifold to
+geodesic distance 100 in 1.5 s with no point lost.
+
+Remaining: complex (spiral) manifolds need the conjugate-coordinate variant (the
+level-set grower seeds a spiral manifold on its tangent plane meanwhile). The
+strict Lorenz growth stops at distance 157.2 (step 1.5, spacing 1.5 to 4.5) and
+says so in `GeodesicMesh.stopped`: there the flow runs along the level set and
+the front is 0.04 to 0.05 off W^s(0) (measured independently), so the radial
+steps turn by 0.38 rad at every Delta and four landings fail. With `loss` it
+goes on, with holes. Krauskopf and Osinga reached 151.75 (SIADS 2003, Sec. 4.5)
+and 154.75 (IJBC 2005 survey, Sec. 2.3). Their step control also bounds
+Delta * alpha, which this grower does not.
 
 ## 2. Connecting orbits - ORBIT SOLVER IMPLEMENTED, continuation pending
 
