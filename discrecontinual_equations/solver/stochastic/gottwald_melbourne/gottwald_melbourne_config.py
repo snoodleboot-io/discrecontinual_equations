@@ -1,6 +1,16 @@
 from discrecontinual_equations.solver.solver_config import StochasticConfig
 
 
+def epsilon_exceeds_step(epsilon: float, step_size: float) -> str:
+    """The error for an ε longer than the grid step (DEQ-86)."""
+    return (
+        f"ε must not exceed step_size (epsilon={epsilon}, step_size={step_size}): "
+        "each fast step of the map advances slow time by ε, so the path at time t "
+        "is z_⌊t/ε⌋ (Gottwald & Melbourne 2021, Theorem 4.1) and cannot resolve a "
+        "step shorter than ε. Take ε ≤ step_size; the method converges as ε → 0."
+    )
+
+
 class GottwaldMelbourneConfig(StochasticConfig):
     """
     Configuration for the Gottwald-Melbourne stochastic differential equation solver.
@@ -17,7 +27,8 @@ class GottwaldMelbourneConfig(StochasticConfig):
     - alpha: Stability parameter of the α-stable Lévy process (1 < α < 2)
     - eta: Scale parameter of the α-stable Lévy process
     - beta: Skewness parameter of the α-stable Lévy process (-1 ≤ β ≤ 1)
-    - epsilon: Homogenisation parameter controlling convergence (small positive value)
+    - epsilon: Homogenisation parameter controlling convergence (small positive
+      value, at most step_size: each fast step advances slow time by ε)
 
     Provides computed properties:
     - times: Array of integration time points
@@ -45,6 +56,8 @@ class GottwaldMelbourneConfig(StochasticConfig):
             raise ValueError("η must be positive")
         if self.epsilon <= 0:
             raise ValueError("ε must be positive")
+        if self.epsilon > self.step_size:
+            raise ValueError(epsilon_exceeds_step(self.epsilon, self.step_size))
 
     @property
     def gamma(self) -> float:

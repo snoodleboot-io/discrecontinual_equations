@@ -7,6 +7,7 @@ from discrecontinual_equations.differential_equation import DifferentialEquation
 from discrecontinual_equations.solver.solver import Solver
 from discrecontinual_equations.solver.stochastic.gottwald_melbourne.gottwald_melbourne_config import (
     GottwaldMelbourneConfig,
+    epsilon_exceeds_step,
 )
 
 
@@ -39,6 +40,16 @@ class GottwaldMelbourneSolver(Solver):
             raise ValueError("η must be positive")
         if self.solver_config.epsilon <= 0:
             raise ValueError("ε must be positive")
+        # With ε above the step, each grid step still took one fast step, so the
+        # path ran ε/step_size times faster than its own clock: ε = 1 on a grid of
+        # 1/20000 ran 20,000 units of slow time and overflowed in the z update.
+        if self.solver_config.epsilon > self.solver_config.step_size:
+            raise ValueError(
+                epsilon_exceeds_step(
+                    self.solver_config.epsilon,
+                    self.solver_config.step_size,
+                ),
+            )
 
         # A generator of this solver's own, never np.random.seed. Seeding the global
         # stream is a correctness hazard rather than a convenience: it changes every
