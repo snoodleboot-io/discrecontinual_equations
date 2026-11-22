@@ -17,17 +17,20 @@ What is checked, and where each number comes from - all measured here:
   in the plane ``z = rho - 1`` meet it within 25 in 6 of 8 directions;
 * its size at the film's settings: 10,289 vertices, 20,154 triangles, 67
   rings, no BVP lost;
-* grown strictly towards 170 it stops at 157.16, with no point lost, and
-  says why: 4 of 1,119 landings fail at the smallest step. Those are two
-  symmetric pairs where the flow runs along the level set (``|f . t| / |f|
-  = 0.999``) and the front itself is 0.04 to 0.05 off W^s(0), measured
-  independently, so the radial steps there turn by 0.38 rad at every Delta.
-  (It stopped at 142.87 until the back-trace stopped counting false
-  crossings far from the ring; there the BVPs did have a solution, and the
-  grower's own Newton finds it in four iterations from the true start.) By
-  then the scrolls have formed: rays from ``C+`` cross three layers of the
-  surface in four of the eight directions;
-* allowed to drop 3% of a ring (``loss=0.03``) it reaches 160 with 58 points
+* grown strictly towards 170 it stops at 157.38, with no point lost, and
+  says why: 6 of 1,123 landings fail at the smallest step, 0.094. Two of
+  them are a symmetric pair at (+-60.09, -+25.9, 76.85) where the flow runs
+  along the level set (``|f . t| / |f| = 0.9993``): continued in the flight
+  time from zero, as the paper does, the landing there moves out to 0.0755
+  from its centre and turns back inside the ring, so the first crossing of
+  the smallest step is inside (at -0.0937) and no outward landing near the
+  centre exists at any step the growth may take. The ring before was
+  accepted at the smallest step with a warning (it turned by 0.52). (It
+  stopped at 157.16 before failed landings were retried alone, and at 142.87
+  before the back-trace stopped counting false crossings far from the ring.)
+  By then the scrolls have formed: rays from ``C+`` cross three layers of
+  the surface in four of the eight directions;
+* allowed to drop 3% of a ring (``loss=0.03``) it reaches 160 with 30 points
   lost, and the crochet pattern still adds up round by round.
 
 What the papers report, read from them: Krauskopf and Osinga (SIAM J. Appl.
@@ -36,10 +39,10 @@ points at distance 1 with alpha in (0.3, 0.4), Delta.alpha in (0.1, 1.0),
 Delta >= 0.01 and spacing 0.25 to 1.0, to 151.75 in 72 circles, the last of
 2,300 points; the IJBC 2005 survey (Sec. 2.3) to 154.75 in 75 bands with
 spacing 0.67 to 2.0. The crocheted model (Math. Intelligencer 26(4), 2004)
-runs to 110.75 (25,511 stitches, by the authors' crochet page). None is
-asserted beyond the strict growth passing 151.75: this grower has no
-Delta.alpha bound and grows Delta by 1.5 rather than 2, so its rings and
-counts differ.
+runs to 110.75 (25,511 stitches, by the authors' crochet page). With the
+paper's step control this grower reproduces their band distances exactly
+and their last circle to within 4% in number and 1.3% in points
+(:class:`TestLorenzManifoldAtThePublishedSettings`).
 """
 
 import math
@@ -47,6 +50,7 @@ from itertools import pairwise
 from unittest import TestCase
 
 import numpy as np
+import pytest
 from scipy.integrate import solve_ivp
 from scipy.optimize import brentq
 
@@ -338,3 +342,57 @@ class TestLorenzManifoldIsOnTheManifold(TestCase):
         assert coarse < 2.0e-2
         assert fine < 2.5e-3
         assert coarse / fine > 4.0
+
+
+class TestLorenzManifoldAtThePublishedSettings(TestCase):
+    """Krauskopf and Osinga's own growth, reproduced at their settings.
+
+    SIAM J. Appl. Dyn. Syst. 2(4) 2003, Sec. 4.5 and Fig. 4.7: 20 points on a
+    circle of radius 1, alpha in (0.3, 0.4), Delta.alpha in (0.1, 1.0),
+    Delta >= 0.01; 25 bands reach 62.75, 40 reach 92.75 and 55 reach 122.75,
+    and 72 circles reach 151.75, the last of 2,300 points. The IJBC 2005
+    survey (Sec. 2.3) starts Delta at 0.25 and spaces points 0.67 to 2.0;
+    those are the settings here. The band distances are reproduced exactly:
+    doubling from 0.25 gives the crochet pattern's 2.75, 4.75 and 8.75 too.
+
+    At the SIAM paper's own spacing, 0.25 to 1.0, the circle at 150.75 has
+    4,524 points: it is 3,217 long, and no circle that long carries only
+    2,300 points 1.0 apart at most. At the survey's spacing it has 2,330 at
+    152.75, within 1.3% of the published count, so that count is the
+    survey's spacing - and 151.75 plus three bands of 1.0 is the survey's
+    154.75, so both papers likely report one computation.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        function = LorenzField(
+            variables=[State(), State(), State()],
+            parameters=[Alpha(value=0.0)],
+            results=[State(), State(), State()],
+            time=None,
+        )
+        jacobian = AutomaticDifferentiation().jacobian(function, np.zeros(3), 0.0)
+        cls.mesh = GeodesicLevelSets(
+            GeodesicSettings(
+                initial_radius=1.0,
+                step=0.25,
+                spacing=(0.67, 2.0),
+                step_range=(0.01, math.inf),
+                angles=(0.3, 0.4),
+                step_angles=(0.1, 1.0),
+                initial_points=20,
+            ),
+        ).compute(function, np.zeros(3), jacobian, StableManifold(), distance=160.0)
+
+    def test_the_bands_reach_the_published_distances(self):
+        distances = self.mesh.ring_distances
+        assert distances[25] == pytest.approx(62.75, abs=1.0e-9)
+        assert distances[40] == pytest.approx(92.75, abs=1.0e-9)
+        assert distances[55] == pytest.approx(122.75, abs=1.0e-9)
+
+    def test_the_last_circle_is_the_published_one_within_ten_percent(self):
+        distances = np.array(self.mesh.ring_distances)
+        assert distances[-1] >= 151.75
+        circle = int(np.searchsorted(distances, 151.75 - 1.0e-9))
+        assert abs(circle - 72) <= 7
+        assert abs(len(self.mesh.rings[circle]) - 2_300) <= 230

@@ -125,3 +125,27 @@ class TestManifoldFilm(TestCase):
         film.projection = np.array([[0, 1, 0], [1, 0, 0], [0, 0, 1]], float)
         swapped = np.reshape(film_payload(film)["vertices"], (-1, 3))
         assert np.allclose(swapped[:, 0], film.mesh.vertices[:, 1], atol=1.0e-4)
+
+
+class TestHowTheGrowthEnded(TestCase):
+    """The page says whether the growth reached its distance, and if not why."""
+
+    def test_a_complete_growth_says_so(self):
+        payload = film_payload(_film())
+        assert payload["stopped"] is None
+        assert payload["lost"] == 0
+        assert payload["warnings"] == []
+
+    def test_a_stopped_growth_carries_its_reason_and_losses(self):
+        film = _film()
+        film.mesh.stopped = "3 of 40 landings failed at the smallest step 0.01"
+        film.mesh.lost = 2
+        film.mesh.warnings = ["ring 4 at distance 0.5 accepted at the smallest step"]
+        html = ManifoldFilmRenderer().render(film)
+        payload = _payload(html)
+        assert payload["stopped"] == film.mesh.stopped
+        assert payload["lost"] == 2
+        assert payload["warnings"] == film.mesh.warnings
+        # Shown in its own line beneath the film, as text, not markup.
+        assert 'id="growth"' in html
+        assert 'getElementById("growth").textContent' in html
