@@ -44,22 +44,26 @@ to exponential, many hundreds are used, and the interval is the one the comparis
 with the grid is made against.
 
 Euler-Maruyama checks the target only at the step times, so a path that enters and
-leaves within one step is missed; the passage time comes out slightly long, by an
-amount that shrinks with the step. Into a well this is a negligible effect - the
-path arrives against the drift's grain only near the saddle - and it is one of the
-two things the tests bound, the other being the Monte-Carlo error.
+leaves within one step is missed, and the scheme's own weak error is first order;
+the time comes out long by an amount proportional to the step. On the planar well
+of the tests at ``sigma^2 = 1/2`` (grid time 11.41), 8000 paths give 11.65, 11.55
+and 11.47 (standard error 0.11) at ``dt = 0.01``, ``0.005`` and ``0.0025``, and the
+linear extrapolation to ``dt = 0`` is 11.39. The tests use ``dt = 0.0025``, where
+the bias is below the Monte-Carlo error they assert against.
 
 *Closed forms.* :func:`eyring_kramers_time` evaluates the small-noise asymptotics,
 in the library's normalisation (``dx = f dt + G dW``, no ``eps``, quasipotential
 ``U`` with the density ``~ exp(-U)``; see :mod:`.quasipotential`). They rest on
 three assumptions that the grid does not need, and the names say which:
 
-* *small noise*: the formulas are leading-order Laplace asymptotics; the
-  relative error is ``O(1 / Delta U)`` for a smooth non-degenerate saddle (in
-  one dimension the error of the Laplace expansion of the double integral below
-  is of that order; Bovier, Eckhoff, Gayrard and Klein bound it by
-  ``O(eps^{1/2} |log eps|^{3/2})`` in any dimension for the gradient case, J. Eur.
-  Math. Soc. 6 (2004), as quoted in Berglund, arXiv 1106.5799, Eq. (3.35));
+* *small noise*: the formulas are leading-order Laplace asymptotics. Measured
+  here the relative error is ``O(1 / Delta U)``: against the exact double
+  integral below Kramers' time is short by 12.5%, 5.4% and 2.6% at
+  ``Delta U = 4, 8, 16``, and on the planar wells the grid / closed-form excess
+  halves with each halving of the variance. Berglund (arXiv 1106.5799) states
+  ``1 + O(eps^{1/2})`` in one dimension (his Eq. (3.15)) and, for gradient
+  systems in any dimension, the bound ``O(eps^{1/2} |log eps|^{3/2})`` of Bovier,
+  Eckhoff, Gayrard and Klein (J. Eur. Math. Soc. 6 (2004); his Eq. (3.35));
 * *overdamped*: the state is the position of a first-order (Smoluchowski)
   equation - no inertia, no velocity variable - and ``D`` is non-singular; and
 * *a single non-degenerate saddle between two point attractors*, with the
@@ -76,13 +80,56 @@ integral
     ``tau(x) = (2 / sigma^2) int_x^b dy int_a^y exp(2 (V(y) - V(z)) / sigma^2) dz``
 
 (Berglund's Eq. (3.14) with ``eps = sigma^2 / 2``, the reflection of its
-target), and Laplace's method on it gives Kramers' time (1940; Hanggi, Talkner and
-Borkovec, Rev. Mod. Phys. 62, 251 (1990), Eq. (4.56b) in the overdamped limit)
-``tau ~ (2 pi / sqrt(V''(m) |V''(s)|)) exp(2 Delta V / sigma^2)``. The ticket wrote
+target), and Laplace's method on it gives Kramers' time, Berglund's Eq. (1.8),
+``tau ~ (2 pi / sqrt(V''(m) |V''(s)|)) exp(2 Delta V / sigma^2)`` - the
+overdamped limit of Kramers (1940) as reviewed by Hanggi, Talkner and Borkovec
+(Rev. Mod. Phys. 62, 251 (1990)); the formula here was checked against
+Berglund's statement and the exact integral, not against those two. The ticket wrote
 the exponent as ``Delta V / eps`` and the integral with ``2 / eps``: those are
 different noise conventions (``sqrt(2 eps)`` and ``sqrt(eps)`` respectively); with
 the library's ``sigma`` both read ``2 Delta V / sigma^2 = Delta U``, which is what
 :func:`eyring_kramers_time` takes.
+
+*Measured.* The tests repeat these.
+
+  - The one-dimensional double well against the exact integral, relative error
+    at 101, 201, 401 and 801 cells: 2.12e-3, 5.31e-4, 1.33e-4, 3.33e-5 at
+    ``sigma^2 = 1/16`` and 2.8e-4 ... 4.4e-6 at ``1/2`` - order 2.00 at every
+    noise level, with an error that grows only linearly as the noise falls.
+  - Planar gradient well (transverse curvature 2 at the minima, 1 at the saddle),
+    grid / Eyring-Kramers at 161 cells: 1.361, 1.215, 1.092, 1.042 at
+    ``sigma^2 = 1/4 ... 1/32``; 161 and 321 cells agree to 1e-3.
+  - Non-Gibbs transverse field (Bouchet-Reygner ``integral F dt = +-1/2``), grid /
+    closed form at 281 cells, ``sigma^2 = 1/8, 1/16, 1/32``: 1.162, 1.073, 1.033
+    from the left well and 1.290, 1.120, 1.054 from the right. Without the
+    non-Gibbs factor the closed form is out by ``e^(+-1/2)``.
+  - Ensemble against grid, within three standard errors: first passages
+    (2000 paths) and residences (300 paths, both wells, two tilts).
+
+*Limits.* Four, each measured.
+
+  - *Oblique drift.* Along an axis the fitted flux is exact for a locally
+    constant drift; across the cells at an angle it adds a crosswind diffusion of
+    order ``|f| h``, first order, and significant once it is comparable to
+    ``sigma^2``. With a divergence-free rotation at ``sigma^2 = 1/32`` the grid /
+    closed-form ratio is 0.816, 0.928, 0.983 at 161, 241, 361 cells: the time
+    comes out short (the grid is hotter
+    than the system), and the remedy is resolution, ``h |f| << sigma^2``.
+  - *Round-off.* The restricted generator's condition number is ``|L| max tau``
+    and grows with the time itself; :attr:`GridFirstPassage.round_off` reports
+    the resulting bound, 1.3e-5 on the planar well at ``Delta U = 16``
+    (``tau ~ 3e7``) and 4% at ``Delta U = 24``; beyond 1% the solve refuses.
+  - *Entry states.* A mean residence is ``tau`` averaged over where the
+    residences began, not ``tau`` at the attractor. At small noise the two agree
+    (``tau`` is flat in the well to exponentially small terms); at the moderate
+    noise a sensor runs at they do not - 3% apart on the planar well at
+    ``sigma^2 = 1/2`` - and :class:`ResidenceTracker` keeps the entry states so
+    the right one can be compared.
+  - *Censoring.* Residences still open when a run stops are the long ones, and
+    dropping them biases the mean short by a fraction of order
+    ``tau / horizon``; :meth:`ResidenceTracker.stop_opening` lets every residence
+    that began before the horizon run to its end instead (see there for the
+    sizes on the ring).
 """
 
 import math
@@ -112,6 +159,8 @@ _HALF = 0.5
 # Two-sided 95% normal quantile, the default interval of every ensemble estimate.
 _NORMAL_95 = 1.959963984540054
 _DEFAULT_CHUNK_STEPS = 400
+# After the horizon, how much longer (in horizons) open residences may run on.
+_DRAIN_FACTOR = 10.0
 _ORDERING = "MMD_AT_PLUS_A"
 _ITERATIVE_DIMENSION = 3
 _ILU_DROP = 1.0e-4
@@ -119,7 +168,8 @@ _ILU_FILL = 20.0
 _ITERATIVE_TOLERANCE = 1.0e-10
 _ITERATIVE_STEPS = 2000
 _EPSILON = float(np.finfo(float).eps)
-_UNVISITED, _FIRST, _SECOND = -1, 0, 1
+_ROUND_OFF_LIMIT = 1.0e-2
+_UNVISITED, _FIRST, _SECOND, _CLOSED = -1, 0, 1, 2
 
 
 class _ForwardOperator(StationaryFokkerPlanck):
@@ -206,10 +256,12 @@ class GridFirstPassage:
         generator, which here is exact rather than estimated: for this M-matrix
         with a constant right-hand side ``|L^{-1}|_inf`` is ``max tau`` itself. The
         condition therefore grows like the time - the smallest eigenvalue is the
-        escape rate. It is ``1e-6`` or below wherever the tests
-        compare times, and the solve refuses negative times beyond it. As the
-        barrier grows it reaches order one - on the planar double well near
-        ``Delta U = 30`` - and then the times are round-off, not a measurement.
+        escape rate. On the planar double well at 161 cells it is 9.8e-12,
+        9.6e-11, 4.7e-9, 1.3e-5, 3.9e-2 and 127 at ``Delta U = 1, 4, 8, 16, 24,
+        32``; the solve refuses a result whose bound exceeds 1%, which is where
+        the times stop being a measurement. (The diagonal-``D`` case is the
+        M-matrix; a correlated ``D`` adds small entries of either sign and the
+        bound is then an estimate.)
         """
         return self._round_off
 
@@ -304,6 +356,7 @@ class MeanFirstPassage:
         if (
             not np.all(np.isfinite(times))
             or float(np.min(times)) < -round_off * largest
+            or round_off > _ROUND_OFF_LIMIT
         ):
             message = (
                 "the first-passage solve did not return finite non-negative times: "
@@ -601,18 +654,21 @@ class ResidenceTracker:
     reaching the other does not end a residence. Residences still open when the
     paths end are not returned. Working through the run as it is made rather than
     on a stored trajectory is what lets a long run keep the entry *states*, which
-    the grid comparison needs: by the strong Markov property the mean residence in a well
-    is the mean of the grid's ``tau`` over the states the residences began at.
+    the grid comparison needs: by the strong Markov property the mean residence in
+    a well is the mean of the grid's ``tau`` over the states the residences began
+    at.
     """
 
-    __slots__ = ["_durations", "_entered", "_since", "_starts", "_well"]
+    __slots__ = ["_closing", "_durations", "_entered", "_since", "_starts", "_well"]
 
     def __init__(self, states: np.ndarray, labels: np.ndarray, time: float) -> None:
         self._well = np.asarray(labels, dtype=np.int8).copy()
+        self._well[self._well == _CLOSED] = _UNVISITED
         self._since = np.full(self._well.size, float(time))
         self._entered = np.asarray(states, dtype=float).copy()
         self._durations: tuple[list[float], list[float]] = ([], [])
         self._starts: tuple[list[np.ndarray], list[np.ndarray]] = ([], [])
+        self._closing = False
 
     def step(self, states: np.ndarray, labels: np.ndarray, time: float) -> None:
         """Record one step: every path's state and its label at ``time``."""
@@ -643,19 +699,51 @@ class ResidenceTracker:
         before = np.vstack([self._well[None, :], carried[:-1]])
         for row, path in np.argwhere(labelled & (labels != before)):
             well = int(self._well[path])
+            if well == _CLOSED:
+                continue
             if well != _UNVISITED:
                 self._durations[well].append(times[row] - self._since[path])
                 self._starts[well].append(self._entered[path].copy())
+                if self._closing:
+                    self._well[path] = _CLOSED
+                    continue
+            elif self._closing:
+                continue
             self._well[path] = labels[row, path]
             self._since[path] = times[row]
             self._entered[path] = states[row, path]
 
+    def stop_opening(self) -> None:
+        """Let the open residences finish, and open no new ones.
+
+        Dropping the residences still open at the end of a run biases the mean
+        short - a long residence is more likely to be the one cut off - by a
+        fraction of the order of ``tau / horizon``: on the three-cell ring, 131
+        against 144 at ``tau / horizon = 0.07``, and 416 against 589 at 0.3.
+        Every residence that *began* before the horizon is an unbiased draw, by
+        the strong Markov property at its entry time, so after the horizon the
+        run continues until those have closed, and no others are counted.
+        """
+        self._closing = True
+        self._well[self._well == _UNVISITED] = _CLOSED
+
+    @property
+    def closing(self) -> bool:
+        """Whether :meth:`stop_opening` has been called."""
+        return self._closing
+
+    @property
+    def open_paths(self) -> np.ndarray:
+        """Indices of the paths with a residence still open."""
+        return np.flatnonzero((self._well == _FIRST) | (self._well == _SECOND))
+
     def sample(self) -> "ResidenceSample":
-        """The completed residences in both wells."""
+        """The completed residences in both wells; open ones count as censored."""
         dimension = self._entered.shape[1]
         first, second = (
             TimeSample(
                 times=np.array(self._durations[well], dtype=float),
+                censored=int(np.count_nonzero(self._well == well)),
                 starts=(
                     np.array(self._starts[well])
                     if self._starts[well]
@@ -674,6 +762,9 @@ class EnsembleResidence:
     they are in, and cut by a :class:`ResidenceTracker`. Half the paths start at
     each attractor so that neither well is short of samples at a strong field;
     residences are measured from entry, so where a path started does not bias them.
+    At the horizon no new residences are opened, and only the paths with one still
+    open go on, until it closes or ten more horizons have passed; any still open
+    then are reported as ``censored``.
     """
 
     __slots__ = ["_chunk", "_config", "_scheme"]
@@ -714,27 +805,69 @@ class EnsembleResidence:
                 np.tile(np.asarray(starts[1], dtype=float), (paths - half, 1)),
             ],
         )
-        tracker = ResidenceTracker(states, _label(states, sets), 0.0)
+        run = _ResidenceRun(ensemble, equation, sets)
+        tracker = ResidenceTracker(states, run.labels(states), 0.0)
         elapsed = 0.0
         while elapsed < horizon:
-            result = ensemble.solve(equation, states, keep_every=1)
-            samples = result.samples[1:]
-            steps, count, dimension = samples.shape
-            labels = _label(samples.reshape(-1, dimension), sets).reshape(steps, count)
-            times = elapsed + dt * np.arange(1, steps + 1)
-            tracker.chunk(samples, labels, times)
-            states = result.final
+            states = run.advance(states, tracker, elapsed)
+            elapsed += self._chunk * dt
+        tracker.stop_opening()
+        limit = elapsed + _DRAIN_FACTOR * horizon
+        while tracker.open_paths.size and elapsed < limit:
+            states = run.advance(states, tracker, elapsed)
             elapsed += self._chunk * dt
         return tracker.sample()
 
 
-def _label(
-    states: np.ndarray,
-    sets: tuple[
-        Callable[[np.ndarray], np.ndarray],
-        Callable[[np.ndarray], np.ndarray],
-    ],
-) -> np.ndarray:
+_Sets = tuple[
+    Callable[[np.ndarray], np.ndarray],
+    Callable[[np.ndarray], np.ndarray],
+]
+
+
+class _ResidenceRun:
+    """One residence run's ensemble, equation and sets, advanced a chunk at a time."""
+
+    __slots__ = ["_ensemble", "_equation", "_sets"]
+
+    def __init__(
+        self,
+        ensemble: StochasticEnsemble,
+        equation: DifferentialEquation,
+        sets: _Sets,
+    ) -> None:
+        self._ensemble = ensemble
+        self._equation = equation
+        self._sets = sets
+
+    def labels(self, states: np.ndarray) -> np.ndarray:
+        """The set each state is in."""
+        return _label(states, self._sets)
+
+    def advance(
+        self,
+        states: np.ndarray,
+        tracker: ResidenceTracker,
+        elapsed: float,
+    ) -> np.ndarray:
+        """Step the paths with an open residence one chunk; the rest stay put."""
+        active = tracker.open_paths if tracker.closing else np.arange(len(states))
+        result = self._ensemble.solve(self._equation, states[active], keep_every=1)
+        steps = result.samples.shape[0] - 1
+        samples = np.zeros((steps, *states.shape))
+        samples[:, active] = result.samples[1:]
+        labels = np.full((steps, states.shape[0]), _UNVISITED, dtype=np.int8)
+        labels[:, active] = self.labels(
+            result.samples[1:].reshape(-1, states.shape[1]),
+        ).reshape(steps, active.size)
+        dt = float(result.times[1] - result.times[0])
+        tracker.chunk(samples, labels, elapsed + dt * np.arange(1, steps + 1))
+        moved = states.copy()
+        moved[active] = result.final
+        return moved
+
+
+def _label(states: np.ndarray, sets: _Sets) -> np.ndarray:
     """Label every state ``0``, ``1`` or ``-1`` by the set it lies in."""
     labels = np.full(states.shape[0], _UNVISITED, dtype=np.int8)
     labels[sets[0](states)] = _FIRST

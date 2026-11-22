@@ -142,6 +142,41 @@ costs three to four times the error on one that is nearly a gradient.
 `GeometricMinimumAction` takes a constant or a state-dependent `D`. The module
 docstring of `continuation/quasipotential.py` has the measured errors.
 
+### First-passage and residence times
+
+The quasipotential says how hard an escape is; `MeanFirstPassage` says how
+long it takes. It solves the backward Kolmogorov problem `L tau = -1` off a
+target set on a `DensityGrid` of any dimension, with the density solve's own
+stencil, and an ensemble gives the same time with an error bar:
+
+```python
+from discrecontinual_equations.continuation import (
+    Ball, DensityGrid, EnsembleFirstPassage, EnsembleResidence, MeanFirstPassage,
+    eyring_kramers_time,
+)
+
+grid = DensityGrid.box([-2.2, -1.8], [2.2, 1.8], [161, 161])
+times = MeanFirstPassage(drift, noise, Ito(), grid).solve(Ball([1.0, 0.0], 0.3).on(grid))
+times.at([-1.0, 0.0])                          # mean time from the left well
+
+sample = EnsembleFirstPassage(StochasticConfig(step_size=0.0025, random_seed=1)).solve(
+    equation, [-1.0, 0.0], 2000, Ball([1.0, 0.0], 0.3), horizon=1e5,
+)
+sample.mean, sample.confidence_interval()      # the same time, by simulation
+
+residences = EnsembleResidence(config).solve(
+    equation, (left, right), 400, (Ball(left, 0.3), Ball(right, 0.3)), horizon=2000.0,
+)
+residences.asymmetry_interval()                # a residence-time sensor's reading
+```
+
+`eyring_kramers_time` is the small-noise limit (Eyring-Kramers, and Bouchet
+and Reygner's non-gradient form) for overdamped dynamics with one
+non-degenerate saddle between two point attractors; it is a limit, and the
+grid shows where it starts to hold. The module docstring of
+`continuation/first_passage.py` has the measured errors and the limits of
+both routes.
+
 ## Custom Solvers
 
 Extend the base `Solver` class to implement custom numerical methods.

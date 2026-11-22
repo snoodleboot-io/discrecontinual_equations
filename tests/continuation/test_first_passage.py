@@ -208,8 +208,8 @@ class TestPlanarClosedForms(TestCase):
         # leaving the right one (see first_passage_systems): the wells have the
         # same barrier and curvatures, and the times still differ by e^(2 gamma).
         # Measured grid / Bouchet-Reygner at 281 cells, gamma = 1/2, variance
-        # 1/8, 1/16, 1/32, 1/48: 1.162, 1.073, 1.033, 1.022 (left to right) and
-        # 1.290, 1.120, 1.054, 1.035 (right to left).
+        # 1/8, 1/16, 1/32: 1.162, 1.073, 1.033 (left to right) and 1.290, 1.120,
+        # 1.054 (right to left).
         well = PlanarWell(curvature=1.0, rotation=0.5)
         left, right = well.minima()
         excess = {+1: [], -1: []}
@@ -298,6 +298,34 @@ class TestResidences(TestCase):
         # Each residence began where the path entered: x = 0 in A, x = 4 in B.
         assert sample.first.starts.tolist() == [[0.0]]
         assert sample.second.starts.tolist() == [[4.0]]
+        assert sample.first.censored == 1
+        assert sample.second.censored == 0
+
+    def test_after_stop_opening_open_residences_finish_and_no_new_ones_start(self):
+        # Two paths: the first is in A when opening stops at t=2 and reaches B at
+        # t=5; the second is in neither and is never counted, though it goes on
+        # to enter A and then B.
+        tracker = ResidenceTracker(
+            np.array([[0.0], [0.0]]),
+            np.array([0, -1]),
+            0.0,
+        )
+        rows = [(1, [0, -1]), (2, [-1, -1])]
+        for time, labels in rows:
+            tracker.step(
+                np.array([[time], [time]], dtype=float), np.array(labels), time
+            )
+        tracker.stop_opening()
+        assert tracker.open_paths.tolist() == [0]
+        for time, labels in [(3, [-1, 0]), (5, [1, 0]), (6, [0, 1])]:
+            tracker.step(
+                np.array([[time], [time]], dtype=float), np.array(labels), time
+            )
+        assert tracker.open_paths.size == 0
+        sample = tracker.sample()
+        assert sample.first.times.tolist() == [5.0]
+        assert sample.second.count == 0
+        assert sample.first.censored == 0
 
     def test_a_path_that_starts_outside_is_counted_from_its_first_entry(self):
         sample = self._track([-1, -1, 1, -1, 0, 1])
@@ -377,12 +405,15 @@ class TestSymmetryAndResponse(TestCase):
             # over where the residences began, which is what is compared. At
             # this noise tau is not flat in the well - the residences begin on
             # the side of the ball facing the saddle - and the minimum's own tau
-            # (11.41 at zero tilt) is 3% above the ensemble's 11.08: outside its
-            # 3-sigma interval, which is why it is not the reference.
+            # is the wrong reference. Measured (ensemble / grid over entries /
+            # grid at the minimum): 11.17 +- 0.15 / 11.08 / 11.41 and 11.07 /
+            # 11.09 / 11.41 at zero tilt; 9.60 / 9.55 / 9.88 and 13.02 / 12.96 /
+            # 13.27 at tilt 0.05.
             for estimate, grid_field in (
                 (sample.first, left_field),
                 (sample.second, right_field),
             ):
+                assert estimate.censored == 0
                 expected = float(
                     np.mean([grid_field.at(start) for start in estimate.starts]),
                 )
