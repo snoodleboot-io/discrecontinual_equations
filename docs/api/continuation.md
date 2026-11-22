@@ -238,8 +238,12 @@ left everywhere is the orbit: nodes, or a higher-order collocation scheme.
 `collocation="gauss_legendre"` is that higher-order scheme: AUTO's orthogonal
 collocation, `collocation_points` Gauss–Legendre points per interval (default 4,
 AUTO's NCOL), a degree-`m` polynomial through `m + 1` equally spaced points per
-interval, order `2m` at the mesh points and for the period. Period error on the
-continued Hopf branch, with the order per mesh doubling:
+interval, order `2m` at the mesh points and for the period. Only the collocation is
+AUTO's: the phase condition is still the point (Poincaré) condition
+`x_0[phase_index] = phase_value`, and the pseudo-arclength constraint the plain
+Euclidean norm of the whole unknown vector, not AUTO's integral phase condition and
+weighted L2 norm. Period error on the continued Hopf branch, with the order per mesh
+doubling:
 
 | m | coarsest | doubled | doubled again | and again |
 |---|---|---|---|---|

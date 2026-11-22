@@ -17,6 +17,11 @@ choice: fourth-order Hermite-Simpson by default, second-order trapezoidal on
 request, or AUTO's orthogonal collocation at ``m`` Gauss-Legendre points (order
 ``2m``). See :class:`CycleContinuation` for why the order, and not the mesh, is
 what decides whether the multipliers can be believed.
+
+Only the collocation follows AUTO. Whatever the scheme, the phase condition is a
+point (Poincare) condition ``x_0[i] = c`` and the arclength constraint uses the
+plain Euclidean norm of the whole unknown vector, not AUTO's integral phase
+condition and weighted ``L2`` norm.
 """
 
 from collections.abc import Callable, Sequence
@@ -313,6 +318,9 @@ class _HermiteSimpson(_Collocation):
 
 class _GaussLegendre(_Collocation):
     """Order ``2m``: orthogonal collocation at ``m`` Gauss-Legendre points, as AUTO.
+
+    The collocation is AUTO's; the phase condition and the arclength norm around
+    it are not (see the module docstring).
 
     On each interval the orbit is the polynomial of degree ``m`` through ``m + 1``
     equally spaced points - the two mesh points and ``m - 1`` between them - and
@@ -945,7 +953,11 @@ class CycleContinuation:
 
     ``"gauss_legendre"`` is AUTO's orthogonal collocation, order ``2m`` with
     ``collocation_points`` (default 4) points to an interval - see
-    :class:`_GaussLegendre` for the measured orders. Its multipliers come off its
+    :class:`_GaussLegendre` for the measured orders. Only the collocation is
+    AUTO's: the phase condition stays the point condition ``x_0[phase_index] =
+    phase_value`` and the arclength the Euclidean norm of the whole unknown
+    vector, where AUTO uses an integral phase condition and a weighted ``L2``
+    norm. Its multipliers come off its
     own Jacobian, and its points carry their error explicitly because the
     trivial multiplier of that monodromy no longer measures it (see
     :attr:`CyclePoint.floquet_error`). On 80 mesh intervals it takes the two
