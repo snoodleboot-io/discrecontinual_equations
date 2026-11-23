@@ -9,7 +9,9 @@ oracles here:
   says it is not a trajectory;
 * at Kirk-Silber's xi2 the unstable manifold is 2-D, so in the full space the
   connections leaving it come in a family and are not isolated. In sheared
-  coordinates the full-space solve does not find the one in the plane.
+  coordinates the full-space solve does not find the one in the plane: its
+  Newton matrix is near-singular (not singular - no factorisation fails),
+  Gauss-Newton diverges, and the best iterate it returns is the seed.
 
 The reference connection is computed by shooting: ``solve_ivp`` on the field in
 its original coordinates, restricted to the plane by hand and written here in
@@ -251,8 +253,9 @@ class TestSolvedInTheSubspace(TestCase):
             error = float(np.max(np.abs(orbit.solution.states - reference)))
             # Measured 3.0e-4 and 3.4e-4: 4/3 of the estimate, as E - E/4 predicts.
             assert error < 2.0 * orbit.resolution.estimate
-            # The full-space solve, from the same seed, does not find it: it stops
-            # on the plane at a path that is no trajectory (residual 9e-2).
+            # The full-space solve, from the same seed, does not find it: it
+            # diverges on a near-singular Newton matrix and returns its best
+            # iterate, which is the seed - no trajectory (residual 9e-2).
             assert not orbit.full_space.residual.is_trajectory
 
     def test_every_edge_agrees_with_shooting_and_converges_at_second_order(self):

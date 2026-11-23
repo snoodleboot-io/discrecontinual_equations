@@ -18,9 +18,12 @@ This module is the bookkeeping layer over the projection boundary-value solver i
   J. Numer. Anal. 10, 1990). In the full space it need not be: when the source's
   unstable manifold is 2-D the full-space problem has a family of solutions, and
   in non-orthogonal coordinates the full-space solve does not find the one in the
-  plane. The full-space solve is still run, uninformed of the subspace, as a
-  check; and every returned path must satisfy the full field's collocation
-  equations, which is what refuses a "connection" in a plane the flow leaves;
+  plane: its Newton matrix is nearly rank-deficient (smallest singular value
+  1e-9 and below, though the factorisation never fails), Gauss-Newton diverges,
+  and the best iterate it returns is the seed itself. The full-space solve is
+  still run, uninformed of the subspace, as a check; and every returned path
+  must satisfy the full field's collocation equations, which is what refuses
+  a "connection" in a plane the flow leaves;
 * **cycles** are the elementary cycles of the directed graph of connections;
 * each cycle's **spectrum** classifies the eigenvalues at every node by the role
   they play *for that cycle* - radial, contracting, expanding, transverse - which
