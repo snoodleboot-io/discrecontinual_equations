@@ -1,4 +1,4 @@
-"""One-pass field values and Jacobians: the numbers of a state at a time (DEQ-75)."""
+"""One-pass field values and Jacobians, equal to a state at a time to rounding."""
 
 import math
 from unittest import TestCase
@@ -89,6 +89,27 @@ class _OneUlpOff(DeterministicFunction):
         return [y * x, -x]
 
 
+def _assert_rounding(batched: np.ndarray, single: np.ndarray) -> None:
+    """Equal to within 4 ulps of each component's scale.
+
+    Each entry is a handful of correctly rounded operations and one integer
+    power. NumPy may take ``x**3`` over an array by a vectorised loop and over
+    a scalar by libm's ``pow``; on CI's runners they differ by one ulp
+    (3.041763569827573 against 3.0417635698275736). A sum of such terms can
+    carry that ulp at the scale of its largest term, so the bound is
+    ``4 eps`` relative plus ``4 eps`` of the column's largest magnitude for
+    entries that cancel toward zero - two orders below anything a wrong
+    formula would give.
+    """
+    eps = np.finfo(float).eps
+    axes = tuple(range(single.ndim - 1))
+    scale = np.max(np.abs(single), axis=axes, keepdims=True)
+    np.testing.assert_array_less(
+        np.abs(batched - single),
+        4.0 * eps * np.abs(single) + 4.0 * eps * scale + np.finfo(float).tiny,
+    )
+
+
 def _function(kind: type, dimension: int, value: float = 0.3) -> DeterministicFunction:
     return kind(
         variables=[State() for _ in range(dimension)],
@@ -115,13 +136,13 @@ def _single_jacobian(function: DeterministicFunction):
 
 
 class TestFieldValues(TestCase):
-    def test_values_equal_a_state_at_a_time_bit_for_bit(self) -> None:
+    def test_values_equal_a_state_at_a_time_to_rounding(self) -> None:
         function = _function(_EveryOperation, 3)
         states = _states(50, 3)
         values = field_values(function, states, _single_values(function))
         expected = np.array([_single_values(function)(state) for state in states])
         assert values is not None
-        np.testing.assert_array_equal(values, expected)
+        _assert_rounding(values, expected)
 
     def test_a_constant_component_is_broadcast(self) -> None:
         function = _function(_EveryOperation, 3)
@@ -166,14 +187,16 @@ class TestFieldValues(TestCase):
 
 
 class TestFieldJacobians(TestCase):
-    def test_jacobians_equal_the_taylor_jets_bit_for_bit(self) -> None:
+    def test_jacobians_equal_the_taylor_jets_to_rounding(self) -> None:
         function = _function(_EveryOperation, 3)
         states = _states(64, 3)
         jacobians = field_jacobians(function, states, _single_jacobian(function))
         expected = np.array([_single_jacobian(function)(state) for state in states])
         assert jacobians is not None
         assert jacobians.shape == (64, 4, 3)
-        np.testing.assert_array_equal(jacobians, expected)
+        # Bit for bit where each + - * / rounds on its own, as here; a fused
+        # multiply-add in the jets' complex products would move an ulp.
+        _assert_rounding(jacobians, expected)
 
     def test_jacobians_match_central_differences(self) -> None:
         # An oracle that shares no code with the duals or the jets.
