@@ -975,3 +975,35 @@ The concepts, worked examples and limits are on the
 ::: discrecontinual_equations.continuation.cycle_manifold
 
 ::: discrecontinual_equations.continuation.cycle_connection
+
+## Jacobians along an orbit
+
+The Lyapunov estimators, the quasipotential's linearisation and the equilibrium
+classifier read a field's Jacobian from `jacobian_at`. By default it forward-
+differences the field with the step of Dennis and Schnabel (*Numerical Methods for
+Unconstrained Optimization and Nonlinear Equations*, 1983, Sec. 5.4 and Algorithm
+A5.4.1): `h_j = sqrt(eps) max(|x_j|, typical_j) sign(x_j)`, divided by the step the
+machine actually took. `typical` (one by default) is the size a component has where
+its value says nothing - near zero, or on a component that lives at `1e-8`.
+`central=True` uses `eps^(1/3)` steps either side: twice the evaluations, error
+`eps^(2/3)` instead of `sqrt(eps)`. `base`, the field at the state when the caller
+has it, saves the forward difference one evaluation. `jacobians_along` takes the
+same steps at every row of a batch of states, through `eval_batch`, and matches
+`jacobian_at` row by row.
+
+No step fixes everything. An entry `df_i/dx_j` is resolved only to about
+`sqrt(eps) |f_i| / |x_j|` forward (`eps^(2/3)` central), so a coupling of one in a
+row of size `1e8` comes back as `1 +- 1.5` forward. Wrap the field in
+`JacobianField` and `jacobian_at` returns its exact Jacobian instead, either a
+closed form you pass or, by default, Taylor jets.
+
+| on Lorenz, one call | cost |
+|---|---|
+| forward difference | 4 field evaluations |
+| Taylor jets | 3 jet evaluations, about 2x a difference |
+| closed form | about 1 field evaluation |
+
+With the closed form, Lorenz's top exponent over `T = 1000` (`dt = 0.01`) takes
+a few seconds on one thread.
+
+::: discrecontinual_equations.continuation.jacobian_field
