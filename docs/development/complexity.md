@@ -4,7 +4,9 @@ This page records the time and space cost of every substantive algorithm in the
 library, derived from the code as written rather than from what the textbook
 algorithm would cost, and checked against measured scaling. Where the code is
 asymptotically worse than its algorithm needs to be, that is called out under
-[Findings](#findings) with the evidence; none of those findings has been fixed yet.
+[Findings](#findings) with the evidence. Most of those findings have since been
+fixed: the table names the ticket that fixed each, and
+[Before / after](#before-after) gives every ticket's measurements.
 
 ## How to read this page
 
@@ -27,11 +29,17 @@ were timed with `OPENBLAS_NUM_THREADS=1`: on a loaded machine threaded OpenBLAS 
 a 128 x 128 solve cost 0.4-2 s instead of a millisecond.
 
 The scaling scripts are not in the repository, which has no benchmark directory;
-the numbers quoted here are their output.
+the numbers quoted here are their output. The survey's scripts and outputs are kept
+outside the repository in `outputs/complexity/baseline/`, and each ticket's
+before/after run in `outputs/complexity/before-after/<TICKET>/` (both under the main
+checkout, git-ignored).
 
-**Unmerged code.** Three sections describe algorithms on branches that had not been
-merged when this page was written. They are marked with a note naming the branch and
-the commit measured.
+**Which code.** The survey was measured on `main` at `4ca6382` and on three branches
+that have since merged (geodesic level sets, the quasipotential and Gauss-Legendre
+collocation; the sections say which commit). Rows that a later ticket changed have
+been rewritten for `main` at `8690798`: they give the cost the code has now and
+quote that ticket's before/after slopes. Rows no ticket touched keep the survey's
+numbers.
 
 ## ODE solvers
 
@@ -46,11 +54,12 @@ as `np.dot(a[i, :i+1], k[:i+1])`, `O(s^2 n)` per step, negligible beside the `s`
 field calls. `AdamsBashforth3Solver` keeps every past derivative in a list although
 it reads only the last three: `O(K n)` extra memory, the same order as the output.
 
-Every solver writes its solution into a `Curve` that shares the equation's
-`Variable` objects, so the trajectory is appended to the equation itself. A second
-`solve` on the same equation appends a second trajectory to the first: measured
-`len(solution)` 1001, 2002, 3003 over three solves of a 1000-step problem. Memory
-therefore grows with the number of solves, not just with `K`.
+Every solve builds a `Curve` of its own (DEQ-45), so solving the same equation again
+costs the same and does not grow the first trajectory. Before that fix the solution
+shared the equation's `Variable` objects and a second solve appended to the first
+(`len(solution)` 1001, 2002, 3003 over three solves of a 1000-step problem). The fix
+left the cost unchanged: Euler CPU-time slope 0.98 before and 0.97 after for `K`
+2000-32000, 6.6 MB at `K = 32000` both ways.
 
 ## SDE solvers
 
@@ -58,28 +67,26 @@ therefore grows with the number of solves, not just with `K`.
 
 | Algorithm | Size parameters | Time per step | Space | Dominated by | Measured slope |
 |---|---|---|---|---|---|
-| `EulerMaruyamaSolver` | `K`, `n`, `m` | `O(C_f + C_g + n m)` **plus `O(K)`** (see below) | `O(K n)` | Python overhead; the `O(K)` term from about `K = 10^4` | vs `K`: 1.20 overall, **1.85 local** (`K` 2000-64000); vs `n`: 1.20 local; memory 1.00 |
-| `MilsteinSolver`, diagonal noise (`m = n`) | `n`, `K` | `2n C_g` (central differences) + `O(n^4)` (`einsum` over `(m, n, n)` Jacobians against an `n x n` diagonal) **plus `O(K)`** | `O(n^3)` | the products and commutativity check | vs `n` (`K = 200`): 1.36 overall, 3.44 local (`n` 32 to 64); memory 1.95 |
-| `MilsteinSolver`, matrix noise | `n`, `m` | `2n C_g + O(m^2 n^2)` **plus `O(K)`** | `O(m n^2)` | as above | (as above) |
+| `EulerMaruyamaSolver` | `K`, `n`, `m` | `O(C_f + C_g + n m)` | `O(K n)` | Python overhead | vs `K` (16000-128000, DEQ-47): CPU 1.04, memory 1.01 (1.76 before the fix) |
+| `MilsteinSolver`, vector (diagonal) noise | `n`, `K` | undeclared: `2n C_g` (central differences of `b`) + `O(n^2)` for `P[j, k] = b_j d b_k / d x_j` and its check; declared `diagonal_noise`: `2 C_g + O(n)` | `O(n^2)` undeclared, `O(n)` declared | the `2n` diffusion calls | vs `n` (`K = 200`, DEQ-48): CPU 1.17 undeclared, 0.41 declared (2.12 before); memory 1.02 / 0.97 (1.98 before) |
+| `MilsteinSolver`, matrix noise | `n`, `m` | `2n C_g + O(m^2 n^2)` | `O(m n^2)` | the products and commutativity check | not re-measured |
 | `SRK2Solver` (strong 1.0) | `n`, `K` | `C_f + (n + 1) C_g`: one supporting diffusion evaluation per channel | `O(K n)` | the `n` supporting evaluations, each returning all `n` components | vs `n`: 1.39 overall, 2.22 local (`C_g = O(n)`) |
 | `SRK3Solver`, `SRK4Solver` (scalar only) | `K` | a fixed number of drift and diffusion calls | `O(K)` | Python overhead | linear in `K` (same driver as SRK2) |
 | `GottwaldMelbourneSolver` | `K`, `E = dt / epsilon` | `O(E (C_f + C_g + n))` | `O(K n)` | the inner fast-map loop | not measured; `E` multiplies everything |
 | `ZhanDuanLiLiSolver` | `K`, `n` | `2 (C_f + C_g)` | `O(K n)` | Python overhead | not measured |
 
-**The `O(K)` per step.** `FixedStepConfig.times` is a property that rebuilds
-`np.arange(start, end + h, h)` on every access. The Euler-Maruyama, Milstein,
-Gottwald-Melbourne and Zhan-Duan-Li-Li solvers and the `srk*` driver
-(`runge_kutta.py`) index it twice per step (`times[i]`, `times[i + 1]`), so each step
-pays two `O(K)` allocations and a whole path is `O(K^2)`. One access costs 1.5 us at
-`K = 2000` and 55 us at `K = 128000`. Euler-Maruyama at `n = 2` costs 27 us per step
-at `K = 2000` and 63 us per step at `K = 64000`, and the difference is the two
-`arange` calls. The ODE solvers and the ensemble read the array once and are linear.
+**The time grid.** `FixedStepConfig.times` is a property that rebuilds
+`np.arange(start, end + h, h)` on every access (1.5 us at `K = 2000`, 55 us at
+`K = 128000`). The stochastic solvers used to index it twice per step, which made a
+path `O(K^2)`; since DEQ-47 every solver reads it once per solve, and every path is
+linear in `K`.
 
-**Milstein with diagonal noise.** `column_jacobians` stores `(m, n, n)` Jacobians and
-`_commuting_products` contracts them with `np.diag(b)` by
-`einsum("kil,jl->jki")`, an `O(m^2 n^2) = O(n^4)` loop for diagonal noise, where
-only the `n` entries `(d b_i / d x_i) b_i` are non-zero and the commutativity check
-is vacuous.
+**Milstein with vector noise.** Before DEQ-48 `column_jacobians` stored `(m, n, n)`
+Jacobians and contracted them with `np.diag(b)` by `einsum`, an `O(n^4)` loop of
+which only `n^2` entries could be non-zero. The step now forms the `n x n` matrix
+`P[j, k] = b_j d b_k / d x_j` directly from the diffusion Jacobian and runs the same
+commutativity check on it; an equation that declares `diagonal_noise` (checked once
+per solve) gets `P`'s diagonal from two evaluations.
 
 **SRK2 is quadratic in `n` by construction.** Platen's scheme needs one supporting
 value per channel, and the `diffusion` interface returns every component, so the
@@ -93,6 +100,7 @@ the code.
 | `GaussianWienerSource.increments` | `m` | `O(m)`, two normal draws per channel | `O(m)` | - |
 | `BrownianPath.sample` | cells `C = (end - start) / resolution`, `m` | `O(C m)` (one `cumsum`) | `O(C m)` | - |
 | `BrownianPath.increments` | cells per step `c` | `O(c m)` (slice and `trapezoid`) | `O(c m)` temporary | 0.75 local vs `c` (10-10000; fixed overhead below 1000 cells) |
+| `BrownianPath` cell Levy areas (`_cell_areas`, drawn on the first area reading) | cells `C`, `m` | `O(C^(3/2))` at fixed `m` (about `C^(1/2)` series terms per cell) | `O(C m^2)` kept + one fixed-size chunk (DEQ-70) | the series terms per cell | time 1.41 vs `C` before and after; peak memory 1.41 before, 0.55 after (DEQ-70) |
 
 A convergence study that reads a path at step `h` therefore costs `O(C m)` in
 increments per path whatever `h`, which is the point of a fixed path.
@@ -102,48 +110,54 @@ increments per path whatever `h`, which is the point of a fixed path.
 | Algorithm | Size parameters | Time per step | Space | Dominated by | Measured slope |
 |---|---|---|---|---|---|
 | Euler-Maruyama | `P`, `n`, `m`, `K` | `O(P n m)` vectorised + the batch drift and diffusion | `O(P n)` + `O(S P n)` for `S` kept samples | NumPy calls (about 60 us per step at `P = 1000`) until `P` is about `10^4` | vs `P`: 0.85 local (100 to 100000); vs `K`: 0.98; memory 0.89 vs `P` |
-| Milstein (and Stratonovich drift) | `P`, `n`, `m` | `2n` batched diffusion calls + `O(P m^2 n^2)` products | `O(P m n^2)` Jacobians + `O(P m^2 n)` products | the `(P, m, n, n)` Jacobian array | diagonal noise vs `n` (`P = 200`, `K = 50`): time 3.17 (3.68 local), memory 2.94; 12.5 s and 212 MB at `n = 32` |
+| Milstein (and Stratonovich drift), vector noise | `P`, `n` | undeclared: `n` batched direction slopes, `O(P n^2)`; declared `diagonal_noise`: 2 batched calls, `O(P n)` | `O(P n)` | the direction slopes | vs `n` (`P = 200`, `K = 50`, DEQ-48): CPU 1.45 undeclared, 0.46 declared (2.70 before); memory 0.99 (2.94 before, 212 MB at `n = 32`) |
+| Milstein, matrix noise | `P`, `n`, `m` | `2n` batched diffusion calls + `O(P m^2 n^2)` products | `O(P m n^2)` | the `(P, m, n, n)` Jacobian array | not re-measured |
 | with a `WienerSource` | as above | `+ P` source calls per step (a Python list comprehension) | | the source | - |
 
 `times` is read once into a local, so the ensemble is linear in `K`. The default
 `eval_batch` and `diffusion_batch` loop over the paths in Python, so an equation that
 does not override them pays `O(P (C_f + C_g))` Python calls per step and loses the
-point of the ensemble. With diagonal noise the Milstein ensemble builds the full
-`(P, n, n, n)` Jacobian tensor and an `(P, n, n, n)` product tensor; the Stratonovich
-Euler-Maruyama drift builds the same Jacobian tensor to read its `n` diagonal entries.
+point of the ensemble. Before DEQ-48 the Milstein ensemble with vector noise built
+the full `(P, n, n, n)` Jacobian and product tensors, and the Stratonovich
+Euler-Maruyama drift built the same Jacobian tensor to read its `n` diagonal
+entries; both now take the slopes direction by direction.
 
 ## Equilibrium continuation
 
 `Continuer.solve` runs pseudo-arclength continuation with the collaborators the
-builder injects. With the defaults (central-difference Jacobian, dense
-`LeastSquaresFallbackSolver`, detectors fold, branch point and Hopf):
+builder injects. With the defaults (central-difference Jacobian wrapped in a
+`MemoizedJacobian`, dense `LeastSquaresFallbackSolver`, detectors fold, branch point
+and Hopf):
 
 | Part | Size parameters | Time | Space | Notes |
 |---|---|---|---|---|
-| `NewtonCorrector.correct`, per iteration | `n` | `(2n + 2) C_f` (extended Jacobian) + dense `(n+1)^2` solve `O(n^3)`; `lstsq` `O(n^3)` on singular steps | `O(n^2)` | the Jacobian is dense whatever the field's sparsity |
+| `NewtonCorrector.correct`, per iteration | `n` | `(2n + 2) C_f` (extended Jacobian; `(2g + 2) C_f` for `g` column groups when a sparsity pattern is given, DEQ-53) + dense `(n+1)^2` solve `O(n^3)`; `lstsq` `O(n^3)` on singular steps | `O(n^2)` | the Jacobian array is dense either way |
 | `BorderedTangentComputer.compute` | `n` | `(2n + 2) C_f + O(n^3)` | `O(n^2)` | |
 | `Fold.test_value` | | `O(1)` (the tangent's last entry) | | |
 | `BranchPoint.test_value` | `n` | `(2n + 2) C_f + O(n^3)` (determinant of the bordered matrix) | `O(n^2)` | |
-| `Hopf.test_value` | `n` | `2n C_f` + `O(n^4)` Python build + `O(n^6)` determinant | `O(n^4)` | see `bialternate_determinant` below |
+| `Hopf.test_value` | `n` | the shared Jacobian + one `eigvals` `O(n^3)` + `n(n-1)/2` pair sums (DEQ-46) | `O(n^2)` | see `bialternate_test_value` below |
 | `PointBuilder.build` | `n` | `2n C_f + O(n^3)` (`eigvals`) | `O(n^2)` | |
 | `RefiningLocalizer.localize` | root-finder iterations `L` | `L` corrector calls + `L` tangents + `L` test values | `O(n^2)` | only when a test function changes sign |
-| **One accepted point** | `n`, `I` | `(I + 4)(2n + 2) C_f + (I + 3) O(n^3)` + Hopf | `O(n^2)` + `O(n)` stored | none of the `I + 4` Jacobians is shared |
+| **One accepted point** | `n`, `I` | `(I + 1)(2n + 2) C_f + (I + 3) O(n^3)` | `O(n^2)` + `O(n)` stored | the tangent, detectors and stability share the converged point's Jacobian (DEQ-53; `I + 4` before) |
 
-Measured on a ring of `n` fold-carrying cells (`C_f = O(n)`), 20 points: with only
-the fold detector the run grows with slope 0.98 (1.28 local) for `n` 4 to 32, as the
-`O(n C_f) = O(n^2)` Jacobians take over from fixed overhead; with the default three
-detectors the slope is 1.84 overall and **3.68 local**, and at `n = 32` the run costs
-1.19 s against 0.12 s, almost all of it the Hopf test. The bialternate determinant
-also overflowed during that run.
+Survey (`4ca6382`), on a ring of `n` fold-carrying cells (`C_f = O(n)`), 20 points:
+with only the fold detector the run grew with slope 0.98 (1.28 local) for `n` 4 to
+32; with the default three detectors the slope was 1.84 overall and 3.68 local,
+almost all of it the Hopf test, whose bialternate determinant also overflowed.
 
-`bialternate_determinant` builds the `s x s` bialternate product, `s = n(n-1)/2`, by
-calling `_offdiagonal` for every one of the `s^2` entries: `O(n^4)` Python calls and
-an `O(n^4)` dense array, of which only `O(n^3)` entries are non-zero, then a dense
-`O(s^3) = O(n^6)` determinant. Measured slope 4.01 in time and 4.10 in memory for
-`n` 8 to 48 (0.48 s and 20 MB at `n = 48`, against 0.7 ms for `eigvals` at the same
-size); the `n^6` determinant takes over beyond that. The determinant of a product
-with entries of order one also overflows for moderate `n` (it overflowed at
-`n = 32` on a random matrix), and an infinite test value cannot change sign.
+The Hopf test used to build the `s x s` bialternate product, `s = n(n-1)/2`, entry by
+entry (`O(n^4)` Python calls and memory) and take its dense `O(n^6)` determinant,
+which overflowed at `n = 32` on a random matrix. Since DEQ-46
+`bialternate_test_value` reads the same sign from one eigenvalue solve, `O(n^3)`.
+Per call on a random Jacobian the time slope went from 4.14 (`n` 8-64) to 1.56
+(`n` 8-128), and a 20-point continuation with all three detectors from 3.23 to 1.26;
+see [DEQ-46](#deq-46-hopf-test-from-one-eigenvalue-solve).
+
+Since DEQ-53 the builder wraps the Jacobian provider in a `MemoizedJacobian`, so one
+accepted point builds `I + 1` Jacobians instead of `I + 4`, every value bit-identical.
+With only the fold detector that made a 20-point run 2.4x faster at `n = 64` (slope
+1.10 to 0.85); with all three detectors the run is dominated by the remaining work
+and did not change (7.8 s to 7.7 s at `n = 32`, wall clock under load 20-50).
 
 ## Limit cycles
 
@@ -151,12 +165,12 @@ with entries of order one also overflows for moderate `n` (it overflowed at
 
 | Algorithm | Size parameters | Time per Newton iteration | Space | Dominated by | Measured slope |
 |---|---|---|---|---|---|
-| `PeriodicOrbit.solve` (trapezoidal, forward-difference Jacobian, `lstsq`) | `N`, `n` | `((N+1) n + 1)` full residuals of `(N + 1) C_f` = `O(N^2 n C_f)`, plus an SVD least squares `O((N n)^3)` | `O(N^2 n^2)` dense Jacobian | the `O(N^2)` field calls up to `N n` in the low thousands; the cubic solve beyond | time 2.01 (2.24 local), memory 1.61 vs `N` (20-160, `n = 2`); 0.80 s at `N = 160` |
-| `HermiteSimpsonOrbit.solve`, `RobustPeriodicOrbit.solve` | `N`, `n` | as above with `2N + 1` field calls per residual; Robust adds up to 20 residuals per line search | `O(N^2 n^2)` | as above | same driver |
+| `PeriodicOrbit.solve` (trapezoidal, column-grouped forward differences, SuperLU) | `N`, `n` | a few residuals per state component plus one for the period, independent of `N`, of `(N + 1) C_f` each: `O(N n C_f)`; sparse LU on `O(N n^2)` non-zeros; dense `lstsq` only where the LU is singular | `O(N n^2)` | the residuals | vs `N` (40-640, `n = 2`, DEQ-49): time 1.05, memory 0.93 (2.35 and 1.81 before); 0.38 s against 62 s at `N = 640` |
+| `HermiteSimpsonOrbit.solve`, `RobustPeriodicOrbit.solve` | `N`, `n` | as above with `2N + 1` field calls per residual; Robust adds up to 20 residuals per line search | `O(N n^2)` | as above | DEQ-49: Hermite-Simpson 1.99 to 0.96, Robust 2.18 to 0.73 |
 | `AnalyticPeriodicOrbit.solve` (autodiff blocks, COO assembly, `spsolve`) | `N`, `n` | `N + 1` autodiff Jacobians `O(N n C_f)` + vectorised assembly of `O(N n^2)` triplets + SuperLU | `O(N n^2)` | the Python autodiff passes | vs `N`: time 1.14 (100-3200), memory 0.97; vs `n` (`N = 100`): time 1.67, memory 1.82 |
 | `AdaptivePeriodicOrbit.solve` | `N`, sweeps `W <= 15`, line-search steps `B <= 20` | `(1 + W)` damped solves, each `I` iterations of the above plus up to `B` residuals | `O(N n^2)` | the re-solves | linear in `N` per solve |
 | `AdaptivePeriodicOrbit.continue_to_resolved` | doublings `D` | `D + 1` full continuations at `N, 2N, ..., 2^D N`, so about twice the finest one | finest level | the finest continuation | - |
-| `PeriodicOrbit.monodromy` | `N`, `n` | per interval 9 forward-difference Jacobians (`9 (n + 1) C_f`) and 4 RK4 substeps of four `n x n` products: `O(N (n C_f + n^3))` | `O(n^2)` (plus the `9 n x n` Jacobians of one interval) | the Jacobians at small `n`, the products at large `n` | vs `N`: 1.01; vs `n` (`N = 40`): 1.29 overall, 2.04 local; 1.2 s at `n = 64` |
+| `PeriodicOrbit.monodromy` | `N`, `n` | `9N` forward-difference Jacobians (`9N (n + 1) C_f`, batched over the stages where the field takes arrays) and `4N` RK4 propagators, then their ordered product: `O(N (n C_f + n^3))` | `O(N n^2)` (the stage Jacobians, batched) | the Jacobians at small `n`, the products at large `n` | survey (before batching): vs `N` 1.01; vs `n` (`N = 40`) 1.29 overall, 2.04 local |
 | `PeriodicOrbit.floquet_multipliers` | | monodromy + `eigvals` `O(n^3)` | `O(n^2)` | | |
 
 **What SuperLU actually factors.** The analytic Jacobian is bordered
@@ -178,10 +192,10 @@ multipliers of every point.
 
 | Part | Size parameters | Time | Space | Dominated by | Measured slope |
 |---|---|---|---|---|---|
-| `_solve_seed` | `N`, `n` | one `PeriodicOrbit.solve` (dense, `O(N^2 n C_f)` per iteration and `O((N n)^3)` least squares), then a sparse correction | `O(N^2 n^2)` | the dense trapezoidal solve | trapezoidal 1.81, Hermite-Simpson 1.63 vs `N` (20-160); 1.8 s at `N = 160` |
+| `_solve_seed` | `N`, `n` | one staged `PeriodicOrbit.solve` (now sparse, `O(N n C_f)` per iteration), then a sparse correction; a direct damped Newton on the target scheme when the staged answer is not a cycle | `O(N n^2)` | the staged solve | vs `N` (40-640, DEQ-49): 0.66, 0.23 s at `N = 640` (1.97 and 26 s before) |
 | corrector iteration (`_correct`) | `N`, `n` | `(N + 1)` autodiff Jacobians + `(N + 1)` parameter differences (+ `N` midpoint ones for Hermite-Simpson) + one `spsolve` on the bordered matrix | `O(N n^2)` | the per-node Python calls | (in the per-step figure) |
 | tangent (`_tangent`) | `N`, `n` | one more assembly and `spsolve` | `O(N n^2)` | | |
-| point (`_point`): multipliers | `N`, `n` | one `PeriodicOrbit.monodromy`, `O(N (n C_f + n^3))` + `eigvals` | `O(n^2)` | the monodromy's 9N forward-difference Jacobians | |
+| point (`_point`): multipliers | `N`, `n` | one `PeriodicOrbit.monodromy`, `O(N (n C_f + n^3))` + `eigvals` | `O(N n^2)` | the monodromy's `9N` forward-difference Jacobians | |
 | **One continuation step** | `N`, `n`, `I` | `(I + 1)` sparse solves + monodromy: `O(I N n C_f + N n^3)` | `O(N n^2)` | | vs `N` (`n = 2`): trapezoidal 1.05, Hermite-Simpson 1.00; vs `n` (`N = 40`): 1.71 |
 
 Measured parts of one Hermite-Simpson step at `n = 2`, `N` 40 to 640: assembly
@@ -197,15 +211,19 @@ COLAMD keeps it out of the elimination until the end, so the step stays linear i
 `O(N^2 n C_f)` and `O((N n)^3)` and run only when the sparse LU returns a
 non-finite update.
 
-The step is linear in `N`, but the *seed* is not: the first point is solved by the
-dense forward-difference `PeriodicOrbit`, so a short trace at large `N` is dominated
-by its seed (at `N = 160`, trapezoidal: seed 1.8 s against 0.15 s per step).
+The seed used to be the exception: it was solved by the dense forward-difference
+`PeriodicOrbit`, so a short trace at large `N` was dominated by it (at `N = 160`,
+trapezoidal: seed 1.8 s against 0.15 s per step). Since DEQ-49 the seed is as linear
+as the step. DEQ-75 then evaluates the cycle fields a batch at a time and adapts the
+arclength step as AUTO does; in the films that cut the continuation's own CPU time
+from 7.75-111.3 s to 0.70-12.85 s per film (see
+[DEQ-75](#deq-75-cycle-continuation-in-the-films)).
 
 ### Gauss-Legendre collocation
 
-!!! note "On branch feature/deq-34-orthogonal-collocation, not yet merged"
-    `continuation/cycle_continuation.py` at `4e6b463`. Measured on that commit with
-    `m = 4` points per interval unless stated.
+The survey measured this section on the DEQ-34 branch at `4e6b463`, before it
+merged, with `m = 4` points per interval unless stated. DEQ-55 has since changed the
+point: see the paragraph after the table.
 
 Orthogonal collocation at `m` Gauss points per interval carries `N m + 1` states.
 Each interval contributes a dense `(m n) x ((m + 1) n)` block, so the bordered matrix
@@ -217,13 +235,19 @@ has `O(N m^2 n^2)` non-zeros.
 | `interval_blocks` (assembly) | `N`, `m`, `n` | `N m` autodiff Jacobians, field and parameter calls + `einsum` chain `O(N m^2 n^2)` | `O(N m^2 n^2)` | the `N m` Python calls | 0.94 vs `N`, 0.90 vs `m`, 1.39 vs `n` |
 | `spsolve` | `N`, `m`, `n` | banded LU, block bandwidth `(m + 1) n`: `O(N m^3 n^3)` worst case | `O(N m^2 n^2)` | | 0.67 vs `N` (fill 1.24, constant), 0.55 vs `m`, 1.69 vs `n` |
 | `_jacobian_monodromy` | `N`, `m`, `n` | `N` batched dense solves of size `m n` with `n` right-hand sides, `O(N m^3 n^3)`, + `N` products `O(N n^3)` | `O(N m^2 n^2)` (the stored blocks) | NumPy batched `solve` | 0.45 vs `N`, 1.50 vs `n`; under 1 ms at `N = 160` |
-| `_point` (Jacobian multipliers + Hermite cross-check + matching) | `N`, `m`, `n` | the cross-check is a full `monodromy` over all `N m` sub-intervals with autodiff Jacobians, `O(N m (n C_f + n^3))`, + `linear_sum_assignment` `O(n^3)` | `O(n^2)` | the cross-check monodromy | 0.96 vs `N`, 0.98 vs `m`, 1.42 vs `n` |
-| **One continuation step** | `N`, `m`, `n` | `O(I N m n C_f + N m^3 n^3)` | `O(N m^2 n^2)` | the cross-check: about 60% of a step | 0.99 vs `N`, 0.97 vs `m`, 1.44 vs `n` (`n` 2-16) |
+| `_point` at `4e6b463` (Jacobian multipliers + Hermite cross-check + matching) | `N`, `m`, `n` | the cross-check is a full `monodromy` over all `N m` sub-intervals with autodiff Jacobians, `O(N m (n C_f + n^3))`, + `linear_sum_assignment` `O(n^3)` | `O(n^2)` | the cross-check monodromy | 0.96 vs `N`, 0.98 vs `m`, 1.42 vs `n` |
+| `_point` on `main` (Jacobian multipliers + doubled-mesh bound) | `N`, `m`, `n` | the `N` transfer matrices of the assembled collocation Jacobian, multiplied out or read by periodic QR (`periodic_schur`), `O(N m^3 n^3)`; then the cycle re-solved on `2N` intervals at fixed parameter and its multipliers read the same way, for the error bound; the Hermite cross-check only when asked for | `O(N m^2 n^2)` | the doubled-mesh re-solve | vs `N` (10-160, `n = 2`, DEQ-55): 1.05 (1.25 before); vs `n` (2-16, `N = 20`): 0.98 (1.73 before) |
+| **One continuation step** at `4e6b463` | `N`, `m`, `n` | `O(I N m n C_f + N m^3 n^3)` | `O(N m^2 n^2)` | the cross-check: about 60% of a step | 0.99 vs `N`, 0.97 vs `m`, 1.44 vs `n` (`n` 2-16) |
 
-The Jacobian monodromy (Fairgrieve-Jepson) is essentially free; what a
-Gauss-Legendre step pays for is the independent Hermite cross-check, which the code
-evaluates eagerly at every point to fill `floquet_error`. At `N = 160`, `m = 4` the
-cross-check took 0.58 s of a 1.0 s step, against 1 ms for the Jacobian monodromy.
+At `4e6b463` the Jacobian monodromy (Fairgrieve-Jepson) was essentially free, and a
+Gauss-Legendre step paid for the independent Hermite cross-check, evaluated eagerly at
+every point to fill `floquet_error` (0.58 s of a 1.0 s step at `N = 160`). DEQ-55
+reads the multipliers by periodic QR where needed, which costs more than the plain
+product (`_jacobian_multipliers` 0.99 ms before, 28.6 ms after at `N = 160`), and
+bounds their error by the disagreement with a doubled-mesh re-solve rather than the
+cross-check; the point as a whole
+went from 2.91 s to 0.49 s at `N = 160` (see
+[DEQ-55](#deq-55-gauss-legendre-multipliers-by-periodic-qr)).
 
 ## Bifurcation curves, connecting orbits and Taylor manifolds
 
@@ -289,14 +313,18 @@ would cut most gaps roughly in half, a constant factor only.
 
 `HomoclinicOrbit` / `HeteroclinicOrbit` `.solve`: Gauss-Newton on the trapezoidal
 projection boundary-value problem, `(N n + n_b + 1) x (N+1) n` with the exact
-(autodiff) Jacobian and `lsmr` on it.
+(autodiff) Jacobian. Since DEQ-50 the Jacobian is assembled sparse and each step
+solves the scaled augmented system `[[alpha I, J], [J^T, 0]]` by two sparse LU
+factorisations whose fill is linear in `N`; `lsmr` and then dense least squares
+remain as fallbacks.
 
 | Size parameters | Time | Space | Dominated by | Measured slope |
 |---|---|---|---|---|
-| `N`, `n`, `I` | per iteration: `2N C_f` (residual) + `(N+1) n C_f` (autodiff Jacobians) + `O(N^2 n^2)` (dense zero-fill and `csr_matrix(dense)`) + `L * O(N n^2)` for `L` `lsmr` iterations, with `L ~ N` measured, so `O(N^2 n^2)` overall | `O(N^2 n^2)` (dense Jacobian) | `lsmr` iterations and the dense array | time 1.13 (`N` 100-1600, `n = 2`); memory 1.98 |
+| `N`, `n`, `I` (on `main`) | per iteration: `2N C_f` (residual) + `(N+1) n C_f` (autodiff Jacobians) + two sparse LU of `O(N n^2)` non-zeros | `O(N n^2)` | the per-node Python calls | vs `N` (200-3200, `n = 2`, DEQ-50): solve 1.13, Newton iteration 0.99; memory 0.98 |
+| as above, before DEQ-50 | `+ O(N^2 n^2)` dense zero-fill and `csr_matrix(dense)` + `L ~ N` `lsmr` iterations of `O(N n^2)` | `O(N^2 n^2)` | `lsmr` iterations and the dense array | survey: time 1.13 (`N` 100-1600), memory 1.98; DEQ-50 before: solve 1.59, memory 1.99, 657 MB at `N = 3200` |
 
-Derivation and measurements (saddle `x'' = x - x^2`, half-length 10, 4 Gauss-Newton
-iterations at every `N`):
+The survey's derivation of the old cost (saddle `x'' = x - x^2`, half-length 10, 4
+Gauss-Newton iterations at every `N`):
 
 * `lsmr` took 100, 200, 390, 765, 1500 iterations at `N` = 100 ... 1600: the
   iteration count is proportional to `N`, as the condition number of a first-order
@@ -314,18 +342,16 @@ iterations at every `N`):
 ### Homoclinic curve continuation (`homoclinic_curve.py`, on `main`)
 
 `HomoclinicCurve.solve_point` / `.trace`: Newton on the orbit, the saddle and one
-parameter, with a forward-difference Jacobian of the whole augmented residual and a
-dense `lstsq`.
+parameter. Since DEQ-50 the bordered block-banded Newton matrix is assembled in
+`O(N)` field work and factored by SuperLU (dense `lstsq` only as a fallback); before,
+it was a forward-difference Jacobian of the whole augmented residual and a dense
+`lstsq`.
 
 | Size parameters | Time | Space | Dominated by | Measured slope |
 |---|---|---|---|---|
-| `N`, `n`, `I` | per iteration: `(N+1) n + n + 2` full residuals, each `2N C_f + (n+1) C_f + O(n^3)` (FD saddle Jacobian, `eig`, `inv`) = `O(N^2 n C_f)`, plus dense SVD `lstsq` `O((N n)^3)` | `O(N^2 n^2)` | `O(N^2)` field evaluations in Python; the cubic `lstsq` takes over only at large `N n` | 1.80 per point (`N` 100-300, `n = 2`; 1.92 per Newton iteration, since the iteration count drops from 4 to 3); memory 1.83 |
-| `P` sweep values | `trace`: `P` point solves | `O(N^2 n^2)` | | |
-
-At `N = 300` one Newton iteration is about 600 residuals, 360,000 field evaluations,
-about 4 s. This is the dense finite-difference construction that
-`connecting_orbit.py` replaced with the banded autodiff Jacobian; the curve solver
-never got the same treatment.
+| `N`, `n`, `I` (on `main`) | per iteration: `O(N n C_f)` assembly + sparse LU, fill linear in `N` | `O(N n^2)` | the per-node calls | vs `N` (DEQ-50): Newton iteration 0.87 (100-3200), point 0.82 (101-3201 nodes); memory 0.97 |
+| as above, before DEQ-50 | `(N+1) n + n + 2` full residuals of `2N C_f + (n+1) C_f + O(n^3)` = `O(N^2 n C_f)`, plus dense `lstsq` `O((N n)^3)` | `O(N^2 n^2)` | `O(N^2)` field evaluations | survey: 1.80 per point (`N` 100-300); DEQ-50 before: 2.37 per iteration (`N` 100-400), 24 s per iteration at `N = 400` |
+| `P` sweep values | `trace`: `P` point solves | `O(N n^2)` | | |
 
 ### Taylor invariant manifolds (`manifold.py`, `multivariate.py`)
 
@@ -389,8 +415,10 @@ with detectors switched off): a central-difference Jacobian of the augmented res
 | Fold, Moore-Spence (`2n+1`) | `C_f` + one jet pass `O(C_f)` | `(4n+4)` residuals + `O(n^3)` solve: `O(n C_f + n^3)` | `O(n^2)` | FD Jacobian columns | 2.02 / 2.67 (`n` 4-32, `C_f = O(n^2)`; 3.3 between 16 and 32) |
 | Hopf (`3n+2`) | `C_f` + two jet passes | `(6n+6)` residuals + `O(27 n^3)`: `O(n C_f + n^3)` | `O(n^2)` | FD Jacobian columns | 2.12 / 2.44 (2.8 between 16 and 32) |
 | Bogdanov-Takens (`3n+2`) | `C_f` + two jet passes | as Hopf | `O(n^2)` | | not measured (same shape as Hopf) |
-| Cusp, codim-3 (`2n+2`) | `C_f` + jet pass + `cusp_coefficient` (Jacobian `n C_f`, 2 SVD `O(n^3)`): `O(n C_f + n^3)` | `(4n+6)` residuals: `O(n^2 C_f + n^4)` | `O(n^2)` | the cusp coefficient re-derived inside every FD column | 2.11 / 3.28 (53 s per iteration at `n = 32`) |
-| Generalized Hopf, codim-3 (`3n+3`) | `C_f` + two jet passes + `lyapunov_quantities` (the order-6 center-manifold reduction above, `O(n^4)` for a cubic field) | `(6n+8)` residuals: `O(n^5)` | `O(n^4)` | center-manifold reduction inside every FD column | 3.44 / 3.93 (`n` 3-6; 9 s per iteration at `n = 6`) |
+| Cusp, codim-3, minimally augmented (`n+2`, DEQ-51) | `C_f` + one LU of the bordered `(n+1)` matrix + a bilinear form | analytic state columns (`n` bilinear forms, solves against the same factors) + 3 differenced parameter columns: `O(n C_f + n^3)` | `O(n^2)` | the state columns | Newton iteration 2.58 (`n` 4-32, DEQ-51), 10.6 s at `n = 32` |
+| Generalized Hopf, codim-3, minimally augmented (`n+3`, DEQ-51) | `C_f` + LU of the bordered `f_u^2 + kappa I` + `first_lyapunov` | analytic state columns, `O(n^2)` each after one factorisation plus a fixed number of multilinear forms, + 3 differenced parameter columns | `O(n^2)` | the state columns | Newton iteration 2.86 (`n` 4-32, DEQ-51), 35 s at `n = 32` |
+| Cusp before DEQ-51 (Moore-Spence, `2n+2`) | `C_f` + jet pass + `cusp_coefficient` (Jacobian `n C_f`, 2 SVD `O(n^3)`) | `(4n+6)` residuals: `O(n^2 C_f + n^4)` | `O(n^2)` | the cusp coefficient re-derived inside every FD column | survey 2.11 / 3.28 (53 s per iteration at `n = 32`); DEQ-51 before: 3.42, 99 s at `n = 32` |
+| Generalized Hopf before DEQ-51 (`3n+3`) | `C_f` + two jet passes + `lyapunov_quantities` (order-6 center-manifold reduction) | `(6n+8)` residuals: `O(n^5)` | `O(n^4)` | center-manifold reduction inside every FD column | survey 3.44 / 3.93 (`n` 3-6); DEQ-51 before: 57-136 s per iteration at `n` 4-6 |
 
 A continuation step costs `(I + 1)` such Jacobians: `I` corrector iterations and
 one tangent solve, none shared.
@@ -402,7 +430,11 @@ derivative; it costs `4n+4` (fold) or `6n+6` (Hopf) residuals where an assembled
 Jacobian (`f_u`, the Hessian contraction `(f_u q)_u`, `f_p`) would cost about `n`
 jet passes. That is a constant factor, not an order.
 
-**Cusp curve.** `CuspCurveResidual.evaluate` calls `cusp_coefficient`, which
+The two paragraphs below describe the cusp and generalized-Hopf residuals as the
+survey found them; DEQ-51 replaced both with the minimally augmented systems in the
+table.
+
+**Cusp curve (before DEQ-51).** `CuspCurveResidual.evaluate` called `cusp_coefficient`, which
 rebuilds the Jacobian and takes two SVDs to find the null vectors `q` and `p` -
 although `q` is already one of the unknowns (`state[n:2n]`). The finite-difference
 Jacobian then repeats that `4n+6` times, so one Newton iteration is `O(n^2 C_f + n^4)`
@@ -411,7 +443,7 @@ is under the derived 3 because at `n <= 32` the per-jet Python overhead of the
 Jacobian's `n` passes outweighs its `O(n^2)` field cost and the SVDs are
 microseconds; the Newton-iteration slope, 3.3, shows the extra factor of `n`.)
 
-**Generalized-Hopf curve.** `GeneralizedHopfCurveResidual.evaluate` calls
+**Generalized-Hopf curve (before DEQ-51).** `GeneralizedHopfCurveResidual.evaluate` called
 `TwoParameterProblem.lyapunov_quantities`, the full order-6 center-manifold
 reduction, and keeps only the first quantity. Inside the finite-difference Jacobian
 that is `6n+8` reductions per Newton iteration. Kuznetsov's `first_lyapunov` (already
@@ -441,13 +473,15 @@ microseconds and is `O(n)` for any field that touches every component.
 
 | Size parameters | Time | Space | Dominated by | Measured slope |
 |---|---|---|---|---|
-| `M`, `d`, `K` | build `O(M K C_g + d M (C_f + K C_g))` Python calls, `O(d^2 M)` vectorised assembly; solve: SuperLU (COLAMD) on a 5-point (2-D) / 7-point (3-D) operator plus one dense row | operator `O(d^2 M)`; LU factor `O(M^1.23)` (2-D), `O(M^1.62)` (3-D) measured | 2-D: the Python face loop (87-93% of runtime up to `M = 58 081`); 3-D: the sparse LU from about `M = 10^4` | 2-D total 1.00, solve 1.18, fill 1.23; 3-D total 1.25 (rising), solve 1.92, fill 1.62; `tracemalloc` peak 1.00 / 1.02 |
+| `M`, `d`, `K` | build `O(M K C_g + d M (C_f + K C_g))` field work, one batched call per face family since DEQ-53, and `O(d^2 M)` vectorised assembly; solve: SuperLU (COLAMD) on a 5-point (2-D) / 7-point (3-D) operator plus one dense row | operator `O(d^2 M)`; LU factor `O(M^1.23)` (2-D), `O(M^1.62)` (3-D) measured | 2-D: the field work (before DEQ-53 a Python face loop, 87-93% of runtime); 3-D: the sparse LU from about `M = 10^4` | survey: 2-D total 1.00, solve 1.18, fill 1.23; 3-D total 1.25 (rising), solve 1.92, fill 1.62; `tracemalloc` peak 1.00 / 1.02. DEQ-53: 2-D 8.5 s to 4.2 s at `M = 58 081`, 3-D unchanged (8.9 s to 9.1 s at `M = 15 625`), both under load 20-50 |
 
-The assembly is two things of different cost. The coefficients are gathered by a
-Python loop: `_diffusion` evaluates all `K` columns at each of the `M` cells, and
+The assembly is two things of different cost. The coefficients are gathered first:
+`_diffusion` evaluates all `K` columns at each of the `M` cells, and
 `_face_coefficients` evaluates the whole drift and all `K` columns at each of the
 roughly `d M` face centres (plus `K (d + 1)` column evaluations per face for the
-Stratonovich shift, through `jacobians_at`). Everything after that - the
+Stratonovich shift). Since DEQ-53 each of these is one `eval_batch` call per face
+family where the field offers it, so no Python runs per face beyond the field's own.
+Everything after that - the
 exponential-fitting weights, the cross-diffusion stencil, the COO triplets - is
 vectorised NumPy and costs `O(d^2 M)`. Each row of the operator has `2d + 1` entries
 from the diagonal diffusion and up to `8(d - 1)` more where `D` has off-diagonal
@@ -490,39 +524,40 @@ correction it feeds is identically zero.
 
 | Size parameters | Time | Space | Dominated by | Measured slope |
 |---|---|---|---|---|
-| `n`, `k`, `H`, `T` | `O((T + H) (n C_f + n^2 k))` plus `O(H n k^2 / 10)` for the QR every tenth step | `O(n k)` frame, `O(n^2)` Jacobian | the `4(n + 2)` field evaluations per RK4 step | `H`: 0.95; `n` (ring, `C_f ~ n`): 1.31 overall, 1.71 local, toward 2; memory 1.45 |
+| `n`, `k`, `H`, `T` | `O(T C_f + H (n C_f + n^2 k))` plus `O(H n k^2 / 10)` for the QR every tenth step | `O(n k)` frame, `O(n^2)` Jacobian | the `4(n + 2)` field evaluations per horizon step | survey: `H` 0.95; `n` (ring, `C_f ~ n`) 1.31 overall, 1.71 local; memory 1.45. DEQ-52 with `T = 50`, `H = 10`: 1.29 to 1.17, 2.9x at `n = 64` |
 
-Each RK4 step evaluates the field at the four stage points and a forward-difference
-Jacobian at the same four points; `jacobian_at` re-evaluates its base point, so the
-step costs `4(n + 2)` field evaluations and four `(n x n) @ (n x k)` products. The
-transient loop runs the same step, Jacobians and frame included, and throws the frame
-away, so the `T` transient steps cost `n + 2` times what advancing the state alone
-would.
+Each horizon RK4 step evaluates the field at the four stage points and a
+forward-difference Jacobian at the same four points; `jacobian_at` re-evaluates its
+base point, so the step costs `4(n + 2)` field evaluations and four
+`(n x n) @ (n x k)` products. Since DEQ-52 a transient step advances the state alone,
+four field evaluations, and lands on the same state bit for bit; before, it ran the
+full step and threw the frame away.
 
 ### Benettin spectrum with one shared driver (`stochastic_lyapunov`)
 
 | Size parameters | Time | Space | Dominated by | Measured slope |
 |---|---|---|---|---|
-| `n`, `k`, `H`, `T` | `O((T + H) (n (C_f + C_g) + n^3 + n^2 k))` | `O(n^2)` | `2(n + 2)` evaluations per Euler-Maruyama step; the `n^3` term from `g_x @ g_x` once `n` is large | `n`: 1.17 overall, 1.53 local |
+| `n`, `k`, `H`, `T` | horizon step `O(n (C_f + C_g) + n^2 k)`, plus `O(n^3)` for `g_x @ g_x` under Stratonovich only; transient step `O(C_f + C_g)` (Ito) or `O(C_f + n C_g)` (Stratonovich) | `O(n^2)` | the `2(n + 2)` evaluations per horizon step | survey: `n` 1.17 overall, 1.53 local. DEQ-52, `T = 100`, `H = 10`: Ito 1.26 to 1.11 (4.9x at `n = 64`), Stratonovich 1.45 to 1.06 (7.7x) |
 
-`_Coefficients` takes both forward-difference Jacobians at every step, transient
-included, and `variational_drift` forms `g_x @ g_x` (`O(n^3)`) before multiplying it
-by the convention factor, which is zero under Ito.
+Before DEQ-52 `_Coefficients` took both forward-difference Jacobians at every step,
+transient included, and formed `g_x @ g_x` (`O(n^3)`) before multiplying it by the
+convention factor, which is zero under Ito. Now the transient advances the state
+alone and the Ito shift is skipped rather than multiplied by zero.
 
 ### Benettin spectrum with `K` drivers (`matrix_noise_lyapunov`)
 
 | Size parameters | Time | Space | Dominated by | Measured slope |
 |---|---|---|---|---|
-| `n`, `K`, `k`, `H`, `T` | `O((T + H) (K n C_g + n C_f + K n^3 + K n^2 k))` | `O(K n^2)` column Jacobians | the `K (n + 1)` column evaluations; then the two `K n^3`-class contractions | `K` (`n = 8`): 0.78; `n` with `K = n`: 1.97 overall, 2.42 local (toward 3 for `C_g ~ n`); memory 2.36 |
+| `n`, `K`, `k`, `H`, `T` | horizon step `O(K n C_g + n C_f + K n^2 + n^2 k)`, plus the `O(K n^3)` variational shift under Stratonovich only; the transient advances the state alone | `O(K n^2)` column Jacobians | the `K (n + 1)` column evaluations | survey: `K` (`n = 8`) 0.78; `n` with `K = n` 1.97 overall, 2.42 local; memory 2.36. DEQ-52, `n = K`, `T = 50`, `H = 5`: Ito 2.19 to 1.83 (11.5x at `n = 64`), Stratonovich 2.39 to 2.11 (1.8x) |
 
-Per step `jacobians_at` takes `K (n + 1)` column evaluations and stores a
-`(K, n, n)` array. Two contractions follow. `variational_drift_shift`,
-`sum_k (dG_k/dx)^2`, is `O(K n^3)` and is computed under Ito as well, where its
-factor is zero. The tangent noise term `einsum("k,kij,jl->il", dW, J, Y)` is a
-three-operand `einsum` without `optimize`, which NumPy evaluates as one nested loop
-over all four indices: `O(K n^2 k)` with no BLAS. Contracting the increments first,
-`tensordot(dW, J, 1) @ Y`, is `O(K n^2 + n^2 k)`; at `n = K = 64` that is 0.21 ms
-against 18.5 ms per step, and the `einsum` is about a fifth of the whole run.
+Per horizon step `jacobians_at` takes `K (n + 1)` column evaluations and stores a
+`(K, n, n)` array. Before DEQ-52 two contractions followed on every step:
+`variational_drift_shift`, `sum_k (dG_k/dx)^2`, `O(K n^3)` and computed under Ito as
+well, where its factor is zero; and the tangent noise term
+`einsum("k,kij,jl->il", dW, J, Y)`, a three-operand `einsum` without `optimize` that
+NumPy ran as one nested loop, `O(K n^2 k)` with no BLAS (18.5 ms per step at
+`n = K = 64`). Now the Ito shift is skipped and the tangent noise is
+`tensordot(dW, J, 1) @ Y`, `O(K n^2 + n^2 k)` (0.21 ms at the same size).
 
 ### Locating a stochastic threshold (`stochastic_threshold`)
 
@@ -566,18 +601,25 @@ directions and the cap of six escalated points per level.
 |---|---|---|---|---|
 | ring length `n` | `eval`: `O(n)` | `O(n)` | a Python comprehension over the cells | used as the `C_f ~ n` field in the scripts above |
 
-The ring's Jacobian has two nonzeros per row, but every consumer in the library
-takes it as a dense forward-difference or autodiff Jacobian, `(n + 1)` evaluations
-and `O(n^2)` memory, and solves with it densely.
+The ring's Jacobian has two nonzeros per row. Since DEQ-53 a `SparsityPattern`
+(given, or detected at the first point) lets the finite-difference and autodiff
+Jacobians difference each group of structurally orthogonal columns at once, a
+constant number of groups for the ring whatever `n`: at `n = 512` the
+finite-difference Jacobian went from 0.267 s to 2.3 ms (time slope 1.80 to 0.85),
+and the autodiff one from 1.25 s to 9.7 ms at `n = 256` (1.84 to 1.05). The array
+handed to the solve is still dense, `O(n^2)` memory.
 
 
-## Unmerged algorithms
+## Algorithms measured before they merged
+
+These two sections were measured on their branches before merge; both have since
+merged (DEQ-31 as #21, DEQ-30 as #23). Open pull requests change both again: see
+DEQ-57, DEQ-58 and DEQ-59 (quasipotential) and DEQ-61 (geodesic level sets) under
+[Before / after](#before-after).
 
 ### Quasipotential (ordered line integral method and minimum action paths)
 
-!!! note "On branch feature/deq-31-quasipotential, not yet merged"
-    `continuation/quasipotential.py` at `eea3fab`. The numbers below were
-    measured on that commit and will move if the branch changes before merge.
+Measured at `eea3fab` on the DEQ-31 branch.
 
 `M` is the number of grid points (`M = N_x N_y`, planar only), `K` the update
 radius in cells (`update_radius`, default 8), `S = |{offsets}| ~ pi K^2` the
@@ -619,8 +661,7 @@ iterations to `1e-10` at `P = 25, 50, 100, 200`), so the whole run is `O(P)`.
 
 ### Geodesic level sets (two-dimensional invariant manifolds)
 
-!!! note "On branch feature/deq-30-geodesic-level-sets, not yet merged"
-    `continuation/geodesic_level_sets.py` at `e363836`.
+Measured at `e363836` on the DEQ-30 branch.
 
 `n` is the state dimension (3 in every example), `R` the points on a ring
 (about `2 pi r / spacing` on a plane at geodesic radius `r`), `L` the number of
@@ -659,43 +700,45 @@ cause of the growing loss, but it was not verified separately.
 
 ## Findings
 
-Places where the implementation costs more, in order, than its algorithm needs.
-Each is a candidate follow-up ticket; none is fixed here.
+Places where the implementation cost more, in order, than its algorithm needs, as
+the survey found them at `4ca6382`, and what has happened to each since.
 
-| # | Where | Cost now | Cost needed | Evidence | Suggested fix |
+| # | Where | Cost then | Cost needed | Evidence (survey) | Status on `main` at `8690798` |
 |---|---|---|---|---|---|
-| 1 | `FixedStepConfig.times`, read twice per step by `EulerMaruyamaSolver`, `MilsteinSolver`, `GottwaldMelbourneSolver`, `ZhanDuanLiLiSolver` and the `srk*` driver | `O(K^2)` per path | `O(K)` | Euler-Maruyama local slope 1.85 in `K`; one `times` access 55 us at `K = 128000`; 4.0 s for 64000 steps | read `times` once before the loop, as `StochasticEnsemble.solve` already does, or cache it on the config |
-| 2 | `bialternate_determinant`, the default Hopf detector | `O(n^4)` Python calls and memory, `O(n^6)` determinant, per point | `O(n^3)` | slope 4.0 in time and memory; 0.48 s and 20 MB at `n = 48` against 0.7 ms for `eigvals`; overflow at `n = 32` | build the `O(n^3)` non-zeros with vectorised indices, or test the signed product of `lambda_i + lambda_j` from one `eigvals` |
-| 3 | `MilsteinSolver` and the Milstein `StochasticEnsemble` with diagonal noise; the Stratonovich ensemble drift | `O(n^4)` time and `O(n^3)` memory per step (times `P` in the ensemble) | `O(n C_g)`: only `(d b_i / d x_i) b_i` is non-zero | per-path local slope 3.44; ensemble 3.17 time, 2.94 memory, 12.5 s and 212 MB at `n = 32`, `P = 200`, 50 steps | a diagonal-noise path that differentiates `b_i` along `x_i` only and skips the commutativity check, which diagonal noise passes trivially |
-| 4 | `CycleContinuation._solve_seed` (also on `deq-34`) | dense forward-difference `PeriodicOrbit.solve`: `O(N^2 n C_f)` per iteration, `O((N n)^3)` least squares, `O(N^2 n^2)` memory | `O(N n C_f)` with the sparse trapezoidal Jacobian | seed slope 1.81 against 1.05 per step; seed 1.8 s against 0.15 s per step at `N = 160` | seed with `AnalyticPeriodicOrbit`, keeping the dense solver as the fallback for fields autodiff rejects |
-| 5 | `PeriodicOrbit`, `HermiteSimpsonOrbit`, `RobustPeriodicOrbit` | as in 4 | `O(N)` per iteration | slope 2.01 in time, 1.61 in memory for `N` 20-160 | `AnalyticPeriodicOrbit` already does this; give the Hermite-Simpson and robust variants the same sparse assembly |
-| 6 | `ConnectingOrbit._analytic_jacobian` | dense `zeros((rows, N n))` then `csr_matrix(dense)`: `O(N^2 n^2)` memory; `lsmr` needs about `N` iterations, `O(N^2 n^2)` time | `O(N n^2)` memory, about `O(N n^3)` with a sparse direct solve | memory slope 1.98, 165 MB at `N = 1600`, `n = 2` (2 GB at `n = 10`) | build COO triplets as `AnalyticPeriodicOrbit` does and solve with SuperLU (augmented system or sparse QR) |
-| 7 | `HomoclinicCurve` | dense forward-difference Newton: `O(N^2 n C_f)` field calls + `O((N n)^3)` per iteration | `O(N n C_f)` | slope 1.92 per iteration; 4 s per iteration at `N = 300` | the banded autodiff assembly of `connecting_orbit` |
-| 8 | `CuspCurveResidual` | both null vectors re-derived (Jacobian + 2 SVD) inside every finite-difference column: `O(n^2 C_f + n^4)` per Newton iteration | `O(n C_f + n^3)` | slope 3.28; 53 s per iteration at `n = 32` against 2.9 s for the fold curve | use `q` from the unknowns and carry `p` as unknowns, or one bordered solve |
-| 9 | `GeneralizedHopfCurveResidual` | a full order-6 center-manifold reduction in every finite-difference column: `O(n^5)` per Newton iteration | `O(n C_f + n^3)` | slope 3.93; 9 s per iteration at `n = 6` | `normal_form.first_lyapunov` with the eigenvectors in the unknowns (0.06 s against 0.79 s at `n = 8`) |
-| 10 | `matrix_noise_lyapunov` tangent-noise term | three-operand `einsum` without `optimize`: `O(K n^2 k)` with no BLAS | `O(K n^2 + n^2 k)` | 18.5 ms against 0.21 ms per step at `n = K = 64` | `np.tensordot(dW, J, 1) @ Y` (agrees to 4e-12) |
-| 11 | `stochastic_lyapunov`, `matrix_noise_lyapunov` under Ito | an `O(K n^3)` drift shift computed and multiplied by zero every step | nothing | 5.9 ms per step at `n = K = 64` | skip it when the convention factor is zero |
+| 1 | `FixedStepConfig.times`, read twice per step by `EulerMaruyamaSolver`, `MilsteinSolver`, `GottwaldMelbourneSolver`, `ZhanDuanLiLiSolver` and the `srk*` driver | `O(K^2)` per path | `O(K)` | Euler-Maruyama local slope 1.85 in `K`; one `times` access 55 us at `K = 128000` | fixed by DEQ-47 (#25): every solver reads the grid once; Euler-Maruyama CPU slope 1.76 to 1.04 |
+| 2 | `bialternate_determinant`, the default Hopf detector | `O(n^4)` Python calls and memory, `O(n^6)` determinant, per point | `O(n^3)` | slope 4.0 in time and memory; overflow at `n = 32` | fixed by DEQ-46 (#31): `bialternate_test_value`, one `eigvals`; slope 4.14 to 1.56 |
+| 3 | `MilsteinSolver` and the Milstein `StochasticEnsemble` with diagonal noise; the Stratonovich ensemble drift | `O(n^4)` time and `O(n^3)` memory per step (times `P` in the ensemble) | `O(n C_g)` | per-path local slope 3.44; ensemble 12.5 s and 212 MB at `n = 32` | fixed by DEQ-48 (#26): `O(n^2)` undeclared, `O(n)` with `diagonal_noise` |
+| 4 | `CycleContinuation._solve_seed` | dense forward-difference `PeriodicOrbit.solve` | `O(N n C_f)` | seed 1.8 s against 0.15 s per step at `N = 160` | fixed by DEQ-49 (#43): seed slope 1.97 to 0.66 |
+| 5 | `PeriodicOrbit`, `HermiteSimpsonOrbit`, `RobustPeriodicOrbit` | as in 4 | `O(N)` per iteration | slope 2.01 in time, 1.61 in memory | fixed by DEQ-49 (#43): column-grouped differences and SuperLU |
+| 6 | `ConnectingOrbit._analytic_jacobian` | dense Jacobian, `O(N^2 n^2)` memory; `lsmr` with about `N` iterations | `O(N n^2)` memory, sparse direct solve | memory slope 1.98, 165 MB at `N = 1600` | fixed by DEQ-50 (#30): memory slope 1.99 to 0.98 |
+| 7 | `HomoclinicCurve` | dense forward-difference Newton, `O(N^2 n C_f)` + `O((N n)^3)` per iteration | `O(N n C_f)` | slope 1.92 per iteration | fixed by DEQ-50 (#30): slope 2.37 to 0.87 |
+| 8 | `CuspCurveResidual` | both null vectors re-derived inside every finite-difference column, `O(n^2 C_f + n^4)` | `O(n C_f + n^3)` | slope 3.28; 53 s per iteration at `n = 32` | fixed by DEQ-51 (#37): minimally augmented, analytic state columns; 99 s to 10.6 s at `n = 32` |
+| 9 | `GeneralizedHopfCurveResidual` | an order-6 center-manifold reduction in every finite-difference column, `O(n^5)` | `O(n C_f + n^3)` | slope 3.93; 9 s per iteration at `n = 6` | fixed by DEQ-51 (#37): `first_lyapunov` on the minimally augmented Hopf system |
+| 10 | `matrix_noise_lyapunov` tangent-noise term | `einsum` without `optimize`, `O(K n^2 k)`, no BLAS | `O(K n^2 + n^2 k)` | 18.5 ms against 0.21 ms per step at `n = K = 64` | fixed by DEQ-52 (#32): `tensordot` |
+| 11 | `stochastic_lyapunov`, `matrix_noise_lyapunov` under Ito | an `O(K n^3)` drift shift multiplied by zero every step | nothing | 5.9 ms per step at `n = K = 64` | fixed by DEQ-52 (#32): skipped under Ito |
 
 Constant factors, not orders:
 
-* No Jacobian is shared within an equilibrium-continuation step: the corrector's last
-  iteration, the tangent, the branch-point and Hopf detectors and the point's
-  stability each rebuild the same dense finite-difference Jacobian, `I + 4` per
-  point where `I + 1` would do.
-* Every Jacobian in the library is dense, including for fields with `O(n)` non-zeros
-  (the coupled rings have two per row).
-* The Benettin transients do the full variational work and discard it; the
-  Fokker-Planck assembly is a Python loop per face (87-93% of 2-D runtime); Taylor
-  series products visit every term pair, including those above the order cap.
-* Gauss-Legendre (`deq-34`) evaluates the Hermite cross-check monodromy eagerly at
-  every point, about 60% of a step; computing it on first use of `floquet_error`
-  would roughly halve a trace that never asks.
-* Geodesic level sets (`deq-30`) discard a whole ring when one landing fails, which
-  makes the cost superlinear in the ring size once the spacing is fine.
-* `scene_builder._resample_by_arclength` and `_resample_by_measure` scan the branch
-  for every sample, `O(samples x points)`; `np.interp` is linear. Both sizes are in
-  the hundreds, so a build does not notice.
+* No Jacobian was shared within an equilibrium-continuation step (`I + 4` per point
+  where `I + 1` would do). Fixed by DEQ-53 (#48): `MemoizedJacobian`.
+* Every Jacobian in the library was dense, including for fields with `O(n)`
+  non-zeros. DEQ-53 (#48) adds column grouping to the continuation's
+  finite-difference and autodiff Jacobians, and DEQ-49 to the periodic orbits; the
+  arrays handed to the dense solves are still `n x n`.
+* The Benettin transients did the full variational work and discarded it: fixed by
+  DEQ-52 (#32). The Fokker-Planck assembly was a Python loop per face: batched by
+  DEQ-53 (#48). Taylor series products still visit every term pair, including those
+  above the order cap (open).
+* Gauss-Legendre evaluated the Hermite cross-check monodromy eagerly at every point:
+  since DEQ-55 (#45) it runs only when asked for, and the point's error bound comes
+  from a doubled-mesh re-solve instead.
+* Geodesic level sets discard a whole ring when one landing fails. DEQ-61 (open,
+  PR #62) retries only the failing landings; see
+  [DEQ-61](#deq-61-geodesic-level-sets-step-control).
+* `scene_builder._resample_by_arclength` and `_resample_by_measure` scanned the branch
+  for every sample, `O(samples x points)`: fixed by DEQ-53 (#48), one walk, slope
+  1.82 to 0.91 and 1.95 to 1.18.
 
-Found on the way, not a cost item: a solver appends its trajectory to the equation's
-own variables, so solving the same equation twice returns a curve holding both runs
-(see [ODE solvers](#ode-solvers)).
+Found on the way, not a cost item: a solver appended its trajectory to the equation's
+own variables, so solving the same equation twice returned a curve holding both runs.
+Fixed by DEQ-45 (#24).
