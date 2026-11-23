@@ -196,7 +196,8 @@ class TestFieldJacobians(TestCase):
         jacobians = field_jacobians(function, states, _single_jacobian(function))
         assert jacobians is not None
         expected = np.array([_single_jacobian(function)(state) for state in states])
-        np.testing.assert_array_max_ulp(jacobians, expected, maxulp=1)
+        # The nudge rounds once more inside the product: two ulps at most.
+        np.testing.assert_array_max_ulp(jacobians, expected, maxulp=2)
 
     def test_a_fractional_power_is_refused(self) -> None:
         function = _function(SnicField, 2)

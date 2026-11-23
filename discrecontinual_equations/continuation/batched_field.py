@@ -12,19 +12,26 @@ for the lot.
 :class:`_Dual` numbers, first-order jets whose value is an array over the states
 and whose derivative carries every direction at once, so one pass gives every
 column of every Jacobian. Each operation of :class:`_Dual` repeats the
-arithmetic of :class:`~.jet.Jet` at first order, in the same order, so every
-entry is the number the state-at-a-time Jacobian of :class:`~.derivative_provider.
-AutomaticDifferentiation` gives, to the last bit; likewise the values, since an
-array operation rounds each element exactly as the scalar one does.
+arithmetic of :class:`~.jet.Jet` at first order, in the same order.
+
+Both agree with the state-at-a-time evaluation *to rounding*, not to the last
+bit on every machine. An array power ``x**3`` may run NumPy's vectorised loop
+where a scalar one calls libm's ``pow``, and the two differ by an ulp on some
+CPUs (CI's runners: 2 of 200 entries, one ulp each); a platform that fuses a
+multiply and an add can do the same to the jets' complex products. On the
+machine the films are built on the two were identical over every row of five
+films. Through a forward difference, as :meth:`~.periodic_orbit.PeriodicOrbit.
+_jacobians` takes, an ulp of ``f`` becomes about ``ulp / step`` of ``df/dx``.
 
 Neither can tell in advance whether a field accepts arrays. A field that
 branches on its state (``if radius < floor``), calls :mod:`math`, or takes a
 fractional power raises, and the caller is told so by ``None`` and evaluates a
 state at a time as before. A field that silently mis-evaluates on arrays - a
 row-vector product, say - is caught by comparing the first and last states
-against the caller's own state-at-a-time evaluation, exactly: any difference
-returns ``None`` too. Two states are a spot check, not a proof, which is why
-the comparison is exact rather than to a tolerance.
+against the caller's own state-at-a-time evaluation: a difference beyond
+rounding (:data:`_SPOT_ULPS` units of the row's largest entry) returns ``None``
+too. Two states are a spot check, not a proof; a field wrong on arrays is wrong
+by far more than rounding, so the bound costs it nothing.
 """
 
 from collections.abc import Callable
@@ -37,6 +44,10 @@ from discrecontinual_equations.function.function import Function
 # What a field that cannot take arrays or duals raises on them: a comparison
 # or ``if`` on an array, a ``math`` call, a fractional power, a missing method.
 _REFUSALS = (TypeError, ValueError, AttributeError, IndexError)
+# How far a spot-checked row may sit from the state-at-a-time one, in units of
+# the row's largest entry times machine epsilon: a few ulps of rounding in a
+# vectorised loop, and of cancellation after it, but nothing a wrong field gives.
+_SPOT_ULPS = 16.0
 # Fewer states than this are evaluated one at a time: a one-element array
 # passes an ``if`` that a longer one would refuse, so it proves nothing.
 _MINIMUM_BATCH = 2
@@ -48,8 +59,9 @@ class _Dual:
     Column ``k`` of the derivative is the coefficient a :class:`~.jet.Jet`
     seeded along unit direction ``k`` would carry at first order. Every
     operation forms it exactly as the jet does, term by term and in the same
-    order, so the two agree bit for bit; the jet's skipped zero terms add a
-    zero, which changes nothing but the sign of a zero result. Like the jet,
+    order, so the two agree to rounding (bit for bit where each operation is
+    rounded on its own); the jet's skipped zero terms add a zero, which changes
+    nothing but the sign of a zero result. Like the jet,
     it has no comparisons and only integer powers.
     """
 
@@ -135,6 +147,23 @@ class _Dual:
         return result
 
 
+def _agrees(batched: np.ndarray, single: np.ndarray) -> bool:
+    """Whether a batched row is the state-at-a-time one, to rounding."""
+    batched = np.asarray(batched, dtype=float)
+    single = np.asarray(single, dtype=float)
+    if batched.shape != single.shape:
+        return False
+    finite = np.isfinite(batched) & np.isfinite(single)
+    # NaNs and infinities must sit in the same places, and match exactly.
+    if not np.array_equal(batched[~finite], single[~finite], equal_nan=True):
+        return False
+    if not finite.any():
+        return True
+    scale = max(np.max(np.abs(batched[finite])), np.max(np.abs(single[finite])))
+    bound = _SPOT_ULPS * np.finfo(float).eps * scale
+    return bool(np.all(np.abs(batched[finite] - single[finite]) <= bound))
+
+
 def _stacked(raw: object, count: int) -> np.ndarray:
     """The field's components as ``(count, components)`` floats."""
     components = [
@@ -153,7 +182,7 @@ def field_values(
     """``f`` at every row of ``states`` in one call, or ``None`` if it cannot be.
 
     ``single`` is the caller's own evaluation at one state, against which the
-    first and last rows are checked exactly.
+    first and last rows are checked to rounding (:func:`_agrees`).
     """
     count = states.shape[0]
     if count < _MINIMUM_BATCH:
@@ -165,7 +194,7 @@ def field_values(
     except _REFUSALS:
         return None
     for row in (0, count - 1):
-        if not np.array_equal(values[row], single(states[row]), equal_nan=True):
+        if not _agrees(values[row], single(states[row])):
             return None
     return values
 
@@ -180,7 +209,7 @@ def field_jacobians(
 
     The field is evaluated once on :class:`_Dual` coordinates seeded along
     every unit direction together. ``single`` is the caller's own Jacobian at
-    one state, against which the first and last are checked exactly.
+    one state, against which the first and last are checked to rounding.
     """
     count, dimension = states.shape
     if count < _MINIMUM_BATCH:
@@ -206,6 +235,6 @@ def field_jacobians(
     except _REFUSALS:
         return None
     for row in (0, count - 1):
-        if not np.array_equal(jacobians[row], single(states[row]), equal_nan=True):
+        if not _agrees(jacobians[row], single(states[row])):
             return None
     return jacobians
