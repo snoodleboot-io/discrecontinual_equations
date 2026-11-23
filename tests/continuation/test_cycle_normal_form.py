@@ -4,6 +4,7 @@ import math
 from unittest import TestCase
 
 import numpy as np
+from scipy.integrate import solve_ivp
 
 from discrecontinual_equations.continuation.cycle_normal_form import CycleNormalForm
 from tests.continuation.cycle_oracles import (
@@ -16,6 +17,8 @@ from tests.continuation.cycle_oracles import (
     Second,
     ShearedBautin,
     ShearedTakens,
+    ThetaFlip,
+    ThetaTorus,
 )
 
 
@@ -123,3 +126,62 @@ class TestTorus(TestCase):
             period,
         ).torus(omega * period)
         assert abs(sheared.real - 1.0238 / 1.19220) < 2e-3
+
+
+def _theta_cycle(field, start: tuple[float, float], period: float, intervals: int):
+    """The cycle through ``u = start[0], z = start[1]`` on ``theta = 0``, by DOP853."""
+    initial = [math.sqrt(1.0 + start[0]), 0.0, start[1]]
+    run = solve_ivp(
+        lambda _t, state: field.eval(list(state)),
+        (0.0, period),
+        initial,
+        method="DOP853",
+        rtol=1e-13,
+        atol=1e-15,
+        dense_output=True,
+    )
+    states = run.sol(np.linspace(0.0, period, intervals + 1)).T
+    states[-1] = states[0]
+    return states
+
+
+class TestIndependentReturnMap(TestCase):
+    """c and d where every term counts, against a return map built without the code.
+
+    The references are the verifier's (outputs/verification/verify-deq35):
+    the theta-flow return map by DOP853 at rtol 1e-13, its Taylor coefficients
+    by Cauchy integrals over complex initial points, its centre-manifold
+    reduction (Kuznetsov, Elements, flip and Neimark-Sacker of maps), and the
+    cycle's eigenfunction normalised as the code normalises it
+    (``int_0^T |v|^2 = 1``, from DOP853 variational equations): then
+    ``c = -C_map / T`` and ``Re d = Re(conj(lambda) c_1) / T``. The same
+    pipeline gives the extended Bautin's exact ``b`` to ten figures. Neither
+    oracle has a symmetry, and both have ``a != 0``: the flip's ``-6 a A v``
+    term is 16% of ``c``, and ``-a int <v*, A v>`` turns ``Re d`` from
+    ``+0.0022`` to ``-0.0539``.
+    """
+
+    def test_c_on_the_theta_flip(self) -> None:
+        m, u, z, period = (
+            -0.27992881012102044,
+            -0.06618157052528172,
+            -0.018106357412197554,
+            6.493169908041482,
+        )
+        field = _field(ThetaFlip, [m, -0.3], 3)
+        states = _theta_cycle(field, (u, z), period, 80)
+        c = CycleNormalForm(field, states, period).flip()
+        assert abs(c + 0.0322799670) < 2e-5 * 0.0322799670, c
+
+    def test_d_on_the_theta_torus(self) -> None:
+        m, u, z, period = (
+            0.001959370032366524,
+            -0.056907808081685746,
+            -0.0013562076192046326,
+            6.436030265065528,
+        )
+        field = _field(ThetaTorus, [m, -0.5], 3)
+        states = _theta_cycle(field, (u, z), period, 80)
+        # The critical pair's angle, from the same DOP853 monodromy.
+        d = CycleNormalForm(field, states, period).torus(2.3299304702)
+        assert abs(d.real + 0.0538821123) < 2e-5 * 0.0538821123, d

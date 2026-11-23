@@ -215,3 +215,92 @@ class ShearedTakens(DeterministicFunction):
         omega = 1.0 + RotatedTakens.E * u
         dx, dy = z * x - omega * y, z * y + omega * x
         return [dx + 2.0 * self.S * y * dy, dy, b1 + u * u + b2 * z + u * z]
+
+
+def _theta_forced(x, y, u_rate, z_rate, speed):
+    """The field with ``rho' = W U``, ``theta' = W``, ``z' = W Z``, ``u = rho - 1``."""
+    rho = x * x + y * y
+    g = speed * u_rate / (2.0 * rho)
+    return [x * g - y * speed, y * g + x * speed, speed * z_rate]
+
+
+class ThetaFlip(DeterministicFunction):
+    """A flip of cycles with no symmetry and amplitude-dependent speed.
+
+    In the angle ``theta`` the pair ``(u, z)``, ``u = rho - 1``, obeys a
+    ``2 pi``-periodic system whose linear part turns half a revolution per lap
+    (multipliers ``-exp(2 pi (m +- K))`` on the unforced circle, a flip near
+    ``m = -K``), with generic quadratic and cubic terms and a small forcing
+    that moves the cycle off the circle. The speed ``W`` depends on ``u`` and
+    ``z``, so the period varies with the amplitude and the normal form's
+    ``a`` does not vanish, as it does in any forced system. The return map to
+    ``theta = 0`` is the ``theta``-flow over ``2 pi``: no section to hit.
+    """
+
+    K = 0.3
+
+    def eval(self, point, time=None):  # noqa: ARG002 (base signature)
+        m = self.parameters[0].value
+        cubic = self.parameters[1].value
+        x, y, z = point[0], point[1], point[2]
+        u = x * x + y * y - 1.0
+        u_rate = (
+            -0.5 * z
+            + m * u
+            + self.K * (x * u + y * z)
+            + 0.05 * y
+            + 0.3 * u * u
+            - 0.4 * u * z
+            + 0.2 * x * z * z
+            + cubic * u * u * u
+            + 0.1 * y * u * u
+        )
+        z_rate = (
+            0.5 * u
+            + m * z
+            + self.K * (y * u - x * z)
+            + 0.25 * z * z
+            + 0.3 * x * u * z
+            - 0.2 * z * z * z
+            + 0.15 * u * u
+            + 0.1 * u * z * z
+        )
+        speed = 1.0 + 0.4 * u + 0.3 * z + 0.2 * x + 0.1 * y
+        return _theta_forced(x, y, u_rate, z_rate, speed)
+
+
+class ThetaTorus(DeterministicFunction):
+    """A Neimark-Sacker of cycles built as :class:`ThetaFlip`, rotating at ``W0``."""
+
+    W0 = 0.37
+
+    def eval(self, point, time=None):  # noqa: ARG002 (base signature)
+        m = self.parameters[0].value
+        cubic = self.parameters[1].value
+        x, y, z = point[0], point[1], point[2]
+        u = x * x + y * y - 1.0
+        u_rate = (
+            m * u
+            - self.W0 * z
+            + 0.1 * (x * u - y * z)
+            + 0.05 * y
+            + 0.3 * u * u
+            - 0.2 * u * z
+            + 0.4 * z * z
+            + cubic * u * u * u
+            + 0.2 * u * z * z
+            + 0.3 * x * u * u * z
+        )
+        z_rate = (
+            self.W0 * u
+            + m * z
+            + 0.1 * (y * u + x * z)
+            - 0.25 * u * u
+            + 0.35 * u * z
+            - 0.1 * z * z
+            - 0.4 * z * z * z
+            + 0.15 * u * u * z
+            + 0.2 * y * u * u
+        )
+        speed = 1.0 + 0.4 * u + 0.3 * z + 0.2 * x + 0.1 * y
+        return _theta_forced(x, y, u_rate, z_rate, speed)
