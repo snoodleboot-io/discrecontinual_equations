@@ -1067,18 +1067,20 @@ def _rotating_error_by_order(count, order):
     return float(np.max(np.abs(field.values.ravel()[inside] - exact[inside])))
 
 
+# Digests of the default march's values before the parabola existed.
+_BEFORE_PARABOLA = {
+    "double well": "53d609f28bdbacce",
+    "rotating": "3c4a880768ff0170",
+}
+
+
 class TestDefaultUpdate(TestCase):
     """OLIM-MID, as published, is the default; the parabola is opt-in.
 
     The default march must be the march before the parabola existed, bit for
-    bit: the digests below are of ``values`` from the solver on
+    bit: the digests in ``_BEFORE_PARABOLA`` are of ``values`` from the solver on
     ``feature/deq-57`` (90b9207), at radius 8 and 41 points.
     """
-
-    _BEFORE = {
-        "double well": "53d609f28bdbacce",
-        "rotating": "3c4a880768ff0170",
-    }
 
     def _fields(self):
         return {
@@ -1116,7 +1118,7 @@ class TestDefaultUpdate(TestCase):
                 .values
             )
             digest = hashlib.sha256(values.tobytes()).hexdigest()[:16]
-            assert digest == self._BEFORE[name], name
+            assert digest == _BEFORE_PARABOLA[name], name
 
 
 class TestQuadraticUpdate(TestCase):
