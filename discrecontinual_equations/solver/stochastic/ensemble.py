@@ -446,9 +446,9 @@ class StochasticEnsemble:
                 levy_area=not commuting,
             )
         else:
-            # Drawn already, without a source (or, should a source's verdict
-            # above disagree with this one, from this ensemble's own stream).
-            areas = None if commuting else self._areas.sample(increments, dt)
+            # Drawn already, for vector noise the O(paths n) form found not to
+            # commute - the verdict this one repeats - and so without a source.
+            areas = self._areas.sample(increments, dt)
         correction = 0.5 * np.einsum("pjki,pj,pk->pi", products, increments, increments)
         if self._config.calculus == "ito":
             correction -= 0.5 * dt * np.einsum("pkki->pi", products)

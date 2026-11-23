@@ -43,11 +43,15 @@ from discrecontinual_equations.solver.stochastic.wiener import (
 from tests.solver.conformal_geometric_brownian_motion import ConformalCase
 from tests.solver.geometric_brownian_motion import slope
 from tests.solver.milstein.test_diagonal_milstein import (
+    _ENSEMBLE_DIMENSION,
+    _MOST_ENSEMBLE_BYTES,
+    _PATHS,
     CrossVectorNoise,
     DeclaredDiagonalNoise,
     DiagonalMatrixNoise,
     DiagonalNoise,
     _equation,
+    _peak,
 )
 from tests.solver.milstein.test_milstein_levy_area import (
     CrossCosineNoise,
@@ -246,22 +250,24 @@ class TestPathByPathAgainstThePerPathSolver:
         # Assert
         assert np.max(np.abs(found - without)) > 1e-4
 
-    def test_non_commuting_noise_warns_about_the_cost_once(self):
+    def test_non_commuting_noise_warns_about_the_cost_once_a_solve(self):
         # Arrange
         config = MilsteinConfig(start_time=0.0, end_time=0.25, step_size=_STEP)
+        ensemble = StochasticEnsemble(config, scheme="milstein")
 
-        # Act
+        # Act: two solves of one ensemble.
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
-            StochasticEnsemble(config, scheme="milstein").solve(
-                _planar_equation(CrossCosineNoise),
-                np.array(_START),
-                paths=3,
-            )
+            for _ in range(2):
+                ensemble.solve(
+                    _planar_equation(CrossCosineNoise),
+                    np.array(_START),
+                    paths=3,
+                )
 
         # Assert
         messages = [str(w.message) for w in caught if "Levy areas" in str(w.message)]
-        assert len(messages) == 1
+        assert len(messages) == 2
         assert "euler_maruyama" in messages[0]
 
 
@@ -433,3 +439,108 @@ def test_commuting_ensembles_keep_their_bits(noise, calculus, source):
     recorded = "conformal" if noise == "conformal" else "diagonal"
     digest = hashlib.sha256(final.tobytes()).hexdigest()
     assert digest == _COMMUTING_BEFORE[(recorded, calculus, source)]
+
+
+class _NoAreas(WienerSource):
+    """A source that fails a scheme asking it for areas, counting what it gives."""
+
+    def __init__(self, channels: int) -> None:
+        self._source = GaussianWienerSource(31)
+        self._channels = channels
+
+    def increments(
+        self,
+        time: float,
+        step: float,
+        dimension: int,
+        *,
+        levy_area: bool = False,
+    ) -> WienerIncrements:
+        assert not levy_area, "a commuting step asked its source for areas"
+        return self._source.increments(time, step, dimension)
+
+
+@pytest.mark.parametrize("calculus", ["ito", "stratonovich"])
+@pytest.mark.parametrize("noise", ["conformal", "diagonal", "matrix", "declared"])
+def test_commuting_ensembles_never_ask_their_source_for_areas(noise, calculus):
+    # Arrange: the per-path solver asks only when the noise does not commute.
+    equation, start, channels = _commuting(noise)
+    config = MilsteinConfig(
+        start_time=0.0,
+        end_time=0.25,
+        step_size=_STEP,
+        calculus=calculus,
+    )
+
+    # Act
+    final = (
+        StochasticEnsemble(config, scheme="milstein", wiener=_NoAreas(channels))
+        .solve(equation, np.array(start), paths=3)
+        .final
+    )
+
+    # Assert
+    assert np.all(np.isfinite(final))
+
+
+class _CountedDeclaredNoise(DeclaredDiagonalNoise):
+    """Declared diagonal noise counting its batched diffusion evaluations."""
+
+    batches = 0
+
+    def diffusion_batch(
+        self,
+        points: np.ndarray,
+        time: float | None = None,
+    ) -> np.ndarray:
+        type(self).batches += 1
+        return super().diffusion_batch(points, time)
+
+
+@pytest.mark.parametrize("dimension", [3, 12])
+def test_declared_noise_with_a_source_costs_what_it_does_without(dimension):
+    # Arrange: deciding whether to ask a source for areas must not read the
+    # 2 n slopes a declaration spares.
+    config = MilsteinConfig(
+        start_time=0.0,
+        end_time=4 * _STEP,
+        step_size=_STEP,
+        random_seed=3,
+    )
+    counts = []
+
+    # Act
+    for wiener in (None, GaussianWienerSource(3)):
+        _CountedDeclaredNoise.batches = 0
+        StochasticEnsemble(config, scheme="milstein", wiener=wiener).solve(
+            _equation(_CountedDeclaredNoise, dimension),
+            np.linspace(0.5, 1.5, dimension),
+            paths=3,
+        )
+        counts.append(_CountedDeclaredNoise.batches)
+
+    # Assert
+    assert counts[1] == counts[0]
+
+
+def test_a_commuting_vector_ensemble_with_a_source_holds_no_cubic_array():
+    # Arrange: asking a source whether to give areas is decided by the
+    # O(paths n) verdict, not the (paths, n, n, n) products of the general step.
+    config = MilsteinConfig(
+        start_time=0.0,
+        end_time=2 * _STEP,
+        step_size=_STEP,
+    )
+    equation = _equation(DiagonalNoise, _ENSEMBLE_DIMENSION)
+    start = np.linspace(0.5, 1.5, _ENSEMBLE_DIMENSION)
+    ensemble = StochasticEnsemble(
+        config,
+        scheme="milstein",
+        wiener=GaussianWienerSource(5),
+    )
+
+    # Act
+    peak = _peak(lambda: ensemble.solve(equation, start, paths=_PATHS))
+
+    # Assert
+    assert peak < _MOST_ENSEMBLE_BYTES
