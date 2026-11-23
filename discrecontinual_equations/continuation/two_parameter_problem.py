@@ -26,7 +26,7 @@ _PLANAR_DIMENSION = 2
 class CurveDecoded:
     """The original-system quantities decoded from an augmented curve point."""
 
-    __slots__ = ["omega", "parameter_a", "parameter_b", "state"]
+    __slots__ = ["null_vector", "omega", "parameter_a", "parameter_b", "state"]
 
     def __init__(
         self,
@@ -34,11 +34,14 @@ class CurveDecoded:
         parameter_a: float,
         parameter_b: float,
         omega: float | None,
+        null_vector: np.ndarray | None = None,
     ) -> None:
         self.state = state
         self.parameter_a = parameter_a
         self.parameter_b = parameter_b
         self.omega = omega
+        # The curve's own null vector, continuous along it (a fold curve's q).
+        self.null_vector = null_vector
 
 
 class TwoParameterProblem:
