@@ -14,6 +14,7 @@ perturbation of Section 4.2, and the stable law of Section 2.1.
 # ruff: noqa: SLF001
 
 import decimal
+import itertools
 import math
 
 import numpy as np
@@ -254,6 +255,26 @@ class TestTheClock:
 
         assert function.times == pytest.approx([0.0, 0.01, 0.02, 0.03], abs=1e-12)
 
+    def test_the_drift_time_starts_at_the_start_time(self):
+        # t_n = t_0 + n ε, not n ε: a path started at t_0 = 0.5 sees its own times.
+        function = _Linear(drift_constant=1.0, sigma=0.0)
+        config = _config(
+            start_time=0.5,
+            step_size=0.015,
+            epsilon=0.01,
+            end_time=0.53,
+        )
+
+        last = config.times[-1]
+
+        GottwaldMelbourneSolver(config).solve(_equation(function), [0.0])
+
+        # Assert: 0.5, 0.51, ... up to the last fast step before the last node.
+        steps = math.floor(round((last - 0.5) / 0.01, 9))
+        expected = [0.5 + 0.01 * n for n in range(steps)]
+        assert len(expected) >= 3
+        assert function.times == pytest.approx(expected, abs=1e-12)
+
 
 class TestTheSign:
     """χ: a fresh δ on each entry to Y = (x*, 1] signs that whole excursion."""
@@ -276,6 +297,47 @@ class TestTheSign:
         assert down.results[0].discretization == [
             -value for value in up.results[0].discretization
         ]
+
+    def test_each_hyperbolic_step_carries_the_sign_drawn_on_entering(self):
+        # Proof of Theorem 4.1: V(y, ±1) = ±(ṽ(y) + (τ - 1)) η d_α^-γ (...)^-γ, so
+        # the step in (x*, 1] carries its own excursion's δ, as do the laminar
+        # steps after it; signing it with the previous excursion's δ is a
+        # different scheme.
+        # Seed 2's orbit enters (x*, 1] a few hundred times in 1000 steps.
+        solver = GottwaldMelbourneSolver(
+            _config(beta=0.0, epsilon=0.001, random_seed=2),
+        )
+        events: list[tuple[str, float, int]] = []
+        draws = iter([1, -1] * 10_000)
+        observable = solver._compute_observable
+
+        def draw():
+            sign = next(draws)
+            events.append(("draw", 0.0, sign))
+            return sign
+
+        def observe(x, chi):
+            events.append(("observe", x, chi))
+            return observable(x, chi)
+
+        solver._draw_sign = draw
+        solver._compute_observable = observe
+
+        solver.solve(_equation(_Linear()), [0.0])
+
+        # Assert: one draw for x_0's excursion, then one per entry to (x*, 1].
+        assert events[0][0] == "draw"
+        hyperbolic = 0
+        last_sign = events[0][2]
+        for previous, (kind, x, sign) in itertools.pairwise(events):
+            if kind == "draw":
+                last_sign = sign
+                continue
+            if x > solver._x_star:
+                hyperbolic += 1
+                assert previous == ("draw", 0.0, sign)
+            assert sign == last_sign
+        assert hyperbolic > 0
 
 
 class TestTheFastState:
