@@ -787,7 +787,12 @@ class CyclePoint:
         43 times on those cycles. Both sources are
         fourth order - the error fell 15.8-15.9 times per doubling of the
         nodes from two turns up - so the doubled mesh's gap sees both, and
-        twice it is the bound ``_DOUBLING_SAFETY`` derives.
+        twice it is the bound ``_DOUBLING_SAFETY`` derives. On that cascade at
+        1 to 16 turns and 40 to 160 nodes a turn (45 cycles) it never read
+        low, and read 1.11 to 2.3 times the true error, median 1.87. On the
+        verifier's grid below under Hermite-Simpson (182 cycles) it read low
+        on 6, all cycles wrong in the leading digit (true errors 0.79 to 773)
+        and all refused; no cycle above the default gate passed.
 
         Under Gauss-Legendre collocation the trivial multiplier stops being a
         measure, and the point carries its error explicitly instead. Those
