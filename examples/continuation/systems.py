@@ -223,6 +223,29 @@ class FoldCycles(DeterministicFunction):
         return [growth * x - y, x + growth * y]
 
 
+# How fast the rotated Takens system's angle runs with its radius: nonzero so
+# that the period depends on the cycle, as a generic fold of cycles needs.
+_ROTATION_SHEAR = 0.3
+
+
+class RotatedTakens(DeterministicFunction):
+    """A Bogdanov-Takens unfolding in ``(u, z)``, ``u = x^2 + y^2 - 1``, turned about z.
+
+    ``u' = 2 (1 + u) z``, ``z' = b1 + u^2 + b2 z + u z``, the angle advancing at
+    ``1 + 0.3 u``: the cycles are the planar system's equilibria, so the fold of
+    cycles is ``b1 = 0`` and the torus curve ``b1 = -b2^2``, meeting at a 1:1
+    resonance at the origin.
+    """
+
+    def eval(self, point, time=None):  # noqa: ARG002
+        b1 = self.parameters[0].value
+        b2 = self.parameters[1].value
+        x, y, z = point[0], point[1], point[2]
+        u = x * x + y * y - 1.0
+        omega = 1.0 + _ROTATION_SHEAR * u
+        return [z * x - omega * y, z * y + omega * x, b1 + u * u + b2 * z + u * z]
+
+
 class Hopf(DeterministicFunction):
     """Planar Hopf normal form; a Hopf bifurcation at mu = 0."""
 

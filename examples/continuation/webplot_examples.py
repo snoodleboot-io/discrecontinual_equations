@@ -107,6 +107,7 @@ try:  # python -m examples.continuation.webplot_examples
     from examples.continuation.pages_cycles import (
         _adaptive_mesh,
         _collocation_convergence,
+        _cycle_codim2,
         _deflated_roots,
         _fold_of_cycles_branch,
         _limit_cycle_branch,
@@ -116,6 +117,7 @@ except ImportError:  # run as a script path: only this directory is on sys.path
     from pages_cycles import (
         _adaptive_mesh,
         _collocation_convergence,
+        _cycle_codim2,
         _deflated_roots,
         _fold_of_cycles_branch,
         _limit_cycle_branch,
@@ -246,6 +248,8 @@ _EQUATIONS = {
     r"\dot{y} = x + \mu y - y(x^2+y^2)",
     "limit_cycle_branch.html": r"\dot{r} = \mu r - r^3,\quad r_{\max} = \sqrt{\mu}",
     "fold_of_cycles_branch.html": r"\dot{r} = \mu r + r^3 - r^5",
+    "cycle_codim2.html": r"\dot{u} = 2(1+u) z,\quad \dot{z} = \beta_1 + u^2 "
+    r"+ \beta_2 z + u z,\quad \dot\theta = 1 + 0.3 u,\quad u = r^2 - 1",
     "dynamical_bifurcation.html": r"\dot{x} = \mu x - y,\quad \dot{y} = x + \mu y",
     "collocation_convergence.html": r"\dot{x}=\mu x - y - x r^2,\ "
     r"\dot{y}=x+\mu y - y r^2",
@@ -315,6 +319,7 @@ def _raw_catalogue() -> list[tuple[str, Scene]]:
         ("hopf.html", _hopf()),
         ("limit_cycle_branch.html", _limit_cycle_branch()),
         ("fold_of_cycles_branch.html", _fold_of_cycles_branch()),
+        ("cycle_codim2.html", _cycle_codim2()),
         ("dynamical_bifurcation.html", _dynamical_bifurcation()),
         ("collocation_convergence.html", _collocation_convergence()),
         ("deflated_roots.html", _deflated_roots()),

@@ -74,6 +74,12 @@ from discrecontinual_equations.continuation.covariant_lyapunov import (
     covariant_lyapunov_vectors,
     stochastic_finite_time_exponents,
 )
+from discrecontinual_equations.continuation.cycle_codim2 import (
+    CycleCodim2Point,
+    CycleCurve,
+    CycleCurveContinuation,
+    CycleCurvePoint,
+)
 from discrecontinual_equations.continuation.cycle_continuation import (
     CycleBifurcation,
     CycleContinuation,
@@ -83,6 +89,7 @@ from discrecontinual_equations.continuation.cycle_continuation import (
     classify_transition,
     resolved_branch,
 )
+from discrecontinual_equations.continuation.cycle_normal_form import CycleNormalForm
 from discrecontinual_equations.continuation.deflation import (
     DeflatedSolver,
     DeflationSettings,
@@ -254,7 +261,12 @@ __all__ = [
     "CuspNormalForm",
     "CycleAttractor",
     "CycleBifurcation",
+    "CycleCodim2Point",
     "CycleContinuation",
+    "CycleCurve",
+    "CycleCurveContinuation",
+    "CycleCurvePoint",
+    "CycleNormalForm",
     "CyclePoint",
     "CycleSeed",
     "CycleSpectrum",
