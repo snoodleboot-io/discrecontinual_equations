@@ -177,9 +177,10 @@ class TestResidualIsReported(TestCase):
         assert residual.largest == pytest.approx(np.max(np.abs(defects)), rel=1e-12)
         # The trapezoidal rule's local truncation error, h^3 |x'''| / 12, read
         # from third differences of the path.
+        # With the safety factor 2 and the Newton tolerance 1e-9 as a floor.
         third = np.max(np.abs(np.diff(solution.states, 3, axis=0))) / 12.0
-        assert residual.tolerance == pytest.approx(third, rel=1e-12)
-        # Measured: 1.9e-3 against a tolerance of 3.0e-5.
+        assert residual.tolerance == pytest.approx(2.0 * third + 1.0e-9, rel=1e-12)
+        # Measured: 1.9e-3 against a tolerance of 6.0e-5.
         assert residual.largest > 10.0 * residual.tolerance
         assert not residual.is_trajectory
 
@@ -196,6 +197,85 @@ class TestResidualIsReported(TestCase):
             rel=1e-6,
             abs=1e-15,
         )
+
+
+def _gh_plane_orbit(mesh: MeshSpec, times: np.ndarray) -> np.ndarray:
+    """GH ``xi1 -> xi2`` shot with Radau in the x1x2 plane, at the mesh's phase.
+
+    ``x_k' = x_k (1 + A x^2)`` restricted to the plane, with ``a1 = -1``,
+    ``a2 = -1.5`` and ``a3 = -0.6``; it leaves xi1 along x2 from ``1e-12``.
+    """
+    block = np.array([[-1.0, -1.5], [-0.6, -1.0]])
+    solution = solve_ivp(
+        lambda _time, x: x * (1.0 + block @ (x * x)),
+        (0.0, 250.0),
+        np.array([1.0, 1.0e-12]),
+        method="Radau",
+        rtol=1.0e-13,
+        atol=1.0e-16,
+        dense_output=True,
+    )
+
+    def phase(time: float) -> float:
+        return float(solution.sol(time)[mesh.phase_index] - mesh.phase_value)
+
+    low, high = 0.0, 250.0
+    for _ in range(100):
+        middle = 0.5 * (low + high)
+        if phase(middle) > 0.0:  # x1 still above its midpoint: not yet there
+            low = middle
+        else:
+            high = middle
+    centre = 0.5 * (low + high)
+    assert centre + times[0] > 0.0
+    assert centre + times[-1] < 250.0
+    return np.column_stack([solution.sol(centre + times).T, np.zeros(len(times))])
+
+
+class TestResidualIsCheckedPerInterval(TestCase):
+    """Each interval's residual is held to its own truncation error, with margin.
+
+    Read against the largest third difference anywhere, a defect near a saddle -
+    where the third derivative is 50 to 250 times smaller than mid-transition -
+    passes when it is as large as the whole orbit's error estimate. And the exact
+    orbit, sampled, leaves a residual 1.005 to 1.24 times ``max |D^3 x| / 12``, so
+    without a safety factor the test refuses the orbit it is meant to accept.
+    """
+
+    def _solver(self, intervals: int):
+        network, connection = _leak_network(0.0)
+        source, target = network.saddle("xi1"), network.saddle("xi2")
+        mesh = network.mesh(connection, half_length=20.0, intervals=intervals)
+        solver = HeteroclinicOrbit(
+            network.function,
+            Terminus(source.equilibrium, source.jacobian),
+            Terminus(target.equilibrium, target.jacobian),
+            mesh,
+        )
+        return network, connection, mesh, solver
+
+    def test_the_exact_orbit_sampled_on_the_mesh_is_a_trajectory(self):
+        for intervals in (25, 200):
+            _, _, mesh, solver = self._solver(intervals)
+            times = np.linspace(-20.0, 20.0, intervals + 1)
+            exact = OrbitSolution(times, _gh_plane_orbit(mesh, times))
+            residual = solver.collocation_residual(exact)
+            # Measured: residual / (max |D^3 x| / 12) = 1.24 at h = 1.6 and
+            # 1.005 at h = 0.2; against the per-interval allowance, 0.62 and 0.50.
+            assert residual.is_trajectory
+
+    def test_a_defect_near_a_saddle_is_refused_where_it_is(self):
+        network, connection, mesh, solver = self._solver(200)
+        orbit = network.solve(connection, mesh)
+        times = orbit.solution.times
+        for centre in (-12.0, 12.0):
+            bumped = orbit.solution.states.copy()
+            bumped[:, 2] += 1.0e-5 * np.exp(-((times - centre) ** 2))
+            residual = solver.collocation_residual(OrbitSolution(times, bumped))
+            # The largest defect is far under the whole path's tolerance, but
+            # not under what its own interval's truncation error allows.
+            assert residual.largest < 0.1 * residual.tolerance
+            assert not residual.is_trajectory
 
 
 class TestLeakingPlaneIsRefused(TestCase):
