@@ -334,3 +334,25 @@ class TestEstimateIsInFullCoordinates(TestCase):
         )
         own = coarse.estimate_orbit_error(orbit.solution).discretisation
         assert own == pytest.approx(shift, rel=1e-6)
+
+
+class TestSaddlesMustLieInTheSubspace(TestCase):
+    """The subspace solve projects each saddle into the plane; it must already be there.
+
+    Kirk-Silber's x2x3 plane is invariant for the flow and for the Jacobian at
+    both xi2 and xi4, and the margin of ``xi2 -> xi4`` in it is positive (0.7),
+    so neither existing check rejects it. But xi4 = e4 is not in the plane: the
+    reduced problem's target would be ``B^T xi4 = 0``. Before this check the solve
+    was refused only by accident, on a residual of 0.15, with the wrong reason
+    ("the flow leaves the subspace").
+    """
+
+    def test_a_plane_that_misses_a_saddle_is_rejected_when_added(self):
+        interaction = _kirk_silber_interaction(_KIRK_SILBER)
+        network = HeteroclinicNetwork(reflection_cubic(np.ones(4), interaction))
+        for index in range(4):
+            network.add_saddle(f"xi{index + 1}", np.eye(4)[index])
+        with pytest.raises(ValueError, match="does not contain the saddle 'xi4'"):
+            network.add_connection("xi2", "xi4", coordinate_plane(4, (1, 2)))
+        # The plane that does contain both is still accepted.
+        network.add_connection("xi2", "xi4", coordinate_plane(4, (1, 3)))
