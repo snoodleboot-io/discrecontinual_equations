@@ -71,6 +71,24 @@ class _Smallest(DeterministicFunction):
         return [y, -x.min()]
 
 
+class _OneUlpOff(DeterministicFunction):
+    """Right on arrays to rounding, as a SIMD loop is: one ulp off the scalar.
+
+    Batched, every value (and, on duals, every derivative) is nudged by one
+    unit in the last place - what a vectorised ``x**3`` gives against libm's
+    ``pow`` on some CPUs. Evaluated a state at a time it is exact.
+    """
+
+    def eval(self, point, time=None):  # noqa: ARG002 (base signature)
+        x, y = point[0], point[1]
+        if isinstance(x, np.ndarray):
+            return [np.nextafter(y * x, np.inf), np.nextafter(-x, np.inf)]
+        if hasattr(x, "derivative"):
+            nudge = float(np.nextafter(1.0, 2.0))
+            return [y * x * nudge, -x * nudge]
+        return [y * x, -x]
+
+
 def _function(kind: type, dimension: int, value: float = 0.3) -> DeterministicFunction:
     return kind(
         variables=[State() for _ in range(dimension)],
@@ -132,6 +150,16 @@ class TestFieldValues(TestCase):
         # Right in the first row, which holds the smallest x; wrong after it.
         assert field_values(function, states, _single_values(function)) is None
 
+    def test_a_one_ulp_difference_is_not_refused(self) -> None:
+        # The spot check is for fields that are wrong on arrays, not for the
+        # last place a vectorised loop may round differently in.
+        function = _function(_OneUlpOff, 2)
+        states = _states(9, 2)
+        values = field_values(function, states, _single_values(function))
+        assert values is not None
+        expected = np.array([_single_values(function)(state) for state in states])
+        np.testing.assert_array_max_ulp(values, expected, maxulp=1)
+
     def test_one_state_is_left_to_the_caller(self) -> None:
         function = _function(HopfField, 2)
         assert field_values(function, _states(1, 2), _single_values(function)) is None
@@ -161,6 +189,14 @@ class TestFieldJacobians(TestCase):
                 shift[j] = step
                 column = (values(state + shift) - values(state - shift)) / (2 * step)
                 np.testing.assert_allclose(jacobian[:, j], column, rtol=1e-7, atol=1e-8)
+
+    def test_a_one_ulp_difference_is_not_refused(self) -> None:
+        function = _function(_OneUlpOff, 2)
+        states = _states(9, 2)
+        jacobians = field_jacobians(function, states, _single_jacobian(function))
+        assert jacobians is not None
+        expected = np.array([_single_jacobian(function)(state) for state in states])
+        np.testing.assert_array_max_ulp(jacobians, expected, maxulp=1)
 
     def test_a_fractional_power_is_refused(self) -> None:
         function = _function(SnicField, 2)
