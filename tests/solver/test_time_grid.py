@@ -350,5 +350,7 @@ def test_the_drift_is_evaluated_at_the_grids_own_nodes(
         expected = expected[:-1]
     if nodes == _FAST:
         fast_steps = round((grid["end_time"] - grid["start_time"]) / extra["epsilon"])
-        expected = [grid["start_time"] + n * extra["epsilon"] for n in range(fast_steps)]
+        expected = [
+            grid["start_time"] + n * extra["epsilon"] for n in range(fast_steps)
+        ]
     assert sorted(set(_Recording.times)) == expected

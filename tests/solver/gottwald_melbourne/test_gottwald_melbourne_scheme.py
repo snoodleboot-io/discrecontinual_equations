@@ -9,6 +9,10 @@ constants (2.2), (2.4), (2.5) and the observable of Section 4.1, the clock
 perturbation of Section 4.2, and the stable law of Section 2.1.
 """
 
+# The scheme's pieces are checked one at a time, so the tests read the solver's
+# private constants and steps.
+# ruff: noqa: SLF001
+
 import decimal
 import math
 
@@ -18,10 +22,10 @@ import pytest
 from discrecontinual_equations.differential_equation import DifferentialEquation
 from discrecontinual_equations.function.stochastic import StochasticFunction
 from discrecontinual_equations.parameter import Parameter
-from discrecontinual_equations.solver.stochastic.gottwald_melbourne.gottwald_melbourne_config import (
+from discrecontinual_equations.solver.stochastic.gottwald_melbourne.gottwald_melbourne_config import (  # noqa: E501
     GottwaldMelbourneConfig,
 )
-from discrecontinual_equations.solver.stochastic.gottwald_melbourne.gottwald_melbourne_solver import (
+from discrecontinual_equations.solver.stochastic.gottwald_melbourne.gottwald_melbourne_solver import (  # noqa: E501
     GottwaldMelbourneSolver,
 )
 from discrecontinual_equations.variable import Variable
@@ -193,7 +197,6 @@ class TestTheConstants:
             )
             expected = image % 1.0
             assert solver._thaler_map(float(x)) == pytest.approx(expected, abs=1e-12)
-
 
     @pytest.mark.parametrize("alpha", _ALPHAS)
     @pytest.mark.parametrize("x", [1e-9, 1e-7, 1e-5])
