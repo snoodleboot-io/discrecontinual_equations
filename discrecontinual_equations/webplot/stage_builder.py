@@ -16,7 +16,6 @@ from collections.abc import Callable, Sequence
 from itertools import pairwise
 
 import numpy as np
-from scipy.integrate import solve_ivp
 
 from discrecontinual_equations.continuation.branch import Branch
 from discrecontinual_equations.continuation.continuation_point import ContinuationPoint
@@ -31,6 +30,7 @@ from discrecontinual_equations.continuation.manifold import (
     UnstableManifold,
 )
 from discrecontinual_equations.differential_equation import DifferentialEquation
+from discrecontinual_equations.webplot.manifold_flow import flow_branches
 from discrecontinual_equations.webplot.stage import (
     BranchPoint,
     Cycle,
@@ -332,16 +332,17 @@ def _frame_manifolds(
     can project it again in another plane. A planar system's branch is already
     in the plane, so it carries nothing extra.
     """
-    manifolds: list[Manifold] = []
+    starts: list[_Start] = []
     for item in equilibria:
         if item.stability != "saddle":
             continue
         state = np.array(item.state) if view else np.array([item.x, item.y])
-        for branch in saddle_manifolds(function, state, bounds, settings):
-            branch.points = [_plane(point, view) for point in branch.curve]
-            if view is None:
-                branch.curve = []
-            manifolds.append(branch)
+        starts.extend(_manifold_starts(function, state, settings))
+    manifolds = _carried(function, starts, bounds, settings)
+    for branch in manifolds:
+        branch.points = [_plane(point, view) for point in branch.curve]
+        if view is None:
+            branch.curve = []
     return manifolds
 
 
@@ -404,8 +405,23 @@ def saddle_manifolds(
     and what a caller with a view replaces by projecting ``curve``.
     """
     settings = settings or StageSettings()
+    starts = _manifold_starts(function, equilibrium, settings)
+    return _carried(function, starts, bounds, settings)
+
+
+# A branch to draw before it is drawn: its kind, its start on the chart, and
+# whether it is carried forward (unstable) or backward (stable) in time.
+_Start = tuple[str, np.ndarray, bool]
+
+
+def _manifold_starts(
+    function,
+    equilibrium: np.ndarray,
+    settings: StageSettings,
+) -> list[_Start]:
+    """Where each branch of each drawable manifold of ``equilibrium`` starts."""
     jacobian = _jacobian(function, equilibrium)
-    manifolds: list[Manifold] = []
+    branches: list[_Start] = []
     for kind, selection, forward in (
         ("unstable", UnstableManifold(), True),
         ("stable", StableManifold(), False),
@@ -437,11 +453,39 @@ def saddle_manifolds(
             # Three dimensions or more: a fan through a ring would sample one
             # arbitrary plane of it and read as a surface it is not.
             continue
-        for start in starts:
-            states = _flow(function, start, bounds, settings, forward)
-            branch = Manifold(name, [(state[0], state[1]) for state in states])
-            branch.curve = states
-            manifolds.append(branch)
+        branches.extend((name, start, forward) for start in starts)
+    return branches
+
+
+def _carried(
+    function,
+    starts: Sequence[_Start],
+    bounds: Sequence[tuple[float, float]],
+    settings: StageSettings,
+) -> list[Manifold]:
+    """Every start carried along the flow until it leaves ``bounds``, together.
+
+    ``bounds`` is one range per coordinate - the plane box for a planar system,
+    the view's own ranges for one seen in projection - and each branch is
+    returned unprojected so the page can draw it in whichever plane it is
+    showing. The branches are stepped as one array (see
+    :mod:`~.manifold_flow`), which is what a per-branch ``solve_ivp`` would
+    draw, to rounding, for a fraction of the interpreter's time.
+    """
+    curves = flow_branches(
+        function,
+        [start for _, start, _ in starts],
+        [1.0 if forward else -1.0 for _, _, forward in starts],
+        bounds,
+        settings.manifold_time,
+        _BOX_MARGIN,
+        _MANIFOLD_SAMPLES,
+    )
+    manifolds = []
+    for (name, _, _), states in zip(starts, curves, strict=True):
+        branch = Manifold(name, [(state[0], state[1]) for state in states])
+        branch.curve = states
+        manifolds.append(branch)
     return manifolds
 
 
@@ -605,48 +649,6 @@ def _eigenvector(jacobian: np.ndarray, selection: ManifoldSelection) -> np.ndarr
     index = int(np.argmax(np.where(wanted, np.abs(values.real), -np.inf)))
     vector = np.real(vectors[:, index])
     return vector / np.linalg.norm(vector)
-
-
-def _flow(
-    function,
-    start: np.ndarray,
-    bounds: Sequence[tuple[float, float]],
-    settings: StageSettings,
-    forward: bool,  # noqa: FBT001 (a direction, not a mode switch)
-) -> list[list[float]]:
-    """Carry ``start`` along the flow until it leaves ``bounds``, in full state.
-
-    ``bounds`` is one range per coordinate - the plane box for a planar system,
-    the view's own ranges for one seen in projection - and the branch is
-    returned unprojected so the page can draw it in whichever plane it is
-    showing.
-    """
-    sense = 1.0 if forward else -1.0
-
-    def rhs(_t, state):
-        values = function.eval(point=[float(v) for v in state], time=None)
-        return [sense * float(v) for v in values]
-
-    def leaving(_t, state):
-        return min(
-            margin
-            for value, (lo, hi) in zip(state, bounds, strict=True)
-            for margin in (value - (lo - _BOX_MARGIN), (hi + _BOX_MARGIN) - value)
-        )
-
-    leaving.terminal = True
-    solution = solve_ivp(
-        rhs,
-        [0.0, settings.manifold_time],
-        start,
-        rtol=1.0e-8,
-        atol=1.0e-10,
-        events=leaving,
-        max_step=0.05,
-        dense_output=True,
-    )
-    times = np.linspace(0.0, solution.t[-1], _MANIFOLD_SAMPLES)
-    return [[float(v) for v in state] for state in solution.sol(times).T]
 
 
 def _plane(state: Sequence[float], view: View | None) -> tuple[float, float]:
