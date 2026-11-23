@@ -127,5 +127,11 @@ def variational_drift_shift(jacobians: np.ndarray, factor: float) -> np.ndarray:
     The two shifts are the same sum over drivers seen from the state and from the
     tangent frame, and they must come from the same convention factor or the exponent
     and the density would be reported for two different systems.
+
+    The ``K`` squares are taken as one batched ``matmul`` and then summed. A
+    two-operand ``einsum`` runs the sum as a loop without BLAS, four times slower at
+    ``n = K = 64``. Folding the sum into one ``(n x Kn) (Kn x n)`` product is no
+    faster on one thread, and on a loaded machine its long inner dimension makes
+    OpenBLAS start threads that measured up to 25 times slower than the loop.
     """
-    return factor * np.einsum("kij,kjl->il", jacobians, jacobians)
+    return factor * np.matmul(jacobians, jacobians).sum(axis=0)
