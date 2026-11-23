@@ -17,6 +17,7 @@ from discrecontinual_equations.continuation.derivative_provider import (
     DerivativeProvider,
 )
 from discrecontinual_equations.continuation.focal import PlanarLyapunov
+from discrecontinual_equations.continuation.jet import Jet
 from discrecontinual_equations.differential_equation import DifferentialEquation
 
 _PLANAR_DIMENSION = 2
@@ -113,6 +114,50 @@ class TwoParameterProblem:
             self._time,
         )
 
+    def joint_taylor(
+        self,
+        state: np.ndarray,
+        direction: np.ndarray,
+        order: int,
+        parameter_a: float,
+        parameter_b: float,
+    ) -> list[np.ndarray]:
+        """Taylor coefficients of ``f`` along a direction in state *and* parameters.
+
+        ``direction`` has the state components followed by the two active
+        parameters. The parameters are seeded with jets as well, so this is always
+        automatic differentiation, whatever provider the problem was built with:
+        the parameter-dependent normal forms need mixed derivatives such as
+        ``f_{u p}`` exactly. The parameters are restored to ``(p_a, p_b)`` after.
+        """
+        size = len(state)
+        seeds = [
+            Jet.seed(complex(state[i]), complex(direction[i]), order)
+            for i in range(size)
+        ]
+        values = (parameter_a, parameter_b)
+        try:
+            for parameter, value, step in zip(
+                (self._first, self._second),
+                values,
+                direction[size : size + _PLANAR_DIMENSION],
+                strict=True,
+            ):
+                # A jet stands in for the float while the field is evaluated, so
+                # the parameter's derivatives come out of the same pass.
+                parameter.value = Jet.seed(complex(value), complex(step), order)  # type: ignore[assignment]
+            # Fields are written over floats but evaluate on jets unchanged.
+            raw = self._equation.derivative.eval(
+                point=seeds,  # type: ignore[arg-type]
+                time=self._time,
+            )
+        finally:
+            self._activate(parameter_a, parameter_b)
+        return [
+            np.array([_jet_coefficient(entry, degree) for entry in raw], dtype=complex)
+            for degree in range(order + 1)
+        ]
+
     def state_jacobian(
         self,
         state: np.ndarray,
@@ -166,3 +211,9 @@ class TwoParameterProblem:
             jacobian,
             self._time,
         )
+
+
+def _jet_coefficient(entry: Jet | complex, degree: int) -> complex:
+    if isinstance(entry, Jet):
+        return complex(entry.coefficients[degree])
+    return complex(entry) if degree == 0 else 0j

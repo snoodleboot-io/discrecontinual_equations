@@ -22,6 +22,7 @@ import numpy as np
 from pydantic import BaseModel, ConfigDict, Field
 
 from discrecontinual_equations.continuation.branch import Branch
+from discrecontinual_equations.continuation.codim2_normal_form import classify
 from discrecontinual_equations.continuation.normal_form import (
     cusp_coefficient,
     first_lyapunov,
@@ -51,6 +52,14 @@ class Codim2Point(BaseModel):
     eigenvalues: list[tuple[float, float]] = Field(
         default_factory=list,
         description="Original-system eigenvalues as (real, imaginary) pairs",
+    )
+    classification: str | None = Field(
+        default=None,
+        description="Case by normal-form coefficient sign, e.g. 's=-1' or 'simple'",
+    )
+    coefficients: dict[str, float] = Field(
+        default_factory=dict,
+        description="The normal-form coefficients the classification rests on",
     )
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -264,6 +273,13 @@ class Codim2Analyzer:
         if lower.omega is not None and upper.omega is not None:
             omega = lower.omega + fraction * (upper.omega - lower.omega)
         eigenvalues = problem.eigenvalues(state, parameter_a, parameter_b)
+        classification, coefficients = classify(
+            kind,
+            problem,
+            state.real,
+            parameter_a,
+            parameter_b,
+        )
         return Codim2Point(
             kind=kind,
             parameter_a=parameter_a,
@@ -273,4 +289,6 @@ class Codim2Analyzer:
             eigenvalues=[
                 (float(value.real), float(value.imag)) for value in eigenvalues
             ],
+            classification=classification,
+            coefficients=coefficients,
         )
