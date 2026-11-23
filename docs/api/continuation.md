@@ -400,13 +400,17 @@ used to ask one state at a time, the Jacobian through Taylor jets one direction
 at a time. `batched_field` hands the field every coordinate as an array of all the
 states, and for the Jacobian first-order dual numbers that carry every direction
 at once. Each dual operation repeats the jet's arithmetic term for term, so the
-Jacobians are the jets' to the last bit and every traced orbit is unchanged bit
-for bit. A field that branches on its state (the SNIC film's `if radius <`),
+Jacobians are the jets', and the values a state at a time's, to rounding: on the
+machine the films are built on they were identical over every row of five
+films, but NumPy may take an array's `x**3` by a vectorised loop where a scalar
+calls libm's `pow`, and on CI's runners the two differ by an ulp. A field that branches on its state (the SNIC film's `if radius <`),
 calls `math`, or takes a fractional power raises on arrays and is evaluated a
-state at a time as before; a field that silently mis-evaluates is caught by an
-exact comparison at the first and last states. The monodromy builds all its RK4
-substep propagators at once and multiplies them, which moves the multipliers by
-rounding only (`6.7e-16` on the Hopf cycle).
+state at a time as before; a field that silently mis-evaluates is caught by
+comparing the first and last states to a state at a time, to within 16 ulps of
+the row's scale. The monodromy builds all its RK4 substep propagators at once and
+multiplies them, which moves the multipliers by rounding (`6.7e-16` on the Hopf
+cycle); where the field values themselves differ by an ulp, its forward-difference
+Jacobians (step `1e-7`) move by about `2e-9`.
 
 **The tangent off the corrector's LU.** The tangent system is the corrector's
 last matrix with the Jacobian one Newton update later. MATCONT's Moore–Penrose
@@ -414,8 +418,8 @@ corrector takes its tangent off the corrector's factorisation; AUTO-07p takes th
 secant (`CONTBV`). Reusing the LU saves an assembly and a factorisation per step,
 but tilts the tangent by the order of that last update, which moves the next
 point along the branch by up to `1e-4` in the parameter: it changes the spacing,
-not the branch. So only the adaptive step reuses it, and the fixed step stays bit
-for bit.
+not the branch. So only the adaptive step reuses it, and the fixed step keeps
+its tangent as it was.
 
 **AUTO's step.** `trace(..., max_arclength=...)` adapts the step by AUTO-07p's
 `ADPTDS` with `ITNW = 5`: doubled after one Newton iteration, half again after
@@ -441,8 +445,9 @@ whole film build):
 | Hopf–Hopf (fixed) | 102 | 20.2 → 2.1 | 233.6 → 211.2 |
 | zero-Hopf (fixed) | 184 | 18.2 → 1.9 | 181.5 → 166.4 |
 
-On the fixed-step films every traced orbit is bit for bit the old one and every
-located bifurcation the same to `2e-14`. On the adaptive ones every point is a
+On the fixed-step films, built on the development machine, every traced orbit was
+bit for bit the old one and every located bifurcation the same to `2e-14`; on a
+CPU whose vectorised powers round differently they agree to rounding. On the adaptive ones every point is a
 converged cycle of the same discrete system, within `2e-4` (scaled) of the old
 dense branch's polyline, with multipliers within `7e-14` of the old monodromy's
 for that cycle; the fold of cycles moved by `1.1e-9` (both `6.1e-7` from the

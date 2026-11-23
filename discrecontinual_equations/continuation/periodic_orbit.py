@@ -540,9 +540,13 @@ class PeriodicOrbit:
     def _jacobians(self, states: np.ndarray) -> np.ndarray:
         """:meth:`_jacobian` at every row of ``states``, shape ``(n, d, d)``.
 
-        The same forward differences, the same numbers to the last bit, with
-        each column's shifted fields taken in one call where the field takes
-        arrays (:mod:`.batched_field`) and a state at a time where it does not.
+        The same forward differences, with each column's shifted fields taken
+        in one call where the field takes arrays (:mod:`.batched_field`) and a
+        state at a time where it does not. The fields agree to rounding, not
+        always to the last bit; a difference quotient with step ``1e-7`` turns
+        an ulp of ``f`` into about ``2e-9`` of the entry, which the monodromy
+        carries into the multipliers. On a field of ``+ - *`` only, the two are
+        identical.
         """
         base = field_values(self._function, states, self._field)
         if base is None:

@@ -253,6 +253,9 @@ class TestBatchedMonodromy(TestCase):
         )
 
     def test_the_product_equals_carrying_the_transition_through(self) -> None:
+        # Tight on every machine: the Hopf field is + - * only, which rounds
+        # the same on arrays and scalars, so the forward-difference Jacobians
+        # agree exactly and only the product's order of rounding differs.
         orbit, solution = self._hopf(0.5, 40)
         transition = np.eye(2)
         # The pre-DEQ-75 loop, written out: Y carried through every RK4 stage.

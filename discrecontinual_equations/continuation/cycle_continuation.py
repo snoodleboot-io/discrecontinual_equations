@@ -1301,7 +1301,8 @@ class CycleContinuation:
         """``f`` at every state: in one call where the field takes arrays.
 
         Otherwise a state at a time, exactly as before. Either way the same
-        numbers, to the last bit (see :mod:`.batched_field`).
+        numbers to rounding: on some CPUs an array power rounds an ulp away
+        from the scalar one (see :mod:`.batched_field`).
         """
         self._equation.derivative.parameters[self._parameter_index].value = parameter
         batched = field_values(
@@ -1708,7 +1709,8 @@ class CycleContinuation:
         same points: on the films the next point moved by up to ``1e-4`` in
         the parameter, the spacing of the branch and not its geometry. That is
         why :meth:`trace` reuses it only under the adaptive step, which moves
-        the points anyway, and keeps the fixed step bit for bit. Rebuilt and
+        the points anyway, and keeps the fixed step's tangent as it always was:
+        rebuilt at the point, the same matrix and solve as before. Rebuilt and
         refactored where the corrector did not iterate, and under
         Gauss-Legendre, whose multipliers need the blocks at this very point
         anyway (see :meth:`_jacobian_multipliers`).
@@ -2193,8 +2195,9 @@ class CycleContinuation:
             reference = self._phase_reference
             self._set_phase_reference(corrected, nodes)
             if limits is None:
-                # The fixed step keeps the tangent rebuilt at the point, and so
-                # every result it ever gave, to the last bit.
+                # The fixed step keeps the tangent rebuilt at the point, so
+                # its points are those it always gave, up to the batched
+                # fields' rounding (:mod:`.batched_field`).
                 self._factored = None
             following = self._tangent(corrected, nodes, tangent)
             point = self._point(corrected, nodes)
