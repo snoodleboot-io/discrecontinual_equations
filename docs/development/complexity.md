@@ -132,11 +132,11 @@ and Hopf):
 | Part | Size parameters | Time | Space | Notes |
 |---|---|---|---|---|
 | `NewtonCorrector.correct`, per iteration | `n` | `(2n + 2) C_f` (extended Jacobian; `(2g + 2) C_f` for `g` column groups when a sparsity pattern is given, DEQ-53) + dense `(n+1)^2` solve `O(n^3)`; `lstsq` `O(n^3)` on singular steps | `O(n^2)` | the Jacobian array is dense either way |
-| `BorderedTangentComputer.compute` | `n` | `(2n + 2) C_f + O(n^3)` | `O(n^2)` | |
+| `BorderedTangentComputer.compute` | `n` | `(2n + 2) C_f + O(n^3)`; inside `Continuer.solve` the Jacobian is the shared one, so only the `O(n^3)` solve | `O(n^2)` | |
 | `Fold.test_value` | | `O(1)` (the tangent's last entry) | | |
-| `BranchPoint.test_value` | `n` | `(2n + 2) C_f + O(n^3)` (determinant of the bordered matrix) | `O(n^2)` | |
+| `BranchPoint.test_value` | `n` | the shared Jacobian + `O(n^3)` (determinant of the bordered matrix) | `O(n^2)` | |
 | `Hopf.test_value` | `n` | the shared Jacobian + one `eigvals` `O(n^3)` + `n(n-1)/2` pair sums (DEQ-46) | `O(n^2)` | see `bialternate_test_value` below |
-| `PointBuilder.build` | `n` | `2n C_f + O(n^3)` (`eigvals`) | `O(n^2)` | |
+| `PointBuilder.build` | `n` | the shared Jacobian + `O(n^3)` (`eigvals`) | `O(n^2)` | |
 | `RefiningLocalizer.localize` | root-finder iterations `L` | `L` corrector calls + `L` tangents + `L` test values | `O(n^2)` | only when a test function changes sign |
 | **One accepted point** | `n`, `I` | `(I + 1)(2n + 2) C_f + (I + 3) O(n^3)` | `O(n^2)` + `O(n)` stored | the tangent, detectors and stability share the converged point's Jacobian (DEQ-53; `I + 4` before) |
 
