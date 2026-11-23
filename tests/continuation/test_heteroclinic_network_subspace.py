@@ -43,6 +43,7 @@ from tests.continuation.test_heteroclinic_network_independent import (
     _kirk_silber_interaction,
     _Leak,
     _sheared,
+    _sheared_gh_network,
 )
 
 _NAMES = ("xi1", "xi2", "xi3")
@@ -290,3 +291,46 @@ class TestSolvedInTheSubspace(TestCase):
         mesh = MeshSpec(20.0, 200, phase_index=2, phase_value=0.0)
         with pytest.raises(ValueError, match="phase"):
             network.solve(connection, mesh)
+
+
+class TestEstimateIsInFullCoordinates(TestCase):
+    """The resolution estimate measures shifts in the coordinates the orbit is read in.
+
+    Sheared GH ``xi1 -> xi2`` is isolated in the full space too, so the full-space
+    solver can be refined independently: interpolate the orbit onto the doubled
+    mesh, solve there, and take the largest component of the shift. The network's
+    estimate, from the subspace solve, must be that number.
+    """
+
+    def test_discretisation_shift_matches_an_independent_full_space_refinement(self):
+        network = _sheared_gh_network(-1.4, -0.6)
+        connection = network.connections[0]
+        mesh = network.mesh(connection, half_length=16.0, intervals=100)
+        orbit = network.solve(connection, mesh)
+        source, target = network.saddle("xi1"), network.saddle("xi2")
+        fine = MeshSpec(16.0, 200, mesh.phase_index, mesh.phase_value)
+        solver = HeteroclinicOrbit(
+            network.function,
+            Terminus(source.equilibrium, source.jacobian),
+            Terminus(target.equilibrium, target.jacobian),
+            fine,
+        )
+        times = np.linspace(-16.0, 16.0, 201)
+        seed = np.column_stack(
+            [
+                np.interp(times, orbit.solution.times, column)
+                for column in orbit.solution.states.T
+            ],
+        )
+        refined = solver.solve(seed)
+        shift = float(np.max(np.abs(refined.states[::2] - orbit.solution.states)))
+        assert orbit.resolution.discretisation == pytest.approx(shift, rel=1e-6)
+        # The full-space solver's own estimate measures the same shift.
+        coarse = HeteroclinicOrbit(
+            network.function,
+            Terminus(source.equilibrium, source.jacobian),
+            Terminus(target.equilibrium, target.jacobian),
+            mesh,
+        )
+        own = coarse.estimate_orbit_error(orbit.solution).discretisation
+        assert own == pytest.approx(shift, rel=1e-6)
