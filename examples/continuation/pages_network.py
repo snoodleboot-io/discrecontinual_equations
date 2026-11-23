@@ -95,7 +95,7 @@ def _heteroclinic_network() -> Scene:
     for connection in network.connections:
         mesh = network.mesh(connection, _HALF_LENGTH, _INTERVALS)
         orbit = network.solve(connection, mesh)
-        defects.append(orbit.subspace_defect)
+        defects.append(orbit.full_space.subspace_defect)
         lines.append(
             (
                 "connection",
@@ -124,8 +124,9 @@ def _heteroclinic_network() -> Scene:
         ("(x1 - x2) / sqrt 2", "(2 x3 - x1 - x2) / sqrt 6"),
         "Guckenheimer-Holmes heteroclinic cycle",
         "Three saddle-to-saddle connections, each solved by the projection "
-        f"boundary-value problem in the full space and found {in_plane} its "
-        "invariant coordinate plane, viewed down the diagonal. Contracting over "
+        "boundary-value problem in its invariant coordinate plane and checked by "
+        f"the full-space solve, found {in_plane} that plane, viewed down the "
+        "diagonal. Contracting over "
         "expanding "
         f"rate {spectrum.contracting[0]:.3f} / {spectrum.expanding[0]:.3f} at every "
         f"saddle gives rho = {spectrum.stability_ratio:.4f} > 1: the cycle "

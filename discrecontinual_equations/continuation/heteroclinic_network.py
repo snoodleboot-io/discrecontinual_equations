@@ -12,9 +12,15 @@ This module is the bookkeeping layer over the projection boundary-value solver i
 
 * **saddles** are refined by Newton's method and carry their Jacobians;
 * **connections** name a source, a target and the invariant subspace between
-  them, and each is solved as a :class:`HeteroclinicOrbit` in the full space -
-  the solver is not told about the subspace, so the distance of the returned orbit
-  from it is a genuine check rather than a construction;
+  them. Each is solved as a :class:`HeteroclinicOrbit` *restricted to the
+  subspace* - in an orthonormal basis of it, then lifted back - where it is a
+  saddle-sink connection and isolated, as Beyn's projection method needs (IMA
+  J. Numer. Anal. 10, 1990). In the full space it need not be: when the source's
+  unstable manifold is 2-D the full-space problem has a family of solutions, and
+  in non-orthogonal coordinates the full-space solve does not find the one in the
+  plane. The full-space solve is still run, uninformed of the subspace, as a
+  check; and every returned path must satisfy the full field's collocation
+  equations, which is what refuses a "connection" in a plane the flow leaves;
 * **cycles** are the elementary cycles of the directed graph of connections;
 * each cycle's **spectrum** classifies the eigenvalues at every node by the role
   they play *for that cycle* - radial, contracting, expanding, transverse - which
@@ -37,6 +43,7 @@ import numpy as np
 from scipy.linalg import null_space, orth
 
 from discrecontinual_equations.continuation.connecting_orbit import (
+    CollocationResidual,
     HeteroclinicOrbit,
     MeshSpec,
     OrbitResolution,
@@ -46,7 +53,9 @@ from discrecontinual_equations.continuation.connecting_orbit import (
 from discrecontinual_equations.continuation.derivative_provider import (
     AutomaticDifferentiation,
 )
+from discrecontinual_equations.function.deterministic import DeterministicFunction
 from discrecontinual_equations.function.function import Function
+from discrecontinual_equations.variable import Variable
 
 _AUTODIFF = AutomaticDifferentiation()
 _NEWTON_TOLERANCE = 1.0e-13
@@ -103,27 +112,134 @@ class NetworkConnection:
         return (self.source, self.target)
 
 
-class ConnectionOrbit:
-    """A solved connection with the two numbers that say whether to trust it.
+class FullSpaceCheck:
+    """The same connection solved in the full space, not told about the subspace.
 
-    ``subspace_defect`` is the largest distance of any node from the connection's
-    invariant subspace; ``resolution`` is the solver's own error estimate in mesh
-    spacing and interval length (see :class:`OrbitResolution`).
+    ``subspace_defect`` is its largest distance from the subspace and
+    ``residual`` its collocation residual under the full field. Where the
+    connection is isolated in the full space this lands on the subspace solve;
+    where it is not, or where the subspace is not invariant along the orbit, the
+    two disagree, and these say how.
     """
 
-    __slots__ = ["connection", "resolution", "solution", "subspace_defect"]
+    __slots__ = ["residual", "solution", "subspace_defect"]
 
     def __init__(
+        self,
+        solution: OrbitSolution,
+        subspace_defect: float,
+        residual: CollocationResidual,
+    ) -> None:
+        self.solution = solution
+        self.subspace_defect = subspace_defect
+        self.residual = residual
+
+
+class ConnectionOrbit:
+    """A solved connection with the numbers that say whether to trust it.
+
+    ``solution`` is the connection solved inside its subspace and lifted to the
+    full space; ``subspace_defect`` is the largest distance of any of its nodes
+    from the subspace, which is rounding by construction. ``residual`` is its
+    collocation residual under the *full* field (see :class:`CollocationResidual`):
+    the subspace solve sees only the field's component in the subspace, so this is
+    what says the path is a trajectory of the actual flow. ``resolution`` is the
+    solver's own error estimate in mesh spacing and interval length (see
+    :class:`OrbitResolution`), and ``full_space`` the check solve.
+    """
+
+    __slots__ = [
+        "connection",
+        "full_space",
+        "residual",
+        "resolution",
+        "solution",
+        "subspace_defect",
+    ]
+
+    def __init__(  # noqa: PLR0913 - the path and each of its separate checks
         self,
         connection: NetworkConnection,
         solution: OrbitSolution,
         subspace_defect: float,
         resolution: OrbitResolution,
+        *,
+        residual: CollocationResidual,
+        full_space: FullSpaceCheck,
     ) -> None:
         self.connection = connection
         self.solution = solution
         self.subspace_defect = subspace_defect
         self.resolution = resolution
+        self.residual = residual
+        self.full_space = full_space
+
+
+class NotATrajectoryError(ValueError):
+    """A solved path whose collocation residual its mesh cannot explain.
+
+    ``orbit`` is the refused :class:`ConnectionOrbit`, with every number that was
+    measured on it, for diagnosis.
+    """
+
+    def __init__(self, message: str, orbit: ConnectionOrbit) -> None:
+        super().__init__(message)
+        self.orbit = orbit
+
+
+class _Restricted(DeterministicFunction):
+    """``g(z) = Q^T f(Q z)``: the field on an invariant subspace, in its basis ``Q``.
+
+    ``Q`` has orthonormal columns. On a subspace the flow leaves, ``g`` drops the
+    component of ``f`` that leaves, which is why a path solved with it must be
+    checked against ``f`` itself. Written with ``float * x`` and ``+`` only, so
+    Taylor jets pass through and automatic differentiation stays exact.
+    """
+
+    __slots__ = ["_basis", "_field"]
+
+    def __init__(self, field: Function, basis: np.ndarray) -> None:
+        size = basis.shape[1]
+        super().__init__(
+            variables=[Variable() for _ in range(size)],
+            parameters=field.parameters,
+            results=[Variable() for _ in range(size)],
+            time=None,
+        )
+        self._field = field
+        self._basis = basis
+
+    def eval(self, point: list[float], time: float | None = None) -> list[float]:
+        """``Q^T f(Q z)``."""
+        rows, columns = self._basis.shape
+        state = [_combine(self._basis[row], point) for row in range(rows)]
+        rate = self._field.eval(state, time)
+        return [_combine(self._basis[:, column], rate) for column in range(columns)]
+
+
+class _ReducedOrbit(HeteroclinicOrbit):
+    """A heteroclinic orbit solved in subspace coordinates, measured in full ones.
+
+    The resolution estimate compares paths component by component, and a
+    component of the reduced coordinates is not one of the full space; lifting
+    first keeps the estimate in the coordinates the caller reads the orbit in.
+    """
+
+    __slots__ = ["_basis"]
+
+    def __init__(
+        self,
+        function: Function,
+        source: Terminus,
+        target: Terminus,
+        mesh: MeshSpec,
+        basis: np.ndarray,
+    ) -> None:
+        super().__init__(function, source, target, mesh)
+        self._basis = basis
+
+    def _shift(self, moved: np.ndarray, original: np.ndarray) -> float:
+        return float(np.max(np.abs((moved - original) @ self._basis.T)))
 
 
 class CycleSpectrum:
@@ -352,18 +468,28 @@ class HeteroclinicNetwork:
         mesh: MeshSpec,
         seed: np.ndarray | None = None,
     ) -> ConnectionOrbit:
-        """Solve the connection in the full space by projection boundary conditions.
+        """Solve the connection inside its subspace, and check it in the full space.
 
-        The departure end is projected out of the source's stable eigenspace and the
+        The boundary-value problem is posed in an orthonormal basis of the subspace
+        whose first vector is the phase coordinate's projection onto it, so the
+        full space's phase condition ``u_c[i] = v`` is ``z_c[0] = v / |B^T e_i|``
+        there and the lifted orbit satisfies the same one. In the subspace the
+        departure end is projected out of the source's stable eigenspace and the
         arrival end out of the target's unstable one (Beyn 1990; the conditions
-        ``L^-(u(tau_-) - xi) = 0`` of Doedel et al. 2008, eq. 5). The subspace is not
-        imposed, so ``subspace_defect`` measures whether the solver found the
-        connection where the symmetry puts it.
+        ``L^-(u(tau_-) - xi) = 0`` of Doedel et al. 2008, eq. 5), and the target is
+        a sink, so the connection is isolated even where, in the full space, the
+        source's unstable manifold is 2-D and the connections leaving it are not.
+
+        The full-space solve from the same seed is kept as ``full_space``. The
+        resolution estimate is the subspace solve's, measured in full coordinates.
 
         A connection whose :meth:`persistence_margin` is not positive does not exist
         in its subspace, and is refused: the least-squares solve would otherwise
         return its best non-trajectory, which can sit on both saddles, in the
-        plane, with a small ``resolution`` estimate.
+        plane, with a small ``resolution`` estimate. A solved path whose collocation
+        residual under the full field exceeds the mesh's truncation error is not a
+        trajectory either - the subspace is not invariant along it - and is refused
+        with :class:`NotATrajectoryError`, which carries it.
         """
         margin = self.persistence_margin(connection)
         if margin <= 0.0:
@@ -375,23 +501,45 @@ class HeteroclinicNetwork:
             raise ValueError(message)
         source = self.saddle(connection.source)
         target = self.saddle(connection.target)
-        orbit = HeteroclinicOrbit(
+        basis, weight = _phase_basis(connection.basis, mesh.phase_index)
+        reduced = _ReducedOrbit(
+            _Restricted(self._function, basis),
+            Terminus(basis.T @ source.equilibrium, basis.T @ source.jacobian @ basis),
+            Terminus(basis.T @ target.equilibrium, basis.T @ target.jacobian @ basis),
+            MeshSpec(mesh.half_length, mesh.intervals, 0, mesh.phase_value / weight),
+            basis,
+        )
+        full = HeteroclinicOrbit(
             self._function,
             Terminus(source.equilibrium, source.jacobian),
             Terminus(target.equilibrium, target.jacobian),
             mesh,
         )
         start = self.seed(connection, mesh) if seed is None else seed
-        solution = orbit.solve(start)
-        basis = connection.basis
-        outside = solution.states - (solution.states @ basis) @ basis.T
-        defect = float(np.max(np.linalg.norm(outside, axis=1)))
-        return ConnectionOrbit(
+        inside = reduced.solve(start @ basis)
+        lifted = OrbitSolution(inside.times, inside.states @ basis.T)
+        check = full.solve(start)
+        orbit = ConnectionOrbit(
             connection,
-            solution,
-            defect,
-            orbit.estimate_orbit_error(solution),
+            lifted,
+            _subspace_defect(lifted.states, connection.basis),
+            reduced.estimate_orbit_error(inside),
+            residual=full.collocation_residual(lifted),
+            full_space=FullSpaceCheck(
+                check,
+                _subspace_defect(check.states, connection.basis),
+                full.collocation_residual(check),
+            ),
         )
+        if not orbit.residual.is_trajectory:
+            message = (
+                f"{connection.source} -> {connection.target} is not a trajectory: "
+                f"its collocation residual {orbit.residual.largest:.3g} exceeds the "
+                f"mesh's truncation error {orbit.residual.tolerance:.3g}, so the flow "
+                f"leaves the subspace along it and no connection lies there"
+            )
+            raise NotATrajectoryError(message, orbit)
+        return orbit
 
     def _connection(self, source: str, target: str) -> NetworkConnection:
         key = (source, target)
@@ -442,6 +590,38 @@ def _require_invariant(saddle: NetworkSaddle, basis: np.ndarray) -> None:
             f"robust connection needs a flow-invariant subspace"
         )
         raise ValueError(message)
+
+
+def _phase_basis(basis: np.ndarray, index: int) -> tuple[np.ndarray, float]:
+    """An orthonormal basis of the subspace led by the phase coordinate's projection.
+
+    Returns the basis and ``|B^T e_index|``, the length of that projection. The
+    phase coordinate of a point ``Q z`` of the subspace is then that length times
+    ``z[0]``. A coordinate orthogonal to the subspace cannot pin an orbit in it.
+    """
+    weight = float(np.linalg.norm(basis[index]))
+    if weight < _RANK_TOLERANCE:
+        message = (
+            f"the phase coordinate {index} is orthogonal to the connection's "
+            f"subspace, so it cannot pin an orbit there; choose another"
+        )
+        raise ValueError(message)
+    first = (basis @ basis[index] / weight)[:, None]
+    return np.hstack([first, _complement_within(basis, first)]), weight
+
+
+def _subspace_defect(states: np.ndarray, basis: np.ndarray) -> float:
+    """Largest distance of any state from the subspace spanned by ``basis``."""
+    outside = states - (states @ basis) @ basis.T
+    return float(np.max(np.linalg.norm(outside, axis=1)))
+
+
+def _combine(weights: np.ndarray, values: list[float]) -> float:
+    """``sum_j weights[j] values[j]``; at run time the values may be Taylor jets."""
+    total = 0.0
+    for weight, value in zip(weights, values, strict=True):
+        total = total + float(weight) * value
+    return total
 
 
 def _intersection(first: np.ndarray, second: np.ndarray) -> np.ndarray:

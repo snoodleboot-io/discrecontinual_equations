@@ -163,6 +163,39 @@ class OrbitResolution:
         return "spacing"
 
 
+class CollocationResidual:
+    """How far a path is from satisfying the trapezoidal rule, and how far it may be.
+
+    ``largest`` is the largest component of ``x_{i+1} - x_i - (h/2)(f_i + f_{i+1})``
+    over every interval. A converged solve of a consistent discrete system drives
+    it to the Newton tolerance; one that has no solution - because the orbit it
+    asks for does not exist - stops at a least-squares minimum that is not.
+
+    ``tolerance`` is what the mesh itself commits: the trapezoidal rule's local
+    truncation error ``h^3 |x'''| / 12``, read off the path's third differences.
+    Even the exact orbit sampled on this mesh leaves a residual that size, so a
+    path whose residual exceeds it is further from a trajectory than the mesh can
+    resolve. Measured on the Guckenheimer-Holmes connection at ``h = 0.2``:
+    genuine orbits leave 1e-15 to 3e-10 against a tolerance of 3e-5, and a path
+    with no orbit behind it 1.9e-3.
+
+    The resolution estimate cannot stand in for this. It measures how much a path
+    moves when the mesh changes, and a non-trajectory converged on one mesh can
+    sit still on the next: the path above had an estimate of 1.9e-4.
+    """
+
+    __slots__ = ["largest", "tolerance"]
+
+    def __init__(self, largest: float, tolerance: float) -> None:
+        self.largest = largest
+        self.tolerance = tolerance
+
+    @property
+    def is_trajectory(self) -> bool:
+        """Whether the residual is within what the mesh's truncation explains."""
+        return self.largest <= self.tolerance
+
+
 class ConnectingOrbit(ABC):
     """Solve for an orbit connecting an equilibrium to itself or another.
 
@@ -272,6 +305,28 @@ class ConnectingOrbit(ABC):
             self._truncation_shift(solution),
         )
 
+    def collocation_residual(self, solution: OrbitSolution) -> CollocationResidual:
+        """The path's largest trapezoidal residual, against its truncation error.
+
+        Only the collocation rows are measured: the boundary and phase rows say
+        where the path starts, ends and is pinned, not whether it is a trajectory.
+        Any path with the solver's dimension can be measured, not only one this
+        solver returned. See :class:`CollocationResidual`.
+        """
+        states, times = solution.states, solution.times
+        rows = [self._collocation(states, times, i) for i in range(len(times) - 1)]
+        third = np.diff(states, 3, axis=0)
+        tolerance = float(np.max(np.abs(third))) / 12.0 if third.size else 0.0
+        return CollocationResidual(float(np.max(np.abs(rows))), tolerance)
+
+    def _shift(self, moved: np.ndarray, original: np.ndarray) -> float:
+        """Largest component of the change between two paths at shared nodes.
+
+        A solver posed in other coordinates overrides this to measure the change
+        in the coordinates its caller reads the orbit in.
+        """
+        return float(np.max(np.abs(moved - original)))
+
     def _solve_on(self, mesh: MeshSpec, seed: np.ndarray) -> OrbitSolution:
         """Solve the same problem on a different mesh, leaving this solver unchanged.
 
@@ -311,7 +366,7 @@ class ConnectingOrbit(ABC):
             ),
             seed,
         )
-        return float(np.max(np.abs(refined.states[::2] - states)))
+        return self._shift(refined.states[::2], states)
 
     def _truncation_shift(self, solution: OrbitSolution) -> float:
         """Largest state shift on the overlap from extending the interval.
@@ -340,7 +395,7 @@ class ConnectingOrbit(ABC):
             seed,
         )
         overlap = longer.states[extra : extra + states.shape[0]]
-        return float(np.max(np.abs(overlap - states)))
+        return self._shift(overlap, states)
 
     def _residual(
         self,
