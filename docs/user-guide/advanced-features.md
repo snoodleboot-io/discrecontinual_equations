@@ -92,8 +92,8 @@ How a planar system gets from one attractor to another under small noise is
 answered by the Freidlin-Wentzell quasipotential `U`: escapes cost
 `exp(-U / eps)`, and the minimiser of the action is the most probable path.
 `OrderedLineIntegral` computes `U` on a `DensityGrid` by the ordered line
-integral method (midpoint quadrature, with `U` a parabola along the accepted
-front by default), for a drift `Function` and a `NoiseMatrix`, from a
+integral method (OLIM-MID: midpoint quadrature, `U` linear along the accepted
+front), for a drift `Function` and a `NoiseMatrix`, from a
 stable equilibrium or a limit cycle:
 
 ```python
@@ -123,9 +123,14 @@ minimum action method from a small surface about the attractor, and with a
 `D = G G^T`, so a gradient drift `-grad V` with `G = I` has `U = 2 V`, and the
 grid density of `StationaryFokkerPlanck` is `exp(-U)` to leading order. The
 method is planar and time-independent and needs `D` non-singular at every grid
-point. With the straight base of OLIM-MID (`update_order="midpoint"`) it is
-first order in the spacing, the bound the method's authors give; the default
-parabolic base measured second order on the rotating test problems. The update
+point. With the default straight base of OLIM-MID it is first order in the
+spacing, the bound the method's authors give, and second order where the
+quadrature dominates. `update_order="quadratic"` takes `U` as a parabola
+along the front instead; it is not a published method, it costs 2.3 to 2.8
+times the march's time, and it pays only on a drift that is linear or nearly
+so (94 times closer on the rotating Ornstein-Uhlenbeck process, 3.6 times on
+Dahiya and Cameron's SDE (21) at 321 points); on the nonlinear problems
+measured the straight base wins at equal cost by 3 to 6 times. The update
 radius is 8 cells on every grid unless `update_radius` is given;
 `default_radius(grid)` in `continuation.quasipotential` is the authors' rule
 of thumb, growing with the grid, which pays on a strongly rotating drift and

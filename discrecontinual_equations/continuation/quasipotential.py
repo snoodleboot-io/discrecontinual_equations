@@ -27,12 +27,13 @@ by ``M = S^{-1} / 2``.) The Ito-Stratonovich correction to the drift is of order
 
 *Method.* ``U`` is computed on the grid of :class:`~.fokker_planck.DensityGrid` by
 the ordered line integral method of Dahiya and Cameron (J. Sci. Comput. 2018,
-arXiv 1706.07509), with the midpoint quadrature of their OLIM-MID and, by
-default, ``U`` interpolated along the front by a parabola rather than a straight
-line (see *Order* below). Grid points are
-accepted in increasing order of ``U``, as in Dijkstra's method; when a point ``x0``
-is accepted every unaccepted point ``x`` within ``update_radius`` cells of it is
-offered
+arXiv 1706.07509), by default their OLIM-MID: midpoint quadrature, with ``U``
+interpolated linearly along the front. ``U`` may instead be interpolated by a
+parabola (``update_order="quadratic"``, see *Order* below), which is not a
+published method and pays only on a drift that is linear or nearly so. Grid
+points are accepted in increasing order of ``U``, as in Dijkstra's method; when
+a point ``x0`` is accepted every unaccepted point ``x`` within ``update_radius``
+cells of it is offered
 
 * a one-point update ``U(x0) + Q(x0, x)``, and
 * a triangle update for every accepted neighbour ``x1`` of ``x0``: the minimum over
@@ -74,8 +75,8 @@ fixed box, at a radius held at 8 cells (the tests repeat these):
     orders 1.87 and 1.89;
   - rotating Ornstein-Uhlenbeck, ``A = [[-1, -2], [2, -1]]``, ``G = [[1, 0.5],
     [0, 0.8]]``, max error against ``(1/2) x^T S^{-1} x`` on ``{U <= 1.5}``, box
-    ``[-1.5, 1.5]^2``: 1.70e-4, 4.25e-5, 1.16e-5, observed orders 2.00 and 1.87
-    (2.27e-3, 9.68e-4, 5.00e-4 with the straight base, orders 1.23 and 0.95).
+    ``[-1.5, 1.5]^2``: 2.27e-3, 9.68e-4, 5.00e-4, observed orders 1.23 and 0.95
+    (1.70e-4, 4.25e-5, 1.16e-5 with the parabolic base, orders 2.00 and 1.87).
 
 The error is two terms of different order. Linear interpolation of ``U`` along the
 base of a triangle costs ``O(h^2)`` per update over ``O(1 / (K h))`` updates along a
@@ -88,12 +89,13 @@ convex integrand, it is the long updates that are picked. The double well's
 ``x - x^3`` is steep enough on this box for that term to dominate: at 81 points
 the error is 0.0107, 0.0112 and 0.0420 for radii 2, 4 and 8.
 
-*Order.* By default (``update_order="quadratic"``) ``U(x_s)`` along a triangle's
-base is the parabola through ``x0``, ``x1 = x0 + e`` and a third accepted point on
-the same line, ``x0 - e`` or else ``x0 + 2 e`` - straight only where neither is
-accepted - so its error is ``O(h^3)`` rather than ``O(h^2)``. ``F(s)`` is then
-minimised by Newton steps from the straight base's closed-form root, keeping the
-lower of the two. The ticket proposed a Hermite cubic with ``grad U`` from the
+*Order.* With ``update_order="quadratic"`` ``U(x_s)`` along a triangle's base is
+the parabola through ``x0``, ``x1 = x0 + e`` and a third accepted point on the
+same line, ``x0 - e`` or else ``x0 + 2 e`` - straight only where neither is
+accepted - so its interpolation error is ``O(h^3)`` rather than ``O(h^2)``.
+``F(s)`` is then minimised by Newton steps from the straight base's closed-form
+root, keeping the lower of the two. This is not a published method, and it is
+not the default. The ticket proposed a Hermite cubic with ``grad U`` from the
 march; it was built first and failed: ``grad U`` at a point can only come from
 the update that set it, by the momentum ``|f|_A A t / |t|_A - A f`` along the
 segment's direction ``t``, which is first order (the chord), or second order if
@@ -102,19 +104,54 @@ then each point's error feeds the next. On the rotating case at 41 points the
 median ``grad U`` was off by 25% from the chord and 80% by reflection, and ``U``
 by 0.32. Dahiya and Cameron also warn that ``U`` need not be smooth across the
 front (arXiv 1806.05321, Sec. 3.3.2); the parabola uses accepted values only.
-At 321 points, radius 14 (:func:`default_radius`, below), the max errors on
-the sets above: rotating Ornstein-Uhlenbeck 9.30e-5 straight, 2.15e-6 parabolic
-(orders 2.00, 2.00, 2.30 from 41 points); their SDE (21) 2.55e-4 and 1.16e-5;
-the non-normal linear system 1.04e-4 and 9.26e-5 (3.33e-4 and 1.17e-4 at 161);
-Maier-Stein's barrier at 161 x 129 points 5.6e-4 and 2.0e-5. Where the
-quadrature term dominates - the double well, the anisotropic gradient, SDE (24)
-- it changes little (9.05e-3, 7.44e-3 and 1.84e-2 straight; 9.05e-3, 7.52e-3
-and 1.85e-2 parabolic), and on the noisy Hopf film's grid, near its singular
-origin, the worst frame moves from 0.054 to 0.056. At the default radius of 8,
-at 321 points: rotating Ornstein-Uhlenbeck 3.34e-4 and 3.41e-6; SDE (21) 1.34e-3 and
-3.73e-4; non-normal 2.36e-4 and 9.26e-5; double well 2.85e-3 both; anisotropic
-gradient 2.09e-3 and 2.15e-3; SDE (24) 4.66e-3 and 5.15e-3. It costs about 1.8
-times the march's time. ``update_order="midpoint"`` is OLIM-MID as published.
+
+The parabola does not raise the order: the quadrature term above is ``O(K^2
+h^2)`` either way. What it does is make the update exact where ``U`` is
+quadratic - a linear drift with a constant ``D``. There the midpoint rule's
+``Q`` is exact along the characteristic through the segment's midpoint
+(``grad U`` at the midpoint is exact for a quadratic ``U``, and
+``grad U . (x - a) <= Q(a, x)`` with equality along it), the parabola is
+exact, and what is left is how well ``s`` is found: on the rotating
+Ornstein-Uhlenbeck process at 41 points the parabola gives 1.70e-4 with the
+Newton steps and 5.5e-8 with ``s`` minimised by brute force. On a nonlinear
+drift the straight base's overestimate of a convex ``U`` partly cancels the
+midpoint rule's underestimate, and the parabola takes that away.
+
+When it helps - linear or nearly linear drifts. Max error at 321 points,
+radius 8, straight against parabolic, on the sets above: rotating
+Ornstein-Uhlenbeck 3.34e-4 and 3.41e-6 (94 times); their SDE (21) 1.34e-3 and
+3.73e-4 (3.6 times); the non-normal linear system 2.36e-4 and 9.26e-5 (2.5
+times); Maier-Stein's barrier at 161 x 129 points (radius 10) 5.6e-4 and
+2.0e-5.
+
+When it does not - nonlinear drifts. At 321 points, straight against
+parabolic: double well 2.85e-3 both; anisotropic gradient 2.09e-3 and 2.15e-3;
+SDE (24) 4.66e-3 and 5.15e-3; and on the verification's nonlinear rotating
+systems (``f = -D grad V + c R grad V`` with ``c = 4``, a multiplicative-noise
+one, an elliptic cycle with rotation 3) 7.1e-4 and 5.3e-4, 8.2e-4 and 1.27e-3,
+8.5e-3 and 5.3e-3 - and at 161 points the parabola was worse on all three
+(1.23e-3 and 2.23e-3, 4.28e-3 and 5.16e-3, 1.88e-2 and 3.17e-2). It costs 2.3
+to 2.8 times the march's time (measured at 321 points, best of one under
+load), so at equal cost the comparison is the straight base at 321 points
+against the parabola at 161, and the straight base wins on every nonlinear
+problem measured:
+
+  ==========================  ===============  ================
+  problem                     straight, 321    parabolic, 161
+  ==========================  ===============  ================
+  double well                 2.85e-3          1.13e-2
+  anisotropic gradient        2.09e-3          8.70e-3
+  SDE (24)                    4.66e-3          2.19e-2
+  rotating, c = 4             7.13e-4          2.23e-3
+  multiplicative noise        8.19e-4          5.16e-3
+  elliptic cycle              8.54e-3          3.17e-2
+  rotating Ornstein-Uhlenbeck 3.34e-4          1.16e-5
+  ==========================  ===============  ================
+
+So the parabola is for a drift that is linear, or nearly so on the region
+asked about; ``update_order="midpoint"``, the default, is OLIM-MID as
+published. On the noisy Hopf film's grid, near its singular origin, the worst
+frame is 0.054 straight and 0.056 parabolic.
 
 *Radius.* The radius is 8 cells on every grid unless ``update_radius`` says
 otherwise. Dahiya and Cameron's rule of thumb ``K = 10 + 4 (round(log2 N) -
@@ -126,9 +163,11 @@ against 8, the straight base: rotating Ornstein-Uhlenbeck 9.30e-5 against
 - but the double well 9.05e-3 against 2.85e-3, the anisotropic gradient
 7.44e-3 against 2.09e-3 and SDE (24) 1.84e-2 against 4.66e-3, where the longer
 updates' quadrature error grows like ``K^2`` and nothing is gained from
-reaching further. With the parabolic base the linear cases gain less (SDE (21)
-1.16e-5 against 3.73e-4, the others within a factor of two) and the
-gradient-dominated ones lose as much. So the default is 8, and
+reaching further. With the parabolic base (at radius 14: rotating
+Ornstein-Uhlenbeck 2.15e-6, SDE (21) 1.16e-5, non-normal 9.26e-5; double well
+9.05e-3, anisotropic gradient 7.52e-3, SDE (24) 1.85e-2) the linear cases gain
+less (SDE (21) 1.16e-5 against 3.73e-4, the others within a factor of two)
+and the gradient-dominated ones lose as much. So the default is 8, and
 ``update_radius=default_radius(grid)`` is for a drift whose
 rotation-to-gradient ratio ``a`` (below) is near or above 8 - SDE (21) has
 ``a = 10`` - on a grid of 128 points or more; a ratio well above the radius
