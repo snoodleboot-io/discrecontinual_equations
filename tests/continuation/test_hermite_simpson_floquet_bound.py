@@ -229,3 +229,27 @@ class TestUnreadableMultipliers(TestCase):
             trace, _ = continuation.trace(CycleSeed(nodes, period, 2.8), 0.1, 0)
         assert trace[0].floquet_error == float("inf")
         assert not trace[0].resolved()
+
+
+class TestTrapezoidalKeepsTheDrift(TestCase):
+    def test_a_trapezoidal_point_reads_the_drift_without_a_doubled_solve(self):
+        """Only Hermite-Simpson and Gauss-Legendre pay for the doubled mesh."""
+
+        def forbidden(*_reading):
+            message = "trapezoidal must not re-solve on the doubled mesh"
+            raise AssertionError(message)
+
+        intervals = 40
+        nodes, period, _ = _reference(2.8, 1, intervals)
+        continuation = CycleContinuation(
+            _equation(2.8),
+            0,
+            intervals,
+            1,
+            0.0,
+            collocation="trapezoidal",
+        )
+        with mock.patch.object(CycleContinuation, "_doubled_multipliers", forbidden):
+            trace, _ = continuation.trace(CycleSeed(nodes, period, 2.8), 0.1, 0)
+        drift = float(np.min(np.abs(trace[0].multipliers - 1.0)))
+        assert trace[0].floquet_error == drift
