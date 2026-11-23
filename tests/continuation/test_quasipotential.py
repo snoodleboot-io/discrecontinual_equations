@@ -1372,9 +1372,10 @@ def _multiplicative_error(count):
 
 
 # Below the double well's level of 2: on {U <= 2} the largest error at 161
-# points, 2.2e-2, sits at (-0.52, 1.31), at the top of the set and 0.19 from
-# the box's edge, and held the order to 0.86 (it is in the left well's basin;
-# the flow from it reaches (-1, 0)).
+# points (2.3e-2 with the default update, 2.2e-2 with the parabola, at
+# (-0.52, 1.31) for the latter) sits at the top of the set, 0.19 from the
+# box's edge, and held the order to 0.77 (0.86); that point is in the left
+# well's basin - the flow from it reaches (-1, 0).
 _MULTIPLICATIVE_LEVEL = 1.5
 
 
@@ -1406,10 +1407,10 @@ class TestMultiplicativeNoise(TestCase):
         assert np.allclose(coefficients, [-2.0, 0.0, 0.0, 0.0], atol=1.0e-5)
 
     def test_the_grid_converges_to_twice_the_potential(self):
-        # Measured 0.141, 0.0333, 0.00808 on {U <= 1.5}: orders 2.08, 2.04.
-        # On {U <= 2} 0.160, 0.0398, 0.0219, order 0.86 at the last (see
-        # _MULTIPLICATIVE_LEVEL) - not from the radius, which is 8 on every
-        # grid here.
+        # Measured 0.139, 0.0327, 0.00776 on {U <= 1.5}: orders 2.09, 2.07
+        # (parabolic: 0.141, 0.0333, 0.00808). On {U <= 2} 0.156, 0.0392,
+        # 0.0231, order 0.77 at the last (see _MULTIPLICATIVE_LEVEL) - not
+        # from the radius, which is 8 on every grid here.
         errors = [_multiplicative_error(count) for count in (41, 81, 161)]
         assert errors[0] > errors[1] > errors[2]
         assert min(_orders(errors)) > 1.8
