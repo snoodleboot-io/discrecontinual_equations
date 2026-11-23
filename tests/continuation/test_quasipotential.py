@@ -94,12 +94,12 @@ _COUNTS = (41, 81, 161)
 _GRADIENT_LEVEL = 2.0
 # The largest sublevel set of (1/2) x^T S^-1 x inside [-1.5, 1.5]^2 with a margin.
 _ROTATING_LEVEL = 1.5
-# Observed orders sit at 1.87, 1.89 and 2.00, 1.87 (module docstring): the
-# double well is dominated by a second-order quadrature term; the rotating case
-# was dominated by first-order linear interpolation along the front (orders
-# 1.23, 0.95) until the base became a parabola.
+# Observed orders sit at 1.87, 1.89 and 1.23, 0.95 (module docstring): the
+# double well is dominated by a second-order quadrature term, the rotating case
+# by the default straight base's first-order interpolation along the front
+# (the opt-in parabola takes it to 2.00, 1.87; TestQuadraticUpdate).
 _GRADIENT_ORDER = 1.7
-_ROTATING_ORDER = 1.8
+_ROTATING_ORDER = 0.9
 # The convergence tests hold the radius at 8 cells as the grid is refined, so
 # that they measure the update itself. It is the default too; default_radius,
 # Dahiya and Cameron's Eq. (28), grows with the grid and trades the two error
@@ -174,13 +174,14 @@ class TestRotatingOrnsteinUhlenbeck(TestCase):
     """Oracle 2: ``U = (1/2) x^T S^{-1} x``, ``A S + S A^T + G G^T = 0``."""
 
     def test_u_is_the_lyapunov_quadratic_form(self):
-        # 4.25e-5 at 81 points with the parabolic base (9.68e-4 with the
-        # straight one of OLIM-MID).
-        assert _rotating_error(81) < 6.0e-5
+        # 9.68e-4 at 81 points with the straight base of OLIM-MID, the
+        # default (4.25e-5 with the parabolic one; TestQuadraticUpdate).
+        assert _rotating_error(81) < 1.2e-3
 
     def test_u_converges_on_doubling_the_grid(self):
-        # Measured 1.70e-4, 4.25e-5, 1.16e-5: orders 2.00, 1.87 (OLIM-MID:
-        # 2.27e-3, 9.68e-4, 5.00e-4, orders 1.23, 0.95).
+        # Measured 2.27e-3, 9.68e-4, 5.00e-4: orders 1.23, 0.95, the first
+        # order of the straight base (parabolic: 1.70e-4, 4.25e-5, 1.16e-5,
+        # orders 2.00, 1.87; TestQuadraticUpdate).
         errors = [_rotating_error(count) for count in _COUNTS]
         orders = _orders(errors)
         assert errors[0] > errors[1] > errors[2]
@@ -657,10 +658,10 @@ class TestMaierStein(TestCase):
     """Maier-Stein at beta = 10, where the escape path leaves the symmetry axis."""
 
     def test_the_barrier_converges_to_the_independent_minimum(self):
-        # Measured 0.340175, 0.340084 against 0.340042 with the parabolic base
-        # at radius 8: errors 1.33e-4, 4.16e-5, order 1.68. OLIM-MID: 0.341561,
-        # 0.340604, errors 1.52e-3, 5.6e-4, order 1.44. The on-axis path
-        # costs 1/2.
+        # Measured 0.341561, 0.340604 against 0.340042 with OLIM-MID, the
+        # default, at radius 8: errors 1.52e-3, 5.6e-4, order 1.44. With the
+        # parabolic base 0.340175, 0.340084: errors 1.33e-4, 4.16e-5, order
+        # 1.68. The on-axis path costs 1/2.
         errors = [
             abs(_maier_stein_field(scale)[2].at(SADDLE) - MAIER_STEIN_BARRIER)
             for scale in (2, 4)
@@ -694,8 +695,8 @@ class TestMaierStein(TestCase):
         ).path(np.linspace(WELL, target, 81))
         assert traced.arrived
         assert relaxed.converged
-        # Measured 0.25883 on the grid with the parabolic base at radius 8;
-        # with OLIM-MID 0.25920 (grid), 0.25879 (trace), 0.25875 (gMAM).
+        # Measured 0.25920 (grid), 0.25879 (trace), 0.25875 (gMAM) with
+        # OLIM-MID, the default; 0.25883 on the grid with the parabolic base.
         assert abs(field.at(target) - relaxed.action) < 1.0e-3
         assert abs(traced.action - relaxed.action) < 3.0e-4
         distance = cKDTree(relaxed.states).query(traced.states)[0]
