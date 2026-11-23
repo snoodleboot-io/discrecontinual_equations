@@ -212,10 +212,31 @@ solver returns the same near-optimal result as the uniform mesh (no regression).
     smaller stability ratio.
 
   Headroom: connections are solved where the symmetry already guarantees them, so
-  there is no search for connections not lying in a known subspace; cycles whose
-  nodes are periodic orbits or chaotic sets are not covered; and the competition
-  between cycles is checked against a published criterion rather than computed by
-  the library (stability indices, Podvigina and Ashwin 2011, are the general tool).
+  there is no search for connections not lying in a known subspace; and cycles
+  whose nodes are periodic orbits or chaotic sets are not covered.
+- **Stability indices and cycle competition (RESOLVED for quasi-simple cycles).**
+  `network_stability.py` builds each node's basic transition matrix from the
+  role-sorted eigenvalues (Garrido-da-Silva and Castro 2019, eq. 7), with the
+  permutation found by matching directions normal to each connection, and returns
+  the local stability index (Podvigina and Ashwin 2011) along every connection by
+  their Theorems 3.4 and 3.10. `CycleStability.delta` is Kirk and Silber's
+  `delta`; `NetworkCompetition` names the cycles that attract a set of positive
+  measure. Oracles in `tests/continuation/test_network_stability.py` and
+  `..._simulation.py`: both Kirk-Silber cycles against Podvigina and Ashwin's B3-
+  closed forms on random eigenvalues (every case of their section 4.2.1), Castro
+  and Lohse's Propositions 5.2/5.3 and eq. (3); the RSP cycle's published indices;
+  Guckenheimer-Holmes `+inf` iff `2 a1 > a2 + a3`; `f^index` against the exact
+  measure of its set; winners confirmed by simulation within 0.07 of `delta = 0`;
+  and the basin complement of an index-1 connection scaling like `eps^1`.
+  `..._independent.py` adds a five-node cycle whose permutation is a 3-cycle, and
+  the type C4- closed forms as corrected by Lohse (2015, Lemma B.5): Podvigina and
+  Ashwin's original `b1 < 0` branch drops the row terms of Theorem 3.10.
+
+  Open: the matching compares directions through orthogonal complements, so a type
+  C cycle in oblique coordinates (or a node with a repeated transverse eigenvalue)
+  is refused rather than computed; a coordinate-free matching through the
+  quotient by each `P_j` would lift that. Indices with respect to the whole
+  network (Castro and Lohse's n-indices) are not computed.
 
 ## 3. Further refinements (optional)
 - **Stochastic nD Lyapunov** is implemented and validated on a bounded chaotic
@@ -236,5 +257,5 @@ solver returns the same near-optimal result as the uniform mesh (no regression).
   same step under every scheme (an `m`-point scheme's step covers about
   `1/sqrt(m)` of the parameter).
 - **Heteroclinic networks** among three or more saddles (see section 2) are
-  resolved for robust cycles between equilibria; stability indices for cycles
-  inside networks are the natural next step.
+  resolved for robust cycles between equilibria, with stability indices for
+  quasi-simple cycles inside them.
