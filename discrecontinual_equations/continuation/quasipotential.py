@@ -202,6 +202,11 @@ _START_SHARE = 0.25
 _SECANT_STEPS = 6
 _SECANT_TOLERANCE = 1.0e-4
 _SECANT_SETTLED = 1.0e-9
+# A chain that blows up is relaxed again at half the step, this many times in all.
+_STEP_HALVINGS = 6
+# A node moving by this share of the distance between the chain's ends in one
+# step is unstable.
+_JUMP_SHARE = 0.25
 # The chain stops when no node moves by this much in a step. The action is
 # stationary on the minimiser, so what is left of the chain's error enters the
 # value squared; 1e-10, the default, costs twice the steps for nothing visible.
@@ -1389,23 +1394,35 @@ class GeometricMinimumAction:
         The chain is relaxed until no node moves by more than ``tolerance`` in a
         step, or for ``iterations`` steps; the result's ``converged`` says which,
         and a chain still moving is returned as it stands rather than refused.
+
+        The explicit part of the flow is stiff where the drift rotates fast
+        against its gradient - on Dahiya and Cameron's SDE (21), rotation ten
+        times the gradient, a chain of 41 nodes blew up at a step of 0.05 - so
+        a chain that stops being finite, or jumps, is started again from
+        ``initial`` at half the step, a few times over, and the step that held
+        is kept for later paths. The step decides only how fast the chain settles, not
+        where.
         """
         states = np.asarray(initial, dtype=float)
         factor = self._constant_factor(states)
         inverse = np.linalg.inv(factor)
-        chain = states @ inverse.T
-        nodes = chain.shape[0]
-        spacing = 1.0 / (nodes - 1)
-        converged = False
-        taken = 0
-        for taken in range(1, self._iterations + 1):  # noqa: B007 (read after)
-            following = self._relax(chain, factor, inverse, spacing)
-            following = _equal_arc_length(following)
-            change = float(np.max(np.abs(following - chain)))
-            chain = following
-            if change < self._tolerance:
-                converged = True
+        step = self._step
+        for _ in range(_STEP_HALVINGS):
+            # A chain that blows up overflows on its way to nan; that is
+            # caught below, not warned about.
+            with np.errstate(over="ignore", invalid="ignore"):
+                relaxed = self._relax_all(states @ inverse.T, factor, inverse, step)
+            if relaxed is not None:
+                self._step = step
                 break
+            step *= _HALF
+        else:
+            message = (
+                f"the minimum action path did not stay finite at any step down to "
+                f"{step / _HALF:g}"
+            )
+            raise ValueError(message)
+        chain, converged, taken = relaxed
         result = chain @ factor.T
         return MinimumActionPath(
             result,
@@ -1413,6 +1430,33 @@ class GeometricMinimumAction:
             converged=converged,
             iterations=taken,
         )
+
+    def _relax_all(self, chain, factor, inverse, step):
+        """Relax at one step: the chain, whether it settled, the steps taken.
+
+        ``None`` if the chain stopped being finite, or if one step moved a node
+        by more than a quarter of the distance between its ends: no relaxation
+        moves that far at once, while an unstable step does - on SDE (21) at a
+        step of 0.0125 the nodes jumped by twice that distance every step,
+        and the chain neither blew up nor settled.
+        """
+        spacing = 1.0 / (chain.shape[0] - 1)
+        reach = _JUMP_SHARE * float(np.linalg.norm(chain[-1] - chain[0]))
+        converged = False
+        taken = 0
+        for taken in range(1, self._iterations + 1):  # noqa: B007 (read after)
+            following = self._relax(chain, factor, inverse, spacing, step)
+            if not np.all(np.isfinite(following)):
+                return None
+            following = _equal_arc_length(following)
+            change = float(np.max(np.abs(following - chain)))
+            if change > reach:
+                return None
+            chain = following
+            if change < self._tolerance:
+                converged = True
+                break
+        return chain, converged, taken
 
     def _constant_factor(self, states: np.ndarray) -> np.ndarray:
         cells = np.array(
@@ -1441,7 +1485,7 @@ class GeometricMinimumAction:
         )
         return velocity, jacobians
 
-    def _relax(self, chain, factor, inverse, spacing):
+    def _relax(self, chain, factor, inverse, spacing, step):
         velocity, jacobians = self._drift_at(chain, factor, inverse)
         tangent = np.gradient(chain, spacing, axis=0)
         speed = np.linalg.norm(tangent, axis=1)
@@ -1461,8 +1505,10 @@ class GeometricMinimumAction:
         # converges as nodes are added.
         unit = tangent / np.where(speed > 0.0, speed, 1.0)[:, None]
         force -= np.sum(force * unit, axis=1)[:, None] * unit
-        explicit = chain + self._step * force
-        weight = self._step * scale * scale / (spacing * spacing)
+        explicit = chain + step * force
+        weight = step * scale * scale / (spacing * spacing)
+        if not (np.all(np.isfinite(explicit)) and np.all(np.isfinite(weight))):
+            return np.full_like(chain, np.nan)
         nodes = chain.shape[0]
         bands = np.zeros((3, nodes))
         bands[1] = 1.0 + 2.0 * weight
