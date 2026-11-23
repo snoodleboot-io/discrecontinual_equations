@@ -9,7 +9,7 @@ from abc import ABC, abstractmethod
 
 import numpy as np
 
-from discrecontinual_equations.continuation.bialternate import bialternate_determinant
+from discrecontinual_equations.continuation.bialternate import bialternate_test_value
 from discrecontinual_equations.continuation.continuation_state import ContinuationState
 from discrecontinual_equations.continuation.jacobian import JacobianProvider
 
@@ -151,14 +151,18 @@ class BranchPoint(BifurcationDetector):
 
 
 class Hopf(BifurcationDetector):
-    """Hopf: the bialternate-product determinant of the state Jacobian changes sign."""
+    """Hopf: the bialternate-product determinant of the state Jacobian changes sign.
+
+    The determinant is read through its eigenvalues (see :mod:`.bialternate`), so
+    the test costs one eigenvalue solve and cannot overflow.
+    """
 
     @property
     def kind(self) -> str:
         return "hopf"
 
     def test_value(self, context: DetectionContext) -> float:
-        return bialternate_determinant(context.state_jacobian())
+        return bialternate_test_value(context.state_jacobian())
 
     def characteristic_frequency(self, context: DetectionContext) -> float | None:
         eigenvalues = np.linalg.eigvals(context.state_jacobian())
