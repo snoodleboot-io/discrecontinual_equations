@@ -167,7 +167,7 @@ _FIXED_STEP = [
         GottwaldMelbourneSolver,
         GottwaldMelbourneConfig,
         _stochastic,
-        {"epsilon": 1.0, **_SEED},
+        {"epsilon": 1.0 / _STEPS, **_SEED},
     ),
     ("zhan_duan_li_li", ZhanDuanLiLiSolver, ZhanDuanLiLiConfig, _stochastic, _SEED),
     ("srk2", SRK2Solver, SRK2Config, _stochastic, _SEED),

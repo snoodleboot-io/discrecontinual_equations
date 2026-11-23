@@ -11,7 +11,7 @@ GottwaldMelbourneSolver
 ├── Config: alpha, eta, beta, epsilon, start_time, end_time, step_size, random_seed
 ├── Method: Deterministic homogenisation with Thaler map
 ├── Order: Weak convergence to Marcus SDE solution
-└── Range: α ∈ (1,2), β ∈ [-1,1]
+└── Range: α ∈ (1,2), β ∈ [-1,1], 0 < ε ≤ step_size
 ```
 
 ## Executive Summary
@@ -87,6 +87,10 @@ where `γ = 1/α`. It has an indifferent fixed point at x=0 and generates interm
 ### Convergence
 
 As `ε → 0`, the slow variable `z_n` converges weakly to the solution of the Marcus SDE in the Skorohod topology.
+
+Each fast step advances slow time by `ε`: the path at time `t` is `z_⌊t/ε⌋` (Theorem 4.1 of the paper). A grid step shorter than `ε` cannot be resolved, so `ε` may not exceed `step_size`, and both the config and the solver raise a `ValueError` naming the two values when it does. Before this check (DEQ-86) the solver still took one fast step per grid step, so the path ran `ε/step_size` times faster than its own clock: `ε = 1` on a grid of `1/20000` ran 20,000 units of slow time and overflowed in the z update.
+
+The z update is an explicit step of length `ε` in the drift plus a bounded kick `ε^γ b(z) v`, so at finite `ε` it carries the usual explicit-step restriction on `ε |a'(z)|`, which depends on the equation and is not checked. The paper notes the spurious unstable fixed points this introduces at finite `ε` (Section 4.3); they move away as `ε → 0`.
 
 ## Examples
 
