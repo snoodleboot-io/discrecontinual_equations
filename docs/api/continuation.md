@@ -391,6 +391,22 @@ on 12 nodes, at 0.50% (read 16.7%, a 33-fold over-read). Every film keeps all it
 roughly doubles (0.089% to 0.17% on Bogdanov–Takens, 0.088% to 0.165% on the ring)
 and stays far under the gate.
 
+The bound has two limits, both found by an independent verification against
+Radau shooting on Lorenz, forced Duffing and Langford cycles:
+
+- It bounds the error of the cycle *actually computed*. A seed can converge to
+  another cycle, and in a forced system, where the period cannot tell them apart,
+  to a lower-period orbit traversed `k` times. Seeded from a four-turn Duffing
+  cycle, or a twelve-turn Lorenz cycle at `r = 99.6`, the solve landed on a two-,
+  six- or three-turn orbit traversed two or four times, and passed with errors of
+  1 to 68 against the cycle seeded. The estimate bounded the error against the
+  orbit it found. Detecting the repetition is tracked as DEQ-127.
+- The monodromy's forward-difference Jacobian biases both meshes alike, so
+  neither the gap nor the drift sees it. Below a floor of about `1e-5` the
+  estimate can read up to about four times low (a 5.9e-6 floor on Duffing),
+  still orders of magnitude under the gate. Switching to an automatic-
+  differentiation Jacobian is tracked as DEQ-128.
+
 ### Equidistributing the mesh, measured again
 
 The adaptive mesh rejected above was rejected under trapezoidal collocation, where

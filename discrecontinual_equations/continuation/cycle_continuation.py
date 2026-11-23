@@ -794,6 +794,19 @@ class CyclePoint:
         on 6, all cycles wrong in the leading digit (true errors 0.79 to 773)
         and all refused; no cycle above the default gate passed.
 
+        The bound has two limits. It is a bound for the cycle actually
+        computed, and a seed can converge to a different one: in a forced
+        system, where the period cannot tell them apart, a lower-period orbit
+        traversed ``k`` times. Seeded from a four-turn forced Duffing cycle, or
+        a twelve-turn Lorenz cycle at ``r = 99.6``, the solve landed on the
+        two-, six- or three-turn orbit traversed two or four times and passed
+        with errors of 1 to 68 against the cycle seeded; the estimate bounded
+        the error against the orbit it found (DEQ-127). And the monodromy's
+        forward-difference ``df/dx`` biases both meshes alike, so neither the
+        gap nor the drift sees it. Below a floor of about ``1e-5`` the
+        estimate can read up to about four times low (5.9e-6 true on the
+        Duffing cycle), still orders of magnitude under the gate (DEQ-128).
+
         Under Gauss-Legendre collocation the trivial multiplier stops being a
         measure, and the point carries its error explicitly instead. Those
         multipliers are read off the collocation Jacobian, which is the
@@ -862,8 +875,13 @@ class CyclePoint:
         exact value is known in advance, so its drift arrives with the point.
         Under Hermite-Simpson and Gauss-Legendre the drift is not enough, and
         the point has already paid for a re-solve on the doubled mesh; the
-        test is conservative there: no cycle measured passed with a true error
-        above the tolerance (see :attr:`floquet_error`).
+        test is conservative there for the cycle actually computed: no cycle
+        measured passed with a true error above the tolerance against the
+        orbit the solve found. A seed that lands on a lower-period orbit
+        traversed several times is judged against that orbit, not the one
+        seeded (DEQ-127), and below a forward-difference floor of about
+        ``1e-5`` the estimate can read up to about four times low (DEQ-128);
+        see :attr:`floquet_error`.
         """
         return self.floquet_error < tolerance
 
