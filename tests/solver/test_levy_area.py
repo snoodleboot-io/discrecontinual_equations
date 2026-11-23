@@ -368,6 +368,20 @@ class TestChunkedCellAreas:
             chunked.sample(delta_w[:2], step),
         )
 
+    @pytest.mark.parametrize("bit_generator", [np.random.MT19937, np.random.Philox])
+    def test_sample_cells_keeps_the_callers_bit_generator(self, bit_generator):
+        # The block streams are copies of the caller's generator, not fresh
+        # PCG64 ones given its state: any bit generator gives the same numbers
+        # and leaves the same state as ``sample``.
+        step = 2.0**-5
+        delta_w = np.sqrt(step) * np.random.default_rng(4).standard_normal((11, 3))
+        whole = np.random.Generator(bit_generator(8))
+        chunked = np.random.Generator(bit_generator(8))
+        expected = LevyAreaSampler(whole).sample(delta_w, step)
+        areas = LevyAreaSampler(chunked).sample_cells(delta_w, step, chunk_normals=7)
+        assert np.array_equal(areas, expected)
+        assert np.array_equal(whole.standard_normal(4), chunked.standard_normal(4))
+
     def test_sample_cells_honours_an_explicit_truncation(self):
         step = 2.0**-4
         delta_w = np.sqrt(step) * np.random.default_rng(5).standard_normal((9, 2))
