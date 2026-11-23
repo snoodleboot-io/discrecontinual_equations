@@ -232,7 +232,10 @@ def _plain_fold(s: float) -> tuple[np.ndarray, float, float, float]:
 
 class TestCuspCoefficientOrientation(TestCase):
     def test_matches_the_center_manifold_reference(self):
-        for function_type, fold in ((CoupledCusp, _cusp_fold), (CoupledFold, _plain_fold)):
+        for function_type, fold in (
+            (CoupledCusp, _cusp_fold),
+            (CoupledFold, _plain_fold),
+        ):
             problem = _problem(function_type)
             for s in (-0.3, -0.12, 0.05, 0.2, 0.3):
                 state, b1, b2, reference = fold(s)

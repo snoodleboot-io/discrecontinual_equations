@@ -83,7 +83,11 @@ jet-aware elementary library).
 
 On the **fold** curve: `bogdanov_takens`, `zero_hopf` (shared kind with the Hopf
 curve), and `cusp`. The cusp test is the quadratic coefficient
-`a = (1/2) <p, B(q, q)>`; it vanishes at a cusp.
+`a = (1/2) <p, B(q, q)>`; it vanishes at a cusp. With `<p, q> = 1` it is odd in
+`q`, so the sign of `q` is taken from the fold curve's own null vector
+(`c . q = 1` along the Moore-Spence curve, as MatCont's bordered
+`v_bor^T v = 1`), never from the SVD; `cusp_coefficient` alone puts the largest
+component of `q` positive unless given an `orientation`.
 
 On the **Hopf** curve: `bogdanov_takens` (omega through zero), `zero_hopf`,
 `hopf_hopf`, and `generalized_hopf`. The generalized-Hopf test is the first
