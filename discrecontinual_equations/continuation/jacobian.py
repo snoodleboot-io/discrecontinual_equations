@@ -4,7 +4,10 @@ from abc import ABC, abstractmethod
 
 import numpy as np
 
-from discrecontinual_equations.continuation.residual import ResidualFunction
+from discrecontinual_equations.continuation.residual import (
+    DifferentiableResidual,
+    ResidualFunction,
+)
 
 _CENTRAL_DIFFERENCE_POINTS = 2.0
 
@@ -55,3 +58,31 @@ class FiniteDifferenceJacobian(JacobianProvider):
         forward = self._residual.evaluate(state, parameter + self._epsilon)
         backward = self._residual.evaluate(state, parameter - self._epsilon)
         return (forward - backward) / (_CENTRAL_DIFFERENCE_POINTS * self._epsilon)
+
+
+class AnalyticJacobian(JacobianProvider):
+    """The extended Jacobian the residual computes itself.
+
+    For augmented systems whose rows are bordered test functions, differencing
+    every column would redo the whole bordered reduction per column; the residual
+    instead differentiates its rows analytically (see
+    :class:`~.residual.DifferentiableResidual`).
+    """
+
+    __slots__ = ["_epsilon", "_residual"]
+
+    def __init__(self, residual: ResidualFunction, epsilon: float) -> None:
+        if not isinstance(residual, DifferentiableResidual):
+            message = "AnalyticJacobian needs a DifferentiableResidual"
+            raise TypeError(message)
+        self._residual = residual
+        self._epsilon = epsilon
+
+    def extended_jacobian(self, state: np.ndarray, parameter: float) -> np.ndarray:
+        return self._residual.extended_jacobian(state, parameter, self._epsilon)
+
+    def state_jacobian(self, state: np.ndarray, parameter: float) -> np.ndarray:
+        return self.extended_jacobian(state, parameter)[:, :-1]
+
+    def parameter_derivative(self, state: np.ndarray, parameter: float) -> np.ndarray:
+        return self.extended_jacobian(state, parameter)[:, -1]

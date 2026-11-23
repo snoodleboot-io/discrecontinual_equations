@@ -38,8 +38,10 @@ solve and the reduction so the substitution is defined in exactly one place.
 
 The reduction is wired into `TwoParameterProblem.lyapunov_quantities`, which uses
 the planar recursion directly in two dimensions and the center manifold reduction
-above in higher dimensions. It is exercised by the generalized-Hopf curve residual
-and the degenerate-Bautin detector, so both now work for systems of any dimension.
+above in higher dimensions. It is exercised by the degenerate-Bautin detector, so
+that works for systems of any dimension. (The generalized-Hopf curve residual used
+it too until DEQ-51; it now uses Kuznetsov's `l1`, `normal_form.first_lyapunov`,
+whose zero set is the same and whose derivatives it can take analytically.)
 
 Validation (see `tests/test_center_manifold.py` and the `TestCenterManifoldCodim3`
 case in `tests/test_codim3.py`):

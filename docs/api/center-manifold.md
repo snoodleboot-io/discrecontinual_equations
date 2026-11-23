@@ -14,7 +14,7 @@ Two reductions live in the library:
 | Points | Hopf (any dimension) | Hopf, Bogdanov-Takens, zero-Hopf, Hopf-Hopf, cusp |
 | Center manifold | Taylor series `w = W(u)`, degree 6, solved order by order | Solved together with the normalising transformation (Kuznetsov's projection method) |
 | Output | Focal values `(eta4, eta6)` | Normal-form coefficients and the case they decide |
-| Used by | generalized-Hopf and degenerate-Bautin detection | `Codim2Point.classification`, the BT unfolding |
+| Used by | degenerate-Bautin detection | `Codim2Point.classification`, the BT unfolding |
 
 ## The method
 
