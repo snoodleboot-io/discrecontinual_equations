@@ -24,6 +24,7 @@ from discrecontinual_equations.continuation.lyapunov import (
     lyapunov_spectrum,
 )
 from discrecontinual_equations.continuation.noise import jacobian_at
+from discrecontinual_equations.continuation.region_analysis import describe_region
 from discrecontinual_equations.function.deterministic import DeterministicFunction
 from tests.continuation.fields import LorenzField, State
 
@@ -266,6 +267,15 @@ class TestForwardStep(TestCase):
         expected = np.sqrt(_EPS) * np.array([3.0, 0.25, 5.0e9])
         assert np.allclose(steps, expected, rtol=1.0e-6)
 
+    def test_typical_size_defaults_to_one(self):
+        # Dennis and Schnabel's typx, IMSL's XSCALE and UNCMIN's sx all default
+        # to one: a component below one in size is stepped as if it were one.
+        spy = _Identity.make()
+        state = np.array([0.0, 0.25, -1.0e-6])
+        jacobian_at(spy, state)
+        steps = [abs(np.array(point) - state).max() for point in spy.points[1:]]
+        assert np.allclose(steps, np.sqrt(_EPS), rtol=1.0e-6)
+
 
 class TestCentralStep(TestCase):
     """A central difference trades two evaluations per column for ``eps^(2/3)``."""
@@ -411,6 +421,34 @@ class TestLorenzWithAnalyticJacobian(TestCase):
             settings=settings,
         )
         assert abs(differenced.top - analytic.top) < 1.0e-6
+
+
+# An equilibrium far from the origin, at a power of two so every evaluation of
+# the linear field below is exact: an ulp there is 2^-18, about 4e-6, so an
+# absolute step of 1e-7 rounds away and Newton would be handed a zero Jacobian.
+_FAR = float(2**34)
+
+
+class _FarFocus(DeterministicFunction):
+    """A stable focus at ``(2^34, -2^34)``: eigenvalues ``-1 +- i``."""
+
+    def eval(self, point, time=None):  # noqa: ARG002 (base signature)
+        u, v = point[0] - _FAR, point[1] + _FAR
+        return [-u - v, u - v]
+
+
+class TestRegionAnalysisUsesTheSharedStep(TestCase):
+    """``region_analysis`` classifies with ``jacobian_at``, not an absolute step."""
+
+    def test_finds_and_classifies_an_equilibrium_far_from_the_origin(self):
+        field = _FarFocus(
+            variables=[State(), State()],
+            parameters=[],
+            results=[State(), State()],
+            time=None,
+        )
+        seed = np.array([_FAR + 1024.0, -_FAR - 512.0])
+        assert describe_region(field, [seed]) == "stable focus"
 
 
 @pytest.mark.timing
