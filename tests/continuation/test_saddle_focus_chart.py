@@ -11,6 +11,7 @@ exactly, with ``phi`` of degree 9, so a chart of order ``N < 9`` is off it by
 
 import math
 from unittest import TestCase
+from unittest.mock import patch
 
 import numpy as np
 import pytest
