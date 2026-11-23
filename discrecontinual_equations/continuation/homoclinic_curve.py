@@ -25,9 +25,12 @@ from scipy.sparse import csc_matrix, csr_matrix
 from scipy.sparse.linalg import splu
 
 from discrecontinual_equations.continuation.connecting_orbit import (
+    _IMAGINARY,
     MeshSpec,
     OrbitSolution,
     _collocation_triplets,
+    _projection_conditions,
+    _split_eigenspaces,
 )
 from discrecontinual_equations.continuation.derivative_provider import (
     AutomaticDifferentiation,
@@ -37,11 +40,33 @@ from discrecontinual_equations.differential_equation import DifferentialEquation
 _TOLERANCE = 1.0e-10
 _ITERATIONS = 80
 _STEP = 1.0e-7
-_REAL_FLOOR = 1.0e-9
 _HALF = 0.5
 # Column ordering for the sparse LU; see ``connecting_orbit._factor`` for why.
 _ORDERING = "COLAMD"
 _AUTODIFF = AutomaticDifferentiation()
+
+
+def _continuous_phases(values: np.ndarray, left: np.ndarray) -> np.ndarray:
+    """Fix the phase of each complex left eigenvector so it varies smoothly.
+
+    LAPACK makes the largest component of a complex eigenvector real but leaves
+    its sign free, and the sign can flip between two Jacobians ``1e-7`` apart.
+    The real and imaginary projection rows then flip with it, and the
+    differenced boundary rows of the Newton matrix jump by ``2 |residual| / 1e-7``
+    (measured: ``1.3e5`` in the parameter column on the jerk saddle-focus).
+    Rotating each complex row so its largest component is real and positive
+    leaves the conditions' zero set unchanged and makes them continuous in the
+    Jacobian away from ties in the largest component. Real rows are untouched.
+    """
+    complex_rows = np.flatnonzero(np.abs(values.imag) > _IMAGINARY)
+    if complex_rows.size == 0:
+        return left
+    fixed = left.copy()
+    for index in complex_rows:
+        row = fixed[index]
+        largest = row[np.argmax(np.abs(row))]
+        fixed[index] = row * (np.conj(largest) / np.abs(largest))
+    return fixed
 
 
 class HomoclinicCurvePoint:
@@ -174,16 +199,20 @@ class HomoclinicCurve:
         These are the only rows that see the saddle's eigenvectors, and the only
         ones besides the phase condition that reach across the mesh: they touch
         the two end nodes, the equilibrium and the continuation parameter.
+
+        A complex pair of a saddle-focus gives one real and one imaginary row,
+        as for a single connecting orbit: the real parts of a conjugate pair's
+        two projections are the same number, so one row per eigenvalue would
+        make the Newton matrix singular.
         """
-        jacobian = self._field_jacobian(equilibrium, continuation, sweep)
-        values, vectors = np.linalg.eig(jacobian)
-        left = np.linalg.inv(vectors)
-        stable = [i for i in range(len(values)) if values[i].real < -_REAL_FLOOR]
-        unstable = [i for i in range(len(values)) if values[i].real > _REAL_FLOOR]
+        values, left, stable, unstable = _split_eigenspaces(
+            self._field_jacobian(equilibrium, continuation, sweep),
+        )
+        left = _continuous_phases(values, left)
         departure = departure_state - equilibrium
         arrival = arrival_state - equilibrium
-        boundary = [(left[i] @ departure).real for i in stable]
-        boundary += [(left[i] @ arrival).real for i in unstable]
+        boundary = _projection_conditions(left, values, stable, departure)
+        boundary += _projection_conditions(left, values, unstable, arrival)
         return np.concatenate(
             [self._field(equilibrium, continuation, sweep), np.array(boundary)],
         )
