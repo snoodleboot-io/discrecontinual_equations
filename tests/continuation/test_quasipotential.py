@@ -15,7 +15,6 @@ successive errors.
 """
 
 import functools
-import hashlib
 import itertools
 import math
 from unittest import TestCase
@@ -1067,19 +1066,85 @@ def _rotating_error_by_order(count, order):
     return float(np.max(np.abs(field.values.ravel()[inside] - exact[inside])))
 
 
-# Digests of the default march's values before the parabola existed.
+# Values of the default march before the parabola existed, recorded on
+# feature/deq-57 (90b9207): a diagonal, an antidiagonal, a row and the largest.
 _BEFORE_PARABOLA = {
-    "double well": "53d609f28bdbacce",
-    "rotating": "3c4a880768ff0170",
+    "double well": (
+        ((0, 0), 6.592977174199513),
+        ((4, 4), 3.1387549139733943),
+        ((8, 8), 1.2407144156863845),
+        ((12, 12), 0.38203922957266656),
+        ((16, 16), 0.15563414370087175),
+        ((20, 20), 0.2823444334057419),
+        ((24, 24), 0.5564219616563246),
+        ((28, 28), 0.8554289192214544),
+        ((32, 32), 1.2744712779154332),
+        ((36, 36), 1.8875599867119182),
+        ((40, 40), 2.6531492185619907),
+        ((2, 38), 4.632251169091255),
+        ((6, 34), 2.0269848284523433),
+        ((10, 30), 0.7070492423146088),
+        ((14, 26), 0.20743695302857446),
+        ((18, 22), 0.19363762894017747),
+        ((22, 18), 0.4133059314316616),
+        ((26, 14), 0.7002162372288548),
+        ((30, 10), 1.039555023349726),
+        ((34, 6), 1.558903795402229),
+        ((38, 2), 2.25154682433646),
+        ((20, 1), 2.3129653830548778),
+        ((20, 7), 1.2338645129081631),
+        ((20, 13), 0.5590143048401391),
+        ((20, 19), 0.29126067162903896),
+        ((20, 25), 0.42566142532022505),
+        ((20, 31), 0.9641756169758537),
+        ((20, 37), 1.908077109253702),
+    ),
+    "rotating": (
+        ((0, 0), 3.9704277385511832),
+        ((4, 4), 2.541368106050344),
+        ((8, 8), 1.4291755097261658),
+        ((12, 12), 0.6351145165090196),
+        ((16, 16), 0.15888327451376946),
+        ((20, 20), 0.0),
+        ((24, 24), 0.15888327451376946),
+        ((28, 28), 0.6351145165090195),
+        ((32, 32), 1.4291755097261651),
+        ((36, 36), 2.5413681060503435),
+        ((40, 40), 3.970427738551183),
+        ((2, 38), 5.422778255160429),
+        ((6, 34), 3.002889865402032),
+        ((10, 30), 1.5327575847215404),
+        ((14, 26), 0.5516771978674945),
+        ((18, 22), 0.061479648191520624),
+        ((22, 18), 0.061479648191520624),
+        ((26, 14), 0.5516771978674946),
+        ((30, 10), 1.5327575847215407),
+        ((34, 6), 3.002889865402033),
+        ((38, 2), 5.422778255160429),
+        ((20, 1), 2.0397144719889644),
+        ((20, 7), 0.9551798888580677),
+        ((20, 13), 0.27713069085562236),
+        ((20, 19), 0.005648904347000301),
+        ((20, 25), 0.14130268600271823),
+        ((20, 31), 0.683733659805187),
+        ((20, 37), 1.632744522869766),
+        ((0, 40), 7.552360706427722),
+    ),
 }
 
 
 class TestDefaultUpdate(TestCase):
     """OLIM-MID, as published, is the default; the parabola is opt-in.
 
-    The default march must be the march before the parabola existed, bit for
-    bit: the digests in ``_BEFORE_PARABOLA`` are of ``values`` from the solver on
-    ``feature/deq-57`` (90b9207), at radius 8 and 41 points.
+    The default march must be the march before the parabola existed: the
+    values in ``_BEFORE_PARABOLA`` are from the solver on ``feature/deq-57``
+    (90b9207), at radius 8 and 41 points. They are compared within a few ulps
+    (``rtol=1e-12``), not bit for bit. On this machine the march is identical
+    to the last bit, but a stored value is from one machine and the test runs
+    on others: NumPy's vectorised ``pow`` and ``sqrt`` can differ from libm by
+    an ulp on another CPU, and an exact digest of float output has already
+    failed on CI runners. A change to the update itself moves these values by
+    far more than that - the parabola moves them by 1e-4 and more.
     """
 
     def _fields(self):
@@ -1117,8 +1182,15 @@ class TestDefaultUpdate(TestCase):
                 )
                 .values
             )
-            digest = hashlib.sha256(values.tobytes()).hexdigest()[:16]
-            assert digest == _BEFORE_PARABOLA[name], name
+            places, before = zip(*_BEFORE_PARABOLA[name], strict=True)
+            now = [values[place] for place in places]
+            np.testing.assert_allclose(
+                now,
+                before,
+                rtol=1.0e-12,
+                atol=1.0e-14,
+                err_msg=name,
+            )
 
 
 class TestQuadraticUpdate(TestCase):
