@@ -102,7 +102,8 @@ class SRK3Solver(StochasticRungeKuttaSolver):
     a remainder whose product with its integral has mean zero and an L2 size of
     ``O(h^2)``, which is what order 1.5 asks of a one-step scheme. (Subtracting
     ``b^j3(Ups+-^j1)`` instead, as the scalar formula's ``b(Y+-)`` might suggest,
-    leaves ``(L^j2 - L^j1) b^j3 / sqrt(h)`` for ``j1 != j2``: order 1.0.) With
+    leaves ``(L^j2 - L^j1) b^j3 / sqrt(h)`` for ``j1 != j2``, a local error of
+    order ``h`` and so strong order 0.5, which is what that variant measures.) With
     ``m = 1`` the lines are (11.2.1)'s, term for term. Per step: ``1 + 2 m`` drift
     and ``1 + 2 m + 2 m^2`` diffusion evaluations, and the ``m^3`` triple
     integrals.
