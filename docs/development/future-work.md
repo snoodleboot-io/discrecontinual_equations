@@ -185,8 +185,9 @@ solver returns the same near-optimal result as the uniform mesh (no regression).
   connection is solved by the projection BVP restricted to its subspace (where it
   is isolated even when the source's unstable manifold is 2-D, as at Kirk-Silber's
   `xi2`), checked by the full-space solve, and refused with `NotATrajectoryError`
-  when its collocation residual under the full field exceeds the mesh's
-  trapezoidal truncation error `h^3 |x'''| / 12` (DEQ-81), and each cycle's
+  when its collocation residual under the full field exceeds, on any interval,
+  twice that interval's trapezoidal truncation error `h^3 |x'''| / 12` (DEQ-81),
+  and each cycle's
   eigenvalues are classified per node into radial, contracting, expanding and
   transverse (Krupa and Melbourne 1995, section 2.3). The oracles, all in
   `tests/continuation/test_heteroclinic_network.py`:

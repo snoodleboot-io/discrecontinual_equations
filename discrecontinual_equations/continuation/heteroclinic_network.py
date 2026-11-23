@@ -493,9 +493,10 @@ class HeteroclinicNetwork:
         in its subspace, and is refused: the least-squares solve would otherwise
         return its best non-trajectory, which can sit on both saddles, in the
         plane, with a small ``resolution`` estimate. A solved path whose collocation
-        residual under the full field exceeds the mesh's truncation error is not a
-        trajectory either - the subspace is not invariant along it - and is refused
-        with :class:`NotATrajectoryError`, which carries it.
+        residual under the full field exceeds, on any interval, what the mesh's
+        truncation error allows there is not a trajectory either - the subspace is
+        not invariant along it - and is refused with :class:`NotATrajectoryError`,
+        which carries it.
         """
         margin = self.persistence_margin(connection)
         if margin <= 0.0:
@@ -540,9 +541,10 @@ class HeteroclinicNetwork:
         if not orbit.residual.is_trajectory:
             message = (
                 f"{connection.source} -> {connection.target} is not a trajectory: "
-                f"its collocation residual {orbit.residual.largest:.3g} exceeds the "
-                f"mesh's truncation error {orbit.residual.tolerance:.3g}, so the flow "
-                f"leaves the subspace along it and no connection lies there"
+                f"its collocation residual (largest {orbit.residual.largest:.3g}) "
+                f"reaches {orbit.residual.worst:.3g} times what the mesh's "
+                f"truncation error allows on some interval, so the flow leaves the "
+                f"subspace along it and no connection lies there"
             )
             raise NotATrajectoryError(message, orbit)
         return orbit
