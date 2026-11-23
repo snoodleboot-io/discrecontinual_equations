@@ -289,6 +289,8 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
+# A standalone script that reads measurement CSVs, not part of a package
+"scripts/*" = ["INP001"]
 # Tests can use magic values, assertions, imports, and print diagnostics
 "tests/**/*" = ["PLR2004", "S101", "TID252", "T20"]
 # unittest.TestCase-style tests use self.assert*
