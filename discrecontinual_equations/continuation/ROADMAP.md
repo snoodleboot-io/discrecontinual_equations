@@ -43,11 +43,13 @@ step, 0.094, and seven rings from 157.09 on were accepted there turning by up
 to 0.95. It stopped at 157.4 while the continuation in the flight time gave a
 landing up after 200 steps: where the flow runs along the level set the
 landings go 18.7 inside before coming round to the outward one. A landing
-lost at 200 steps is now continued again with 4,000, and a final Newton
-solve outside its bracket counts as lost. The growth to 157.4 costs what it
-did (the same mesh); the rings beyond it take 1,350 s against 93 s, and the
-papers' settings, where a few rows never land and escalate at every halving,
-about 3 times longer for the same stop. With `loss` it goes on, with holes. At the papers' settings it stops
+lost at 200 steps is now continued again with 4,000, once per front (a row
+the larger budget failed is not escalated again at a smaller Delta), and a
+final Newton solve outside its bracket counts as lost. The growth to 157.4
+costs what it did (the same mesh); the rings beyond it take 824 s against
+64 s for the 200-step growth to 157.4, side by side. At the papers' settings,
+where a few rows never land, the same stops cost 1.7 (SIADS) to 2.2 (IJBC)
+times as long, and the lossy growth to 170 2.8 times, losing 1 point not 57. With `loss` it goes on, with holes. At the papers' settings it stops
 short of their distances: 150.75 at the SIADS spacing (0.25 to 1.0; published
 151.75) and 152.75 at the survey's (0.67 to 2.0; published 154.75), on 7 and 4
 landings at the smallest step 0.01.

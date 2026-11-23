@@ -26,16 +26,18 @@ What is checked, and where each number comes from - all measured here:
   (``|f . t| / |f| = 0.9993``), the landings go 18.7 inside the ring
   before they come round to the outward one at tau = 0.263, some 400 steps
   of Delta / 4 - measured independently, DOP853. A row lost at 200 steps is
-  now continued again with 4,000. The growth to 157.38 costs what it did,
-  the same mesh in 53 s; the 28 rings beyond it, with their halvings and
-  escalated rows, take the rest of 1,350 s. It stopped at 157.16 before
+  now continued again with 4,000, once per front. The growth to 157.38
+  costs what it did, the same mesh; the 28 rings beyond it take the rest
+  of 824 s, against 64 s for the 200-step growth stopping at 157.38, run
+  side by side. The classes below grow without the escalation, to keep
+  the suite fast: it stops at 157.38. It stopped at 157.16 before
   failed landings were retried alone, and at 142.87 before the back-trace
   stopped counting false crossings far from the ring.)
   By then the scrolls have formed: rays from ``C+`` cross three layers of
   the surface in four of the eight directions;
 * allowed to drop 3% of a ring (``loss=0.03``) it reaches 170 with 1 point
-  lost (to 160 it now loses none), and the crochet pattern still adds up
-  round by round.
+  lost (57 without the escalation; to 160 it now loses none, 30 without),
+  and the crochet pattern still adds up round by round.
 
 What the papers report, read from them: Krauskopf and Osinga (SIAM J. Appl.
 Dyn. Syst. 2(4) 2003, Sec. 4.5, preprint of 7 May 2003) grew it from 20
