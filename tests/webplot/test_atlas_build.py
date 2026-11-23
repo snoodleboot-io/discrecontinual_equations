@@ -57,7 +57,10 @@ def test_every_catalogue_entry_becomes_a_unit():
 
 def test_a_unit_that_expands_to_several_pages_is_one_unit():
     starred = [unit for unit in atlas._page_units() if unit.filename is None]
-    assert [unit.builder for unit in starred] == ["_connecting_orbit_entries"]
+    assert [unit.builder for unit in starred] == [
+        "_connecting_orbit_entries",
+        "_network_entries",
+    ]
 
 
 @pytest.mark.parametrize(
