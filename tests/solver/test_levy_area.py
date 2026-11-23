@@ -19,10 +19,13 @@ pathwise error is checked separately, against a reference coupled to the same
 Fourier coefficients, at the rate of their Theorem 4.4.
 """
 
+import tracemalloc
+
 import numpy as np
 import pytest
 from scipy import special, stats
 
+from discrecontinual_equations.solver.stochastic import wiener
 from discrecontinual_equations.solver.stochastic.wiener import (
     BrownianPath,
     GaussianWienerSource,
@@ -334,3 +337,224 @@ class TestBrownianPathAreas:
         with_areas = path.increments(0.0, 0.5, 2, levy_area=True)
         assert np.array_equal(plain.delta_w, with_areas.delta_w)
         assert np.array_equal(plain.delta_z, with_areas.delta_z)
+
+
+class TestChunkedCellAreas:
+    """DEQ-70: a path's cell areas are drawn in chunks, bit for bit as at once.
+
+    The reference is the one allocation the path made before: the sampler's
+    ``sample`` on every cell, on the stream the path spawns from its seed. The
+    chunked draw must give the same numbers and leave the generator where
+    ``sample`` leaves it, at any chunk size, while its working memory stays
+    bounded by the chunk rather than by the number of cells.
+    """
+
+    @pytest.mark.parametrize("dimension", [1, 2, 3])
+    @pytest.mark.parametrize("chunk_normals", [1, 50, 10**9])
+    def test_sample_cells_is_bit_identical_to_sample(self, dimension, chunk_normals):
+        step = 2.0**-6
+        cells = 37
+        delta_w = np.sqrt(step) * np.random.default_rng(3).standard_normal(
+            (cells, dimension),
+        )
+        whole = LevyAreaSampler(np.random.default_rng(31))
+        chunked = LevyAreaSampler(np.random.default_rng(31))
+        expected = whole.sample(delta_w, step)
+        areas = chunked.sample_cells(delta_w, step, chunk_normals=chunk_normals)
+        assert np.array_equal(areas, expected)
+        # Both samplers continue from the same point of the stream.
+        assert np.array_equal(
+            whole.sample(delta_w[:2], step),
+            chunked.sample(delta_w[:2], step),
+        )
+
+    @pytest.mark.parametrize("bit_generator", [np.random.MT19937, np.random.Philox])
+    def test_sample_cells_keeps_the_callers_bit_generator(self, bit_generator):
+        # The block streams are copies of the caller's generator, not fresh
+        # PCG64 ones given its state: any bit generator gives the same numbers
+        # and leaves the same state as ``sample``.
+        step = 2.0**-5
+        delta_w = np.sqrt(step) * np.random.default_rng(4).standard_normal((11, 3))
+        whole = np.random.Generator(bit_generator(8))
+        chunked = np.random.Generator(bit_generator(8))
+        expected = LevyAreaSampler(whole).sample(delta_w, step)
+        areas = LevyAreaSampler(chunked).sample_cells(delta_w, step, chunk_normals=7)
+        assert np.array_equal(areas, expected)
+        assert np.array_equal(whole.standard_normal(4), chunked.standard_normal(4))
+
+    def test_sample_cells_honours_an_explicit_truncation(self):
+        step = 2.0**-4
+        delta_w = np.sqrt(step) * np.random.default_rng(5).standard_normal((9, 2))
+        expected = LevyAreaSampler(np.random.default_rng(6)).sample(
+            delta_w,
+            step,
+            terms=7,
+        )
+        areas = LevyAreaSampler(np.random.default_rng(6)).sample_cells(
+            delta_w,
+            step,
+            terms=7,
+            chunk_normals=30,
+        )
+        assert np.array_equal(areas, expected)
+
+    @pytest.mark.parametrize("dimension", [2, 3])
+    def test_path_readings_are_bit_identical_to_one_allocation(
+        self,
+        dimension,
+        monkeypatch,
+    ):
+        monkeypatch.setattr(wiener, "_CHUNK_NORMALS", 40)
+        resolution = 2.0**-8
+        path = BrownianPath.sample(0.0, 1.0, resolution, dimension, seed=5)
+        sequence = np.random.SeedSequence(5)
+        sampler = LevyAreaSampler(np.random.default_rng(sequence.spawn(1)[0]))
+        cells = sampler.sample(np.diff(path.values, axis=0), resolution)
+        reference = BrownianPath(0.0, resolution, path.values, areas=cells)
+        for step in [resolution, 2.0**-5, 2.0**-2, 1.0]:
+            for start in [0.0, 1.0 - step]:
+                got = path.increments(start, step, dimension, levy_area=True)
+                want = reference.increments(start, step, dimension, levy_area=True)
+                assert np.array_equal(got.levy_area, want.levy_area), (step, start)
+
+    @staticmethod
+    def _first_reading_peak(exponent: int) -> tuple[int, int]:
+        """Peak bytes of a path's first area reading, and the bytes it keeps."""
+        resolution = 2.0**-exponent
+        path = BrownianPath.sample(0.0, 1.0, resolution, 2, seed=1)
+        tracemalloc.start()
+        base = tracemalloc.get_traced_memory()[0]
+        path.increments(0.0, resolution, 2, levy_area=True)
+        peak = tracemalloc.get_traced_memory()[1] - base
+        tracemalloc.stop()
+        # The cell areas it keeps (cells x m x m) and the increments it draws
+        # them for (cells x m).
+        return peak, 2**exponent * (2 * 2 + 2) * 8
+
+    @pytest.mark.parametrize("exponent", [10, 14])
+    def test_working_memory_is_bounded_by_the_chunk(self, exponent, monkeypatch):
+        # Beyond what it keeps, the draw holds X, Y and two scaled copies of one
+        # chunk: about 4 to 7 chunks of 2^12 normals (32 kB each) whatever the
+        # grid, where one allocation of all cells took 19.7 MB at 2^-14.
+        monkeypatch.setattr(wiener, "_CHUNK_NORMALS", 2**12)
+        peak, kept = self._first_reading_peak(exponent)
+        assert peak - kept < 9 * 2**12 * 8, (peak, kept)
+
+    def test_default_chunk_bounds_a_fine_grid(self):
+        # At 2^-16 with two channels the one allocation peaked at 150 MB; the
+        # default chunk of 2^18 normals (2 MB) keeps the working memory near 9 MB.
+        peak, kept = self._first_reading_peak(16)
+        assert peak - kept < 20 * 2**20, (peak, kept)
+
+    def test_sample_cells_chunks_by_the_budget_it_is_given(self):
+        step = 2.0**-12
+        cells = 4096
+        delta_w = np.sqrt(step) * np.random.default_rng(2).standard_normal((cells, 2))
+        sampler = LevyAreaSampler(np.random.default_rng(3))
+        tracemalloc.start()
+        base = tracemalloc.get_traced_memory()[0]
+        areas = sampler.sample_cells(delta_w, step, chunk_normals=2**10)
+        peak = tracemalloc.get_traced_memory()[1] - base
+        tracemalloc.stop()
+        # Nine terms at 2^-12: all cells' X alone would be 590 kB.
+        assert peak - areas.nbytes < 9 * 2**10 * 8, peak
+
+
+class TestAccuracySetting:
+    """DEQ-67: the constant ``c1`` of the truncation rule, ``L2 error <= c1 h^(3/2)``.
+
+    ``n = ceil(sqrt(m / (12 pi^2)) / (c1 sqrt(h)))`` (Kastner and Rossler (67)).
+    With ``c1 = 1`` the rule keeps ``n`` at 1 for ``h >= 2^-5`` and the sampler's
+    error falls more slowly than ``1 / n`` for ``n <= 5``, so the global error over
+    ``h = 2^-3 ... 2^-10`` measures a slope of about 0.75; ``c1 = 0.05`` keeps ``n``
+    at 8 or more there, and the slope is 0.975 in theory (Mrongowius and Rossler,
+    Theorem 4.4 (i), summed over ``1 / h`` independent steps).
+    """
+
+    def test_terms_scale_with_the_accuracy(self):
+        for step, dimension, accuracy in [
+            (2.0**-3, 2, 0.05),
+            (2.0**-10, 2, 0.05),
+            (2.0**-8, 5, 0.3),
+            (1e-6, 3, 2.0),
+        ]:
+            expected = int(
+                np.ceil(
+                    np.sqrt(dimension / (12 * np.pi**2)) / (accuracy * np.sqrt(step)),
+                ),
+            )
+            assert LevyAreaSampler.terms(step, dimension, accuracy) == expected
+        assert LevyAreaSampler.terms(2.0**-3, 2, 0.05) == 8
+        assert LevyAreaSampler.terms(2.0**-10, 2, 0.05) == 84
+        assert LevyAreaSampler.terms(2.0**-6, 2) == LevyAreaSampler.terms(
+            2.0**-6,
+            2,
+            1.0,
+        )
+
+    @pytest.mark.parametrize("accuracy", [0.0, -1.0])
+    def test_accuracy_must_be_positive(self, accuracy):
+        with pytest.raises(ValueError, match="accuracy"):
+            LevyAreaSampler(np.random.default_rng(0), accuracy=accuracy)
+
+    @pytest.mark.parametrize("accuracy", [1.0, 0.05])
+    def test_sampler_draws_the_terms_of_its_accuracy(self, accuracy):
+        step = 2.0**-6
+        delta_w = np.sqrt(step) * np.random.default_rng(1).standard_normal((5, 2))
+        terms = LevyAreaSampler.terms(step, 2, accuracy)
+        expected = LevyAreaSampler(np.random.default_rng(2)).sample(
+            delta_w,
+            step,
+            terms=terms,
+        )
+        sampler = LevyAreaSampler(np.random.default_rng(2), accuracy=accuracy)
+        assert np.array_equal(sampler.sample(delta_w, step), expected)
+        cells = LevyAreaSampler(np.random.default_rng(2), accuracy=accuracy)
+        assert np.array_equal(cells.sample_cells(delta_w, step), expected)
+
+    @pytest.mark.parametrize("step", [2.0**-6, 2.0**-12])
+    def test_default_sampler_is_the_order_one_rule(self, step):
+        # At 2^-12 the bound is 8.3 terms: 9 at c1 = 1, 10 at any c1 <= 0.92.
+        delta_w = np.sqrt(step) * np.random.default_rng(1).standard_normal((5, 2))
+        expected = LevyAreaSampler(np.random.default_rng(2)).sample(
+            delta_w,
+            step,
+            terms=LevyAreaSampler.terms(step, 2),
+        )
+        sampler = LevyAreaSampler(np.random.default_rng(2))
+        assert np.array_equal(sampler.sample(delta_w, step), expected)
+
+    @staticmethod
+    def _global_errors(accuracy: float) -> dict[float, float]:
+        # The global L2 error over [0, 1] of sampler-driven Milstein on the
+        # iterated-integral oracle is sqrt(1 / h) times the per-step error.
+        generator = np.random.default_rng(17)
+        errors = {}
+        for exponent in range(3, 11):
+            step = 2.0**-exponent
+            terms = LevyAreaSampler.terms(step, 2, accuracy)
+            delta_w = np.sqrt(step) * generator.standard_normal((4000, 2))
+            approximation, reference = coupled_areas(
+                generator,
+                delta_w,
+                step,
+                terms,
+                reference_terms=16 * terms,
+            )
+            per_step = np.sqrt(np.mean((approximation - reference)[:, 0, 1] ** 2))
+            errors[step] = float(np.sqrt(1.0 / step) * per_step)
+        return errors
+
+    def test_small_accuracy_gives_order_one_at_moderate_steps(self):
+        errors = self._global_errors(0.05)
+        order = np.polyfit(np.log(list(errors)), np.log(list(errors.values())), 1)[0]
+        assert order > 0.95, errors
+        assert all(error < 0.05 * step for step, error in errors.items()), errors
+
+    def test_default_accuracy_measures_the_plateau(self):
+        # What DEQ-67 was raised for, kept as the default: within the bound but
+        # of slope about 0.75 over these steps.
+        errors = self._global_errors(1.0)
+        order = np.polyfit(np.log(list(errors)), np.log(list(errors.values())), 1)[0]
+        assert 0.65 < order < 0.85, errors
+        assert all(error < step for step, error in errors.items()), errors

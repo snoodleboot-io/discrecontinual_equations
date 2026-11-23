@@ -75,10 +75,16 @@ References:
   https://en.wikipedia.org/wiki/L%C3%A9vy%27s_stochastic_area.
 """
 
+import copy
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
 import numpy as np
+
+# How many normals of each kind a chunk of cells draws at a time, when a path's
+# every cell is given its areas (DEQ-70): 2 MB a block, so that the working
+# memory is a few such blocks however fine the grid.
+_CHUNK_NORMALS = 2**18
 
 
 @dataclass(frozen=True)
@@ -140,26 +146,39 @@ class LevyAreaSampler:
     error is at most ``h sqrt(m) / (sqrt(12) pi n)`` (their Corollary 4.5).
 
     The sampler is scale-free in the sense that ``A(h) = h A(1)`` given ``dW /
-    sqrt(h)``; it takes ``dW`` with any leading batch axes, so that a fine path's
-    every cell can be drawn at once.
+    sqrt(h)``; it takes ``dW`` with any leading batch axes, and
+    :meth:`sample_cells` draws a fine path's every cell in bounded memory.
     """
 
-    __slots__ = ["_generator"]
+    __slots__ = ["_accuracy", "_generator"]
 
-    def __init__(self, generator: np.random.Generator) -> None:
+    def __init__(self, generator: np.random.Generator, accuracy: float = 1.0) -> None:
+        if not accuracy > 0.0:
+            message = f"accuracy must be positive, got {accuracy}"
+            raise ValueError(message)
         self._generator = generator
+        self._accuracy = float(accuracy)
 
     @staticmethod
-    def terms(step: float, dimension: int) -> int:
-        """The truncation ``n`` that keeps the L2 error per step below ``h^(3/2)``.
+    def terms(step: float, dimension: int, accuracy: float = 1.0) -> int:
+        """The truncation ``n`` that keeps the L2 error per step below ``c1 h^(3/2)``.
 
         From Mrongowius and Rossler's (36), ``max E|I^(n) - I|^2 <= m h^2 / (12
-        pi^2 n^2)``; asking for ``h^(3/2)`` (Kastner and Rossler,
-        arXiv:2201.08424, (64) with ``gamma = 1``, ``c1 = 1``) gives ``n >=
-        sqrt(m / (12 pi^2)) / sqrt(h)`` (their (67)), which is ``O(h^(-1/2))`` -
-        against ``O(h^(-1))`` for the Fourier series without the remainder terms.
+        pi^2 n^2)``; asking for ``c1 h^(3/2)`` (Kastner and Rossler,
+        arXiv:2201.08424, (64) with ``gamma = 1``) gives ``n >= sqrt(m / (12
+        pi^2)) / (c1 sqrt(h))`` (their (67)), which is ``O(h^(-1/2))`` - against
+        ``O(h^(-1))`` for the Fourier series without the remainder terms.
+
+        ``accuracy`` is ``c1``. Any constant gives strong order 1.0 as ``h -> 0``;
+        the default 1 (Kastner and Rossler's ``epsilon = h^(3/2)``) keeps ``n``
+        at 1 for ``h >= 2^-5`` with two channels, and the sampler's error falls
+        more slowly than ``1 / n`` for small ``n``, so sampler-driven Milstein
+        measures a slope of about 0.75 over ``h = 2^-3 ... 2^-10`` (within the
+        bound: at most ``0.4 h``).
+        ``0.05`` measures 0.96 to 0.98 there, for 8 to 17 times the terms
+        (DEQ-67).
         """
-        bound = np.sqrt(dimension / (12.0 * np.pi**2)) / np.sqrt(step)
+        bound = np.sqrt(dimension / (12.0 * np.pi**2)) / (accuracy * np.sqrt(step))
         return max(1, int(np.ceil(bound)))
 
     @staticmethod
@@ -208,20 +227,83 @@ class LevyAreaSampler:
     ) -> np.ndarray:
         """Draw the areas for increments ``delta_w`` of shape ``(..., m)``.
 
-        ``terms`` defaults to :meth:`terms` for the step; the ``2 m n + m + m (m -
-        1) / 2`` normals are drawn in the order ``X``, ``Y``, ``Psi_1``,
-        ``Psi_2``.
+        ``terms`` defaults to :meth:`terms` for the step at this sampler's
+        accuracy; the ``2 m n + m + m (m - 1) / 2`` normals are drawn in the order
+        ``X``, ``Y``, ``Psi_1``, ``Psi_2``.
         """
+        dimension = delta_w.shape[-1]
+        count = self._count(step, dimension, terms)
+        streams = [self._generator] * 4
+        return self._draw(streams, delta_w, step, count)
+
+    def sample_cells(
+        self,
+        delta_w: np.ndarray,
+        step: float,
+        terms: int | None = None,
+        chunk_normals: int | None = None,
+    ) -> np.ndarray:
+        """What :meth:`sample` gives for ``delta_w`` ``(cells, m)``, in chunks.
+
+        The same numbers bit for bit, and the generator left where
+        :meth:`sample` leaves it, but drawn a chunk of cells at a time, so that
+        the working memory is a few chunks rather than ``cells x n x m x 2``
+        normals - several GB for a path of ``2^20`` cells (DEQ-70). ``sample``
+        draws all the ``X`` before all the ``Y``, then ``Psi_1``, then
+        ``Psi_2``; a chunk needs its cells' share of each, so a first pass walks
+        the stream in chunks, discarding the draws and keeping the generator's
+        state where each block begins, and a second draws every block's chunk
+        from a copy of the generator set to that state. The normals are drawn
+        twice; that is the price of an unchanged stream, since a normal takes a
+        varying number of the generator's outputs and a block's end cannot be
+        jumped to. ``chunk_normals`` (default ``_CHUNK_NORMALS``) bounds the
+        normals of one kind a chunk draws.
+        """
+        cells, dimension = delta_w.shape
+        count = self._count(step, dimension, terms)
+        budget = _CHUNK_NORMALS if chunk_normals is None else chunk_normals
+        chunk = max(1, budget // (count * dimension))
+        pairs = dimension * (dimension - 1) // 2
+        blocks = [(count, dimension), (count, dimension), (dimension,), (pairs,)]
+        starts = []
+        for shape in blocks:
+            starts.append(self._generator.bit_generator.state)
+            for begin in range(0, cells, chunk):
+                self._generator.standard_normal((min(chunk, cells - begin), *shape))
+        streams = []
+        for state in starts:
+            stream = copy.deepcopy(self._generator)
+            stream.bit_generator.state = state
+            streams.append(stream)
+        areas = np.empty((cells, dimension, dimension))
+        for begin in range(0, cells, chunk):
+            cut = slice(begin, begin + chunk)
+            areas[cut] = self._draw(streams, delta_w[cut], step, count)
+        return areas
+
+    def _count(self, step: float, dimension: int, terms: int | None) -> int:
+        """``terms`` if given, else the rule's at this sampler's accuracy."""
+        if terms is not None:
+            return terms
+        return self.terms(step, dimension, self._accuracy)
+
+    def _draw(
+        self,
+        streams: list[np.random.Generator],
+        delta_w: np.ndarray,
+        step: float,
+        count: int,
+    ) -> np.ndarray:
+        """The areas with ``X``, ``Y``, ``Psi_1``, ``Psi_2`` from the four streams."""
         batch = delta_w.shape[:-1]
         dimension = delta_w.shape[-1]
-        count = self.terms(step, dimension) if terms is None else terms
-        x = self._generator.standard_normal((*batch, count, dimension))
-        y = self._generator.standard_normal((*batch, count, dimension))
-        psi1 = self._generator.standard_normal((*batch, dimension))
+        x = streams[0].standard_normal((*batch, count, dimension))
+        y = streams[1].standard_normal((*batch, count, dimension))
+        psi1 = streams[2].standard_normal((*batch, dimension))
         # One Psi_2 per pair j < l, in the row-major order of the upper triangle.
         upper = np.triu_indices(dimension, 1)
         psi2 = np.zeros((*batch, dimension, dimension))
-        psi2[..., upper[0], upper[1]] = self._generator.standard_normal(
+        psi2[..., upper[0], upper[1]] = streams[3].standard_normal(
             (*batch, len(upper[0])),
         )
         return self.assemble(delta_w, step, x, y, psi1, psi2)
@@ -302,7 +384,8 @@ class BrownianPath(WienerSource):
     reading is consistent between step sizes: the areas of two adjacent steps and
     the cross term of their increments add up to the area of their union. A path
     from :meth:`sample` draws the cell areas with :class:`LevyAreaSampler`, on a
-    stream of its own and only when first asked, and its reading has the law of
+    stream of its own, only when first asked and a chunk of cells at a time
+    (:meth:`LevyAreaSampler.sample_cells`), and its reading has the law of
     the Levy area at any resolution. A path built from ``values`` alone has no
     cell areas unless given ``areas``; its reading then lacks variance ``h
     resolution / 4`` of the ``h^2 / 4`` and converges to the law as the grid is
@@ -386,7 +469,7 @@ class BrownianPath(WienerSource):
         """The areas inside the grid cells, drawn on first use for a sampled path."""
         if self._areas is None and self._area_sampler is not None:
             cells = np.diff(self._values, axis=0)
-            self._areas = self._area_sampler.sample(cells, self._resolution)
+            self._areas = self._area_sampler.sample_cells(cells, self._resolution)
         return self._areas
 
     def increments(
