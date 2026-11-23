@@ -19,7 +19,7 @@ Every oracle here is computed independently of the code under test:
 """
 
 import math
-from unittest import TestCase, expectedFailure
+from unittest import TestCase
 
 import numpy as np
 import pytest
@@ -446,13 +446,10 @@ class TestSingularHopf(TestCase):
             expected = -1.0 / (2.0 * math.sqrt(epsilon) * (1.0 + epsilon))
             assert abs(_kuznetsov_l1(epsilon) - expected) < 1.0e-12
 
-    @expectedFailure
     def test_library_first_lyapunov_has_the_supercritical_sign(self):
-        # normal_form.first_lyapunov normalises p by <p, q> instead of its
-        # conjugate, so <p, q> = c / conj(c); here c is imaginary and the
-        # normalisation is -1, flipping the sign (+2.13 against -2.13 at
-        # eps = 0.05). A normal Jacobian has a real c, which is why the
-        # library's own Hopf tests do not see it. Reported, not fixed here.
+        # Here <p, q> is imaginary before normalisation, so dividing p by it
+        # instead of its conjugate would flip the sign (+2.13 against -2.13 at
+        # eps = 0.05); DEQ-96 fixed that in normal_form.first_lyapunov.
         epsilon = 0.05
         state = np.array([1.0, -2.0 / 3.0])
         l1 = first_lyapunov(
