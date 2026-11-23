@@ -210,13 +210,23 @@ def first_lyapunov(
     parameter_b: float,
     omega: float,
 ) -> float:
-    """First Lyapunov coefficient ``l1`` at a Hopf point (Kuznetsov's formula)."""
+    """First Lyapunov coefficient ``l1`` at a Hopf point (Kuznetsov's formula).
+
+    ``A q = i omega q``, ``A^T p = -i omega p``, ``<p, q> = <q, q> = 1`` with
+    ``<p, q> = conj(p) . q``, and ``l1 = Re G21 / (2 omega)``. MatCont prints
+    ``Re G21 / 2``, which is ``omega * l1``. The formula assumes ``omega > 0``;
+    ``-omega`` names the same eigenpair (a Hopf curve continued past a
+    Bogdanov-Takens point returns it), so the positive frequency is used.
+    """
+    omega = abs(omega)
     jacobian = problem.state_jacobian(state, parameter_a, parameter_b)
     dimension = jacobian.shape[0]
     right = _eigenvector(jacobian, 1j * omega)
     left = _eigenvector(jacobian.T, -1j * omega)
     right = right / np.sqrt(right.conj() @ right)
-    left = left / (left.conj() @ right)
+    # <p, q> is conjugate-linear in p, so p is divided by the conjugate of
+    # <p, q>; dividing by <p, q> itself leaves <p, q> = c / conj(c).
+    left = left / np.conj(left.conj() @ right)
 
     forms = MultilinearForms(problem, state, parameter_a, parameter_b)
     conjugate = right.conj()
