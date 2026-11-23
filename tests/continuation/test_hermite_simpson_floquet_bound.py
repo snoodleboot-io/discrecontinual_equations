@@ -215,3 +215,17 @@ class TestDisagreementScale(TestCase):
             second,
             first,
         )
+
+
+class TestUnreadableMultipliers(TestCase):
+    def test_a_monodromy_with_no_finite_multipliers_reads_infinite(self):
+        def unreadable(*_reading):
+            return np.full(3, np.nan)
+
+        intervals = 40
+        nodes, period, _ = _reference(2.8, 1, intervals)
+        continuation = CycleContinuation(_equation(2.8), 0, intervals, 1, 0.0)
+        with mock.patch.object(CycleContinuation, "_multipliers", unreadable):
+            trace, _ = continuation.trace(CycleSeed(nodes, period, 2.8), 0.1, 0)
+        assert trace[0].floquet_error == float("inf")
+        assert not trace[0].resolved()
