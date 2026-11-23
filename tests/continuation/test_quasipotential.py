@@ -15,6 +15,7 @@ successive errors.
 """
 
 import functools
+import hashlib
 import itertools
 import math
 from unittest import TestCase
@@ -1063,6 +1064,58 @@ def _rotating_error_by_order(count, order):
     exact = rotating_quasipotential(grid.points())
     inside = exact <= _ROTATING_LEVEL
     return float(np.max(np.abs(field.values.ravel()[inside] - exact[inside])))
+
+
+class TestDefaultUpdate(TestCase):
+    """OLIM-MID, as published, is the default; the parabola is opt-in.
+
+    The default march must be the march before the parabola existed, bit for
+    bit: the digests below are of ``values`` from the solver on
+    ``feature/deq-57`` (90b9207), at radius 8 and 41 points.
+    """
+
+    _BEFORE = {
+        "double well": "53d609f28bdbacce",
+        "rotating": "3c4a880768ff0170",
+    }
+
+    def _fields(self):
+        return {
+            "double well": (
+                double_well(),
+                constant_noise(_IDENTITY),
+                DensityGrid.box([-2.0, -1.5], [1.0, 1.5], [41, 41]),
+                WELL,
+            ),
+            "rotating": (
+                rotating_drift(),
+                constant_noise(rotating_noise_matrix()),
+                DensityGrid.box([-1.5, -1.5], [1.5, 1.5], [41, 41]),
+                [0.0, 0.0],
+            ),
+        }
+
+    def test_the_default_update_is_the_midpoint_one(self):
+        drift, noise, grid, _ = self._fields()["rotating"]
+        solver = OrderedLineIntegral(drift, noise, grid)
+        midpoint = OrderedLineIntegral(drift, noise, grid, update_order=MIDPOINT)
+        attractor = EquilibriumAttractor([0.0, 0.0])
+        assert np.array_equal(
+            solver.solve(attractor).values,
+            midpoint.solve(attractor).values,
+        )
+
+    def test_the_default_march_is_the_one_before_the_parabola(self):
+        for name, (drift, noise, grid, well) in self._fields().items():
+            values = (
+                OrderedLineIntegral(drift, noise, grid)
+                .solve(
+                    EquilibriumAttractor(well),
+                )
+                .values
+            )
+            digest = hashlib.sha256(values.tobytes()).hexdigest()[:16]
+            assert digest == self._BEFORE[name], name
 
 
 class TestQuadraticUpdate(TestCase):
