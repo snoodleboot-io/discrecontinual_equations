@@ -301,7 +301,7 @@ class ConformalNoise(StochasticFunction):
 | Euler-Maruyama | 0.5 | 1.0 | 1 | Fastest |
 | Milstein | 1.0 | 1.0 | 1 | Fast |
 | SRK2 | 1.0 (measured 0.99) | 1.0 (measured 0.97) | 2 | Medium |
-| SRK3 | 1.5 (measured 1.48; 1.42-1.46 on two non-commuting channels) | measured 1.98 | 3 drift + 6 diffusion (`1+2m`, `1+2m+2m^2` for `m` channels) | Slow |
+| SRK3 | 1.5 (measured 1.48; 1.43-1.46 on two non-commuting channels) | measured 1.98 | 3 drift + 6 diffusion (`1+2m`, `1+2m+2m^2` for `m` channels) | Slow |
 | SRK4 | 1.0 (measured 1.05), scalar noise | 2.0 (measured 1.96) | 2 drift + 4 diffusion | Medium |
 | SRK5 | refused | refused | - | - |
 
