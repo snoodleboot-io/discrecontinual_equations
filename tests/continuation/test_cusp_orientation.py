@@ -5,7 +5,7 @@ Every system is written in coordinates ``(u, v)`` with a stable mode
 non-orthogonal ``x = M (u, v)``, so the null vectors have both components and the
 center manifold is curved. The reference values are a center-manifold
 (Poincare-Dulac) reduction done in closed form on ``(u, v)`` and checked
-symbolically (``outputs/verification/deq-102/reference.py``); none of them comes
+symbolically by a separate sympy center-manifold reduction; none of them comes
 from the library.
 
 * Cusp system ``u' = b1 + b2 u + 3 u v - u^3``: fold curve
