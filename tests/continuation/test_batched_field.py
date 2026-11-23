@@ -58,6 +58,19 @@ class _RowVector(DeterministicFunction):
         return list(np.asarray(point, dtype=float).T @ rotation)
 
 
+class _Smallest(DeterministicFunction):
+    """Silently wrong on arrays after the first state: a reduction over them.
+
+    ``x.min()`` of one state's coordinate is the coordinate; of the batch it is
+    the smallest over every state, right for the state that holds it and wrong
+    for the rest.
+    """
+
+    def eval(self, point, time=None):  # noqa: ARG002 (base signature)
+        x, y = point[0], point[1]
+        return [y, -x.min()]
+
+
 def _function(kind: type, dimension: int, value: float = 0.3) -> DeterministicFunction:
     return kind(
         variables=[State() for _ in range(dimension)],
@@ -111,6 +124,13 @@ class TestFieldValues(TestCase):
         # Two states in two dimensions: the row-vector product runs on arrays
         # and returns the transposed answer, which only the comparison sees.
         assert field_values(function, _states(2, 2), _single_values(function)) is None
+
+    def test_the_last_state_is_checked_as_well_as_the_first(self) -> None:
+        function = _function(_Smallest, 2)
+        states = _states(9, 2)
+        states = states[np.argsort(states[:, 0])]
+        # Right in the first row, which holds the smallest x; wrong after it.
+        assert field_values(function, states, _single_values(function)) is None
 
     def test_one_state_is_left_to_the_caller(self) -> None:
         function = _function(HopfField, 2)

@@ -305,3 +305,98 @@ class TestCrossingRetaken(TestCase):
         )
         # Retaken at the base step: the chord is the step, a little curved.
         assert gap < 0.01 * 1.05
+
+
+class _Recording(CycleContinuation):
+    """Records each correction's step and phase reference against its anchor."""
+
+    __slots__ = ["calls", "fail_above", "slow"]
+
+    def _correct(self, prediction, nodes, arc):
+        reference = self._phase_reference
+        self.calls = [
+            *getattr(self, "calls", []),
+            (
+                arc.arclength,
+                arc.anchor.copy(),
+                None if reference is None else reference[0].copy(),
+            ),
+        ]
+        if arc.arclength > getattr(self, "fail_above", math.inf):
+            self._factored = None
+            self._iterations = 0
+            return None
+        corrected = super()._correct(prediction, nodes, arc)
+        if getattr(self, "slow", False):
+            self._iterations = 5
+        return corrected
+
+
+class TestStepRecovery(TestCase):
+    """The failure, slow-convergence and retake paths of the adaptive step."""
+
+    def _recording(self, phase: str = "point") -> _Recording:
+        return _Recording(
+            _equation(FoldOfCyclesField, -0.1),
+            0,
+            40,
+            phase_index=1,
+            phase_value=0.0,
+            phase=phase,
+        )
+
+    def _seed(self) -> CycleSeed:
+        return CycleSeed(_circle(_outer(-0.1), 40), 2.0 * math.pi, -0.1)
+
+    def test_a_failed_long_step_is_halved_and_retried(self) -> None:
+        fixed, _ = self._recording().trace(self._seed(), 0.01, 40, direction=-1.0)
+        continuation = self._recording()
+        continuation.fail_above = 0.03
+        adaptive, _ = continuation.trace(
+            self._seed(),
+            0.01,
+            40,
+            direction=-1.0,
+            max_arclength=0.08,
+        )
+        lengths = [call[0] for call in continuation.calls if call[0] > 0.0]
+        assert max(lengths) > 0.03  # it did try, and fail
+        # Every failure is retried shorter, so the budget is still spent.
+        assert adaptive[-1].parameter == pytest.approx(fixed[-1].parameter, abs=2e-3)
+
+    def test_slow_convergence_never_takes_the_step_below_its_minimum(self) -> None:
+        continuation = self._recording()
+        continuation.slow = True
+        continuation.trace(
+            self._seed(),
+            0.01,
+            12,
+            direction=-1.0,
+            max_arclength=0.08,
+        )
+        # The seed's own correction has no step; the last is cut to the budget.
+        lengths = [call[0] for call in continuation.calls if call[0] > 0.0]
+        # Five iterations halve the step; min_arclength (the base step) holds it.
+        assert min(lengths[:-1]) == pytest.approx(0.01)
+
+    def test_a_retaken_step_corrects_against_the_kept_points_phase(self) -> None:
+        continuation = self._recording("integral")
+        continuation.trace(
+            self._seed(),
+            0.01,
+            200,
+            direction=-1.0,
+            max_arclength=0.16,
+        )
+        # The seed's own correction, before any reference, is not a step.
+        steps = [call for call in continuation.calls if call[0] > 0.0]
+        retaken = [
+            index
+            for index, (a, b) in enumerate(pairwise(steps))
+            if np.array_equal(a[1], b[1])
+        ]
+        assert retaken  # the fold's crossing was stepped over once, and retaken
+        for _, anchor, reference in steps:
+            # The phase reference is always the anchor's own orbit: a
+            # discarded correction does not leave its orbit behind.
+            np.testing.assert_array_equal(reference, anchor[: reference.size])
