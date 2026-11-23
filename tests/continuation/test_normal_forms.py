@@ -52,7 +52,10 @@ from discrecontinual_equations.continuation.derivative_provider import (
     AutomaticDifferentiation,
 )
 from discrecontinual_equations.continuation.homoclinic_curve import HomoclinicCurve
-from discrecontinual_equations.continuation.normal_form import first_lyapunov
+from discrecontinual_equations.continuation.normal_form import (
+    cubic_fold_coefficient,
+    first_lyapunov,
+)
 from discrecontinual_equations.continuation.two_parameter_problem import (
     TwoParameterProblem,
 )
@@ -269,6 +272,17 @@ class TestEmbeddedCusp(TestCase):
             result = cusp_normal_form(problem, np.zeros(3), 0.0, 0.0)
             scale = (np.linalg.inv(EmbeddedCusp.transform) @ result.q)[0]
             assert _close(result.c, scale**2 * (c + g))
+
+    def test_cubic_fold_coefficient_includes_the_manifold_contribution(self):
+        # DEQ-83: the swallowtail test function is this same c. The null vector is
+        # unit length, so in z it is e_x / |T e_x| and c scales by 1 / |T e_x|^2.
+        for c, g, seed in [(-1.0, 1.5, 13), (0.6, -2.0, 21), (-0.4, 0.4, 34)]:
+            EmbeddedCusp.c, EmbeddedCusp.g = c, g
+            EmbeddedCusp.transform = random_transform(3, seed)
+            problem = _problem(build(EmbeddedCusp, 3))
+            value = cubic_fold_coefficient(problem, np.zeros(3), 0.0, 0.0)
+            scale = 1.0 / np.linalg.norm(EmbeddedCusp.transform[:, 0])
+            assert _close(value, scale**2 * (c + g))
 
 
 class TestEigenvectorNormalisation(TestCase):
