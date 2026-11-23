@@ -993,17 +993,21 @@ same steps at every row of a batch of states, through `eval_batch`, and matches
 
 No step fixes everything. An entry `df_i/dx_j` is resolved only to about
 `sqrt(eps) |f_i| / |x_j|` forward (`eps^(2/3)` central), so a coupling of one in a
-row of size `1e8` comes back as `1 +- 1.5` forward. Wrap the field in
+row of size `1e8` comes back anywhere in `1 +- 3` forward and `1 +- 5e-3` central
+(the worst of 2000 states). Wrap the field in
 `JacobianField` and `jacobian_at` returns its exact Jacobian instead, either a
 closed form you pass or, by default, Taylor jets.
 
-| on Lorenz, one call | cost |
-|---|---|
-| forward difference | 4 field evaluations |
-| Taylor jets | 3 jet evaluations, about 2x a difference |
-| closed form | about 1 field evaluation |
+Lorenz's top exponent over `T = 1000` (`dt = 0.01`, one BLAS thread, best CPU
+time of three on a loaded machine):
 
-With the closed form, Lorenz's top exponent over `T = 1000` (`dt = 0.01`) takes
-a few seconds on one thread.
+| Jacobian | per call | `T = 1000` |
+|---|---|---|
+| forward difference | 4 field evaluations | 29 s |
+| Taylor jets (`JacobianField(field)`) | 3 jet evaluations | 45 s |
+| closed form (`JacobianField(field, jacobian)`) | about 1 field evaluation | 9 s |
+
+All three scale linearly in `T` (fitted log-log slopes 1.07, 0.97, 1.01). Jets
+buy exactness, not speed; the closed form buys both.
 
 ::: discrecontinual_equations.continuation.jacobian_field

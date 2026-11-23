@@ -124,7 +124,7 @@ def jacobian_at(
 
     No step fixes the rounding of the field itself: entry ``(i, j)`` is resolved to
     about ``sqrt(eps) |f_i| / |x_j|``, so a unit coupling in a row of size ``1e8``
-    comes back as ``1 +- 1.5``. That is what the exact Jacobian is for.
+    comes back anywhere in ``1 +- 3``. That is what the exact Jacobian is for.
     """
     if isinstance(function, JacobianField):
         return function.jacobian(state)
