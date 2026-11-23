@@ -633,6 +633,9 @@ _CONTINUATION_STEPS = 200
 # the detour to an outward landing can be long (see :func:`_first_landing`),
 # and only the rows that need it pay for it.
 _ESCALATED_STEPS = (4000,)
+# Ring parameters are matched to this many decimals in the memo of landings
+# the larger budgets have failed (:class:`_Front`).
+_MEMO_DIGITS = 9
 
 
 def _first_guess(  # noqa: PLR0913 (the BVP's data)
@@ -864,8 +867,12 @@ def _land(  # noqa: PLR0913 (the BVP's data)
     valid &= np.einsum("ij,ij->i", points - centres, outward) > 0.0
     for budget in (_CONTINUATION_STEPS, *_ESCALATED_STEPS):
         failed = np.flatnonzero(~valid)
+        escalating = budget > _CONTINUATION_STEPS
+        if escalating:
+            rounded = np.round(keys[failed], _MEMO_DIGITS)
+            failed = failed[[key not in front.exhausted for key in rounded]]
         if failed.size == 0:
-            break
+            continue
         retried = _first_landing(
             field,
             sense,
@@ -888,6 +895,10 @@ def _land(  # noqa: PLR0913 (the BVP's data)
         times[mended] = retried.times[good]
         residual[mended] = retried.residual[good]
         valid[mended] = True
+        if escalating:
+            front.exhausted.update(
+                np.round(keys[failed[~good]], _MEMO_DIGITS).tolist(),
+            )
     outward_side = np.einsum("ij,ij->i", points - centres, outward) > 0.0
     return _Landing(points, times, residual, valid & outward_side)
 
@@ -1233,9 +1244,18 @@ class _Ring:
 
 
 class _Front:
-    """The outermost ring: its points and the radial directions they arrived along."""
+    """The outermost ring: its points and the radial directions they arrived along.
 
-    __slots__ = ["directions", "indices", "points"]
+    ``exhausted`` holds the ring parameters, rounded to ``_MEMO_DIGITS``, of
+    the landings that the larger continuation budgets have already failed
+    from this front. A ring parameter fixes the centre and its outward
+    direction on a given front, so a row met again when the ring is retried
+    at a smaller Delta is the same row; it is not escalated again. Losing it
+    without the second escalation is what happened before there was one, so
+    the memo can only save time, never a landing that would have been kept.
+    """
+
+    __slots__ = ["directions", "exhausted", "indices", "points"]
 
     def __init__(
         self,
@@ -1246,6 +1266,7 @@ class _Front:
         self.points = points
         self.directions = directions
         self.indices = indices
+        self.exhausted: set[float] = set()
 
 
 def _solve(  # noqa: PLR0913 (the BVP's data)
