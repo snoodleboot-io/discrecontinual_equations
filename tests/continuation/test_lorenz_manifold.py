@@ -17,26 +17,25 @@ What is checked, and where each number comes from - all measured here:
   in the plane ``z = rho - 1`` meet it within 25 in 6 of 8 directions;
 * its size at the film's settings: 10,289 vertices, 20,154 triangles, 67
   rings, no BVP lost;
-* grown strictly towards 170 it stops at 157.38, with no point lost, and
-  says why: 6 of 1,123 landings fail at the smallest step, 0.094. Two of
-  them are a symmetric pair at (+-60.09, -+25.9, 76.85) where the flow runs
-  along the level set (``|f . t| / |f| = 0.9993``): continued in the flight
-  time from zero, as the paper does, the landing there moves out to 0.0755
-  from its centre and turns back inside the ring, so the first crossing of
-  the smallest step is inside (at -0.0937). The outward landing does exist:
-  the continuation, followed further (independently, DOP853), goes 18.7
-  inside and comes round to it at tau = 0.263 - some 400 steps of
-  Delta / 4, where the grower gives a row up after 200. Allowed 2,000 steps
-  it lands both and the growth reaches 162.72 (stopping on 4 of 1,216
-  landings, five rings accepted at the smallest step turning by up to
-  0.93), 16 times slower. The ring before was
-  accepted at the smallest step with a warning (it turned by 0.52). (It
-  stopped at 157.16 before failed landings were retried alone, and at 142.87
-  before the back-trace stopped counting false crossings far from the ring.)
+* grown strictly towards 170 it stops at 165.25, with no point lost, and
+  says why: 1 of 1,248 landings fails at the smallest step, 0.094; seven
+  rings from 157.09 on were accepted there with a warning, turning by up to
+  0.95. (It stopped at 157.38 while the continuation in the flight time
+  gave a landing up after 200 steps: at a symmetric pair of points at
+  (+-60.09, -+25.9, 76.85), where the flow runs along the level set
+  (``|f . t| / |f| = 0.9993``), the landings go 18.7 inside the ring
+  before they come round to the outward one at tau = 0.263, some 400 steps
+  of Delta / 4 - measured independently, DOP853. A row lost at 200 steps is
+  now continued again with 4,000. The growth to 157.38 costs what it did,
+  the same mesh in 53 s; the 28 rings beyond it, with their halvings and
+  escalated rows, take the rest of 1,350 s. It stopped at 157.16 before
+  failed landings were retried alone, and at 142.87 before the back-trace
+  stopped counting false crossings far from the ring.)
   By then the scrolls have formed: rays from ``C+`` cross three layers of
   the surface in four of the eight directions;
-* allowed to drop 3% of a ring (``loss=0.03``) it reaches 160 with 30 points
-  lost, and the crochet pattern still adds up round by round.
+* allowed to drop 3% of a ring (``loss=0.03``) it reaches 170 with 1 point
+  lost (to 160 it now loses none), and the crochet pattern still adds up
+  round by round.
 
 What the papers report, read from them: Krauskopf and Osinga (SIAM J. Appl.
 Dyn. Syst. 2(4) 2003, Sec. 4.5, preprint of 7 May 2003) grew it from 20
@@ -219,7 +218,7 @@ class TestLorenzManifoldAsFarAsItGoes(TestCase):
 
 class TestLossyLorenzManifold(TestCase):
     def test_the_crochet_pattern_adds_up_when_points_are_lost(self):
-        mesh = _lorenz(160.0, loss=0.03)
+        mesh = _lorenz(170.0, loss=0.03)
         assert mesh.stopped is None
         assert mesh.lost > 0
         pattern = mesh.crochet_pattern()

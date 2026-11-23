@@ -37,6 +37,7 @@ from discrecontinual_equations.continuation.geodesic_level_sets import (
     _first_guess,
     _first_landing,
     _Front,
+    _land,
     _ring_tangents,
     _thin,
     _trace_back,
@@ -367,22 +368,49 @@ class TestFirstLanding(TestCase):
             1.0e-12
         )
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="200 continuation steps of Delta / 4; 2,000 land every row but "
-        "make the strict Lorenz growth 16 times slower (DEQ-61 verification)",
-    )
+    def test_a_newton_solve_that_leaves_its_bracket_is_not_a_landing(self):
+        # At Delta = 0.2 one row's final Newton solve, started inside its
+        # bracket, converged to the inward solution 0.8 r at another flight
+        # time: a solution of the equations, but not this branch's landing.
+        landing = self._land(0.2)
+        side = np.einsum("ij,ij->i", landing.points - self.ring, self.ring)
+        assert not np.any(landing.valid & (side < 0.0))
+        good = landing.valid
+        assert np.max(np.abs(landing.points[good] - 1.2 * self.ring[good])) < 1.0e-12
+
     def test_a_small_delta_still_reaches_the_outward_crossing(self):
         # At Delta = 0.005 the continuation goes inward for up to 0.4 before
         # it comes round, 4 x 0.4 / 0.005 = 320 steps of Delta / 4: more than
-        # its 200, and 5 of the 11 outward-flowing rows were given up,
-        # though each has its landing at exactly 1.005 r.
-        outward = np.einsum("ij,ij->i", _swirl(self.ring), self.ring) > 0.0
-        landing = self._land(0.005)
+        # its first 200, which give 6 of the 40 rows up (5 of them among the
+        # 11 where the flow points out), though each has its landing at
+        # exactly 1.005 r. Those 6 alone are continued again with the larger
+        # budget, and land.
+        ring, delta = self.ring, 0.005
+        budgets = []
+
+        def no_guess(_field, _sense, _front, _centres, keys, *_rest):
+            return keys.astype(float).copy(), np.full(len(keys), np.nan)
+
+        def spy(*args):
+            budgets.append((args[-1], len(args[3])))
+            return _first_landing(*args)
+
+        front = _Front(ring, ring.copy(), np.arange(len(ring)))
+        with patch(_FIRST_GUESS, no_guess), patch(_FIRST_LANDING, spy):
+            landing = _land(
+                _swirl,
+                -1.0,
+                front,
+                ring,
+                _ring_tangents(ring),
+                np.arange(len(ring), dtype=float),
+                ring,
+                delta,
+                self.settings,
+            )
         assert np.all(landing.valid)
-        assert np.max(np.abs(landing.points[outward] - 1.005 * self.ring[outward])) < (
-            1.0e-12
-        )
+        assert np.max(np.abs(landing.points - (1.0 + delta) * ring)) < 1.0e-12
+        assert budgets == [(200, 40), (4000, 6)]
 
     def test_a_landing_the_first_guess_misses_is_retried_alone(self):
         # Two first guesses in seven are spoiled - half the ring away, which

@@ -628,6 +628,11 @@ _SPLITS = 4
 _CORRECTIONS = 8
 _STEP_FLOOR = 1.0e-3
 _CONTINUATION_STEPS = 200
+# A landing the continuation has not reached in that many steps is continued
+# again, alone, with each of these larger budgets in turn before it is lost:
+# the detour to an outward landing can be long (see :func:`_first_landing`),
+# and only the rows that need it pay for it.
+_ESCALATED_STEPS = (4000,)
 
 
 def _first_guess(  # noqa: PLR0913 (the BVP's data)
@@ -857,8 +862,10 @@ def _land(  # noqa: PLR0913 (the BVP's data)
     target = (centres, tangents, delta)
     residual, valid = _newton(field, sense, ring, (points, times, s), target, settings)
     valid &= np.einsum("ij,ij->i", points - centres, outward) > 0.0
-    failed = np.flatnonzero(~valid)
-    if failed.size:
+    for budget in (_CONTINUATION_STEPS, *_ESCALATED_STEPS):
+        failed = np.flatnonzero(~valid)
+        if failed.size == 0:
+            break
         retried = _first_landing(
             field,
             sense,
@@ -866,11 +873,20 @@ def _land(  # noqa: PLR0913 (the BVP's data)
             keys[failed],
             (centres[failed], tangents[failed], outward[failed], delta),
             settings,
+            budget,
         )
-        mended = failed[retried.valid]
-        points[mended] = retried.points[retried.valid]
-        times[mended] = retried.times[retried.valid]
-        residual[mended] = retried.residual[retried.valid]
+        good = retried.valid & (
+            np.einsum(
+                "ij,ij->i",
+                retried.points - centres[failed],
+                outward[failed],
+            )
+            > 0.0
+        )
+        mended = failed[good]
+        points[mended] = retried.points[good]
+        times[mended] = retried.times[good]
+        residual[mended] = retried.residual[good]
         valid[mended] = True
     outward_side = np.einsum("ij,ij->i", points - centres, outward) > 0.0
     return _Landing(points, times, residual, valid & outward_side)
@@ -954,6 +970,7 @@ def _first_landing(  # noqa: PLR0913 (the BVP's data)
     keys: np.ndarray,
     target: tuple[np.ndarray, np.ndarray, np.ndarray, float],
     settings: GeodesicSettings,
+    budget: int = _CONTINUATION_STEPS,
 ) -> _Landing:
     """Each row's BVP continued in the flight time from zero, as the paper does.
 
@@ -979,7 +996,14 @@ def _first_landing(  # noqa: PLR0913 (the BVP's data)
 
     Each step aims to move the landing by ``delta / _SPLITS``, halving a step
     whose correction fails; a row that has not reached ``delta`` after
-    ``_CONTINUATION_STEPS`` steps, or whose step has halved to nothing, is lost.
+    ``budget`` steps, or whose step has halved to nothing, is lost, and so is
+    one whose final Newton solve lands at a flight time outside the bracket
+    it started from - a solution on another branch, never this one's.
+    :func:`_land` gives the rows lost at the first budget the larger ones of
+    ``_ESCALATED_STEPS``: on the Lorenz manifold at distance 157.4 the
+    landings of a point where the flow runs along the level set go 18.7
+    inside before they come round to the outward one at ``tau`` = 0.263,
+    some 400 steps of ``delta / 4`` at ``delta`` = 0.094.
     """
     centres, tangents, outward, delta = target
     rows = len(centres)
@@ -991,7 +1015,7 @@ def _first_landing(  # noqa: PLR0913 (the BVP's data)
     floor = step * _STEP_FLOOR
     bracketed = np.zeros(rows, dtype=bool)
     alive = np.ones(rows, dtype=bool)
-    for _ in range(_CONTINUATION_STEPS):
+    for _ in range(budget):
         going = np.flatnonzero(alive & ~bracketed)
         if going.size == 0:
             break
@@ -1043,6 +1067,8 @@ def _first_landing(  # noqa: PLR0913 (the BVP's data)
     residual = np.full(rows, np.inf)
     valid = np.zeros(rows, dtype=bool)
     if hit.size:
+        low = np.minimum(last[2][hit], times[hit])
+        high = np.maximum(last[2][hit], times[hit])
         residual[hit], valid[hit] = _newton(
             field,
             sense,
@@ -1051,6 +1077,9 @@ def _first_landing(  # noqa: PLR0913 (the BVP's data)
             (centres[hit], tangents[hit], delta),
             settings,
         )
+        # Newton started inside the bracket; ending outside it, it has
+        # found a landing on another branch, not this one's.
+        valid[hit] &= (flight >= low) & (flight <= high)
         points[hit], times[hit] = land, flight
     return _Landing(points, times, residual, valid)
 

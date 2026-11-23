@@ -37,13 +37,17 @@ exactly (25, 40, 55 bands at 62.75, 92.75, 122.75) and the last circle has
 
 Remaining: complex (spiral) manifolds need the conjugate-coordinate variant (the
 level-set grower seeds a spiral manifold on its tangent plane meanwhile). The
-strict Lorenz growth stops at distance 157.4 (step 1.5, spacing 1.5 to 4.5) and
-says so in `GeodesicMesh.stopped`: at two symmetric points the flow runs along
-the level set and the landings continued from the ring turn back inside it
-before reaching the smallest step, 0.094. The outward landings exist there:
-the continuation comes round to them after an 18.7-long inward detour, past
-its 200-step budget; with 2,000 steps the growth reaches 162.7, 16 times
-slower. With `loss` it goes on, with holes. At the papers' settings it stops
+strict Lorenz growth stops at distance 165.25 (step 1.5, spacing 1.5 to 4.5) and
+says so in `GeodesicMesh.stopped`: 1 of 1,248 landings fails at the smallest
+step, 0.094, and seven rings from 157.09 on were accepted there turning by up
+to 0.95. It stopped at 157.4 while the continuation in the flight time gave a
+landing up after 200 steps: where the flow runs along the level set the
+landings go 18.7 inside before coming round to the outward one. A landing
+lost at 200 steps is now continued again with 4,000, and a final Newton
+solve outside its bracket counts as lost. The growth to 157.4 costs what it
+did (the same mesh); the rings beyond it take 1,350 s against 93 s, and the
+papers' settings, where a few rows never land and escalate at every halving,
+about 3 times longer for the same stop. With `loss` it goes on, with holes. At the papers' settings it stops
 short of their distances: 150.75 at the SIADS spacing (0.25 to 1.0; published
 151.75) and 152.75 at the survey's (0.67 to 2.0; published 154.75), on 7 and 4
 landings at the smallest step 0.01.
