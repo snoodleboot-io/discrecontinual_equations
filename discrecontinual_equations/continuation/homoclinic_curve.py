@@ -11,13 +11,26 @@ the trapezoidal collocation of the orbit, the equilibrium condition, the project
 boundary conditions onto the (recomputed) stable and unstable eigenspaces of the
 saddle, and a phase condition. The square system is solved by Newton's method, and
 each swept point is seeded from the previous one.
+
+The Newton matrix is block-banded in the nodes and bordered by the equilibrium,
+boundary and phase rows and the parameter column - HomCont's structure (Champneys,
+Kuznetsov & Sandstede, IJBC 6, 1996) - so it is assembled sparse and factored with
+a sparse LU, in time and memory linear in the nodes.
 """
 
+import warnings
+
 import numpy as np
+from scipy.sparse import csc_matrix, csr_matrix
+from scipy.sparse.linalg import splu
 
 from discrecontinual_equations.continuation.connecting_orbit import (
     MeshSpec,
     OrbitSolution,
+    _collocation_triplets,
+)
+from discrecontinual_equations.continuation.derivative_provider import (
+    AutomaticDifferentiation,
 )
 from discrecontinual_equations.differential_equation import DifferentialEquation
 
@@ -25,6 +38,10 @@ _TOLERANCE = 1.0e-10
 _ITERATIONS = 80
 _STEP = 1.0e-7
 _REAL_FLOOR = 1.0e-9
+_HALF = 0.5
+# Column ordering for the sparse LU; see ``connecting_orbit._factor`` for why.
+_ORDERING = "COLAMD"
+_AUTODIFF = AutomaticDifferentiation()
 
 
 class HomoclinicCurvePoint:
@@ -136,21 +153,191 @@ class HomoclinicCurve:
             here = self._field(states[i], continuation, sweep)
             ahead = self._field(states[i + 1], continuation, sweep)
             blocks.append(states[i + 1] - states[i] - 0.5 * step * (here + ahead))
-        blocks.append(self._field(equilibrium, continuation, sweep))
+        blocks.append(
+            self._tail(states[0], states[-1], equilibrium, continuation, sweep),
+        )
+        centre = nodes // 2
+        phase = states[centre, self._mesh.phase_index] - self._mesh.phase_value
+        blocks.append(np.array([phase]))
+        return np.concatenate(blocks)
+
+    def _tail(
+        self,
+        departure_state: np.ndarray,
+        arrival_state: np.ndarray,
+        equilibrium: np.ndarray,
+        continuation: float,
+        sweep: float,
+    ) -> np.ndarray:
+        """The equilibrium condition and the projection boundary conditions.
+
+        These are the only rows that see the saddle's eigenvectors, and the only
+        ones besides the phase condition that reach across the mesh: they touch
+        the two end nodes, the equilibrium and the continuation parameter.
+        """
         jacobian = self._field_jacobian(equilibrium, continuation, sweep)
         values, vectors = np.linalg.eig(jacobian)
         left = np.linalg.inv(vectors)
         stable = [i for i in range(len(values)) if values[i].real < -_REAL_FLOOR]
         unstable = [i for i in range(len(values)) if values[i].real > _REAL_FLOOR]
-        departure = states[0] - equilibrium
-        arrival = states[-1] - equilibrium
+        departure = departure_state - equilibrium
+        arrival = arrival_state - equilibrium
         boundary = [(left[i] @ departure).real for i in stable]
         boundary += [(left[i] @ arrival).real for i in unstable]
-        blocks.append(np.array(boundary))
-        centre = nodes // 2
-        phase = states[centre, self._mesh.phase_index] - self._mesh.phase_value
-        blocks.append(np.array([phase]))
-        return np.concatenate(blocks)
+        return np.concatenate(
+            [self._field(equilibrium, continuation, sweep), np.array(boundary)],
+        )
+
+    def _jacobian(
+        self,
+        unknowns: np.ndarray,
+        times: np.ndarray,
+        dimension: int,
+        sweep: float,
+        residual: np.ndarray,
+    ) -> csr_matrix:
+        """Assemble the bordered block-banded Newton matrix, in O(N) field work.
+
+        This is the defining system HomCont continues a homoclinic orbit to a
+        saddle with (Champneys, Kuznetsov & Sandstede 1996): collocation, the
+        equilibrium condition, Beyn's projection boundary conditions, a phase
+        condition, and one free system parameter. Its Jacobian has three parts:
+
+        * the collocation rows, banded in the nodes exactly as for a single
+          connecting orbit, from one field Jacobian per node, plus the parameter
+          column ``-(h/2) (f_a(x_i) + f_a(x_{i+1}))``;
+        * the equilibrium and boundary rows, which touch only the two end nodes,
+          the equilibrium and the parameter, and whose dependence on the saddle's
+          eigenvectors is differenced - as HomCont does - in ``3n + 1``
+          evaluations that do not grow with the mesh;
+        * the phase row, a single unit entry.
+
+        The dense finite-difference matrix it replaces took one full residual per
+        unknown: ``O(N^2)`` field evaluations and ``O(N^2)`` memory per iteration.
+        """
+        size = unknowns.size
+        nodes = times.size
+        states = unknowns[: nodes * dimension].reshape(nodes, dimension)
+        continuation = float(unknowns[-1])
+        derivatives = self._node_jacobians(states, continuation, sweep)
+        row, column, value = _collocation_triplets(derivatives, times)
+        bands = (nodes - 1) * dimension
+        sensitivity = np.array(
+            [
+                self._parameter_sensitivity(state, continuation, sweep)
+                for state in states
+            ],
+        )
+        weights = _HALF * np.diff(times)[:, None]
+        parameter = -weights * (sensitivity[:-1] + sensitivity[1:])
+        rows = [row, np.arange(bands)]
+        columns = [column, np.full(bands, size - 1)]
+        values = [value, parameter.ravel()]
+        tail_rows = bands + np.arange(residual.size - 1 - bands)
+        base = residual[bands:-1]
+        for index in self._tail_columns(nodes, dimension, size):
+            shifted = unknowns.copy()
+            shifted[index] += _STEP
+            moved = self._tail(
+                shifted[:dimension],
+                shifted[bands : bands + dimension],
+                shifted[nodes * dimension : nodes * dimension + dimension],
+                float(shifted[-1]),
+                sweep,
+            )
+            rows.append(tail_rows)
+            columns.append(np.full(tail_rows.size, index))
+            values.append((moved - base) / _STEP)
+        rows.append(np.array([residual.size - 1]))
+        columns.append(
+            np.array([(nodes // 2) * dimension + self._mesh.phase_index]),
+        )
+        values.append(np.array([1.0]))
+        return csr_matrix(
+            (
+                np.concatenate(values),
+                (np.concatenate(rows), np.concatenate(columns)),
+            ),
+            shape=(residual.size, size),
+        )
+
+    @staticmethod
+    def _tail_columns(nodes: int, dimension: int, size: int) -> list[int]:
+        """Unknowns the tail rows depend on: both end nodes, equilibrium, parameter."""
+        last = (nodes - 1) * dimension
+        equilibrium = nodes * dimension
+        return [
+            *range(dimension),
+            *range(last, last + dimension),
+            *range(equilibrium, equilibrium + dimension),
+            size - 1,
+        ]
+
+    def _node_jacobians(
+        self,
+        states: np.ndarray,
+        continuation: float,
+        sweep: float,
+    ) -> np.ndarray:
+        """The field Jacobian at every node, exact where the field allows it."""
+        parameters = self._equation.derivative.parameters
+        parameters[self._continuation_index].value = float(continuation)
+        parameters[self._sweep_index].value = float(sweep)
+        try:
+            return np.array(
+                [
+                    _AUTODIFF.jacobian(self._equation.derivative, state, self._time)
+                    for state in states
+                ],
+            )
+        except (TypeError, ValueError, AttributeError):
+            return np.array(
+                [self._field_jacobian(state, continuation, sweep) for state in states],
+            )
+
+    def _parameter_sensitivity(
+        self,
+        point: np.ndarray,
+        continuation: float,
+        sweep: float,
+    ) -> np.ndarray:
+        """Forward difference of the field in the continuation parameter."""
+        base = self._field(point, continuation, sweep)
+        return (self._field(point, continuation + _STEP, sweep) - base) / _STEP
+
+    @staticmethod
+    def _step(jacobian: csr_matrix, residual: np.ndarray) -> np.ndarray:
+        """Newton step from a sparse LU of the square bordered system.
+
+        Falls back to the dense least-squares solve the dense Newton used when the
+        matrix is singular or not square, which happens only for a degenerate
+        saddle whose boundary-condition count does not match the unknowns. The
+        fallback is dense, so it announces itself with a ``RuntimeWarning``.
+        """
+        if jacobian.shape[0] != jacobian.shape[1]:
+            reason = (
+                f"Newton matrix is {jacobian.shape[0]} x {jacobian.shape[1]}, not "
+                f"square (a non-hyperbolic saddle)"
+            )
+        else:
+            reason = "non-finite solution (near-singular factorisation)"
+            try:
+                step = splu(csc_matrix(jacobian), permc_spec=_ORDERING).solve(
+                    -residual,
+                )
+            except RuntimeError:
+                reason = "exactly singular factorisation"
+                step = np.full(residual.size, np.nan)
+            if np.all(np.isfinite(step)):
+                return step
+        warnings.warn(
+            f"homoclinic-curve Newton step: {reason}; falling back to a dense "
+            f"least-squares solve",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        fallback, *_ = np.linalg.lstsq(jacobian.toarray(), -residual, rcond=None)
+        return fallback
 
     def _newton(
         self,
@@ -164,14 +351,14 @@ class HomoclinicCurve:
             residual = self._residual(unknowns, times, nodes, dimension, sweep)
             if np.linalg.norm(residual) < _TOLERANCE:
                 return unknowns
-            jacobian = np.empty((residual.size, unknowns.size))
-            for j in range(unknowns.size):
-                shifted = unknowns.copy()
-                shifted[j] += _STEP
-                perturbed = self._residual(shifted, times, nodes, dimension, sweep)
-                jacobian[:, j] = (perturbed - residual) / _STEP
-            step, *_ = np.linalg.lstsq(jacobian, -residual, rcond=None)
-            unknowns = unknowns + step
+            jacobian = self._jacobian(
+                unknowns,
+                times,
+                dimension,
+                sweep,
+                residual,
+            )
+            unknowns = unknowns + self._step(jacobian, residual)
         residual = self._residual(unknowns, times, nodes, dimension, sweep)
         if np.linalg.norm(residual) < _TOLERANCE:
             return unknowns
