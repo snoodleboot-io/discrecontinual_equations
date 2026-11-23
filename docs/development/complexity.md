@@ -742,3 +742,384 @@ Constant factors, not orders:
 Found on the way, not a cost item: a solver appended its trajectory to the equation's
 own variables, so solving the same equation twice returned a curve holding both runs.
 Fixed by DEQ-45 (#24).
+
+## Before / after
+
+Every performance ticket measured its change before merging, and the runs are kept in
+the main checkout's git-ignored `outputs/complexity/before-after/<TICKET>/`: a CSV
+of every run (or the best of each size), the scripts and, for most tickets, a README
+naming the commits compared. The survey that found the costs is in
+`outputs/complexity/baseline/`. Nothing in those folders is committed; the paths
+below are relative to `outputs/complexity/before-after/`.
+
+**How the numbers here were made.** Every slope below was refitted for this page
+from the raw CSV by `scripts/complexity_before_after.py`: the best (smallest) time of
+each size, the largest traced peak, and an ordinary least-squares line through
+`log(cost)` against `log(size)`. That agrees with the tickets' own summaries to two
+decimals everywhere it was checked except DEQ-50, whose `summarize.py` fitted both of
+its passes as ten points; see [Checks](#checks). "Ratio" is after over before at the
+largest size both variants reached, so below 1 is faster. Times are wall clock
+unless marked CPU. Most runs shared the machine with other test suites; a dagger (†)
+marks wall-clock numbers taken at a recorded load average of 12 or more, or that the
+folder itself calls noisy, and for those the slopes and CPU times are the figures to
+trust. "Not recorded" means the folder does not hold the number; nothing here is
+estimated.
+
+### Summary
+
+| Ticket | Status | Measured | Sizes | Time slope before → after | Ratio at largest common size | Peak memory before → after | Results unchanged? |
+|---|---|---|---|---|---|---|---|
+| DEQ-35 | merged (#52) | no cost measurement: verification scripts and mutants only | - | - | - | - | not applicable |
+| DEQ-45 | merged (#24) | `EulerSolver.solve` vs steps `K` | `K` 2000-32000 | CPU 0.98 → 0.97 | CPU 1.02 | 6.6 → 6.6 MB | not recorded |
+| DEQ-46 | merged (#31) | Hopf test per call vs `n`; 20-point continuation with three detectors | `n` 8-64 (before), 8-128 (after) | 4.14 → 1.56 (call); 3.23 → 1.26 (run) | 0.00074 (call), 0.010 (run) at `n = 64` | 65.2 → 0.13 MB (call, `n = 64`) | not recorded |
+| DEQ-47 | merged (#25) | Euler-Maruyama and Milstein solve vs `K` | `K` 16000-128000 | CPU 1.76 → 1.04 (EM), 1.56 → 1.05 (Milstein) | CPU 0.056 (EM), 0.24 (Milstein) | 16 → 16 MB | not recorded |
+| DEQ-48 | merged (#26) | Milstein, per path and ensemble, vector noise vs `n`, undeclared and declared diagonal | `n` 4-128 (ensemble before: 4-32) | CPU 2.12 → 1.17 / 0.41 (path); 2.68 → 1.45, 2.70 → 0.46 (ensemble) | CPU 0.026 / 0.00072 (path, `n = 128`); 0.013 / 0.0020 (ensemble, `n = 32`) | 51.9 → 1.9 / 1.5 MB (path); 212 → 0.77 / 0.46 MB (ensemble) | not recorded |
+| DEQ-49 | merged (#43) | periodic-orbit solves, cycle seed and step vs `N`; `PeriodicOrbit` vs `n` | `N` 40-640, `n` 2-16 | 2.35 → 1.05 (`PeriodicOrbit`); 1.97 → 0.66 (seed); step 0.98 → 0.99 | 0.0062 (`PeriodicOrbit`), 0.0087 (seed), 0.96 (step) | 27.9 → 0.27 MB (`PeriodicOrbit`, `N = 640`) | not recorded |
+| DEQ-50 | merged (#30) | connecting-orbit and homoclinic-curve Newton iteration and solve vs `N` | `N` 200-3200 (orbit); 100-400 before, 100-3200 after (curve) | 1.59 → 1.13 (orbit solve); 2.37 → 0.87 (curve iteration) † | 0.052 (orbit solve, 3200); 0.0047 (curve iteration, 400) † | 657 → 2.6 MB (orbit solve, 3200) | not recorded |
+| DEQ-51 | merged (#37) | one Newton iteration of the cusp and generalized-Hopf curves vs `n` | `n` 4-32 (GH before: 4-6) | 3.42 → 2.58 (cusp) †; GH before 3 points only | 0.11 (cusp, `n = 32`); 0.00073 (GH, `n = 6`) † | 0.13 → 0.34 MB (cusp); 2.1 → 0.14 MB (GH, `n = 6`) | not recorded |
+| DEQ-52 | merged (#32) | `lyapunov_spectrum`, `stochastic_lyapunov`, `matrix_noise_lyapunov`, with and without transients | `n` 4-64, `K` 2-32, `H` 250-2000 | e.g. 2.19 → 1.83 (matrix, Ito, transient) †; controls 0.85 → 0.69, 1.30 → 1.21 † | 0.087 (matrix, Ito, transient); 0.13-0.55 (other transients); controls 1.0, 1.5 † | 6.5 → 6.5 MB (matrix, `n = 64`) | not recorded |
+| DEQ-53 | merged (#48) | shared Jacobian, grouped sparse Jacobians, Fokker-Planck assembly, scene resampling | `n` 4-512, `M` 729-58081, samples 40-2560 | 1.80 → 0.85 (FD ring Jacobian); 1.82 → 0.91 (resample) † | 0.0088 (FD Jacobian, 512); 0.41 (fold run); 0.50 (2-D FP); 1.03 (3-D FP) † | 38.4 → 40.3 MB (2-D FP) | not recorded |
+| DEQ-55 | merged (#45) | Gauss-Legendre `_point` and multipliers vs `N` and `n` | `N` 10-160, `n` 2-16 | 1.25 → 1.05 (point, `N`); 0.46 → 1.34 (multipliers, `N`) | 0.17 (point), 29 (multipliers) at `N = 160` | 2.17 → 2.17 MB | not recorded |
+| DEQ-70 | merged (#53) | `BrownianPath._cell_areas` vs cells | `2^11`-`2^18` before, to `2^20` after | 1.41 → 1.41 †; peak 1.41 → 0.55 | 1.51 at `2^18` † | 1149 → 21.1 MB at `2^18`; before fails at `2^20` | bit-identical, `e` = 11-18 |
+| DEQ-73 | merged (#40) | manifold fan flow vs branches per frame | 4-64 | 0.82 → 0.19 | 0.053 at 64 | 5.4 → 11.2 MB | not recorded |
+| DEQ-75 | merged (#51) | nine stage films, best of 5 | one build per film | no size sweep | continuation CPU 0.020-0.39; film CPU 0.04-0.92 | not recorded | not recorded (adaptive steps move the points) |
+| DEQ-57 | PR #58 | OLIM vs grid side and radius; gMAM per iteration; new `check()` | side 41-161, radius 2-16, nodes 25-400 | 1.80 → 1.96 vs side (unchanged) | 1.00 (OLIM, 161); 0.65 (gMAM, 400) | 28.9 → 28.9 MB | not recorded |
+| DEQ-58 | PR #59 | half lattice vs side; OLIM with the parabolic update and Eq. 28 radius (now opt-in) | side 41-321, radius 2-16 | 2.41 → 2.30 (lattice); 2.45 → 2.43 (OLIM) | 0.026 (lattice, 321); 1.97-2.52 (OLIM, 161) | 115 → 79 MB (lattice); 28.9 → 19.9 MB (OLIM) | not recorded |
+| DEQ-59 | PR #60 | gMAM per iteration, constant and state-dependent `D` | nodes 25-400 | 1.33 → 1.12 (constant `D`); before refuses varying `D` | 0.88 (constant `D`, 400) | 0.20 → 0.30 MB | not recorded |
+| DEQ-61 | PR #62 | `GeodesicLevelSets.compute` vs `1/h`; four film-scale runs | `1/h` 200-3200 | CPU 1.30 → 1.01 † | CPU 0.30 at 3200 †; films 1.76-16.1x costlier, deliberately | 103.8 → 66.2 MB | memo mesh bit-identical to un-memoised escalation |
+| DEQ-65 | PR #56 | ensemble Milstein step vs paths `P`, channels `m` | `P` 256-16384, `m` 2-16 | 0.73-0.96 → 0.80-1.11 vs `P` (commuting) | 0.35-0.89 (commuting, largest `P`) | not recorded | commuting: final-state hashes equal at all 15 sizes |
+| DEQ-72 | PR #57 | full atlas build and a 12-unit subset vs workers | workers 1-12 | no fitted slope (worker count) | 0.29 wall at 12 workers vs before serial †; CPU 1.09 | 638 → 636 MB per process (RSS) | byte-identical, 62 files |
+| DEQ-94 | PR #68 | Lorenz `lambda_1` vs horizon `T` by Jacobian kind; Jacobian entry errors | `T` 125-1000 | CPU 1.13 → 1.07 (FD), 1.01 (analytic), 0.97 (jets) | CPU 1.02 (FD), 0.30 (analytic), 1.55 (jets) at `T = 1000` | not recorded | no: `lambda_1` within 2.1e-9; 129 exponents within 2.5e-7 |
+| DEQ-105 | PR #74 | Hermite-Simpson `_point` and one step vs `N` | `N` 20-320 | 1.27 → 0.90 (point); 1.05 → 1.05 (step) † | 1.74 (point), 2.10 (step) at 320; 5.47 at `N = 20` †, deliberately | not recorded | not applicable: the error estimate changes by design |
+
+### By status
+
+**Merged:** DEQ-35 (#52), DEQ-45 (#24), DEQ-46 (#31), DEQ-47 (#25), DEQ-48 (#26),
+DEQ-49 (#43), DEQ-50 (#30), DEQ-51 (#37), DEQ-52 (#32), DEQ-53 (#48), DEQ-55 (#45),
+DEQ-70 (#53), DEQ-73 (#40), DEQ-75 (#51).
+
+**In open pull requests:** DEQ-57 (#58), DEQ-58 (#59), DEQ-59 (#60), DEQ-61 (#62),
+DEQ-65 (#56), DEQ-72 (#57), DEQ-94 (#68), DEQ-105 (#74). The rest of this page
+describes `main`, so none of these is reflected in the sections above.
+
+**Costlier on purpose, for correctness:**
+
+* DEQ-105 (#74): the Hermite-Simpson Floquet error becomes a bound, the larger of the
+  drift and twice the doubled-mesh gap, and the point costs 1.74x to 5.47x what it did
+  (ratio 5.47, 4.87, 5.28, 3.68, 1.74 at `N` = 20 ... 320; the folder's README rounds
+  these to 5.5 ... 1.7). Film builds took 1.8x to 3.2x as long under concurrent load.
+* DEQ-61 (#62): escalating only the failing landings reaches further. The strict
+  film reached 165.25 instead of 157.375 and cost 16.1x the 200-step baseline (1853 s
+  against 115 s); the IJBC and SIADS spacings reached the same distance at 2.21x and
+  1.76x, and the lossy run lost 1 point instead of 57 at 2.56x
+  (`DEQ-61/memo_numbers_2026-11-23.csv`).
+* DEQ-58 (#59): the parabolic update and the Eq. (28) radius, opt-in since the PR
+  but the defaults in the measured commit `d893783`, cost 1.78x to 2.79x the
+  midpoint march across all three OLIM sweeps (1.97x, 2.52x and 2.01x at the largest
+  size). The PR body says 2.3-2.8x; the CSV's range starts lower.
+* DEQ-70 (#53) also trades time for memory: the chunked draw walks the generator
+  twice to stay bit-identical and is 1.22x to 1.67x slower per size, for a peak 54x
+  smaller at `2^18` cells.
+
+### Checks
+
+Eleven slopes were refitted from the raw rows by a least-squares fit written for this
+page (no NumPy), and compared with what the folders claim:
+
+| Ticket | Series | Claimed | Refit | Agrees? |
+|---|---|---|---|---|
+| DEQ-45 | `euler.solve` CPU, before / after | 0.98 / 0.97 (`summary.txt`) | 0.98 / 0.97 | yes |
+| DEQ-46 | Hopf test per call, before / after | 4.14 / 1.56 (`summarize.py` output) | 4.14 / 1.56 | yes |
+| DEQ-47 | Euler-Maruyama CPU, before / after | 1.76 / 1.04 (`summary.txt`) | 1.76 / 1.04 | yes |
+| DEQ-48 | `milstein.solve_diagonal` CPU, before / after | 2.12 / 1.17 (`summary.txt`) | 2.12 / 1.17 | yes |
+| DEQ-50 | `connecting_orbit.newton_iteration`, before / after | 1.06 / 1.17, 3.819 s / 0.774 s at 3200 (`summarize.py` output) | 1.02 / 0.99, 2.061 s / 0.219 s | **no**: the script fits both passes' ten rows and reports the slower pass's time; the refit takes the best of the two passes at each size |
+| DEQ-51 | cusp Newton iteration, before / after | 3.42 / 2.58 (`summarize.py` output) | 3.42 / 2.58 | yes |
+| DEQ-52 | `matrix_noise_lyapunov` transient Ito, before / after | 2.19 / 1.83 (`summary.txt`) | 2.19 / 1.83 | yes |
+| DEQ-53 | `fd_jacobian_ring`, before / after | 1.80 / 0.85 (`summary.md`) | 1.80 / 0.85 | yes |
+| DEQ-65 | commuting `m = 2` vs `P`, before / after | 0.92 / 0.80 (`slopes.csv`) | 0.92 / 0.80 | yes |
+| DEQ-70 | peak bytes, before / after | 1.41 / 0.55 (`summary.txt`) | 1.41 / 0.55 | yes |
+| DEQ-105 | `_point`, before / after | 1.27 / 0.90 (README) | 1.27 / 0.90 | yes |
+
+Two other differences between a folder and its own files: DEQ-75's README says 19
+mutants, all killed, but `DEQ-75/mutants.log` records 17 killed and 2 survived
+(mutant 16, `np.array_equal(factored[0], border)`, among them); and DEQ-70's README
+gives the slowdown as 1.2-1.6x where its `summary.txt` times give 1.22x to 1.67x.
+
+### Per ticket
+
+#### DEQ-35: cycle codimension two
+
+`DEQ-35/` holds the verification scripts for the periodic normal forms and the fold,
+flip and torus curves of cycles (DOP853 shooting, closed forms, MATCONT and De Witte
+et al. references) and `mutants.log`. It records no timing or memory, so there is
+nothing to fit.
+
+#### DEQ-45: a curve per solve
+
+`EulerSolver.solve` against `K` = 2000-32000, best of 5 interleaved, CPU recorded
+(`DEQ-45/deq_45_scaling.csv`, `raw.csv`). The fix was not meant to change the cost and
+did not: CPU slope 0.98 before, 0.97 after, 0.1816 s against 0.1845 s at
+`K = 32000`, memory slope 1.00 and 6.6 MB both ways. The wall slopes (1.08, 0.71)
+scatter more than the CPU ones. Commits `7f8bc92` → `7209310`.
+
+#### DEQ-46: Hopf test from one eigenvalue solve
+
+Per-call cost of the Hopf test on a random `n x n` Jacobian, and a 20-point
+continuation with the fold, branch-point and Hopf detectors, best of 5 interleaved
+(`DEQ-46/measurements.csv`). The old test was skipped at `n = 128` (minutes per run).
+Per call: time slope 4.14 → 1.56, memory 4.08 → 1.59; 2.87 s and 65 MB against 2.1 ms
+and 0.13 MB at `n = 64`. Continuation: 3.23 → 1.26, 110 s against 1.09 s at
+`n = 64`, peak 67.8 → 2.75 MB. Commits `4ca6382` → `ebe13b6`. Load not recorded.
+
+#### DEQ-47: the time grid read once
+
+Euler-Maruyama and Milstein solves of a two-state OU against `K` = 16000-128000,
+best of 5 with CPU (`DEQ-47/deq_47_scaling.csv`). CPU slope 1.76 → 1.04
+(Euler-Maruyama) and 1.56 → 1.05 (Milstein); at `K = 128000` 36.8 s → 2.07 s and
+56.4 s → 13.3 s CPU. Wall times (91 s → 6.4 s, 139 s → 24.6 s) are the same story
+with more scatter; Milstein's last wall pair has slope 0.10. Memory 16 MB both ways,
+slope 1.0. Commits `7209310` → `c31efdd`.
+
+#### DEQ-48: vector-noise Milstein
+
+Per-path Milstein (`K = 200`) and the ensemble's Milstein and Stratonovich drift
+(`P = 200`, `K = 50`) against `n`, for an OU whose noise is found commuting
+(undeclared) or declared diagonal, best of 5 with CPU (`DEQ-48/deq_48_scaling.csv`).
+The ensemble's before runs stop at `n = 32` (64 for Stratonovich), where they needed
+212 MB (421 MB).
+
+| Series | CPU slope before → after | CPU at largest common `n` | Peak memory |
+|---|---|---|---|
+| path, undeclared | 2.12 → 1.17 | 49.3 s → 1.27 s (`n = 128`) | 51.9 → 1.9 MB |
+| path, declared | 2.12 → 0.41 | 48.6 s → 0.035 s (`n = 128`) | 51.9 → 1.5 MB |
+| ensemble Milstein, undeclared | 2.68 → 1.45 | 13.2 s → 0.17 s (`n = 32`) | 212 → 0.77 MB |
+| ensemble Milstein, declared | 2.70 → 0.46 | 13.7 s → 0.027 s (`n = 32`) | 212 → 0.46 MB |
+| ensemble Stratonovich drift, undeclared | 1.98 → 1.58 | 4.19 s → 0.83 s (`n = 64`) | 421 → 1.2 MB |
+| ensemble Stratonovich drift, declared | 1.92 → 0.47 | 3.72 s → 0.043 s (`n = 64`) | 421 → 0.93 MB |
+
+The declaration is ignored before the change, so before-declared and before-undeclared
+are the same code. Commits `c31efdd` → `365394c`.
+
+#### DEQ-49: sparse periodic orbits
+
+`PeriodicOrbit`, `HermiteSimpsonOrbit` and `RobustPeriodicOrbit.solve`,
+`CycleContinuation._solve_seed` and one continuation step against `N` = 40-640
+(`n = 2`), and `PeriodicOrbit.solve` against `n` = 2-16, 5 interleaved rounds
+(`DEQ-49/deq49.csv`).
+
+| Series | Slope before → after | At largest size | Memory slope, peak |
+|---|---|---|---|
+| `PeriodicOrbit.solve` vs `N` | 2.35 → 1.05 | 61.7 s → 0.38 s | 1.81 → 0.93; 27.9 → 0.27 MB |
+| `HermiteSimpsonOrbit.solve` | 1.99 → 0.96 | 36.2 s → 0.18 s | 1.81 → 0.93 |
+| `RobustPeriodicOrbit.solve` | 2.18 → 0.73 | 53.9 s → 0.13 s | 1.81 → 0.93 |
+| `_solve_seed` | 1.97 → 0.66 | 26.2 s → 0.23 s | 1.81 → 0.94; 27.9 → 0.58 MB |
+| one continuation step (control) | 0.98 → 0.99 | 0.249 s → 0.237 s | 0.96 → 0.96 |
+| `PeriodicOrbit.solve` vs `n` | 1.63 → 1.09 | 0.86 s → 0.042 s (`n = 16`) | 1.78 → 1.75 |
+
+Commits `d24b753` → `12b69c8`. Load not recorded.
+
+#### DEQ-50: sparse connecting orbits and homoclinic curves
+
+Connecting-orbit Newton iteration and solve against mesh intervals `N` = 200-3200,
+homoclinic-curve Newton iteration and `solve_point` against `N` (`DEQ-50/deq50_scaling.csv`,
+best of 5). The curve's before runs stop at `N = 400` (about 25 s per solve); its after
+runs go to 3200. Load average 12-27, so the time slopes are noisy (†) and the memory
+slopes are not. Peaks are `tracemalloc`'s, which misses SuperLU's factor (1.8 MB for
+the orbit, 0.68 MB for the curve at `N = 3200`, per the README).
+
+| Series | Time slope † | At largest common size † | Memory slope, peak |
+|---|---|---|---|
+| orbit Newton iteration | 1.02 → 0.99 | 2.06 s → 0.22 s (3200) | 1.98 → 0.98; 329 → 2.5 MB |
+| orbit solve | 1.59 → 1.13 | 20.7 s → 1.07 s (3200) | 1.99 → 0.98; 657 → 2.6 MB |
+| curve Newton iteration | 2.37 → 0.87 | 23.6 s → 0.11 s (400) | 1.85 → 0.97 |
+| curve `solve_point` | 1.54 → 0.82 | 24.9 s → 0.13 s (301 nodes) | 1.84 → 0.97 |
+
+The orbit iteration was run twice, on `ed8171e` → `a045604` and again on
+`8f514cb` → `3f94bb7` with the same orbit code; the refit takes the faster of the two
+at each size. Its own `summarize.py` gives 1.06 → 1.17 because it fits all ten rows.
+
+#### DEQ-51: minimally augmented cusp and Bautin curves
+
+One Newton iteration (residual, extended Jacobian, bordered solve) of each curve on
+dense fields against `n` (`DEQ-51/deq51_scaling.csv`, best of 5). Load 30-40
+throughout (†). Cusp: 3.42 → 2.58, 99.0 s → 10.6 s at `n = 32`; memory slope
+1.27 → 1.36, peak 0.13 → 0.34 MB, so the new system holds more but stays small.
+Generalized Hopf: before stops at `n = 6` (57 s, 136 s, 85 s at `n` = 4, 5, 6, not
+monotone under the load), after runs to 32 with slope 2.86 and 35.5 s at `n = 32`;
+at `n = 6` 84.6 s → 0.062 s. Commits `a984a5c` → `78d22e1`.
+
+#### DEQ-52: Lyapunov estimator costs
+
+13 series of the three Benettin estimators, with and without transients and under
+both conventions, against `n` = 4-64, `K` = 2-32 or `H` = 250-2000, best of 5
+(`DEQ-52/deq52.csv`, `summary.txt`). Load 30-50; the README notes the unchanged-path
+controls scatter 0.5-1.5x, and one of them, `stochastic_lyapunov` Ito with no
+transient, reads 2.2x slower (†). The transient series carry the change:
+
+| Series (`n` 4-64) | Time slope † | Ratio at `n = 64` † |
+|---|---|---|
+| `lyapunov_spectrum`, `T = 50`, `H = 10` | 1.29 → 1.17 | 0.34 |
+| `stochastic_lyapunov`, `T = 100`, `H = 10`, Ito | 1.26 → 1.11 | 0.20 |
+| `stochastic_lyapunov`, `T = 100`, `H = 10`, Stratonovich | 1.45 → 1.06 | 0.13 |
+| `matrix_noise_lyapunov`, `n = K`, `T = 50`, `H = 5`, Ito | 2.19 → 1.83 | 0.087 |
+| `matrix_noise_lyapunov`, `n = K`, `T = 50`, `H = 5`, Stratonovich | 2.39 → 2.11 | 0.55 |
+
+Memory slopes are unchanged (1.34-2.52 before and after; 6.5 MB at `n = K = 64`).
+`per_step_analytic_noise.txt` isolates the tangent-noise step with the field cost
+removed: Ito 37.8 → 3.3 ms per step at `n = K = 64`. Commits `4ca6382` → `67a68f2`.
+
+#### DEQ-53: constant factors
+
+Nine series (`DEQ-53/deq53.csv`, `summary.md`); load 20-50 (†), single cold runs for
+the continuations and Fokker-Planck, means over 0.2 s for the sub-millisecond kernels.
+
+| Series | Sizes | Time slope † | At largest size † | Peak |
+|---|---|---|---|---|
+| continuation, fold detector | `n` 4-64 | 1.10 → 0.85 | 0.97 s → 0.40 s | 2.7 → 2.9 MB |
+| continuation, all detectors | `n` 4-32 | 2.04 → 2.51 | 7.85 s → 7.67 s | 6.4 → 6.5 MB |
+| FD Jacobian, ring | `n` 32-512 | 1.80 → 0.85 | 0.267 s → 2.3 ms | 2.1 → 2.2 MB |
+| autodiff Jacobian, ring | `n` 32-256 | 1.84 → 1.05 | 1.25 s → 9.7 ms | 1.7 → 0.55 MB |
+| continuation, ring, declared sparsity | `n` 16-128 | 1.77 → 1.54 | 3.44 s → 1.35 s | 3.4 → 4.0 MB |
+| Fokker-Planck 2-D | `M` 1681-58081 | 1.14 → 1.28 | 8.51 s → 4.22 s | 38.4 → 40.3 MB |
+| Fokker-Planck 3-D | `M` 729-15625 | 1.46 → 1.55 | 8.85 s → 9.10 s | 15.0 → 16.2 MB |
+| resample by arclength | 40-2560 | 1.82 → 0.91 | 0.270 s → 3.7 ms | 0.47 → 0.39 MB |
+| resample by measure | 40-2560 | 1.95 → 1.18 | 0.224 s → 3.9 ms | 0.33 → 0.33 MB |
+
+The all-detector continuation's slope rose while its time at `n = 32` did not move:
+this base still had the `O(n^6)` Hopf determinant (DEQ-46 merged later), which
+dominates that run, so the shared Jacobian's constant saving is lost in it and in the
+load.
+Commits `4ca6382` → `dde829b`.
+
+#### DEQ-55: Gauss-Legendre multipliers by periodic QR
+
+`CycleContinuation._point` (multipliers and the Floquet error estimate) and the
+Jacobian multipliers alone, Gauss-Legendre with `m = 4`, against `N` = 10-160
+(`n = 2`) and `n` = 2-16 (`N = 20`), 5 interleaved rounds (`DEQ-55/deq55.csv`).
+Point: 1.25 → 1.05 against `N`, 2.91 s → 0.49 s at `N = 160`; 1.73 → 0.98 against
+`n`, 4.83 s → 1.19 s at `n = 16`. The multipliers alone got dearer, 0.46 → 1.34
+against `N` (0.99 ms → 28.6 ms at 160) and 1.62 → 1.82 against `n`, and are a small
+part of the point. Peaks unchanged (2.17 MB, 13.6 MB). Commits `efdc0dd` → `7d4a170`.
+Load not recorded.
+
+#### DEQ-70: Brownian-path areas in chunks
+
+`BrownianPath._cell_areas` against cells `2^11`-`2^20` with `m = 2`, best of 3
+(`DEQ-70/deq70_scaling.csv`, `summary.txt`, README). Load 19-23 (†). Peak memory
+slope 1.41 → 0.55: 1149 MB → 21.1 MB at `2^18`, and at `2^20` the old code hit the
+5 GB limit while the new one peaked at 58.8 MB; beyond the increments the working
+set stays at 8.5-9.0 MB from `2^14` on. Time slope 1.41 both ways, the new code
+1.22x-1.67x slower per size (4.24 s → 6.38 s at `2^18`). The readings are
+bit-identical (`np.array_equal` and byte equality) for `e` = 11-18, stored as
+`before_<e>.npy` and `after_<e>.npy`. Commits `8a76b6a` → `0f43b4c`.
+
+#### DEQ-73: manifold branches in one Dormand-Prince pass
+
+`manifold_fan_flow` against branches per frame 4-64, with an intermediate `step1`
+(`DEQ-73/ba.csv`; no README, so neither the rounds nor the load are recorded).
+Slope 0.82 → 0.83 (`step1`) → 0.19; 6.21 s → 3.05 s → 0.33 s at 64 branches. Peak
+memory rose, 5.4 → 4.7 → 11.2 MB, as the branches are carried together. Commits
+`0153340` → `3219a6c` → `5722f8c`.
+
+#### DEQ-75: cycle continuation in the films
+
+Nine stage films built 5 times each from the old and new trees, interleaved, with the
+continuation's own CPU time recorded (`DEQ-75/best_of_5.csv`, `builds.csv`). There is
+no size sweep, so no slopes. Continuation CPU went from 7.75-111.3 s to 0.70-12.85 s
+per film (ratio 0.020 for ferroelectric to 0.39 for SNIC); whole-film CPU from 0.04x
+(van der Pol, 25.7 s → 1.06 s) to 0.92x (zero-Hopf, where other work dominates).
+Memory was not recorded. The adaptive step moves the continuation points, so results
+are compared by `compare_adapt.py` and `mult_check.py`, whose outputs are not in the
+folder. Base `d2d71b4`.
+
+#### DEQ-57: quasipotential error estimate
+
+OLIM against grid side 41-161 (radius 8) and radius 2-16 (81 points), gMAM per
+iteration against nodes 25-400, and the new `check()` per point (after only), best of
+5 (`DEQ-57/ba.csv`). The march is unchanged, as intended: slope 1.80 → 1.96 against
+the side (about 0.9-1.0 against `M = side^2`), ratio 0.68-1.10 per size, 28.9 MB both.
+gMAM 1.08 → 1.05. `check()` takes 5.0-14.0 s per point (slope 0.72 against nodes
+41-121). Commits `9df11d9` → `2419505`. Load not recorded.
+
+#### DEQ-58: quasipotential order and batching
+
+The half lattice against side 81-321, and OLIM against side 41-161 at radius 8, at
+the default radius, and against radius 2-16 (`DEQ-58/ba.csv`, best of 5). The
+batched half lattice is 0.026x the time at side 321 (22.7 s → 0.58 s, slope 2.41 →
+2.30 against the side) and peaks lower (115 → 79 MB). The OLIM runs measure the
+parabolic update and Eq. (28) radius, the defaults at `d893783` and opt-in in the PR:
+1.78x-2.79x the midpoint march, peak 28.9 → 19.9 MB at side 161. Commits
+`026c7e8` → `d893783`.
+
+#### DEQ-59: gMAM with state-dependent noise
+
+gMAM per iteration against nodes 25-400 with constant `D` (should be unchanged) and
+25-200 with a state-dependent `D`, which the old code refused (`nan` rows)
+(`DEQ-59/ba.csv`). Constant `D`: 1.33 → 1.12, ratio 0.64-1.61 per size, 0.88 at 400.
+State-dependent: slope 1.12, 0.096 s per iteration at 200 nodes. Commits `7202a32` →
+`4b2c42c`.
+
+#### DEQ-61: geodesic level sets, step control
+
+`GeodesicLevelSets.compute` on the linear saddle, step 0.1 to distance 1.0, against
+`1/h` = 200-3200, best of 5 with CPU (`DEQ-61/deq_61_scaling.csv`); load 40-58 (†).
+CPU slope 1.30 → 1.01, 61.9 s → 18.5 s CPU at 3200; wall 1.50 → 1.04; memory slope
+1.14 → 1.01, peak 103.8 → 66.2 MB. The film-scale runs in
+`memo_numbers_2026-11-23.csv` (all eight started together, load rising to about 47)
+show the price of reaching further: 16.1x on the strict film, 2.21x, 1.76x and 2.56x
+on the others; `memo_numbers.csv` notes the memoised mesh is bit-identical to the
+un-memoised escalation. Commits `3a5ccae` → `581e50d`.
+
+#### DEQ-65: non-commuting noise in the Milstein ensemble
+
+Ensemble Milstein step time against paths `P` = 256-16384 (4096 at `m = 16`) for
+`m` = 2, 4, 8, 16 channels, commuting and non-commuting noise, best of the steps
+(`DEQ-65/before.csv`, `after.csv`, `slopes.csv`). Before, non-commuting noise was
+refused. Commuting slopes against `P` 0.73-0.96 before, 0.80-1.11 after; at the
+largest `P` the step is 0.35x-0.89x the old time. Non-commuting: 0.81-1.17 against
+`P`, and 2.44, 2.77, 2.91 against `m` at `P` = 256, 1024, 4096, as the `m^2` Levy
+areas grow. The commuting final states hash equal before and after at all 15 sizes
+(a 16-hex-digit SHA-256 prefix). Memory and load not recorded.
+
+#### DEQ-72: parallel atlas build
+
+The full atlas and a 12-unit subset, wall and CPU (user + system with children),
+peak RSS per process (`DEQ-72/atlas_build.csv`, `README.txt`); load 33-47 (†).
+
+| Build | Wall | CPU |
+|---|---|---|
+| before, in-process serial, unpinned BLAS | 3453.6 s | 1994.7 s |
+| before, serial, BLAS threads 1 | 5399.7 s | 1835.3 s |
+| after, 1 worker | 5564.8 s | 2004.6 s |
+| after, 12 workers | 987.5 s (repeat 1142.6 s) | 2173.8 s (2086.7 s) |
+
+The subset went 361.0, 168.7, 92.0, 69.3, 72.3 s (repeat 62.7 s) at 1, 2, 4, 8 and 12
+workers. Peak RSS stays 636-644 MB per process. All 62 output files are
+byte-identical (SHA-256) across after 12 workers, its repeat, after 1 worker and
+before with BLAS pinned to one thread; the unpinned before differs in 4 files at
+rounding level.
+
+#### DEQ-94: per-component finite-difference steps
+
+The top Lorenz exponent against horizon `T` = 125-1000 by Jacobian kind, CPU best of
+interleaved runs (`DEQ-94/lorenz_lambda1_cpu_interleaved.csv`; the wall-only
+`lorenz_lambda1_timing.csv` is noisier), plus the error of every Jacobian entry and
+the exponents of 17 tests (no README; load not recorded). CPU slope 1.13 before, 1.07
+(finite differences), 1.01 (analytic), 0.97 (jets) after; at `T = 1000` 29.3 s →
+29.8 s, 8.7 s and 45.4 s. On the small-scale system the default forward difference
+kept 6 of 9 entries within four times its error allowance before and 7 of 9 after,
+and 9 of 9 with `typical=scale` (`jacobian_entry_errors.csv`). Results are not
+bit-identical: `lambda_1` moves by at most 2.1e-9, and the 129 exponents of the 17
+tests by at most 2.5e-7, with 1 test bit-identical
+(`lyapunov_exponents_before_after.csv`). Commits `8a76b6a` → `b248cf9`.
+
+#### DEQ-105: a Hermite-Simpson Floquet error bound
+
+`CycleContinuation._point` and a one-step trace on van der Pol (`mu = 1`), Hermite-
+Simpson, against `N` = 20-320, two interleaved rounds run beside the full suite (†)
+(`DEQ-105/bench.csv`, which has no header: label, case, `N`, point seconds, step
+seconds). Point: 1.27 → 0.90, 3.4 → 18.7 ms at `N = 20` and 139 → 242 ms at 320.
+Step: 1.05 both ways, 1.9x-2.4x the old time. The README adds film builds 1.8x-3.2x
+longer. The point now carries a bound, the larger of the drift and twice the
+doubled-mesh gap, so its value differs from before by design; the accuracy evidence
+is in `outputs/verification/verify-deq105/`. Commits `e1912a1` → `b1f777b`.
