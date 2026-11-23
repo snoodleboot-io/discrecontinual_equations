@@ -11,7 +11,6 @@ exactly, with ``phi`` of degree 9, so a chart of order ``N < 9`` is off it by
 
 import math
 from unittest import TestCase
-from unittest.mock import patch
 
 import numpy as np
 
@@ -23,7 +22,10 @@ from discrecontinual_equations.continuation.manifold import (
     TaylorManifold,
 )
 from discrecontinual_equations.function.deterministic import DeterministicFunction
-from discrecontinual_equations.webplot.stage_builder import saddle_manifolds
+from discrecontinual_equations.webplot.stage_builder import (
+    StageSettings,
+    _manifold_starts,
+)
 from tests.continuation.fields import Alpha, State
 
 # The focus block of B: eigenvalues -1 +- 2i, and 1.5 off the surface.
@@ -118,15 +120,8 @@ def test_the_stage_fan_starts_on_a_circle_not_a_line():
     # DEQ-71: the twelve starts of the stable surface's fan, from the chart
     # at radius 1e-3, collapsed to six distinct points on one line.
     function = _field(LinearFocus)
-    starts = []
-
-    def capture(_function, start, *_rest):
-        starts.append(np.array(start, dtype=float))
-        return [[0.0, 0.0, 0.0]]
-
-    with patch("discrecontinual_equations.webplot.stage_builder._flow", capture):
-        saddle_manifolds(function, np.zeros(3), [(-1.0, 1.0)] * 3)
-    fan = np.array(starts[2:])
+    starts = _manifold_starts(function, np.zeros(3), StageSettings())
+    fan = np.array([start for kind, start, _ in starts if kind == "stable-surface"])
     assert len(fan) == 12
     assert len({tuple(np.round(start, 12)) for start in fan}) == 12
     assert np.linalg.matrix_rank(fan, tol=1.0e-9) == 2
