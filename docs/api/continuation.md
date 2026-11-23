@@ -238,11 +238,11 @@ left everywhere is the orbit: nodes, or a higher-order collocation scheme.
 `collocation="gauss_legendre"` is that higher-order scheme: AUTO's orthogonal
 collocation, `collocation_points` Gauss–Legendre points per interval (default 4,
 AUTO's NCOL), a degree-`m` polynomial through `m + 1` equally spaced points per
-interval, order `2m` at the mesh points and for the period. Only the collocation is
-AUTO's: the phase condition is still the point (Poincaré) condition
-`x_0[phase_index] = phase_value`, and the pseudo-arclength constraint the plain
-Euclidean norm of the whole unknown vector, not AUTO's integral phase condition and
-weighted L2 norm. Period error on the continued Hopf branch, with the order per mesh
+interval, order `2m` at the mesh points and for the period. By default only the
+collocation is AUTO's: the phase condition is the point (Poincaré) condition
+`x_0[phase_index] = phase_value` and the pseudo-arclength constraint the plain
+Euclidean norm of the whole unknown vector. AUTO's integral phase condition and
+weighted L2 arclength are options (see below). Period error on the continued Hopf branch, with the order per mesh
 doubling:
 
 | m | coarsest | doubled | doubled again | and again |
@@ -362,6 +362,32 @@ both films, `m = 4`, over the stretch of each branch both runs covered:
 It grades the Bogdanov–Takens mesh by a factor of six and buys nothing the order has
 not already bought, and on the coarse ring it is seven times worse, so it is left
 out. The interval blocks take a graded mesh all the same.
+
+### AUTO's phase condition and arclength (DEQ-56)
+
+`CycleContinuation(..., phase="integral", arclength="weighted")` switches both to
+AUTO's (Doedel, Keller and Kernévez, IJBC 1, 1991; Doedel's lecture notes give the
+derivation). The integral phase condition `∫₀¹ ⟨x(t) − x̂(t), x̂′(t)⟩ dt = 0`, with
+`x̂` the previous cycle, picks the phase that minimises the distance to it, so no
+coordinate has to cross any value. The weighted arclength measures a step as the L2
+norm of the orbit's change plus the parameter's (the period weighted zero, AUTO's
+default `THL = {11: 0}` for cycles). Both integrals use the active scheme's
+quadrature: the trapezoidal rule on the nodes for the one-wide schemes, the Gauss
+rule on each interval's polynomial for Gauss–Legendre.
+
+A Hopf circle of radius 1/2 sliding sideways along `x` (`phase_index = 0`,
+`phase_value = 0`): the point condition follows it to `p = 1/2`, where `x = 0`
+touches the circle, then rounds an artificial fold and comes back; the integral
+condition carries it to `p = 1.41` in the same 40 steps, every cycle within 1e-3 of
+the exact one under all three schemes. One step of 0.05 on the Hopf branch at 24
+intervals spans:
+
+| norm | trapezoidal | Hermite–Simpson | GL m=2 | GL m=3 | GL m=4 |
+|---|---|---|---|---|---|
+| Euclidean | 9.90e-3 | 9.90e-3 | 7.12e-3 | 5.85e-3 | 5.08e-3 |
+| weighted | 3.5959e-2 | 3.5959e-2 | 3.5959e-2 | 3.5959e-2 | 3.5959e-2 |
+
+The defaults are unchanged, and reproduce every film to the last bit.
 
 ## Trusting a computed connecting orbit
 
