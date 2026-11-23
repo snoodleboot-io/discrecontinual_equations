@@ -182,6 +182,7 @@ class IteratedIntegralSampler:
         return max(1, int(np.ceil(bound)))
 
     @staticmethod
+    @lru_cache(maxsize=64)
     def triple_terms(step: float) -> int:
         """The least ``q`` whose worst exact error (49), (59)-(61) is ``<= h^4``."""
 
