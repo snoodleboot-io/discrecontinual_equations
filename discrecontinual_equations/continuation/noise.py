@@ -15,6 +15,14 @@ exists to do.
 The columns are held as ordinary :class:`~.function.function.Function` objects, one
 per driver, so every field already written for the library can be reused as a noise
 column without a new evaluation protocol.
+
+The solvers read the same amplitude differently: a
+:class:`~.function.stochastic.StochasticFunction` whose ``diffusion()`` returns the
+``N x K`` matrix ``G``. :class:`NoiseMatrixFunction` and :func:`noise_matrix_from`
+carry a system from one form to the other, so it is written once (DEQ-44). Neither
+form carries the calculus: the analysis side takes a
+:class:`~.stochastic.NoiseConvention`, the solvers a ``calculus`` in their
+configuration, and the two must be chosen to agree (``Ito()`` with ``"ito"``).
 """
 
 from collections.abc import Sequence
@@ -23,9 +31,11 @@ import numpy as np
 
 from discrecontinual_equations.continuation.stochastic import NoiseConvention
 from discrecontinual_equations.function.function import Function
+from discrecontinual_equations.function.stochastic import StochasticFunction
 
 _JACOBIAN_STEP = 1.0e-7
 _UNIT = 1.0
+_VECTOR = 1
 
 
 def stratonovich_factor(convention: NoiseConvention) -> float:
@@ -100,6 +110,110 @@ class NoiseMatrix:
     def jacobians_at(self, state: np.ndarray) -> np.ndarray:
         """The Jacobian of each column, as a ``(K, N, N)`` array."""
         return np.array([jacobian_at(column, state) for column in self._columns])
+
+
+class NoiseMatrixFunction(StochasticFunction):
+    """A drift ``Function`` and a :class:`NoiseMatrix` as one ``StochasticFunction``.
+
+    The analysis side's two objects, handed to the solvers unchanged: ``eval`` is the
+    drift's own, and ``diffusion`` is ``G`` as the ``N x K`` matrix the solvers read,
+    built from :meth:`NoiseMatrix.columns_at` so that it is the very matrix the
+    Fokker-Planck operator and the matrix-noise exponent see, not a re-derivation of
+    it. Variables and parameters are the drift's, so a parameter changed on the drift
+    reaches the solvers too. Like the rest of this module the columns are evaluated
+    without a time; the drift receives the solver's time as it always would.
+    """
+
+    __slots__ = ["_drift", "_noise"]
+
+    def __init__(self, drift: Function, noise: NoiseMatrix) -> None:
+        super().__init__(
+            drift.variables,
+            drift.parameters,
+            drift.curve.results,
+            drift.time,
+        )
+        self._drift = drift
+        self._noise = noise
+
+    @property
+    def drift(self) -> Function:
+        """The drift ``f``, as given."""
+        return self._drift
+
+    @property
+    def noise(self) -> NoiseMatrix:
+        """The amplitude ``G``, as given."""
+        return self._noise
+
+    def eval(self, point: list[float], time: float | None = None) -> list[float]:
+        """The drift at ``point``, exactly as the drift computes it."""
+        return self._drift.eval(point=point, time=time)
+
+    def diffusion(  # type: ignore[override]
+        self,
+        point: list[float],
+        time: float | None = None,  # noqa: ARG002 (the columns are autonomous)
+    ) -> list[list[float]]:
+        """``G(x)`` as ``N`` rows of ``K`` entries: column ``k`` is driver ``k``."""
+        columns = self._noise.columns_at(np.asarray(point, dtype=float))
+        return [[float(value) for value in row] for row in columns.T]
+
+
+class _DiffusionColumn(Function):
+    """Column ``index`` of a ``StochasticFunction``'s diffusion, as a vector field.
+
+    A vector-form diffusion ``b`` is the diagonal ``G = diag(b)``, so its column
+    ``k`` is ``b_k e_k``; a matrix-form one is read as it stands, and its width must
+    be the driver count the noise matrix was built with.
+    """
+
+    __slots__ = ["_drivers", "_index", "_source"]
+
+    def __init__(self, source: StochasticFunction, index: int, drivers: int) -> None:
+        super().__init__(
+            source.variables,
+            source.parameters,
+            source.curve.results,
+            source.time,
+        )
+        self._source = source
+        self._index = index
+        self._drivers = drivers
+
+    def eval(self, point: list[float], time: float | None = None) -> list[float]:
+        amplitude = np.asarray(self._source.diffusion(point=point, time=time))
+        vector = amplitude.ndim == _VECTOR
+        width = amplitude.shape[-1]
+        if width != self._drivers:
+            message = (
+                f"the noise matrix was built with {self._drivers} drivers but "
+                f"diffusion() has {width}"
+            )
+            raise ValueError(message)
+        if vector:
+            column = np.zeros(width)
+            column[self._index] = amplitude[self._index]
+            return [float(value) for value in column]
+        return [float(value) for value in amplitude[:, self._index]]
+
+
+def noise_matrix_from(
+    function: StochasticFunction,
+    drivers: int | None = None,
+) -> NoiseMatrix:
+    """The :class:`NoiseMatrix` of a solver's ``StochasticFunction``.
+
+    The reverse of :class:`NoiseMatrixFunction`: ``function`` itself serves as the
+    drift (its ``eval`` is the drift), and this supplies the amplitude, one column
+    per driver, each evaluated from ``diffusion()`` so the two can never disagree.
+    ``drivers`` is ``K``, the width of a matrix-form diffusion; it defaults to the
+    state dimension, which is what a vector-form (diagonal) diffusion needs. A width
+    that does not match is reported when the columns are first evaluated, since the
+    shape of ``diffusion()`` is only known then.
+    """
+    count = len(function.variables) if drivers is None else drivers
+    return NoiseMatrix([_DiffusionColumn(function, k, count) for k in range(count)])
 
 
 def diffusion_matrix(columns: np.ndarray) -> np.ndarray:

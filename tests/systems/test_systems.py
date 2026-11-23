@@ -81,12 +81,8 @@ def _equation(
     )
 
 
-def _period(gain: float, coupling: float, start: list[float]) -> float | None:
-    """Period of the ring's first cell on the attractor, or ``None`` at a fixed point.
-
-    Integrated from ``start`` to ``t = 600`` and read on ``[300, 600]`` from the
-    upward crossings of the cell's mean.
-    """
+def _cell_trace(gain: float, coupling: float, start: list[float]) -> np.ndarray:
+    """The ring's first cell on ``[300, 600]``, integrated from ``start``."""
     equation = _equation(FerroelectricRing, coupling, gain, 0.0)
     field = equation.derivative
     solution = solve_ivp(
@@ -97,8 +93,17 @@ def _period(gain: float, coupling: float, start: list[float]) -> float | None:
         atol=1.0e-11,
         dense_output=True,
     )
+    return solution.sol(np.linspace(300.0, 600.0, 60001))[0]
+
+
+def _period(gain: float, coupling: float, start: list[float]) -> float | None:
+    """Period of the ring's first cell on the attractor, or ``None`` at a fixed point.
+
+    Integrated from ``start`` to ``t = 600`` and read on ``[300, 600]`` from the
+    upward crossings of the cell's mean.
+    """
     times = np.linspace(300.0, 600.0, 60001)
-    first = solution.sol(times)[0]
+    first = _cell_trace(gain, coupling, start)
     if np.ptp(first) < 1.0e-6:
         return None
     centred = first - first.mean()
@@ -234,6 +239,46 @@ class TestCoupledRings(TestCase):
         period = _period(-0.3, 0.65, [0.3, -0.2, 0.1])
         assert period is not None
         assert abs(period - 4.0 * math.pi / (0.65 * math.sqrt(3.0))) < 0.05
+
+    def test_ferroelectric_negative_gain_thresholds_by_continuation(self):
+        # a = -0.3, the operating map's a < 0 half (DEQ-44): the trivial branch
+        # breaks symmetry at lambda = a and has its wave Hopf at -2a, and the
+        # symmetric states, which exist only for lambda < a, have no Hopf at all
+        # (their k = 1 real part 3.5 lambda - 2a stays below 1.5a < 0).
+        gain = -0.3
+        trivial = self._continue(_equation(FerroelectricRing, 0.0, gain, 0.0), "hopf")
+        assert any(
+            abs(p.parameter - (-2.0 * gain)) < _TOLERANCE
+            for p in trivial.special_points
+            if p.kind == "hopf"
+        )
+        breaking = self._continue(
+            _equation(FerroelectricRing, 0.0, gain, 0.0),
+            "branch_point",
+        )
+        assert any(
+            abs(p.parameter - gain) < _TOLERANCE
+            for p in breaking.special_points
+            if p.kind == "pitchfork"
+        )
+        symmetric = self._continue(
+            _equation(FerroelectricRing, -1.0, gain, 0.0),
+            "hopf",
+            start=[math.sqrt(gain + 1.0)] * 3,
+            initial_parameter=-1.0,
+            direction=1,
+        )
+        assert len(symmetric) > 0
+        assert not [p for p in symmetric.special_points if p.kind == "hopf"]
+
+    def test_ferroelectric_negative_gain_hopf_is_supercritical(self):
+        # The wave is born small at -2a, not by a jump: its amplitude squared grows
+        # as (2/3)(lambda + 2a), the cubic's averaged (3/4) A^2 balancing the k = 1
+        # growth rate a + lambda/2 (measured 0.666 at a = -0.1, -0.3 and -0.6).
+        gain, coupling = -0.3, 0.62
+        first = _cell_trace(gain, coupling, [0.115, -0.0575, -0.0575])
+        amplitude = np.ptp(first) / 2.0
+        assert abs(amplitude**2 / (coupling + 2.0 * gain) - 2.0 / 3.0) < 0.01
 
     def _continue(
         self,

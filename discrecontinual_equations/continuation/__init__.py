@@ -142,9 +142,11 @@ from discrecontinual_equations.continuation.network_continuation import (
 )
 from discrecontinual_equations.continuation.noise import (
     NoiseMatrix,
+    NoiseMatrixFunction,
     diffusion_matrix,
     field_at,
     jacobian_at,
+    noise_matrix_from,
     state_drift_shift,
     stratonovich_factor,
     variational_drift_shift,
@@ -289,6 +291,7 @@ __all__ = [
     "NetworkSaddle",
     "NoiseConvention",
     "NoiseMatrix",
+    "NoiseMatrixFunction",
     "OrbitSolution",
     "OrderedLineIntegral",
     "ParameterFamily",
@@ -337,6 +340,7 @@ __all__ = [
     "jacobian_at",
     "lyapunov_spectrum",
     "matrix_noise_lyapunov",
+    "noise_matrix_from",
     "resolved_branch",
     "state_drift_shift",
     "stochastic_finite_time_exponents",
