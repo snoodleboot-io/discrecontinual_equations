@@ -1444,13 +1444,15 @@ class GeometricMinimumAction:
         reach = _JUMP_SHARE * float(np.linalg.norm(chain[-1] - chain[0]))
         converged = False
         taken = 0
-        for taken in range(1, self._iterations + 1):  # noqa: B007 (read after)
+        for taken in range(1, self._iterations + 1):
             following = self._relax(chain, factor, inverse, spacing, step)
             if not np.all(np.isfinite(following)):
                 return None
             following = _equal_arc_length(following)
             change = float(np.max(np.abs(following - chain)))
-            if change > reach:
+            # The first step may move nodes far by reparametrising a chain
+            # that was spaced evenly in x rather than z; only later ones count.
+            if taken > 1 and change > reach:
                 return None
             chain = following
             if change < self._tolerance:

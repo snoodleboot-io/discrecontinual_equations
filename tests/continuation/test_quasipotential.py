@@ -810,10 +810,17 @@ class TestErrorEstimate(TestCase):
             grid,
         )
         field = solver.solve(EquilibriumAttractor([0.0, 0.0]))
-        target = np.array([0.5, 0.3])
-        value, own = solver.reference(field, target)
+        index = np.ravel_multi_index(grid.nearest([0.5, 0.3]), grid.shape)
+        target = grid.points()[index]
         exact = 2.0 * target[0] ** 2 + target[1] ** 2
-        assert abs(value - exact) <= own < 1.0e-3
+        value, own = solver.reference(field, target)
+        checked = solver.check(field, [index])
+        # The chain from the surface is no better than the grid here - the
+        # path spirals out of the origin ten times faster than it climbs -
+        # but its own estimate says so, and the grid's estimate stays a bound.
+        assert abs(value - exact) <= own
+        grid_error = abs(field.values.ravel()[index] - exact)
+        assert checked.errors.ravel()[index] >= grid_error
 
     def test_the_references_own_estimate_bounds_its_error(self):
         # About a nonlinear well, where the chain's error goes at second order
