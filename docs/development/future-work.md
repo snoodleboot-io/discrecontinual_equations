@@ -228,6 +228,9 @@ solver returns the same near-optimal result as the uniform mesh (no regression).
   Guckenheimer-Holmes `+inf` iff `2 a1 > a2 + a3`; `f^index` against the exact
   measure of its set; winners confirmed by simulation within 0.07 of `delta = 0`;
   and the basin complement of an index-1 connection scaling like `eps^1`.
+  `..._independent.py` adds a five-node cycle whose permutation is a 3-cycle, and
+  the type C4- closed forms as corrected by Lohse (2015, Lemma B.5): Podvigina and
+  Ashwin's original `b1 < 0` branch drops the row terms of Theorem 3.10.
 
   Open: the matching compares directions through orthogonal complements, so a type
   C cycle in oblique coordinates (or a node with a repeated transverse eigenvalue)
