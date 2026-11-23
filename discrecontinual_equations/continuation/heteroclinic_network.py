@@ -352,9 +352,11 @@ class HeteroclinicNetwork:
     ) -> NetworkConnection:
         """Add ``source -> target`` inside the subspace spanned by ``basis`` columns.
 
-        The subspace must be invariant for the Jacobian at both ends, which it is
-        whenever it is invariant for the flow; a subspace that is not is rejected
-        here rather than producing a meaningless spectrum later.
+        The subspace must contain both saddles and be invariant for the Jacobian
+        at both ends, which it is whenever it is invariant for the flow; a
+        subspace that is not is rejected here rather than producing a meaningless
+        spectrum later. A saddle outside the subspace would otherwise be replaced
+        by its projection ``B B^T xi`` in the subspace solve.
         """
         for name in (source, target):
             self.saddle(name)
@@ -363,6 +365,7 @@ class HeteroclinicNetwork:
             message = f"the network already has a connection {source} -> {target}"
             raise ValueError(message)
         for name in (source, target):
+            _require_contained(self.saddle(name), connection.basis)
             _require_invariant(self.saddle(name), connection.basis)
         self._connections[connection.key] = connection
         return connection
@@ -575,6 +578,19 @@ class HeteroclinicNetwork:
         message = (
             f"Newton did not converge to an equilibrium for saddle {name!r} from "
             f"{guess.tolist()} within {_NEWTON_ITERATIONS} iterations"
+        )
+        raise ValueError(message)
+
+
+def _require_contained(saddle: NetworkSaddle, basis: np.ndarray) -> None:
+    """Reject a subspace that does not pass through ``saddle``."""
+    position = saddle.equilibrium
+    outside = position - basis @ (basis.T @ position)
+    scale = max(1.0, float(np.linalg.norm(position)))
+    if float(np.linalg.norm(outside)) > _INVARIANCE_TOLERANCE * scale:
+        message = (
+            f"the subspace does not contain the saddle {saddle.name!r}; a "
+            f"connection to or from it cannot lie there"
         )
         raise ValueError(message)
 
