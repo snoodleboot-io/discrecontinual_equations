@@ -138,6 +138,20 @@ class TwoParameterJerkField(DeterministicFunction):
         return [y, z, -a * z - b * y + x - x * x]
 
 
+class ReversedTwoParameterJerkField(DeterministicFunction):
+    """The jerk field in reversed time: its saddle-focus pair is unstable."""
+
+    def eval(
+        self,
+        point: list[float],
+        time: float | None = None,  # noqa: ARG002 (base signature)
+    ) -> list[float]:
+        a = self.parameters[0].value
+        b = self.parameters[1].value
+        x, y, z = point[0], point[1], point[2]
+        return [-y, -z, a * z + b * y - x + x * x]
+
+
 class DampedWellField(DeterministicFunction):
     """x' = y, y' = x - x^2 + mu y; homoclinic to the origin exactly at mu = 0."""
 

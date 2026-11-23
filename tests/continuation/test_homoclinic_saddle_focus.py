@@ -23,6 +23,7 @@ from discrecontinual_equations.differential_equation import DifferentialEquation
 from tests.continuation.fields import (
     Alpha,
     BetaOne,
+    ReversedTwoParameterJerkField,
     State,
     Time,
     TwoParameterJerkField,
@@ -235,6 +236,51 @@ class TestSaddleFocusNewtonMatrix(TestCase):
         values = np.array([2.0, -1.0, -3.0])
         left = np.array([[0.6, -0.8, 0.0], [-1.0, 0.0, 0.0], [0.0, 0.3, -0.4]])
         np.testing.assert_array_equal(_continuous_phases(values, left), left)
+
+
+class TestUnstableSaddleFocus(TestCase):
+    """The complex pair on the unstable side, so its two rows sit at the arrival end.
+
+    Reversing time keeps the homoclinic and swaps the eigenspaces. The trapezoidal
+    rule is symmetric in time, so on the mirrored mesh the reversed problem has the
+    same discrete solution: measured agreement 9e-16 in ``a`` and 3e-15 in the orbit.
+    """
+
+    def test_reversed_field_gives_the_same_curve(self):
+        forward, times, seed = _jerk_curve(100)
+        parameters = [Alpha(value=0.5), BetaOne(value=0.9)]
+        reversed_field = ReversedTwoParameterJerkField(
+            variables=[State(), State(), State()],
+            parameters=parameters,
+            results=[State(), State(), State()],
+            time=None,
+        )
+        backward = HomoclinicCurve(
+            DifferentialEquation(
+                variables=[State(), State(), State()],
+                time=Time(),
+                parameters=parameters,
+                derivative=reversed_field,
+            ),
+            0,
+            1,
+            MeshSpec(_HALF, times.size - 1, 1, 0.0),
+        )
+        sweeps = [0.90, 0.89]
+        ahead = forward.trace(sweeps, seed, np.zeros(3), _SHOOTING[0.90])
+        with _refusing_fallback():
+            behind = backward.trace(
+                sweeps,
+                seed[::-1].copy(),
+                np.zeros(3),
+                _SHOOTING[0.90],
+            )
+        assert [point.sweep for point in behind] == sweeps
+        for there, back in zip(ahead, behind, strict=True):
+            assert abs(back.continuation - there.continuation) < 1.0e-12
+            assert (
+                np.max(np.abs(back.orbit.states[::-1] - there.orbit.states)) < 1.0e-10
+            )
 
 
 class TestSaddleFocusCurveAgainstShooting(TestCase):
