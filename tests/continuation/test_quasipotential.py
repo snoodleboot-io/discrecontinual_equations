@@ -53,6 +53,7 @@ from tests.continuation.fields import (
 )
 from tests.continuation.quasipotential_systems import (
     ANISOTROPIC_AMPLITUDE,
+    CUBIC_TERMS,
     MAIER_STEIN_BARRIER,
     MAIER_STEIN_VALUES,
     NON_NORMAL_AMPLITUDE,
@@ -65,6 +66,7 @@ from tests.continuation.quasipotential_systems import (
     NonNormalField,
     PaperCycleField,
     PaperLinearField,
+    RotatingCubicField,
     constant_noise,
     double_well,
     kronecker_covariance,
@@ -907,6 +909,27 @@ class TestCubicTerm(TestCase):
             np.diag([2.0, 1.0]),
         )
         assert np.allclose(coefficients, [-2.0, 0.0, 0.0, 0.0], atol=1.0e-5)
+
+    def test_the_cubic_term_of_a_rotating_well_is_its_own(self):
+        # Off the gradient case, with every coefficient of U3 nonzero: U is
+        # exact by construction (see RotatingCubicField), M = diag(1, 2).
+        drift = system(RotatingCubicField)
+        noise = constant_noise(_IDENTITY)
+        origin = np.zeros(2)
+        start = EquilibriumAttractor(origin).start(None, drift, noise, [0.4, 0.2])
+        assert start.value([0.1, 0.0]) == pytest.approx(0.01 + 0.3e-3)
+        coefficients = _cubic_coefficients(drift, noise, origin, np.diag([1.0, 2.0]))
+        assert np.allclose(coefficients, CUBIC_TERMS, atol=1.0e-6)
+
+    def test_the_inner_surface_is_at_half_the_distance(self):
+        # The reference's second surface, which measures the expansion's error,
+        # is the same level set scaled by one half about the equilibrium.
+        drift = system(RotatingCubicField)
+        noise = constant_noise(_IDENTITY)
+        outer = EquilibriumAttractor([0.0, 0.0]).start(None, drift, noise, [0.4, 0.2])
+        inner = outer.shrunk()
+        for angle in (0.0, 1.0, 2.5):
+            assert np.allclose(inner.point(angle), 0.5 * outer.point(angle))
 
 
 class TestArrival(TestCase):
