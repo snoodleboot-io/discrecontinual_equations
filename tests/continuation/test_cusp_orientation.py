@@ -33,7 +33,7 @@ from unittest import TestCase, mock
 import numpy as np
 
 from discrecontinual_equations.continuation.builder import ContinuerBuilder
-from discrecontinual_equations.continuation.codim2 import Cusp
+from discrecontinual_equations.continuation.codim2 import Codim2Analyzer, Cusp
 from discrecontinual_equations.continuation.codim2_builder import (
     Codim2Driver,
     CurveSeed,
@@ -53,6 +53,7 @@ from discrecontinual_equations.continuation.detection import (
     DetectionContext,
     _branch_coefficients,
 )
+from discrecontinual_equations.continuation.fold_curve import FoldCurveResidual
 from discrecontinual_equations.continuation.jacobian import JacobianProvider
 from discrecontinual_equations.continuation.normal_form import cusp_coefficient
 from discrecontinual_equations.continuation.two_parameter_problem import (
@@ -285,6 +286,54 @@ class TestCuspCoefficientOrientation(TestCase):
                     decoded = CurveDecoded(state, b1, b2, None)
                     signs.add(math.copysign(1.0, detector.value(problem, decoded)))
             assert len(signs) == 1
+
+
+class _Recorder(Cusp):
+    """The cusp test function, recording the orientation each scan starts from."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.starts: list[np.ndarray | None] = []
+
+    def reset(self) -> None:
+        super().reset()
+        self.starts.append(self._previous)
+
+
+class _Points:
+    def __init__(self, points: list[tuple[np.ndarray, float, float]]) -> None:
+        self.points = [_Point(state, b1, b2) for state, b1, b2 in points]
+
+
+class _Point:
+    def __init__(self, state: np.ndarray, b1: float, b2: float) -> None:
+        self.state = [*state, b1]
+        self.parameter = b2
+
+
+class _Decoder:
+    def decode(self, state: np.ndarray, parameter: float) -> CurveDecoded:
+        return CurveDecoded(state[:2], float(state[2]), parameter, None)
+
+
+class TestCuspScan(TestCase):
+    def test_fold_curve_decodes_its_null_vector(self):
+        # The Moore-Spence q (c . q = 1) is what orients the cusp test on a fold
+        # curve, so the decoded point must carry it.
+        residual = FoldCurveResidual(_problem(CoupledFold), 2, np.array([1.0, 0.0]))
+        state = np.array([0.1, 0.2, 0.3, -0.4, 0.5])
+        decoded = residual.decode(state, 0.6)
+        assert decoded.null_vector is not None
+        assert np.array_equal(decoded.null_vector, [0.3, -0.4])
+
+    def test_each_scan_starts_without_an_orientation(self):
+        problem = _problem(CoupledFold)
+        detector = _Recorder()
+        analyzer = Codim2Analyzer([detector])
+        curve = _Points([_plain_fold(float(s))[:3] for s in (0.0, 0.1, 0.2)])
+        for _ in range(2):
+            analyzer.analyze(curve, _Decoder(), problem)
+        assert detector.starts == [None, None]
 
 
 class TestCuspDetectionUnderSvdFlips(TestCase):
