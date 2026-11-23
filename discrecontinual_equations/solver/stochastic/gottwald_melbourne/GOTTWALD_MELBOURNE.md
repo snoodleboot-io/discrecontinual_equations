@@ -151,10 +151,11 @@ The scheme is that of Gottwald & Melbourne (arXiv:2004.09914, MMS 19(2), 2021), 
 | `v(x)` | `η d_α^{-γ} (1-2^{γ-1})^{-γ} ṽ(x)`, `ṽ = 1` on `[0, x*]`, `ṽ = (1-2^{1-γ})^{-1}` on `(x*, 1]` | §4.1 |
 | sign `χ` | a fresh `δ = ±1`, `P(δ = ±1) = (1 ± β)/2`, on each entry to `(x*, 1]`, signing that hyperbolic step and the laminar steps after it | §4.1, proof of Thm 4.1 |
 | `x_0` | `T^10000 x_0'`, `x_0'` uniform | Remark 4.4 |
+| first sign | the excursion under way at `x_0` gets a `δ` of its own | §5.3 (`µ_Y × λ`) |
 | clock | the value at grid time `t_i` is `z_{n_i}`, `n_i = ⌊(t_i - t_0)/ε⌋` | Thm 4.1 |
 | perturbation | `N(0, 10^-20)` added to `x` mod 1 on entering `(x*, 1]`, at least `10^4` iterations after the last | §4.2 |
 
-`ṽ` is negative on `(x*, 1]`, so `v` has mean zero under the invariant measure. Section 4.1 prints the sign as the product `χ^(n) = χ_{n-1}···χ_0`; taken literally, that product gives the symmetric law whatever `β` (its marginal is ±1 with probability ½ each). The proof of Theorem 4.1 (Section 5.3) gives each excursion its own `δ` (the induced observable `V(y, ±1)`), and that is what the solver does: it converges to the requested `β` (DEQ-108).
+`ṽ` is negative on `(x*, 1]`, so `v` has mean zero under the invariant measure. Section 4.1 prints the sign as the product `χ^(n) = χ_{n-1}···χ_0`; taken literally, that product gives the symmetric law whatever `β` (its marginal is ±1 with probability ½ each). The proof of Theorem 4.1 (Section 5.3) gives each excursion its own `δ` (the induced observable `V(y, ±1)`), and that is what the solver does: it converges to the requested `β` (DEQ-108). Read literally, the empty product also gives the excursion under way at `x_0` the sign +1 on every path; that does not change the limit, but at finite `ε` it biases `ẑ_ε(1)` upwards (median +0.53 at `ε = 0.01` on `dZ = dW`, `β = 0`), so the solver signs it with a `δ` like any other.
 
 ```python
 def solve(self, equation, initial_values):
