@@ -9,6 +9,7 @@ constants (2.2), (2.4), (2.5) and the observable of Section 4.1, the clock
 perturbation of Section 4.2, and the stable law of Section 2.1.
 """
 
+import decimal
 import math
 
 import numpy as np
@@ -194,6 +195,24 @@ class TestTheConstants:
             assert solver._thaler_map(float(x)) == pytest.approx(expected, abs=1e-12)
 
 
+    @pytest.mark.parametrize("alpha", _ALPHAS)
+    @pytest.mark.parametrize("x", [1e-9, 1e-7, 1e-5])
+    def test_the_map_keeps_its_digits_near_the_neutral_point(self, alpha, x):
+        # Near 0, T x = x (1 + x^γ + ...) moves x by a few parts in 10^6, and
+        # (1+x)^{1-γ} - 1 formed directly loses digits that it needs. Remark 2.2's
+        # form is evaluated here to 50 digits.
+        with decimal.localcontext() as context:
+            context.prec = 50
+            exponent = 1 - decimal.Decimal(1) / decimal.Decimal(alpha)
+            point = decimal.Decimal(x)
+            inner = point**exponent + (1 + point) ** exponent - 1
+            expected = float(inner ** (1 / exponent))
+
+        actual = GottwaldMelbourneSolver(_config(alpha=alpha))._thaler_map(x)
+
+        assert actual == pytest.approx(expected, rel=4e-15, abs=0.0)
+
+
 class TestTheClock:
     """ẑ_ε(t_i) = z_{n_i} with n_i = ⌊(t_i - t_0)/ε⌋ (Theorem 4.1)."""
 
@@ -295,6 +314,26 @@ class TestTheFastState:
         assert since_late == 0
         assert late != solver._thaler_map(x)
         assert abs(late - solver._thaler_map(x)) < 1e-8
+
+    def test_the_perturbation_is_taken_mod_1(self):
+        # Arrange: a perturbation far larger than 1e-10, to carry x past 1.
+        solver = GottwaldMelbourneSolver(_config())
+
+        class _Large:
+            def normal(self, loc, scale):
+                return 0.75
+
+        solver._generator = _Large()
+        x = 0.5 * solver._x_star
+        while solver._thaler_map(x) <= solver._x_star:
+            x = solver._thaler_map(x)
+
+        # Act: x* > 1/2, so T x + 0.75 > 1.
+        perturbed, _ = solver._advance(x, 10_000)
+
+        # Assert
+        assert perturbed == pytest.approx((solver._thaler_map(x) + 0.75) % 1.0)
+        assert 0.0 <= perturbed < 1.0
 
     def test_no_perturbation_off_the_hyperbolic_branch(self):
         solver = GottwaldMelbourneSolver(_config())
