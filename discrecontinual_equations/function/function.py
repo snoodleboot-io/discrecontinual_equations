@@ -1,3 +1,5 @@
+import numpy as np
+
 from discrecontinual_equations.curve import Curve
 from discrecontinual_equations.parameter import Parameter
 from discrecontinual_equations.variable import Variable
@@ -54,3 +56,17 @@ class Function:
             Function evaluation result
         """
         raise NotImplementedError
+
+    def eval_batch(self, points: np.ndarray, time: float | None = None) -> np.ndarray:
+        """Evaluate at every row of ``points`` (``(count, n)``), as ``(count, n)``.
+
+        The default calls :meth:`eval` once per row, so every function supports it
+        unchanged; a function that overrides it with array arithmetic makes the
+        callers that evaluate it on a whole grid at once (the stationary
+        Fokker-Planck assembly) cost a few array operations instead of a Python call
+        per point.
+        """
+        return np.array(
+            [self.eval(point=list(point), time=time) for point in points],
+            dtype=float,
+        )

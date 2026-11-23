@@ -95,6 +95,17 @@ class ContinuationConfig(SolverConfig):
         default=1e-7,
         description="Step used for central finite-difference derivatives",
     )
+    jacobian_sparsity: Literal["dense", "detect"] | list[list[int]] = Field(
+        default="dense",
+        description=(
+            "Sparsity of the state Jacobian: 'dense' differences every column; "
+            "'detect' finds the non-zero pattern once, at the first point; a list "
+            "gives, for each equation, the state indices it depends on. A known "
+            "pattern lets the provider difference structurally orthogonal columns "
+            "together (Curtis-Powell-Reid), so a ring costs 2-3 grouped passes "
+            "instead of n columns, with bit-identical entries"
+        ),
+    )
 
     initial_step: float = Field(
         default=0.05,

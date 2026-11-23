@@ -29,7 +29,7 @@ Continuer(Solver)                            # thin orchestrator
         ▼
 ContinuationComponents
 ├── ResidualFunction        (EquationResidual)          # sole domain coupling
-├── JacobianProvider        (FiniteDifferenceJacobian)
+├── JacobianProvider        (MemoizedJacobian over FiniteDifferenceJacobian)
 ├── LinearSolver            (LeastSquaresFallbackSolver)
 ├── SeedRefiner             (NewtonSeedRefiner)
 ├── Predictor               (TangentPredictor)
@@ -171,6 +171,21 @@ bifurcation, which is then localized by bisection:
   eigenvalues at the point tell the two apart.
 
 Stability at each point is read from the eigenvalues of the state Jacobian.
+The converged point's Jacobian is built once and shared: inside `Continuer.solve`
+the `MemoizedJacobian` the builder wraps around the configured provider hands the
+tangent, the branch-point and Hopf tests and the stability the same array, so a
+point costs `I + 1` Jacobians (`I` Newton iterations) rather than `I + 4`, with
+every stored number bit-identical to building each one afresh.
+
+The Jacobian is dense by default: `2n` field evaluations per build. A field whose
+equations each read a few states (a ring, a lattice) can set
+`jacobian_sparsity` to the per-equation dependency lists, or to `"detect"` to find
+the pattern from three dense Jacobians at the first point. The provider then
+differences each group of structurally orthogonal columns in one pair (Curtis,
+Powell and Reid's grouping, `sparsity.SparsityPattern`), `2g` evaluations for `g`
+groups - 2 for an even ring, 3 for an odd one, 7-10 for a five-point lattice - and
+every entry is bit-identical to the dense one. `AutomaticDifferentiation.jacobian`
+takes the same pattern and seeds one jet pass per group.
 
 ## Requirements on the derivative function
 

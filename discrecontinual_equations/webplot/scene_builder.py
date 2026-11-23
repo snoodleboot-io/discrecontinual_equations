@@ -283,50 +283,73 @@ def _resample_by_measure(
     raw: list[tuple[float, float]],
     samples: int,
 ) -> list[tuple[float, float]]:
+    """Resample at evenly spaced measures, in one merge walk along the branch.
+
+    The targets rise with ``i`` and the branch is sorted by measure, so the segment
+    holding each target is never behind the previous one: a single forward walk
+    finds every segment, ``O(samples + points)`` against a scan from the start for
+    every sample. The segment and the interpolation formula are the scan's own, so
+    every resampled value is unchanged to the bit.
+    """
     ordered = sorted(raw, key=lambda pair: pair[1])
     low, high = ordered[0][1], ordered[-1][1]
     span = (high - low) or 1.0
     result = []
+    segment = 1
     for i in range(samples):
         measure = low + span * i / (samples - 1)
-        parameter = _interpolate_measure(ordered, measure)
-        result.append((parameter, measure))
+        while segment < len(ordered) and ordered[segment][1] < measure:
+            segment += 1
+        result.append((_interpolate_measure(ordered, segment, measure), measure))
     return result
 
 
-def _interpolate_measure(ordered: list[tuple[float, float]], measure: float) -> float:
-    for (p0, m0), (p1, m1) in pairwise(ordered):
-        if m1 >= measure:
-            span = (m1 - m0) or 1.0
-            return p0 + (measure - m0) / span * (p1 - p0)
-    return ordered[-1][0]
+def _interpolate_measure(
+    ordered: list[tuple[float, float]],
+    segment: int,
+    measure: float,
+) -> float:
+    """Parameter at ``measure`` on the segment ending at ``ordered[segment]``."""
+    if segment >= len(ordered):
+        return ordered[-1][0]
+    (p0, m0), (p1, m1) = ordered[segment - 1], ordered[segment]
+    span = (m1 - m0) or 1.0
+    return p0 + (measure - m0) / span * (p1 - p0)
 
 
 def _resample_by_arclength(
     raw: list[tuple[float, float]],
     samples: int,
 ) -> list[tuple[float, float]]:
+    """Resample at evenly spaced arclengths, in one merge walk (as by measure)."""
     lengths = [0.0]
     for (x0, z0), (x1, z1) in pairwise(raw):
         lengths.append(lengths[-1] + ((x1 - x0) ** 2 + (z1 - z0) ** 2) ** 0.5)
     total = lengths[-1] or 1.0
-    targets = [total * i / (samples - 1) for i in range(samples)]
-    return [_interpolate_arclength(raw, lengths, target) for target in targets]
+    result = []
+    segment = 1
+    for i in range(samples):
+        target = total * i / (samples - 1)
+        while segment < len(lengths) and lengths[segment] < target:
+            segment += 1
+        result.append(_interpolate_arclength(raw, lengths, segment, target))
+    return result
 
 
 def _interpolate_arclength(
     raw: list[tuple[float, float]],
     lengths: list[float],
+    segment: int,
     target: float,
 ) -> tuple[float, float]:
-    for i in range(1, len(lengths)):
-        if lengths[i] >= target:
-            span = lengths[i] - lengths[i - 1] or 1.0
-            fraction = (target - lengths[i - 1]) / span
-            x = raw[i - 1][0] + fraction * (raw[i][0] - raw[i - 1][0])
-            z = raw[i - 1][1] + fraction * (raw[i][1] - raw[i - 1][1])
-            return (x, z)
-    return raw[-1]
+    """Point at arclength ``target`` on the segment ending at ``raw[segment]``."""
+    if segment >= len(lengths):
+        return raw[-1]
+    span = lengths[segment] - lengths[segment - 1] or 1.0
+    fraction = (target - lengths[segment - 1]) / span
+    x = raw[segment - 1][0] + fraction * (raw[segment][0] - raw[segment - 1][0])
+    z = raw[segment - 1][1] + fraction * (raw[segment][1] - raw[segment - 1][1])
+    return (x, z)
 
 
 def _continued_loci(family: ParameterFamily) -> list[Locus]:
