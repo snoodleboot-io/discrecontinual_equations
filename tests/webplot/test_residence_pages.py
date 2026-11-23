@@ -41,13 +41,16 @@ class TestRingSymmetry(TestCase):
         # (the identity is exact on any grid symmetric about the origin).
         field, points = 0.05, 13
         lower, upper = pages.attractors(field)
-        grid = DensityGrid.box([-pages._BOX] * 3, [pages._BOX] * 3, [points] * 3)
+        box = pages._BOX  # noqa: SLF001
+        column = pages._NoiseColumn  # noqa: SLF001
+        radius = pages._READOUT_RADIUS  # noqa: SLF001
+        grid = DensityGrid.box([-box] * 3, [box] * 3, [points] * 3)
         direct = MeanFirstPassage(
-            pages._ring(field),
-            NoiseMatrix([pages._NoiseColumn(index) for index in range(3)]),
+            pages._ring(field),  # noqa: SLF001
+            NoiseMatrix([column(index) for index in range(3)]),
             Ito(),
             grid,
-        ).solve(Ball(lower, pages._READOUT_RADIUS).on(grid))
+        ).solve(Ball(lower, radius).on(grid))
         mirrored = pages.grid_time_up(-field, points)
         assert direct.at(upper) == pytest.approx(mirrored.at(-upper), rel=1.0e-8)
         # The field favours the upper well: leaving it takes longer.
@@ -57,9 +60,9 @@ class TestRingSymmetry(TestCase):
 class TestHistogram(TestCase):
     def test_step_histogram_integrates_to_the_fraction_in_the_window(self):
         times = np.random.default_rng(1).exponential(10.0, 5000)
-        points = pages._histogram(times, top=20.0)
+        points = pages._histogram(times, top=20.0)  # noqa: SLF001
         area = sum(
             (right[0] - left[0]) * left[1]
-            for left, right in zip(points[::2], points[1::2])
+            for left, right in zip(points[::2], points[1::2], strict=False)
         )
         assert abs(area - float(np.mean(times <= 20.0))) < 1.0e-9
