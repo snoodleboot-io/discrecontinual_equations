@@ -383,26 +383,25 @@ class TestJacobianField(TestCase):
         assert np.array_equal(jets, _lorenz_jacobian(state))
 
 
-class TestLorenzWithAnalyticJacobian(TestCase):
-    """Lorenz's top exponent over ``T = 1000`` in CI time."""
+def _lorenz_top_over_t_1000() -> float:
+    spectrum = lyapunov_spectrum(
+        JacobianField(_lorenz(), _lorenz_jacobian),
+        np.array([1.0, 1.0, 1.0]),
+        count=1,
+        settings=LyapunovSettings(dt=0.01, horizon=100000, transient=1000),
+    )
+    return spectrum.top
 
-    def test_top_exponent_at_t_1000_under_30_seconds(self):
-        field = JacobianField(_lorenz(), _lorenz_jacobian)
-        settings = LyapunovSettings(dt=0.01, horizon=100000, transient=1000)
-        start = time.perf_counter()
-        spectrum = lyapunov_spectrum(
-            field,
-            np.array([1.0, 1.0, 1.0]),
-            count=1,
-            settings=settings,
-        )
-        elapsed = time.perf_counter() - start
-        assert elapsed < 30.0
+
+class TestLorenzWithAnalyticJacobian(TestCase):
+    """Lorenz's top exponent over ``T = 1000``, which CI can now afford."""
+
+    def test_top_exponent_at_t_1000(self):
         # Viswanath (1998) gives 0.9056; T = 1000 holds it to about a percent.
-        assert abs(spectrum.top - 0.9056) < 1.0e-2
+        assert abs(_lorenz_top_over_t_1000() - 0.9056) < 1.0e-2
 
     def test_analytic_and_differenced_jacobians_give_the_same_exponent(self):
-        settings = LyapunovSettings(dt=0.005, horizon=30000, transient=3000)
+        settings = LyapunovSettings(dt=0.01, horizon=10000, transient=1000)
         start = np.array([1.0, 1.0, 1.0])
         differenced = lyapunov_spectrum(_lorenz(), start, count=1, settings=settings)
         analytic = lyapunov_spectrum(
@@ -411,4 +410,12 @@ class TestLorenzWithAnalyticJacobian(TestCase):
             count=1,
             settings=settings,
         )
-        assert abs(differenced.top - analytic.top) < 1.0e-4
+        assert abs(differenced.top - analytic.top) < 1.0e-6
+
+
+@pytest.mark.timing
+def test_lorenz_top_exponent_at_t_1000_takes_under_30_seconds():
+    # Wall time, as CI sees it; about 8 s of CPU on one thread.
+    start = time.perf_counter()
+    _lorenz_top_over_t_1000()
+    assert time.perf_counter() - start < 30.0
