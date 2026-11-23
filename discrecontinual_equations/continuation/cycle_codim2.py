@@ -677,7 +677,7 @@ class CycleCurveContinuation:
         period = float(unknowns[size - 2])
         parameters = (float(unknowns[size - 1]), float(unknowns[size]))
         _, blocks = self._jacobian(unknowns)
-        multipliers = _product_multipliers(_transfer_matrices(blocks, dimension))
+        multipliers, _ = _product_multipliers(_transfer_matrices(blocks, dimension))
         coefficient = self._coefficient(states, period, parameters, multipliers, kappa)
         point = CycleCurvePoint(
             parameters,
