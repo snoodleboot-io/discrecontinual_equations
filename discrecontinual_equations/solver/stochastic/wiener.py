@@ -51,9 +51,6 @@ Rossler, arXiv:2201.08424, (64)-(67)). Areas are drawn only when a scheme asks
 (``levy_area=True``), and from a stream of their own, so asking for them never
 changes the increments a seeded source gives.
 
-The triple integrals ``I_(j,k,l)`` between channels, which a strong order 1.5
-scheme for several drivers would need, are still not sampled.
-
 Why the increments come from a source object rather than from a generator inside
 each solver: a strong-order measurement is the expected pathwise distance
 between the scheme and the exact solution, driven by the same Brownian path. It
