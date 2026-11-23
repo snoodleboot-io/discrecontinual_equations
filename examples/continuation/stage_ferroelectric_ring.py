@@ -43,6 +43,7 @@ from discrecontinual_equations.webplot.stage_builder import Continued, Film, sta
 
 try:  # python -m examples.continuation.stage_ferroelectric_ring
     from examples.continuation.stage_support import (
+        STEP_GROWTH,
         BranchLimits,
         continue_branch,
         ensure_registry,
@@ -52,6 +53,7 @@ try:  # python -m examples.continuation.stage_ferroelectric_ring
     )
 except ImportError:  # run as a script path: only this directory is on sys.path
     from stage_support import (
+        STEP_GROWTH,
         BranchLimits,
         continue_branch,
         ensure_registry,
@@ -204,6 +206,7 @@ def _trace_from(coupling: float, direction: float) -> list[CyclePoint]:
         ARCLENGTH,
         STEPS_DOWN if direction < 0 else STEPS_UP,
         direction,
+        max_arclength=STEP_GROWTH * ARCLENGTH,
     )
     return keep_cycles(points, _MIN_AMPLITUDE, _PERIOD_RANGE)
 

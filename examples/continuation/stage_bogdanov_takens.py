@@ -35,6 +35,7 @@ from discrecontinual_equations.webplot.stage_builder import Continued, Film, sta
 
 try:  # python -m examples.continuation.stage_bogdanov_takens
     from examples.continuation.stage_support import (
+        STEP_GROWTH,
         BranchLimits,
         continue_branch,
         equation,
@@ -43,6 +44,7 @@ try:  # python -m examples.continuation.stage_bogdanov_takens
     )
 except ImportError:  # run as a script path: only this directory is on sys.path
     from stage_support import (
+        STEP_GROWTH,
         BranchLimits,
         continue_branch,
         equation,
@@ -195,7 +197,13 @@ def _trace_from(b1: float, direction: float) -> list[CyclePoint]:
     eq = slice_equation(b1)
     states, period = _integrated_cycle(eq, b1)
     continuation = CycleContinuation(eq, 0, INTERVALS, phase_index=1, phase_value=0.0)
-    points, _ = continuation.trace(CycleSeed(states, period, b1), 0.02, 400, direction)
+    points, _ = continuation.trace(
+        CycleSeed(states, period, b1),
+        0.02,
+        400,
+        direction,
+        max_arclength=STEP_GROWTH * 0.02,
+    )
     return keep_cycles(points, _MIN_AMPLITUDE, _PERIOD_RANGE)
 
 

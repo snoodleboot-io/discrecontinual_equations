@@ -34,8 +34,12 @@ import numpy as np
 from numpy.polynomial.legendre import leggauss
 from scipy.optimize import linear_sum_assignment
 from scipy.sparse import coo_matrix
-from scipy.sparse.linalg import spsolve
+from scipy.sparse.linalg import SuperLU, splu
 
+from discrecontinual_equations.continuation.batched_field import (
+    field_jacobians,
+    field_values,
+)
 from discrecontinual_equations.continuation.derivative_provider import (
     AutomaticDifferentiation,
 )
@@ -109,6 +113,12 @@ _DAMPED_ITERATIONS = 80
 _BACKTRACK_STEPS = 30
 _BACKTRACK_FACTOR = 0.5
 _PERIOD_FLOOR_FRACTION = 0.1
+# The adaptive step (DEQ-75): AUTO's ITNW, the iteration count its step rules
+# are scaled to; the factor a failed or slow step shrinks by; and what is left
+# of the arclength budget, in units of the base step, below which it is spent.
+_NEWTON_LIMIT = 5
+_STEP_DECREASE = 0.5
+_BUDGET_SLACK = 1.0e-9
 
 
 def _near(period: float, expected: float) -> bool:
@@ -125,25 +135,28 @@ def _extent(states: np.ndarray) -> float:
 
 
 class _VectorField:
-    """``f``, ``df/dx`` and ``df/dp`` of the equation, as three callables.
+    """``f``, ``df/dx`` and ``df/dp`` of the equation, at many states at once.
 
-    Each takes ``(state, parameter)``. Bundled so that a collocation scheme asks
-    one object for whatever it needs at a node or a midpoint, and so that the
-    scheme itself holds no reference to the equation and stays a stateless
-    singleton.
+    Each takes ``(states, parameter)`` with one state to a row and returns one
+    row per state; ``parameter_derivatives`` also takes the values at those
+    states, which its difference starts from. Bundled so that a collocation
+    scheme asks one object for whatever it needs at its nodes or midpoints, and
+    so that the scheme itself holds no reference to the equation and stays a
+    stateless singleton. Taking every state at once is what lets a field that
+    accepts arrays be evaluated in one pass (DEQ-75, :mod:`.batched_field`).
     """
 
-    __slots__ = ["jacobian", "parameter_derivative", "value"]
+    __slots__ = ["jacobians", "parameter_derivatives", "values"]
 
     def __init__(
         self,
-        value: Callable[[np.ndarray, float], np.ndarray],
-        jacobian: Callable[[np.ndarray, float], np.ndarray],
-        parameter_derivative: Callable[[np.ndarray, float], np.ndarray],
+        values: Callable[[np.ndarray, float], np.ndarray],
+        jacobians: Callable[[np.ndarray, float], np.ndarray],
+        parameter_derivatives: Callable[[np.ndarray, float, np.ndarray], np.ndarray],
     ) -> None:
-        self.value = value
-        self.jacobian = jacobian
-        self.parameter_derivative = parameter_derivative
+        self.values = values
+        self.jacobians = jacobians
+        self.parameter_derivatives = parameter_derivatives
 
 
 class _Collocation:
@@ -253,7 +266,7 @@ class _Trapezoidal(_Collocation):
         parameter: float,
         step: float | np.ndarray,
     ) -> np.ndarray:
-        fields = np.array([field.value(state, parameter) for state in states])
+        fields = field.values(states, parameter)
         weight = _HALF * period * step
         return states[1:] - states[:-1] - weight * (fields[:-1] + fields[1:])
 
@@ -267,11 +280,9 @@ class _Trapezoidal(_Collocation):
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         identity = np.eye(states.shape[1])
         weight = _HALF * period * step
-        derivatives = np.array([field.jacobian(state, parameter) for state in states])
-        fields = np.array([field.value(state, parameter) for state in states])
-        parameter_fields = np.array(
-            [field.parameter_derivative(state, parameter) for state in states],
-        )
+        derivatives = field.jacobians(states, parameter)
+        fields = field.values(states, parameter)
+        parameter_fields = field.parameter_derivatives(states, parameter, fields)
         left = -identity[None] - weight * derivatives[:-1]
         right = identity[None] - weight * derivatives[1:]
         period_values = -_HALF * step * (fields[:-1] + fields[1:])
@@ -314,9 +325,9 @@ class _HermiteSimpson(_Collocation):
         parameter: float,
         step: float | np.ndarray,
     ) -> np.ndarray:
-        fields = np.array([field.value(state, parameter) for state in states])
+        fields = field.values(states, parameter)
         midpoints = self._midpoints(states, fields, period, step)
-        middles = np.array([field.value(point, parameter) for point in midpoints])
+        middles = field.values(midpoints, parameter)
         weight = period * step / _SIXTH
         return (
             states[1:]
@@ -333,18 +344,16 @@ class _HermiteSimpson(_Collocation):
         step: float | np.ndarray,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         identity = np.eye(states.shape[1])
-        fields = np.array([field.value(state, parameter) for state in states])
-        derivatives = np.array([field.jacobian(state, parameter) for state in states])
-        parameter_fields = np.array(
-            [field.parameter_derivative(state, parameter) for state in states],
-        )
+        fields = field.values(states, parameter)
+        derivatives = field.jacobians(states, parameter)
+        parameter_fields = field.parameter_derivatives(states, parameter, fields)
         midpoints = self._midpoints(states, fields, period, step)
-        middles = np.array([field.value(point, parameter) for point in midpoints])
-        middle_derivatives = np.array(
-            [field.jacobian(point, parameter) for point in midpoints],
-        )
-        middle_parameter_fields = np.array(
-            [field.parameter_derivative(point, parameter) for point in midpoints],
+        middles = field.values(midpoints, parameter)
+        middle_derivatives = field.jacobians(midpoints, parameter)
+        middle_parameter_fields = field.parameter_derivatives(
+            midpoints,
+            parameter,
+            middles,
         )
 
         end_weight = period * step / _SIXTH
@@ -469,12 +478,8 @@ class _GaussLegendre(_Collocation):
         steps = np.broadcast_to(np.asarray(step, dtype=float), windows.shape[:1])
         points = np.einsum("kj,njd->nkd", self._values, windows)
         slopes = np.einsum("kj,njd->nkd", self._derivatives, windows)
-        fields = np.array(
-            [
-                [field.value(point, parameter) for point in interval]
-                for interval in points
-            ],
-        )
+        flat = points.reshape(-1, points.shape[2])
+        fields = field.values(flat, parameter).reshape(points.shape)
         defect = slopes - (period * steps)[:, None, None] * fields
         return defect.reshape(-1, states.shape[1])
 
@@ -490,24 +495,17 @@ class _GaussLegendre(_Collocation):
         intervals, width, dimension = windows.shape[0], self.width, states.shape[1]
         steps = np.broadcast_to(np.asarray(step, dtype=float), (intervals,))
         points = np.einsum("kj,njd->nkd", self._values, windows)
-        fields = np.array(
-            [
-                [field.value(point, parameter) for point in interval]
-                for interval in points
-            ],
+        flat = points.reshape(-1, dimension)
+        flat_fields = field.values(flat, parameter)
+        fields = flat_fields.reshape(points.shape)
+        derivatives = field.jacobians(flat, parameter).reshape(
+            (*points.shape, dimension),
         )
-        derivatives = np.array(
-            [
-                [field.jacobian(point, parameter) for point in interval]
-                for interval in points
-            ],
-        )
-        parameter_fields = np.array(
-            [
-                [field.parameter_derivative(point, parameter) for point in interval]
-                for interval in points
-            ],
-        )
+        parameter_fields = field.parameter_derivatives(
+            flat,
+            parameter,
+            flat_fields,
+        ).reshape(points.shape)
         # Rows (stage k, component d) against columns (point j, component e).
         identity = np.einsum("kj,de->kdje", self._derivatives, np.eye(dimension))
         chain = np.einsum("kj,nkde->nkdje", self._values, derivatives)
@@ -627,6 +625,12 @@ class _DifferentiatedOrbit(PeriodicOrbit):
             return _AUTODIFF.jacobian(self._function, state, 0.0)
         except (TypeError, ValueError, AttributeError):
             return super()._jacobian(state)
+
+    def _jacobians(self, states: np.ndarray) -> np.ndarray:
+        batched = field_jacobians(self._function, states, self._jacobian)
+        if batched is not None:
+            return batched
+        return np.array([self._jacobian(state) for state in states])
 
 
 class CycleSeed:
@@ -1036,6 +1040,50 @@ def resolved_branch(
     return ResolvedBranch(kept, bifurcations, len(points) - len(kept), tolerance)
 
 
+def _step_limits(
+    arclength: float,
+    maximum: float | None,
+    minimum: float | None,
+) -> tuple[float, float] | None:
+    """``(max, min)`` for the adaptive step, or ``None`` for the fixed one."""
+    if maximum is None:
+        if minimum is not None:
+            message = "min_arclength applies to the adaptive step; pass max_arclength"
+            raise ValueError(message)
+        return None
+    floor = arclength if minimum is None else minimum
+    if not 0.0 < floor <= arclength <= maximum:
+        message = (
+            "need 0 < min_arclength <= arclength <= max_arclength, got "
+            f"{floor!r}, {arclength!r}, {maximum!r}"
+        )
+        raise ValueError(message)
+    return float(maximum), float(floor)
+
+
+def _adapted_step(length: float, iterations: int) -> float:
+    """The next step after a correction that took ``iterations`` Newton solves.
+
+    AUTO-07p's ``ADPTDS`` (``src/mesh.f90``) with its recommended ``ITNW = 5``:
+    double after at most one iteration, half as much again after two, a tenth
+    more up to ``ITNW / 2`` (in integers, so never at ``ITNW = 5``), and halve
+    at ``ITNW`` or more. MATCONT's rule is the same shape (manual 2019, section
+    2.3: grow after fewer than a threshold of iterations, shrink on failure);
+    Allgower and Georg (*Numerical Continuation Methods*, 1990, chapter 6)
+    derive steplength rules from the corrector's contraction, which the
+    iteration count stands in for here.
+    """
+    if iterations <= 1:
+        return 2.0 * length
+    if iterations == 2:  # noqa: PLR2004 (AUTO's table, entry by entry)
+        return 1.5 * length
+    if iterations <= _NEWTON_LIMIT // 2:
+        return 1.1 * length
+    if iterations >= _NEWTON_LIMIT:
+        return _STEP_DECREASE * length
+    return length
+
+
 class CycleContinuation:
     """Pseudo-arclength continuation of a limit cycle in one parameter.
 
@@ -1147,7 +1195,9 @@ class CycleContinuation:
         "_collocation",
         "_dimension",
         "_equation",
+        "_factored",
         "_intervals",
+        "_iterations",
         "_mesh",
         "_parameter_index",
         "_phase",
@@ -1213,6 +1263,11 @@ class CycleContinuation:
         # The last Jacobian blocks assembled and the unknowns they were taken
         # at, so the multipliers of a point can reuse the tangent solve's.
         self._assembled: tuple[np.ndarray, np.ndarray] | None = None
+        # The last corrector iteration's factorisation and the border row it
+        # was taken with, which the tangent solve reuses (see :meth:`_tangent`),
+        # and how many Newton solves that correction took.
+        self._factored: tuple[np.ndarray, SuperLU] | None = None
+        self._iterations = 0
 
     @property
     def collocation(self) -> str:
@@ -1242,20 +1297,59 @@ class CycleContinuation:
             dtype=float,
         )
 
-    def _parameter_derivative(self, state: np.ndarray, parameter: float) -> np.ndarray:
-        """``df/dp`` at one state, by a forward difference in the parameter.
+    def _values(self, states: np.ndarray, parameter: float) -> np.ndarray:
+        """``f`` at every state: in one call where the field takes arrays.
 
-        One extra field evaluation per node, against the whole augmented residual
-        that a finite-difference column of the full Jacobian would have cost.
+        Otherwise a state at a time, exactly as before. Either way the same
+        numbers to rounding: on some CPUs an array power rounds an ulp away
+        from the scalar one (see :mod:`.batched_field`).
         """
-        base = self._field(state, parameter)
-        return (self._field(state, parameter + _STEP) - base) / _STEP
+        self._equation.derivative.parameters[self._parameter_index].value = parameter
+        batched = field_values(
+            self._equation.derivative,
+            states,
+            lambda state: self._field(state, parameter),
+        )
+        if batched is not None:
+            return batched
+        return np.array([self._field(state, parameter) for state in states])
+
+    def _state_jacobians(self, states: np.ndarray, parameter: float) -> np.ndarray:
+        """``df/dx`` at every state: one dual-number pass where the field allows.
+
+        A field the duals cannot pass falls back to :meth:`_state_jacobian` a
+        state at a time - Taylor jets, or forward differences - as before.
+        """
+        self._equation.derivative.parameters[self._parameter_index].value = parameter
+        batched = field_jacobians(
+            self._equation.derivative,
+            states,
+            lambda state: self._state_jacobian(state, parameter),
+        )
+        if batched is not None:
+            return batched
+        return np.array([self._state_jacobian(state, parameter) for state in states])
+
+    def _parameter_derivatives(
+        self,
+        states: np.ndarray,
+        parameter: float,
+        values: np.ndarray,
+    ) -> np.ndarray:
+        """``df/dp`` at every state, by a forward difference in the parameter.
+
+        One extra field evaluation per state, against the whole augmented
+        residual that a finite-difference column of the full Jacobian would have
+        cost. ``values`` are ``f`` at the same states and parameter, which the
+        difference starts from rather than evaluating them again.
+        """
+        return (self._values(states, parameter + _STEP) - values) / _STEP
 
     def _vector_field(self) -> _VectorField:
         return _VectorField(
-            self._field,
-            self._state_jacobian,
-            self._parameter_derivative,
+            self._values,
+            self._state_jacobians,
+            self._parameter_derivatives,
         )
 
     def _cycle_residual(self, unknowns: np.ndarray, nodes: int) -> np.ndarray:
@@ -1308,7 +1402,7 @@ class CycleContinuation:
         states = unknowns[: nodes * dimension].reshape(nodes, dimension)
         period = float(unknowns[nodes * dimension])
         parameter = float(unknowns[-1])
-        slopes = period * np.array([self._field(state, parameter) for state in states])
+        slopes = period * self._values(states, parameter)
         weights = self._collocation.weights(self._mesh)
         row = (weights[:, None] * slopes).ravel()
         self._phase_reference = (states.ravel().copy(), row)
@@ -1506,18 +1600,20 @@ class CycleContinuation:
             shape=(size, size),
         )
 
-    def _solve_bordered(
+    def _solve_bordered(  # noqa: PLR0913 (the factorisation is kept on request)
         self,
         unknowns: np.ndarray,
         nodes: int,
         border: np.ndarray,
         rhs: np.ndarray,
         dense: Callable[[], np.ndarray],
+        *,
+        keep: bool = False,
     ) -> np.ndarray:
         """One sparse solve, falling back to a dense least squares.
 
-        Where the Jacobian is singular the sparse LU returns a non-finite vector
-        rather than raising, so the result is checked before it is trusted - the
+        Where the Jacobian is singular the LU cannot be formed, or yields a
+        non-finite vector, so the result is checked before it is trusted - the
         same guard the periodic orbit solver uses.
 
         ``dense`` is a callable and not an array on purpose. Building the
@@ -1525,11 +1621,24 @@ class CycleContinuation:
         evaluations, which is the expense this class exists to avoid; passing it
         eagerly would pay that cost on every step and leave the sparse path
         saving nothing at all.
+
+        The LU is SuperLU's, factored once and kept when ``keep`` asks, so a
+        later solve with the same matrix costs two triangular sweeps. It gives
+        the same vector :func:`scipy.sparse.linalg.spsolve` did to the last bit
+        (both are SuperLU with the same column ordering), which the corrector
+        used before DEQ-75.
         """
         sparse = self._bordered(unknowns, nodes, border).tocsc()
-        update = spsolve(sparse, rhs)
-        if np.all(np.isfinite(update)):
-            return update
+        try:
+            factor = splu(sparse)
+        except RuntimeError:  # exactly singular: no LU to solve with
+            factor = None
+        if factor is not None:
+            update = factor.solve(rhs)
+            if np.all(np.isfinite(update)):
+                if keep:
+                    self._factored = (border.copy(), factor)
+                return update
         fallback, *_ = np.linalg.lstsq(dense(), rhs, rcond=None)
         return fallback
 
@@ -1539,7 +1648,14 @@ class CycleContinuation:
         nodes: int,
         arc: _Arc,
     ) -> np.ndarray | None:
+        """Newton on the arclength-augmented system from ``prediction``.
+
+        Keeps the last iteration's factorisation for :meth:`_tangent`, and
+        counts its solves in ``_iterations`` for the step control.
+        """
         unknowns = prediction
+        self._factored = None
+        self._iterations = 0
         for _ in range(_ITERATIONS):
             residual = self._augmented(unknowns, nodes, arc)
             if np.linalg.norm(residual) < _TOLERANCE:
@@ -1550,6 +1666,7 @@ class CycleContinuation:
                 # finite-difference Jacobian - seconds at 160 intervals -
                 # finding that out, or raise.
                 return None
+            self._factored = None
             update = self._solve_bordered(
                 unknowns,
                 nodes,
@@ -1562,7 +1679,9 @@ class CycleContinuation:
                     arc,
                     r,
                 ),
+                keep=True,
             )
+            self._iterations += 1
             unknowns = unknowns + update
         residual = self._augmented(unknowns, nodes, arc)
         return unknowns if np.linalg.norm(residual) < _TOLERANCE else None
@@ -1573,17 +1692,51 @@ class CycleContinuation:
         nodes: int,
         previous: np.ndarray,
     ) -> np.ndarray:
+        """The unit tangent at ``unknowns``, pointing the way ``previous`` did.
+
+        It solves ``[J; b^T] t = e_last`` with ``J`` the cycle Jacobian and ``b``
+        the previous tangent in the arclength's inner product - the very matrix
+        the corrector's last iteration factored, except that the corrector took
+        ``J`` one Newton update earlier. Where :meth:`_correct` left that
+        factorisation behind (``_factored``, with the same border), it is
+        reused (DEQ-75), as MATCONT's Moore-Penrose corrector takes its
+        tangent off the corrector's own factorisation (MATCONT manual, 2019,
+        section 2.2.2); AUTO goes further and takes the secant
+        ``(u - u_old) / ds`` (``CONTBV`` in AUTO-07p's ``bvp.f90``). The
+        tangent is then off by the order of that last update. It is only a
+        direction to predict along and a plane to correct in, so the points
+        stay on the branch to the corrector's tolerance, but they are not the
+        same points: on the films the next point moved by up to ``1e-4`` in
+        the parameter, the spacing of the branch and not its geometry. That is
+        why :meth:`trace` reuses it only under the adaptive step, which moves
+        the points anyway, and keeps the fixed step's tangent as it always was:
+        rebuilt at the point, the same matrix and solve as before. Rebuilt and
+        refactored where the corrector did not iterate, and under
+        Gauss-Legendre, whose multipliers need the blocks at this very point
+        anyway (see :meth:`_jacobian_multipliers`).
+        """
         rhs = np.zeros(unknowns.size)
         rhs[-1] = 1.0
         weights = self._norm_weights(unknowns.size)
         border = previous if weights is None else weights * previous
-        tangent = self._solve_bordered(
-            unknowns,
-            nodes,
-            border,
-            rhs,
-            lambda: self._dense_tangent_system(unknowns, nodes, border),
-        )
+        tangent = None
+        factored = self._factored
+        if (
+            factored is not None
+            and not self._collocation.jacobian_monodromy
+            and np.array_equal(factored[0], border)
+        ):
+            reused = factored[1].solve(rhs)
+            if np.all(np.isfinite(reused)):
+                tangent = reused
+        if tangent is None:
+            tangent = self._solve_bordered(
+                unknowns,
+                nodes,
+                border,
+                rhs,
+                lambda: self._dense_tangent_system(unknowns, nodes, border),
+            )
         if weights is None:
             tangent = tangent / np.linalg.norm(tangent)
         else:
@@ -1957,9 +2110,7 @@ class CycleContinuation:
         if width == 1:
             return solved.states
         states = solved.states
-        slopes = solved.period * np.array(
-            [self._field(state, parameter) for state in states],
-        )
+        slopes = solved.period * self._values(states, parameter)
         fractions = np.arange(width) / width
         step = 1.0 / self._intervals
         pieces = [
@@ -1968,48 +2119,104 @@ class CycleContinuation:
         ]
         return np.vstack([*pieces, states[-1:]])
 
-    def trace(
+    def trace(  # noqa: PLR0913 (step limits beside the established signature)
         self,
         seed: CycleSeed,
         arclength: float,
         steps: int,
         direction: float = 1.0,
+        *,
+        max_arclength: float | None = None,
+        min_arclength: float | None = None,
     ) -> tuple[list[CyclePoint], list[CycleBifurcation]]:
         """Trace the cycle branch, returning its points and detected bifurcations.
 
         ``direction`` sets the initial parameter sense (+1 increasing, -1 decreasing);
         the branch then follows its own tangent and may round a turning point.
+
+        By default every step is ``arclength`` long and the trace takes
+        ``steps`` of them, stopping at the first the corrector cannot close.
+        ``max_arclength`` turns on AUTO's step control instead (DEQ-75, see
+        :func:`_adapted_step`): the step starts at ``arclength``, doubles while
+        Newton converges in one iteration, grows by half at two, is halved at
+        five or more, and never exceeds ``max_arclength``; a step that fails is
+        halved and retried, down to ``min_arclength`` (default ``arclength``,
+        so that the branch ends where the fixed step would have ended it).
+        ``steps * arclength`` is then the arclength budget, the distance the
+        fixed-step trace covers, and the last step is shortened to land on it;
+        ``steps`` still caps the number of points.
+
+        The adaptive step also takes each tangent off the corrector's last
+        factorisation instead of a fresh one (see :meth:`_tangent`), one LU per
+        step fewer.
+
+        A crossing the step control would have stepped over is not: a step
+        longer than ``arclength`` across which :func:`classify_transition`
+        finds a bifurcation is discarded and retaken at ``arclength``, so the
+        crossing is bracketed by points as close as the fixed step put them
+        and located as accurately. Tracing at a few times the step everywhere
+        else is where the time goes; see :meth:`trace`'s use in the films.
         """
         self._dimension = seed.states.shape[1]
         self._mesh = np.linspace(0.0, 1.0, self._intervals + 1)
         nodes = self._intervals * self._collocation.width + 1
+        limits = _step_limits(arclength, max_arclength, min_arclength)
         unknowns = self._solve_seed(seed, nodes)
         if unknowns is None:
             return [], []
         self._set_phase_reference(unknowns, nodes)
         seed_direction = np.zeros(unknowns.size)
         seed_direction[-1] = direction
+        # The seed's own correction held the parameter fixed; its factorisation
+        # is not the tangent system's, whatever its border reads.
+        self._factored = None
         tangent = self._tangent(unknowns, nodes, seed_direction)
         weights = self._norm_weights(unknowns.size)
         points = [self._point(unknowns, nodes)]
         bifurcations: list[CycleBifurcation] = []
-        for _ in range(steps):
-            prediction = unknowns + arclength * tangent
-            # The constraint's row is the tangent in the arclength's own inner
-            # product, so it reads ``arclength`` at the prediction either way.
-            row = tangent if weights is None else weights * tangent
-            arc = _Arc(unknowns, row, arclength)
-            corrected = self._correct(prediction, nodes, arc)
-            if corrected is None:
+        budget = steps * arclength
+        travelled = 0.0
+        length = arclength
+        while len(points) <= steps:
+            step = arclength if limits is None else min(length, budget - travelled)
+            if step <= _BUDGET_SLACK * arclength:
                 break
+            prediction = unknowns + step * tangent
+            # The constraint's row is the tangent in the arclength's own inner
+            # product, so it reads ``step`` at the prediction either way.
+            row = tangent if weights is None else weights * tangent
+            corrected = self._correct(prediction, nodes, _Arc(unknowns, row, step))
+            if corrected is None:
+                if limits is None or length * _STEP_DECREASE < limits[1]:
+                    break
+                length *= _STEP_DECREASE
+                continue
+            iterations = self._iterations
+            reference = self._phase_reference
             self._set_phase_reference(corrected, nodes)
-            tangent = self._tangent(corrected, nodes, tangent)
-            unknowns = corrected
-            point = self._point(unknowns, nodes)
+            if limits is None:
+                # The fixed step keeps the tangent rebuilt at the point, so
+                # its points are those it always gave, up to the batched
+                # fields' rounding (:mod:`.batched_field`).
+                self._factored = None
+            following = self._tangent(corrected, nodes, tangent)
+            point = self._point(corrected, nodes)
             transition = classify_transition(points[-1], point)
+            if transition is not None and step > arclength:
+                self._phase_reference = reference
+                length = arclength
+                continue
+            tangent = following
+            unknowns = corrected
             if transition is not None:
                 bifurcations.append(transition)
             points.append(point)
+            travelled += step
+            if limits is not None:
+                length = min(
+                    max(_adapted_step(length, iterations), limits[1]),
+                    limits[0],
+                )
         return points, bifurcations
 
     def _point(self, unknowns: np.ndarray, nodes: int) -> CyclePoint:

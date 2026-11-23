@@ -389,6 +389,74 @@ intervals spans:
 
 The defaults are unchanged, and reproduce every film to the last bit.
 
+### Batched fields, the corrector's tangent and AUTO's step (DEQ-75)
+
+Three changes took cycle continuation from three quarters of a cycle film's
+build to a few percent of it.
+
+**One evaluation for every state.** The collocation blocks and the monodromy ask
+for `f`, `df/dx` and `df/dp` at every node, midpoint and Runge–Kutta stage, and
+used to ask one state at a time, the Jacobian through Taylor jets one direction
+at a time. `batched_field` hands the field every coordinate as an array of all the
+states, and for the Jacobian first-order dual numbers that carry every direction
+at once. Each dual operation repeats the jet's arithmetic term for term, so the
+Jacobians are the jets', and the values a state at a time's, to rounding: on the
+machine the films are built on they were identical over every row of five
+films, but NumPy may take an array's `x**3` by a vectorised loop where a scalar
+calls libm's `pow`, and on CI's runners the two differ by an ulp. A field that branches on its state (the SNIC film's `if radius <`),
+calls `math`, or takes a fractional power raises on arrays and is evaluated a
+state at a time as before; a field that silently mis-evaluates is caught by
+comparing the first and last states to a state at a time, to within 16 ulps of
+the row's scale. The monodromy builds all its RK4 substep propagators at once and
+multiplies them, which moves the multipliers by rounding (`6.7e-16` on the Hopf
+cycle); where the field values themselves differ by an ulp, its forward-difference
+Jacobians (step `1e-7`) move by about `2e-9`.
+
+**The tangent off the corrector's LU.** The tangent system is the corrector's
+last matrix with the Jacobian one Newton update later. MATCONT's Moore–Penrose
+corrector takes its tangent off the corrector's factorisation; AUTO-07p takes the
+secant (`CONTBV`). Reusing the LU saves an assembly and a factorisation per step,
+but tilts the tangent by the order of that last update, which moves the next
+point along the branch by up to `1e-4` in the parameter: it changes the spacing,
+not the branch. So only the adaptive step reuses it, and the fixed step keeps
+its tangent as it was.
+
+**AUTO's step.** `trace(..., max_arclength=...)` adapts the step by AUTO-07p's
+`ADPTDS` with `ITNW = 5`: doubled after one Newton iteration, half again after
+two, halved at five, capped at `max_arclength`; a failed step is halved down to
+`min_arclength` (by default the step asked for, so a branch ends where it always
+ended). `steps * arclength` is the arclength budget. A step longer than the base
+across which a multiplier crosses the circle is retaken at the base step, so the
+crossing is bracketed as before.
+
+The films opt in where their frames allow it. Measured best of five builds,
+interleaved with the pre-DEQ-75 build (CPU seconds of `trace`, then of the
+whole film build):
+
+| film | traced points | trace CPU | film CPU |
+|---|---|---|---|
+| Bogdanov–Takens (step x4) | 802 → 206 | 48.9 → 1.6 | 66.5 → 19.1 |
+| ferroelectric ring (x4) | 762 → 196 | 111.3 → 2.2 | 279.7 → 168.3 |
+| van der Pol (x4) | 401 → 103 | 25.2 → 0.7 | 25.7 → 1.1 |
+| fold of cycles (x2) | 602 → 305 | 43.1 → 1.7 | 43.6 → 2.1 |
+| SNIC (x2; field branches) | 442 → 224 | 32.7 → 12.8 | 53.1 → 33.0 |
+| Hopf (fixed) | 87 | 7.8 → 0.8 | 8.1 → 1.1 |
+| extended Bautin (fixed) | 167 | 16.9 → 1.7 | 17.3 → 2.2 |
+| Hopf–Hopf (fixed) | 102 | 20.2 → 2.1 | 233.6 → 211.2 |
+| zero-Hopf (fixed) | 184 | 18.2 → 1.9 | 181.5 → 166.4 |
+
+On the fixed-step films, built on the development machine, every traced orbit was
+bit for bit the old one and every located bifurcation the same to `2e-14`; on a
+CPU whose vectorised powers round differently they agree to rounding. On the adaptive ones every point is a
+converged cycle of the same discrete system, within `2e-4` (scaled) of the old
+dense branch's polyline, with multipliers within `7e-14` of the old monodromy's
+for that cycle; the fold of cycles moved by `1.1e-9` (both `6.1e-7` from the
+exact `-1/4`). Hopf, extended Bautin, Hopf–Hopf and zero-Hopf keep the fixed step:
+they already step at about their frame spacing, and a larger step would show a
+frame's cycle up to four frames from it. The frames of the adaptive films show
+the same number of cycles as before, each within half a frame spacing of its
+frame (fold of cycles: within 0.78 of a spacing, against 0.38 before).
+
 ## Trusting a computed connecting orbit
 
 A homoclinic or heteroclinic orbit has **two** independent resolutions, and either

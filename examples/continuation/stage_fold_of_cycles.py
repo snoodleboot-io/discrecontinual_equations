@@ -56,6 +56,9 @@ except ImportError:  # run as a script path: only this directory is on sys.path
 P_LO, P_HI, FRAMES = -0.35, 0.3, 79
 BOX = ((-1.45, 1.45), (-1.45, 1.45))
 INTERVALS = 80
+# The adaptive step may only double here (DEQ-75): at the shared STEP_GROWTH
+# the cycle a frame shows sat up to a frame and a half from it.
+_STEP_GROWTH = 2.0
 FOLD = -0.25
 HOPF = 0.0
 # Seeded on the outer cycle partway between the fold and the Hopf, then
@@ -84,8 +87,20 @@ def cycle_branch() -> list[CyclePoint]:
     eq = equation(FoldCycles, [Mu(value=SEED_MU)])
     seed = circle_seed(outer_radius(SEED_MU), 2.0 * math.pi, SEED_MU, INTERVALS)
     continuation = CycleContinuation(eq, 0, INTERVALS, phase_index=1, phase_value=0.0)
-    downward, _ = continuation.trace(seed, 0.02, 400, direction=-1.0)
-    upward, _ = continuation.trace(seed, 0.02, 200, direction=1.0)
+    downward, _ = continuation.trace(
+        seed,
+        0.02,
+        400,
+        direction=-1.0,
+        max_arclength=_STEP_GROWTH * 0.02,
+    )
+    upward, _ = continuation.trace(
+        seed,
+        0.02,
+        200,
+        direction=1.0,
+        max_arclength=_STEP_GROWTH * 0.02,
+    )
     # The two traces share the seed and run opposite ways, so the branch is
     # continuous only if one is reversed: outer cycle in from the right, round
     # the fold, back out as the inner one. Concatenated the other way round the
