@@ -97,12 +97,15 @@ class MilsteinSolver(Solver):
     **The accuracy setting (DEQ-67).** ``levy_area_accuracy`` is ``c1`` in the
     rule's per-step bound ``c1 Δt^(3/2)`` (Kastner and Rossler (64)-(67)); ``n``
     grows like ``1 / c1``. Sampler-driven on the same equation, ``Δt = 2^-3 ...
-    2^-10``, 300-400 paths against a reference coupled to ``16 n`` terms
-    (bootstrap standard error of the slope 0.01): ``c1 = 1`` slope 0.75, error
-    at most ``0.40 Δt``, ``n = 1 ... 5``; ``0.2``: 0.91, ``0.10 Δt``, ``n = 2
-    ... 21``; ``0.1``: 0.96, ``0.05 Δt``, ``n = 4 ... 42``; ``0.05``: 0.96,
-    ``0.026 Δt``, ``n = 8 ... 84`` (0.975 from the closed form of Mrongowius
-    and Rossler's Theorem 4.4 (i); ``0.02`` gives 0.99 there). The extra cost
+    2^-10``, slope of the L2 error against a reference coupled to ``8 n``
+    Fourier terms and the path's own remainder (``10^5`` steps per ``Δt``,
+    standard error of the slope 0.001): ``c1 = 1`` slope 0.75, error at most
+    ``0.40 Δt``, ``n = 1 ... 5``; ``0.2``: 0.93, ``0.10 Δt``, ``n = 2 ...
+    21``; ``0.1``: 0.95, ``0.05 Δt``, ``n = 4 ... 42``; ``0.05``: 0.97,
+    ``0.025 Δt``, ``n = 8 ... 84``; ``0.04``: 0.98. The solver itself, 1000
+    paths a step size, measures 0.75 and 0.97 (standard error 0.005) at 1 and
+    0.05, and 0.96 in mean absolute error at 0.05 (0.975 from the closed form
+    of Mrongowius and Rossler's Theorem 4.4 (i)). The extra cost
     is ``2 m`` normals per extra term: at ``Δt = 2^-10`` 339 normals a step at
     ``0.05`` against 23 at 1, the sampler alone 1.8 times slower, a two-driver
     solve no slower within timing noise (the per-step Python work dominates).

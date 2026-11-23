@@ -21,7 +21,7 @@ class MilsteinConfig(StochasticConfig):
         description=(
             "c1 in the Levy-area truncation rule, L2 error <= c1 dt^(3/2) per step: "
             "smaller draws more Fourier terms (n grows like 1/c1) for a cleaner "
-            "order 1 at moderate dt; 0.05 measures slope 0.96 over dt = 2^-3 .. "
+            "order 1 at moderate dt; 0.05 measures slope 0.97 over dt = 2^-3 .. "
             "2^-10 where 1 measures 0.75. Used only for non-commuting noise "
             "without a Wiener source (DEQ-67)."
         ),

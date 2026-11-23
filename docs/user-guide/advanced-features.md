@@ -22,7 +22,7 @@ between drivers (`LevyAreaSampler`, DEQ-36) and warns once about their cost; the
 `srk*` solvers take the vector form only. `MilsteinConfig(levy_area_accuracy=c1)`
 sets the areas' error bound `c1 dt^(3/2)` per step (default 1, the cheapest that
 keeps order 1.0); at moderate `dt` the default measures a slope nearer 0.75, and
-`0.05` measures 0.96 for some 15 times the area normals (DEQ-67).
+`0.05` measures 0.97 for some 15 times the area normals (DEQ-67).
 
 ```python
 class ConformalNoise(StochasticFunction):
