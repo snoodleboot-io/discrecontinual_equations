@@ -164,7 +164,8 @@ class TestTheConstants:
     @pytest.mark.parametrize("alpha", _ALPHAS)
     def test_v_has_mean_zero_under_the_invariant_measure(self, alpha):
         # Arrange: ∫ v h dx over [0, 1] with x = s^p, p = 1/(1-γ), which turns
-        # h dx into p (1 + (s^p/(1+s^p))^γ ... ) ds without the x^-γ singularity.
+        # h dx = (x^-γ + (1+x)^-γ) dx into p (1 + (x/(1+x))^γ) ds, free of the
+        # x^-γ singularity at 0.
         gamma = 1 / alpha
         power = 1 / (1 - gamma)
         solver = GottwaldMelbourneSolver(_config(alpha=alpha))
@@ -336,9 +337,10 @@ class TestTheLaw:
         # δ gives the symmetric law whatever β.
         finals = _final_values(_config(beta=0.5), _Linear(), _PATHS)
 
-        skewed = _cf_error(finals, 1.5, 1.0, 0.5)
-        assert skewed < 0.15
-        assert skewed < _cf_error(finals, 1.5, 1.0, 0.0)
+        assert _cf_error(finals, 1.5, 1.0, 0.5) < 0.15
+        # Im E e^{iZ} is e^{-1} sin(-0.5) = -0.18 for β = 0.5 and 0 for β = 0;
+        # its sampling noise at 800 paths is about 0.025.
+        assert np.exp(1j * finals).mean().imag < -0.06
 
     def test_the_linear_equation_has_its_stable_law(self):
         # dZ = -Z dt + dW, Z(0) = 0: Z(1) = ∫_0^1 e^{-(1-s)} dW(s) =d
