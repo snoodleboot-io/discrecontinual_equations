@@ -1005,9 +1005,11 @@ class OrderedLineIntegral:
     module docstring for when it pays). It must be comparable to the
     drift's rotation-to-gradient ratio on the region asked about, or the error
     does not converge as the grid is refined. ``update_order`` is
-    :data:`QUADRATIC` (``U`` a parabola along the front, the default) or
-    :data:`MIDPOINT` (a straight line, OLIM-MID as published). See the module
-    docstring for both, the method, the normalisation, and its limits.
+    :data:`MIDPOINT` (``U`` a straight line along the front, OLIM-MID as
+    published, the default) or :data:`QUADRATIC` (a parabola, to opt into for
+    a drift that is linear or nearly so; see the module docstring's *Order*
+    for where it helps and where it does not). See the module docstring for
+    both, the method, the normalisation, and its limits.
     """
 
     __slots__ = ["_drift", "_grid", "_noise", "_offsets", "_quadratic", "update_radius"]
@@ -1018,7 +1020,7 @@ class OrderedLineIntegral:
         noise: NoiseMatrix,
         grid: DensityGrid,
         update_radius: int | None = None,
-        update_order: str = QUADRATIC,
+        update_order: str = MIDPOINT,
     ) -> None:
         if grid.dimension != _PLANE:
             message = (
