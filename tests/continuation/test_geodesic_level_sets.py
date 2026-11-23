@@ -1086,3 +1086,57 @@ def test_thinning_never_opens_a_gap_wider_than_the_spacing():
     )
     keep = _thin(points, 0.05, 0.15)
     assert keep[1]
+
+
+class TestEscalationMemo(TestCase):
+    """A landing escalated to the larger budget and lost there is not
+    escalated again while the same front is retried at a smaller Delta."""
+
+    def test_a_row_is_escalated_at_most_once_per_ring(self):
+        # Every seventh first guess is spoiled and no continuation ever
+        # lands, so those rows are lost at every Delta down to the smallest
+        # and the growth stops; each is given the larger budget once.
+        real = _first_guess
+
+        def spoiled(field, sense, front, *rest):
+            places, times = real(field, sense, front, *rest)
+            times[::7] = np.nan
+            return places, times
+
+        escalated = []
+
+        def never(*args):
+            ring, keys = args[2], args[3]
+            if len(args) > 6 and args[6] > 200:
+                escalated.extend((id(ring), float(key)) for key in keys)
+            landing = _first_landing(*args[:6], 1)
+            landing.valid[:] = False
+            return landing
+
+        with patch(_FIRST_GUESS, spoiled), patch(_FIRST_LANDING, never):
+            mesh = _linear_mesh(distance=0.6)
+        assert mesh.stopped is not None
+        assert escalated
+        assert len(escalated) == len(set(escalated))
+
+    def test_the_memo_changes_nothing_where_nothing_fails(self):
+        # Spoiled first guesses that the continuation does land: with the
+        # memo cleared before every ring solve the mesh is the same.
+        real = _first_guess
+
+        def spoiled(field, sense, front, *rest):
+            places, times = real(field, sense, front, *rest)
+            places[::7] += 0.5 * len(front.points)
+            times[3::7] = np.nan
+            return places, times
+
+        def forgetful(*args):
+            args[2].exhausted.clear()
+            return _advance(*args)
+
+        with patch(_FIRST_GUESS, spoiled):
+            kept = _linear_mesh(distance=0.6)
+            with patch(_ADVANCE, forgetful):
+                forgot = _linear_mesh(distance=0.6)
+        assert kept.ring_distances == forgot.ring_distances
+        assert np.array_equal(kept.vertices, forgot.vertices)
