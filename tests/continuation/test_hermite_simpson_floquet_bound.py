@@ -17,6 +17,7 @@ from scipy.integrate import solve_ivp
 from discrecontinual_equations.continuation.cycle_continuation import (
     CycleContinuation,
     CycleSeed,
+    _multiplier_disagreement,
 )
 from discrecontinual_equations.differential_equation import DifferentialEquation
 from discrecontinual_equations.function.deterministic import DeterministicFunction
@@ -172,7 +173,7 @@ class TestBoundOnMultiTurnCycles(TestCase):
 
 
 class TestEstimateReadings(TestCase):
-    """Each reading counts on its own under Hermite-Simpson, and a failed one refuses."""
+    """Each reading counts on its own, and a failed doubled solve refuses."""
 
     def test_the_drift_alone_when_the_doubled_mesh_agrees(self):
         def agreeing(continuation, states, period, parameter):
@@ -185,7 +186,8 @@ class TestEstimateReadings(TestCase):
 
     def test_twice_the_gap_when_it_is_the_larger(self):
         def shifted(continuation, states, period, parameter):
-            multipliers = continuation._multipliers(states, period, parameter)  # noqa: SLF001
+            reading = continuation._multipliers  # noqa: SLF001
+            multipliers = reading(states, period, parameter)
             return multipliers + 0.01 * (np.abs(multipliers) > 0.5)
 
         point, _ = _point(2.8, 1, 40, shifted)
@@ -199,3 +201,17 @@ class TestEstimateReadings(TestCase):
         assert np.all(np.isfinite(point.multipliers))
         assert point.floquet_error == float("inf")
         assert not point.resolved()
+
+
+class TestDisagreementScale(TestCase):
+    def test_a_reading_that_lost_the_trivial_multiplier_is_not_capped_at_one(self):
+        """Van der Pol at ``mu = 5`` on 12 nodes read 1540 for multipliers 1 and 0."""
+        gap = _multiplier_disagreement(np.array([1540.0, 0.0]), np.array([1.0, 1e-30]))
+        assert abs(gap - 1539.0) < 1e-9
+
+    def test_either_order_gives_the_same_gap(self):
+        first, second = np.array([140.0, 1.0, 0.2]), np.array([1.0, 0.25, 7.0])
+        assert _multiplier_disagreement(first, second) == _multiplier_disagreement(
+            second,
+            first,
+        )
