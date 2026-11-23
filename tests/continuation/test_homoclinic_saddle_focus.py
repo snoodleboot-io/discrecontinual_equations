@@ -216,8 +216,25 @@ class TestSaddleFocusNewtonMatrix(TestCase):
                 np.array([[0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [1.0, -0.89, -a]]),
             )
             left = _continuous_phases(values, np.linalg.inv(vectors))
-            rows.append(left[np.argmax(values.imag)])
+            spiral, partner = np.argmax(values.imag), np.argmin(values.imag)
+            largest = left[spiral][np.argmax(np.abs(left[spiral]))]
+            assert abs(largest.imag) < 1.0e-15
+            assert largest.real > 0.0
+            np.testing.assert_allclose(
+                left[partner],
+                np.conj(left[spiral]),
+                atol=1.0e-15,
+            )
+            # still left eigenvectors: a unimodular diagonal against the right ones
+            duality = left @ vectors
+            np.testing.assert_allclose(np.abs(duality), np.eye(3), atol=1.0e-12)
+            rows.append(left[spiral])
         assert np.max(np.abs(rows[1] - rows[0])) < 1.0e-6
+
+    def test_real_rows_are_returned_unchanged(self):
+        values = np.array([2.0, -1.0, -3.0])
+        left = np.array([[0.6, -0.8, 0.0], [-1.0, 0.0, 0.0], [0.0, 0.3, -0.4]])
+        np.testing.assert_array_equal(_continuous_phases(values, left), left)
 
 
 class TestSaddleFocusCurveAgainstShooting(TestCase):

@@ -58,11 +58,8 @@ def _continuous_phases(values: np.ndarray, left: np.ndarray) -> np.ndarray:
     leaves the conditions' zero set unchanged and makes them continuous in the
     Jacobian away from ties in the largest component. Real rows are untouched.
     """
-    complex_rows = np.flatnonzero(np.abs(values.imag) > _IMAGINARY)
-    if complex_rows.size == 0:
-        return left
     fixed = left.copy()
-    for index in complex_rows:
+    for index in np.flatnonzero(np.abs(values.imag) > _IMAGINARY):
         row = fixed[index]
         largest = row[np.argmax(np.abs(row))]
         fixed[index] = row * (np.conj(largest) / np.abs(largest))
