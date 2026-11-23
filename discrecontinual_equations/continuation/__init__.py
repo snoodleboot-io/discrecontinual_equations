@@ -50,6 +50,17 @@ from discrecontinual_equations.continuation.continuation_config import (
 )
 from discrecontinual_equations.continuation.continuation_point import ContinuationPoint
 from discrecontinual_equations.continuation.continuer import Continuer
+from discrecontinual_equations.continuation.covariant_lyapunov import (
+    AngleDistribution,
+    CovariantLyapunov,
+    CovariantLyapunovSettings,
+    FiniteTimeExponents,
+    FlowTangent,
+    MapTangent,
+    TangentDynamics,
+    covariant_lyapunov_vectors,
+    stochastic_finite_time_exponents,
+)
 from discrecontinual_equations.continuation.cycle_continuation import (
     CycleBifurcation,
     CycleContinuation,
@@ -197,6 +208,7 @@ from discrecontinual_equations.continuation.symmetry import (
 __all__ = [
     "AdaptivePeriodicOrbit",
     "AnalyticPeriodicOrbit",
+    "AngleDistribution",
     "BifurcationDiagram",
     "BifurcationExplorer",
     "Branch",
@@ -218,6 +230,8 @@ __all__ = [
     "ContinuationPoint",
     "Continuer",
     "ContinuerBuilder",
+    "CovariantLyapunov",
+    "CovariantLyapunovSettings",
     "CrochetRound",
     "CurveSeed",
     "CycleAttractor",
@@ -241,6 +255,8 @@ __all__ = [
     "FamilyConfig",
     "FamilyDriver",
     "FamilySlice",
+    "FiniteTimeExponents",
+    "FlowTangent",
     "FourierReduction",
     "GeodesicLevelSets",
     "GeodesicMesh",
@@ -262,6 +278,7 @@ __all__ = [
     "LyapunovSpectrum",
     "ManifoldChart",
     "ManifoldSelection",
+    "MapTangent",
     "MatrixNoiseSystem",
     "MeanTopExponent",
     "MeshSpec",
@@ -299,6 +316,7 @@ __all__ = [
     "StochasticScan",
     "StochasticSystem",
     "Stratonovich",
+    "TangentDynamics",
     "TaylorCenterManifold",
     "TaylorManifold",
     "Terminus",
@@ -310,6 +328,7 @@ __all__ = [
     "classify_saddle_focus",
     "classify_transition",
     "coordinate_plane",
+    "covariant_lyapunov_vectors",
     "cyclic_action",
     "diffusion_matrix",
     "equivariance_defect",
@@ -320,6 +339,7 @@ __all__ = [
     "matrix_noise_lyapunov",
     "resolved_branch",
     "state_drift_shift",
+    "stochastic_finite_time_exponents",
     "stochastic_lyapunov",
     "stratonovich_factor",
     "variational_drift_shift",

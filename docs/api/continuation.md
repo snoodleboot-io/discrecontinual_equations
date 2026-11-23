@@ -425,6 +425,44 @@ usable bound rather than the screen the cycle estimator turned out to be.
 has no matching centre when doubled, so the comparison would measure a translation
 of `O(h)` rather than the error.
 
+## Covariant Lyapunov vectors and finite-time exponents
+
+`lyapunov_spectrum` gives rates; `covariant_lyapunov_vectors` gives the directions
+that go with them. It runs the Benettin pass, keeps every triangular factor, and
+iterates backward on them (Ginelli et al., PRL 99, 130601, 2007; J. Phys. A 46,
+254005, 2013), so the vectors it returns are carried onto each other by the
+tangent flow and depend on no inner product. `FlowTangent` drives a flow and
+`MapTangent` an iterated map.
+
+What it was checked against, none of it computed by the code under test:
+
+| Check | Reference | Measured |
+|---|---|---|
+| `x' = J x`, Kuptsov–Parlitz Eq. 69 | eigenvectors, exponents `1, -1, -3` | vectors to `1e-10` in `1 - cos`, every window |
+| non-normal `2 x 2`, eigenvectors 20° apart | `numpy.linalg.eig` | angle `0.35` rad to `1e-6` |
+| Lorenz spectrum, `T = 1000` | `0.9056, 0, -14.5723` | `0.9058, -0.0011, -14.5713` |
+| Lorenz sum | trace `-41/3` | to `1e-3` |
+| covariance, Lorenz | SciPy DOP853 with the analytic Jacobian | `1 - cos < 1e-8` at lags 0.1 and 0.7 |
+| second Lorenz vector | flow direction (Wolfe–Samelson: 0.02°) | median `3e-5`°, max `2.5e-4`° |
+| stable vs centre-unstable plane, Lorenz | bounded away from 0 (Kuptsov 2012) | min `0.136` rad; unstable vs rest min `0.009` |
+| Henon / Lozi `v1, v2` angle | tangencies / none (Ginelli 2007 Fig. 1a) | min `2e-4` / `0.59` rad over `1e5` iterates |
+
+Both transients matter. The `j`-th vector is found inside the span of the first `j`
+Gram-Schmidt vectors, so an unconverged forward frame spoils it as surely as a short
+backward run; each converges like `exp(-gap * time)` with `gap` the smallest
+neighbouring-exponent difference.
+
+`CovariantLyapunov.finite_time_exponents(window)` returns the covariant growth rates
+over tiling windows as a `FiniteTimeExponents` distribution, whose mean is the
+exponent over the stretch. For noisy flows `stochastic_finite_time_exponents` calls
+`matrix_noise_lyapunov` once per window with advancing seeds, so the same settings
+give the same random numbers at every parameter value and the median is a usable
+test function. For the noisy pitchfork `dx = (a x - x^3) dt + s x dW` at its origin
+the window exponent is exactly `a - s^2/2 + s W(T)/T`: the measured spread is
+`s / sqrt(T)` within sampling error, and the median's zero, located by
+`DynamicalThreshold`, sits at the same `s^2 / 2` as the exponent's. The noisy Hopf
+stage draws this distribution behind the exponent.
+
 ## Continuation
 
 ::: discrecontinual_equations.continuation

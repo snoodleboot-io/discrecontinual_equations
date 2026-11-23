@@ -60,6 +60,10 @@ import sys
 
 import numpy as np
 
+from discrecontinual_equations.continuation.covariant_lyapunov import (
+    FiniteTimeExponents,
+    stochastic_finite_time_exponents,
+)
 from discrecontinual_equations.continuation.fokker_planck import (
     DensityGrid,
     StationaryFokkerPlanck,
@@ -158,6 +162,14 @@ EXPONENT_SAMPLES = (-0.5, 0.0, 0.5, 1.0, 1.5)
 # much; the closed form is drawn beside it so the offset is visible, not hidden.
 EXPONENT_SETTINGS = StochasticLyapunovSettings(dt=0.01, horizon=20000, transient=0)
 EXPONENT_SEEDS = (3, 5)
+# The finite-time exponents drawn behind it: forty independent windows of five
+# time units at each sample value, with the same seeds at every mu. For this
+# noise log|z| of the linearisation is mu t + sigma W_1(t) exactly, so the
+# top finite-time exponent is normal with mean mu and standard deviation
+# sigma / sqrt(5) = 0.31, and its median crosses zero where the exponent does.
+FINITE_TIME_WINDOW = 500
+FINITE_TIME_WINDOWS = 40
+FINITE_TIME_SETTINGS = StochasticLyapunovSettings(dt=0.01, transient=0, seed=101)
 # The page's own generator seed and Euler-Maruyama step.
 PATH_SEED = 7
 PATH_STEP = 0.02
@@ -334,6 +346,18 @@ def exponent_at(mu: float) -> float:
     return estimator.at(mu)
 
 
+def finite_time_at(mu: float) -> FiniteTimeExponents:
+    """Finite-time exponents of the origin's linearisation at ``mu``."""
+    parameters = _parameters(mu)
+    return stochastic_finite_time_exponents(
+        MatrixNoiseSystem(_drift(parameters), _noise(parameters), Ito()),
+        np.zeros(2),
+        FINITE_TIME_WINDOW,
+        FINITE_TIME_WINDOWS,
+        FINITE_TIME_SETTINGS,
+    )
+
+
 def exact_crest(mu: float) -> float | None:
     """``sqrt(mu - sigma^2)``: where the density's crest sits once it craters."""
     return math.sqrt(mu - P_EXACT) if mu > P_EXACT else None
@@ -392,8 +416,15 @@ def _system() -> StageSystem:
             "units with common random numbers, which is mu plus one shared "
             "Monte-Carlo offset of standard deviation 0.035; the exact exponent "
             "is mu, so D is at mu = 0 exactly, and the dashed closed forms show "
-            "the gap. Sample paths are integrated in the browser by "
-            "Euler-Maruyama from a generator seeded in the page. The "
+            "the gap. Behind it, the band is the distribution of the top "
+            "finite-time exponent over 40 independent windows of 5 time units: "
+            "log|z| of the linearisation is mu t + sigma W_1(t) exactly, so a "
+            "window sees mu plus normal noise of standard deviation "
+            "sigma / sqrt(5) = 0.31, and its median crosses zero at the same D. "
+            "Below D a fair fraction of windows still expand; that, not the "
+            "limit, is what a path of finite length shows. Sample paths are "
+            "integrated in the browser by Euler-Maruyama from a generator seeded "
+            "in the page. The "
             "quasipotential U, measured from the cycle, is marched by "
             "OrderedLineIntegral (OLIM-MID) on an 88 x 88 grid over [-2.2, 2.2]^2; "
             "its closed form is (r^2 - mu - mu log(r^2 / mu)) / sigma^2, and on "
@@ -443,6 +474,7 @@ def noisy_hopf_stage() -> StageScene:
             exponent_at,
             EXPONENT_SAMPLES,
             ClosedForms(exponent=lambda mu: mu, crest=exact_crest),
+            finite_time_at,
         ),
         Thresholds(
             RadialCrater([0.0, 0.0], axis=0, offset=PROBE_OFFSET),
