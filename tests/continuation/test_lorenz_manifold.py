@@ -50,8 +50,10 @@ and their last circle to within 4% in number and 1.3% in points
 """
 
 import math
+from contextlib import nullcontext
 from itertools import pairwise
 from unittest import TestCase
+from unittest.mock import patch
 
 import numpy as np
 import pytest
@@ -172,7 +174,12 @@ class TestLorenzManifold(TestCase):
         assert abs(len(self.mesh.rings) - 67) <= 3
 
 
-def _lorenz(distance: float, loss: float = 0.0):
+_ESCALATED = (
+    "discrecontinual_equations.continuation.geodesic_level_sets._ESCALATED_STEPS"
+)
+
+
+def _lorenz(distance: float, loss: float = 0.0, *, escalate: bool = True):
     function = LorenzField(
         variables=[State(), State(), State()],
         parameters=[Alpha(value=0.0)],
@@ -180,15 +187,27 @@ def _lorenz(distance: float, loss: float = 0.0):
         time=None,
     )
     jacobian = AutomaticDifferentiation().jacobian(function, np.zeros(3), 0.0)
-    return GeodesicLevelSets(
+    grower = GeodesicLevelSets(
         GeodesicSettings(initial_radius=1.0, step=1.5, spacing=(1.5, 4.5), loss=loss),
-    ).compute(function, np.zeros(3), jacobian, StableManifold(), distance=distance)
+    )
+    with nullcontext() if escalate else patch(_ESCALATED, ()):
+        return grower.compute(
+            function,
+            np.zeros(3),
+            jacobian,
+            StableManifold(),
+            distance=distance,
+        )
 
 
 class TestLorenzManifoldAsFarAsItGoes(TestCase):
+    """Grown without the escalated continuation budget, which stops it at
+    157.38 in about a minute; with it the growth reaches 165.25 but takes
+    many times longer, too long for every run of the suite."""
+
     @classmethod
     def setUpClass(cls):
-        cls.mesh = _lorenz(170.0)
+        cls.mesh = _lorenz(170.0, escalate=False)
 
     def test_the_strict_growth_stops_and_says_why(self):
         assert self.mesh.stopped is not None
@@ -218,7 +237,9 @@ class TestLorenzManifoldAsFarAsItGoes(TestCase):
 
 class TestLossyLorenzManifold(TestCase):
     def test_the_crochet_pattern_adds_up_when_points_are_lost(self):
-        mesh = _lorenz(170.0, loss=0.03)
+        # Without the escalated budget, as above: it reaches 160 with 30
+        # points lost. With it, it loses none to 160 and 1 to 170, slowly.
+        mesh = _lorenz(160.0, loss=0.03, escalate=False)
         assert mesh.stopped is None
         assert mesh.lost > 0
         pattern = mesh.crochet_pattern()
