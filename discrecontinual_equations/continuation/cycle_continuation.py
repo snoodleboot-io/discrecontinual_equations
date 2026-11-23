@@ -24,6 +24,7 @@ plain Euclidean norm of the whole unknown vector, not AUTO's integral phase
 condition and weighted ``L2`` norm.
 """
 
+import warnings
 from collections.abc import Callable, Sequence
 from itertools import pairwise
 from numbers import Integral
@@ -41,6 +42,10 @@ from discrecontinual_equations.continuation.periodic_orbit import (
     PeriodicOrbit,
     PeriodicOrbitSolution,
     _hermite_positions,
+)
+from discrecontinual_equations.continuation.periodic_schur import (
+    PeriodicSchurError,
+    periodic_eigenvalues,
 )
 from discrecontinual_equations.differential_equation import DifferentialEquation
 
@@ -75,8 +80,9 @@ _FLOQUET_TOLERANCE = 2.0e-2
 # error, then e_N <= |mu_N - mu_2N| + e_2N <= |mu_N - mu_2N| + e_N / 2, so
 # e_N <= 2 |mu_N - mu_2N|. Any convergent order gives that once resolved; order
 # 2m gives it with room to spare (the gap is then (1 - 4^-m) e_N, read 2/(1 -
-# 4^-m) ~ 2.1 times high at m = 2). The Hermite cross-check alone could not
-# bound the error at m = 2, where both readings are fourth order and cancel.
+# 4^-m) ~ 2.1 times high at m = 2). The fourth-order Hermite cross-check could
+# not bound the error at m = 2, where both readings cancel, and over-read it by
+# orders of magnitude at m = 4; since DEQ-55 it is not part of the estimate.
 _DOUBLING_SAFETY = 2.0
 # How far a solved seed's period may stray from the seed's own, either way,
 # before it is refused as another cycle or none (see
@@ -87,6 +93,14 @@ _SEED_PERIOD_RATIO = 2.0
 # a cycle many times smaller is a spurious one round an equilibrium (see
 # :meth:`CycleContinuation._plausible`).
 _SEED_EXTENT_RATIO = 2.0
+# Imaginary parts this many machine epsilons per factor of a multiplier's size
+# are the complex arithmetic's rounding, not a conjugate pair.
+_REAL_TOLERANCE = 64.0 * float(np.finfo(float).eps)
+# How a point's multipliers were read (:attr:`CyclePoint.multipliers_method`).
+_HERMITE_MONODROMY = "hermite_monodromy"
+_PERIODIC_QR = "periodic_qr"
+_EXPLICIT_PRODUCT = "explicit_product"
+_UNREAD = "none"
 # The damped seed correction: as many iterations as the adaptive orbit solver
 # allows, halving each step at most thirty times, the period kept above a tenth
 # of the seed's - the floor :class:`RobustPeriodicOrbit` uses.
@@ -502,31 +516,68 @@ def _multiplier_disagreement(first: np.ndarray, second: np.ndarray) -> float:
     return float(np.max(gaps[rows, columns]))
 
 
-def _jacobian_monodromy(block: np.ndarray, dimension: int) -> np.ndarray:
-    """The monodromy read off the collocation Jacobian (Fairgrieve and Jepson).
+def _transfer_matrices(block: np.ndarray, dimension: int) -> np.ndarray:
+    """Each interval's transfer matrix, read off the collocation Jacobian.
 
     The state columns of each interval's block are the linearised collocation
     system: ``A x_left + W (interior, x_right) = 0`` for any perturbation that
     keeps the equations satisfied. Solving it for the interval's far end gives
-    the discrete transfer matrix ``-(W^-1 A)`` restricted to its last rows, and
-    the product round the mesh is the derivative of the discrete period map,
-    which inherits the scheme's order. Nothing is integrated and no field is
-    evaluated: the block is the one the last tangent solve assembled.
-
-    A block too singular to solve raises :class:`numpy.linalg.LinAlgError`;
-    the caller reports the point with an infinite error rather than lose the
-    trace.
-
-    The product is formed explicitly rather than by a periodic Schur
-    decomposition, which is what keeps this short. That loses accuracy only
-    when the multipliers span many orders of magnitude, far beyond the 1e2-1e3
-    the films see.
+    the discrete transfer matrix ``-(W^-1 A)`` restricted to its last rows
+    (Fairgrieve and Jepson), shape ``(intervals, dimension, dimension)``.
+    Nothing is integrated and no field is evaluated: the block is the one the
+    last tangent solve assembled. A block too singular to solve raises
+    :class:`numpy.linalg.LinAlgError`.
     """
     transfers = -np.linalg.solve(block[:, :, dimension:], block[:, :, :dimension])
+    return transfers[:, -dimension:]
+
+
+def _jacobian_monodromy(block: np.ndarray, dimension: int) -> np.ndarray:
+    """The monodromy read off the collocation Jacobian (Fairgrieve and Jepson).
+
+    The product round the mesh of :func:`_transfer_matrices`: the derivative of
+    the discrete period map, which inherits the scheme's order. Formed
+    explicitly, so its eigenvalues are accurate only relative to the largest;
+    the multipliers come from :func:`_product_multipliers` instead, and this is
+    kept as the plain reading tests compare against.
+    """
     monodromy = np.eye(dimension)
-    for transfer in transfers[:, -dimension:]:
+    for transfer in _transfer_matrices(block, dimension):
         monodromy = transfer @ monodromy
     return monodromy
+
+
+def _product_multipliers(transfers: np.ndarray) -> tuple[np.ndarray, str]:
+    """Eigenvalues of the transfer product by periodic QR, never forming it.
+
+    A multiplier far below the largest keeps its own relative accuracy this
+    way (see :mod:`periodic_schur`): on van der Pol at ``mu = 5`` the explicit
+    product read the 7.7e-38 multiplier as 1e-15 noise. Should the iteration
+    not converge, the product's eigenvalues are the fallback, as before - with
+    a :class:`RuntimeWarning`, since they are then accurate only relative to
+    the largest. A spectrum whose imaginary parts are all at rounding level
+    comes back real, as :func:`numpy.linalg.eigvals` would return it.
+
+    Returns the multipliers and how they were read: ``"periodic_qr"`` or
+    ``"explicit_product"`` (see :attr:`CyclePoint.multipliers_method`).
+    """
+    try:
+        values = periodic_eigenvalues(transfers)
+    except PeriodicSchurError as failure:
+        warnings.warn(
+            f"{failure}; the Floquet multipliers come from the explicit product, "
+            "accurate only relative to the largest",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        product = np.eye(transfers.shape[1])
+        for transfer in transfers:
+            product = transfer @ product
+        return np.linalg.eigvals(product), _EXPLICIT_PRODUCT
+    rounding = _REAL_TOLERANCE * transfers.shape[0] * np.abs(values)
+    if np.all(np.abs(values.imag) <= rounding):
+        return values.real.copy(), _PERIODIC_QR
+    return values, _PERIODIC_QR
 
 
 class _DifferentiatedOrbit(PeriodicOrbit):
@@ -582,21 +633,30 @@ class CyclePoint:
     multiplier cannot say it (see :attr:`floquet_error`); ``None`` means it can.
     """
 
-    __slots__ = ["_error", "_mesh", "_multipliers", "_parameter", "_solution"]
+    __slots__ = [
+        "_error",
+        "_mesh",
+        "_method",
+        "_multipliers",
+        "_parameter",
+        "_solution",
+    ]
 
-    def __init__(
+    def __init__(  # noqa: PLR0913 (the point's readings, all optional)
         self,
         parameter: float,
         solution: PeriodicOrbitSolution,
         multipliers: np.ndarray,
         mesh: np.ndarray | None = None,
         error: float | None = None,
+        method: str = _HERMITE_MONODROMY,
     ) -> None:
         self._parameter = parameter
         self._solution = solution
         self._multipliers = multipliers
         self._mesh = mesh
         self._error = error
+        self._method = method
 
     @property
     def parameter(self) -> float:
@@ -612,6 +672,18 @@ class CyclePoint:
     def multipliers(self) -> np.ndarray:
         """Floquet multipliers of the cycle."""
         return self._multipliers
+
+    @property
+    def multipliers_method(self) -> str:
+        """How :attr:`multipliers` were read.
+
+        ``"hermite_monodromy"`` under the one-wide schemes; under
+        Gauss-Legendre ``"periodic_qr"``, or ``"explicit_product"`` where the
+        periodic QR iteration did not converge - those multipliers are accurate
+        only relative to the largest, and a :class:`RuntimeWarning` said so -
+        or ``"none"`` where an interval block could not be solved.
+        """
+        return self._method
 
     @property
     def mesh(self) -> np.ndarray:
@@ -658,38 +730,35 @@ class CyclePoint:
         6.0e-6. That is asymptotic, not a rule: on the Brusselator at ``b = 3``
         the drift was the *larger* error, 2.9e-8 against 5.7e-12 with ``m = 4``
         on 80 intervals. Neither can stand for the other, so for those points
-        this is the largest of three readings: the trivial drift; the relative
-        disagreement between the Jacobian's multipliers and the Hermite
-        monodromy's (see :func:`_multiplier_disagreement`); and twice the
-        disagreement with the same cycle re-solved on twice the intervals (see
-        ``_DOUBLING_SAFETY`` for why twice).
+        this is the larger of two readings: the trivial drift, and twice the
+        relative disagreement (see :func:`_multiplier_disagreement`) with the
+        same cycle re-solved on twice the intervals (see ``_DOUBLING_SAFETY``
+        for why twice). Both converge at the scheme's own order, so the
+        estimate does too.
 
-        The Hermite reading alone did not bound the error. At ``m = 2`` it and
-        the Jacobian are both fourth order and their errors partly cancel: on
-        the fold-of-cycles normal form it read up to 2.5 times low on every mesh
-        from 4 to 24 intervals and on 4 intervals let two cycles with true
-        errors 3.1e-2 and 3.4e-2 under the default 2e-2; at ``m = 3`` on 3
-        intervals it read up to six times low. With the doubled-mesh reading,
-        against closed-form or DOP853 references on 1391 cycles - van der Pol
-        at ``mu`` from 0.5 to 10, the Brusselator at ``b`` from 2.5 to 4, that
-        fold branch; ``m`` from 1 to 4 on 3 to 160 intervals - the error never
-        exceeded the estimate (worst ratio 0.75 at ``m = 1``, 0.61 at 2, 0.54
-        at 3, 0.50 at 4) and no cycle above 2e-2 passed. That is a measurement,
-        not a proof: it holds wherever doubling the mesh at least halves the
-        error, which every resolved mesh measured did.
+        Against DOP853 references with variational multipliers on the
+        verifier's grid - van der Pol at ``mu`` 0.5, 2, 3, 4 and the
+        Brusselator at ``b`` 2.5, 3, 4, ``m`` from 1 to 4 on 8 to 96
+        intervals, 211 cycles - it never read below the true error, and its
+        median over-read was 2.0 at every ``m``; 196 cycles were within 100
+        times. The other 15 are cycles whose doubled-mesh solve failed (read
+        infinite) or landed far off, with true errors 2.7e-3 to 1.1, all but
+        one above the default gate anyway.
+        On 1159 cycles of the fold-of-cycles normal form, against the exact
+        multipliers, it read low only at ``m = 1`` on 3 and 4 intervals - up to
+        11 times, on true errors of 5e-7 to 6e-6 - and no cycle above 2e-2
+        passed anywhere. That is a measurement, not a proof: it holds wherever
+        doubling the mesh at least halves the error.
 
-        It over-reads by about two where the doubled-mesh term dominates
-        (median 2.3 at ``m = 2``) and by far more where the fourth-order
-        Hermite term does (median 5 at ``m = 3``, 140 at ``m = 4``): with
-        ``m = 4`` on 80 intervals 4.7e-9 against a true 9.6e-15 on van der Pol
-        at ``mu = 1``, and 1.87e-7 against 1.24e-10 on the Bogdanov-Takens orbit
-        at b1 = -0.4554 (8.1e-5 against 1.34e-5 on 20 intervals). That has a
-        cost: on van der Pol at ``mu = 6`` with ``m = 4`` on 80 intervals it
-        reads 4.65e-2 against a true 6.25e-3, so :meth:`resolved` refuses at
-        the default 2e-2 a cycle that Hermite-Simpson on 320 nodes (true
-        6.05e-3) is let through on. The Hermite term is kept anyway: without
-        it, one ``m = 1`` cycle on 3 intervals read eight times low. An
-        estimate that is tight at every ``m`` is the open follow-up.
+        Until DEQ-55 a third reading was in the maximum: the disagreement with
+        the fourth-order Hermite monodromy (:meth:`CycleContinuation.
+        hermite_multipliers`, still there on request). Fourth order whatever
+        ``m`` is, it over-read by a median of 5 at ``m = 3`` and 140 at
+        ``m = 4`` - 1.6e4 times at worst on that grid - and falsely refused van
+        der Pol at ``mu = 6`` with ``m = 4`` on 80 intervals (4.65e-2 against a
+        true 6.25e-3). It was kept for one ``m = 1`` cycle on 3 intervals that
+        read eight times low without it; that is the fold-branch case above,
+        where the error it hides is under 1e-5.
 
         A point whose states have collapsed onto one another reads infinite
         under every scheme. Every collocation admits that degenerate solution -
@@ -717,11 +786,9 @@ class CyclePoint:
         has to be re-solved on a doubled mesh before anyone can say how wrong it is,
         whereas the trivial multiplier's exact value is known in advance, so this
         measurement arrives with the point. Under the one-wide schemes it costs
-        nothing more. Under Gauss-Legendre it costs the Hermite cross-check
-        monodromy and a re-solve on the doubled mesh for every point - a point
-        takes 1.3 to 1.5 times as long - and it is conservative: no cycle
-        measured passed with a true error above the tolerance, and it can refuse
-        a cycle whose multipliers are good enough (see :attr:`floquet_error`).
+        nothing more. Under Gauss-Legendre it costs a re-solve on the doubled
+        mesh for every point, and it is conservative: no cycle measured passed
+        with a true error above the tolerance (see :attr:`floquet_error`).
         """
         return self.floquet_error < tolerance
 
@@ -1002,9 +1069,11 @@ class CycleContinuation:
     ``T h = 1.7`` per interval). These worst-error figures predate the
     doubled-mesh reading in the estimate; on the worst Bogdanov-Takens orbit it
     leaves them unchanged (1.87e-7 on 80 intervals, 8.06e-5 on 20), the
-    Hermite term being the larger at ``m = 4``. It is not the default: a step
-    costs about four times as much on 80 intervals, and the doubled-mesh
-    reading another 1.3 to 1.5 times per point, and with ``m`` times the unknowns one
+    Hermite term being the larger at ``m = 4``; DEQ-55 dropped that term, so
+    the estimate there is now the doubled-mesh reading, about twice the true
+    error. It is not the default: a step costs about four times as much on 80
+    intervals, and the doubled-mesh reading more per point, and with ``m``
+    times the unknowns one
     arclength step covers about ``1/sqrt(m)`` of the parameter, so a caller
     after the same span passes about ``sqrt(m)`` times the step - the figures
     above doubled it, and then reached further along both branches.
@@ -1449,11 +1518,17 @@ class CycleContinuation:
             point.mesh,
         )
 
-    def _jacobian_multipliers(self, unknowns: np.ndarray, nodes: int) -> np.ndarray:
+    def _jacobian_multipliers(
+        self,
+        unknowns: np.ndarray,
+        nodes: int,
+    ) -> tuple[np.ndarray, str]:
         """Floquet multipliers off the collocation Jacobian at ``unknowns``.
 
         The blocks are the ones the tangent solve just assembled at this very
         point whenever :meth:`trace` asks, and are only rebuilt otherwise.
+        Returned with how they were read (:func:`_product_multipliers`), or
+        ``nan`` and ``"none"`` where a block could not be solved.
         """
         assembled = self._assembled
         if assembled is None or not np.array_equal(assembled[0], unknowns):
@@ -1463,12 +1538,12 @@ class CycleContinuation:
             message = "the collocation Jacobian was not assembled"
             raise RuntimeError(message)
         try:
-            monodromy = _jacobian_monodromy(assembled[1], self._dimension)
+            transfers = _transfer_matrices(assembled[1], self._dimension)
         except np.linalg.LinAlgError:
-            return np.full(self._dimension, np.nan)
-        if not np.all(np.isfinite(monodromy)):
-            return np.full(self._dimension, np.nan)
-        return np.linalg.eigvals(monodromy)
+            return np.full(self._dimension, np.nan), _UNREAD
+        if not np.all(np.isfinite(transfers)):
+            return np.full(self._dimension, np.nan), _UNREAD
+        return _product_multipliers(transfers)
 
     def _doubled_multipliers(
         self,
@@ -1514,7 +1589,7 @@ class CycleContinuation:
         corrected = fine._correct(unknowns, nodes, _Arc(unknowns, fixed_parameter, 0.0))
         if corrected is None:
             return np.full(self._dimension, np.nan)
-        return fine._jacobian_multipliers(corrected, nodes)
+        return fine._jacobian_multipliers(corrected, nodes)[0]
 
     def _solve_seed(self, seed: CycleSeed, nodes: int) -> np.ndarray | None:
         """The first point on the branch, or ``None`` if no believable one is found.
@@ -1797,22 +1872,17 @@ class CycleContinuation:
                 multipliers,
             )
         # The point keeps every point of the solution, interior ones included,
-        # with where each sits: the Hermite cross-check walks all of them.
+        # with where each sits: the Hermite cross-check, asked for, walks them.
         positions = self._collocation.grid(self._mesh)
-        multipliers = self._jacobian_multipliers(unknowns, nodes)
+        multipliers, method = self._jacobian_multipliers(unknowns, nodes)
         if np.all(np.isfinite(multipliers)):
-            hermite = self._multipliers(states, period, parameter, positions)
             doubled = self._doubled_multipliers(states, period, parameter)
             refinement = (
                 _DOUBLING_SAFETY * _multiplier_disagreement(multipliers, doubled)
                 if np.all(np.isfinite(doubled))
                 else float("inf")
             )
-            error = max(
-                float(np.min(np.abs(multipliers - 1.0))),
-                _multiplier_disagreement(multipliers, hermite),
-                refinement,
-            )
+            error = max(float(np.min(np.abs(multipliers - 1.0))), refinement)
         else:
             # An interval block too singular to solve: no multipliers to read,
             # so the point is reported and refused rather than the trace lost.
@@ -1823,4 +1893,5 @@ class CycleContinuation:
             multipliers,
             positions,
             error,
+            method,
         )

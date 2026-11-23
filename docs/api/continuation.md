@@ -268,53 +268,47 @@ its trivial multiplier stays at one far beyond the scheme's order: on van der Po
 at `m = 2` it read 3.4e-4, 1.4e-9 and 4e-16 at 20, 40 and 80 intervals while the
 nontrivial multiplier was off 2.0e-3, 9.8e-5 and 6.0e-6; on the rotation-symmetric
 Hopf cycle it is one to rounding. A Gauss–Legendre `CyclePoint` therefore carries
-its `floquet_error` explicitly: the larger of the trivial drift and the relative
-disagreement between the Jacobian's multipliers and the Hermite cross-check's. The
-cross-check takes `df/dx` by automatic differentiation, because the forward
-difference floors it at 3e-5 on the Bogdanov–Takens orbit nearest the homoclinic
-however fine the mesh.
+its `floquet_error` explicitly, as below. The Hermite cross-check takes `df/dx` by
+automatic differentiation, because the forward difference floors it at 3e-5 on the
+Bogdanov–Takens orbit nearest the homoclinic however fine the mesh.
 
-**`floquet_error` is a conservative estimate, not the `2m`-order error.** It is the
-largest of three readings: the trivial drift, the relative disagreement with the
-Hermite cross-check, and twice the disagreement with the same cycle re-solved on
-twice the intervals. The factor two is what bounds the error whenever doubling the
-mesh at least halves it: `e_N <= |mu_N - mu_2N| + e_2N <= |mu_N - mu_2N| + e_N / 2`.
+**`floquet_error` is the larger of the trivial drift and twice the disagreement
+with the same cycle re-solved on twice the intervals** (DEQ-55). The factor two is
+what bounds the error whenever doubling the mesh at least halves it:
+`e_N <= |mu_N - mu_2N| + e_2N <= |mu_N - mu_2N| + e_N / 2`. Both readings converge
+at the scheme's order, so the estimate is tight at every `m`. Against DOP853
+references with variational multipliers on the verifier's 211-cycle grid (van der
+Pol at `mu` 0.5, 2, 3, 4; the Brusselator at `b` 2.5, 3, 4; `m` 1 to 4 on 8 to 96
+intervals):
 
-The doubled-mesh reading is there because the Hermite one alone did not bound the
-error. At `m = 2` the Jacobian's multipliers and the cross-check are both fourth
-order and their errors partly cancel: on the fold-of-cycles normal form it read up
-to 2.5 times low on every mesh from 4 to 24 intervals, and on 4 intervals passed two
-cycles whose true errors were 3.1e-2 and 3.4e-2 under the default 2e-2; at `m = 3`
-on 3 intervals it read up to six times low. With all three readings, against
-closed-form or DOP853 references on 1391 cycles (van der Pol at `mu` from 0.5 to 10,
-the Brusselator at `b` from 2.5 to 4, the fold branch; `m` from 1 to 4 on 3 to 160
-intervals) the true error never exceeded the estimate and no cycle above 2e-2
-passed:
+| `m` | cycles | below the true error | median estimate / true | within 1-100x (before) |
+|---|---|---|---|---|
+| 1 | 53 | 0 | 2.0 | 44 (21) |
+| 2 | 54 | 0 | 2.0 | 50 (46) |
+| 3 | 52 | 0 | 2.0 | 51 (43) |
+| 4 | 52 | 0 | 2.0 | 51 (39) |
 
-| `m` | cycles | worst true / estimate | median estimate / true |
-|---|---|---|---|
-| 1 | 300 | 0.75 | 34 |
-| 2 | 482 | 0.61 | 2.3 |
-| 3 | 297 | 0.54 | 5.1 |
-| 4 | 296 | 0.50 | 140 |
+The 15 outside 100x are cycles whose doubled-mesh solve failed (11, read infinite)
+or landed far off (4); their true errors were 2.7e-3 to 1.1, and all but one are
+above the default gate of 2e-2, so refusing them is right. On 1159 cycles of the fold-of-cycles normal form, against
+exact multipliers, it read low only at `m = 1` on 3 and 4 intervals, by up to 11
+times on true errors of 5e-7 to 6e-6. No cycle above 2e-2 passed `resolved()`
+anywhere. Van der Pol at `mu = 6` with `m = 4` on 80 intervals, which the earlier
+estimate refused (4.65e-2 against a true 6.25e-3), now passes.
 
-Where the fourth-order Hermite term dominates - large `m`, fine meshes - it
-over-reads a great deal. Against an exact reference (a planar cycle's nontrivial
-multiplier is `exp` of the divergence integrated over the period, here by DOP853 at
-`rtol = 1e-12`) with `m = 4`:
+The earlier estimate also took the disagreement with the Hermite cross-check.
+Fourth order whatever `m` is, that term over-read by a median of 5 at `m = 3` and
+140 at `m = 4` (up to 1.6e4 times on the grid). It is no longer computed per point;
+`hermite_multipliers(point)` still gives it on request.
 
-| cycle | intervals | `floquet_error` | true error |
-|---|---|---|---|
-| van der Pol, `mu = 1` | 80 | 4.7e-9 | 4.9e-15 |
-| Bogdanov–Takens, b1 = -0.4554 | 80 | 1.9e-7 | 1.2e-10 |
-| Bogdanov–Takens, b1 = -0.4554 | 20 | 8.1e-5 | 1.3e-5 |
-| van der Pol, `mu = 6` | 80 | 4.65e-2 | 6.25e-3 |
-
-The last row is a false refusal: `resolved()` at the default 2e-2 refuses that
-cycle, where Hermite–Simpson on 320 nodes, true error 6.05e-3, is let through. The
-Hermite term is kept regardless, because without it one `m = 1` cycle on 3 intervals
-read eight times low. The doubled-mesh solve makes a point cost 1.3 to 1.5 times as
-much. An estimate that is tight at every `m` is open.
+**The multipliers are eigenvalues of the transfer product, computed without
+forming it** (periodic QR: Bojanczyk, Golub and Van Dooren 1992, in the form of
+Kressner 2006). The explicit product gives every multiplier to an absolute accuracy
+of about `eps` times the largest, so van der Pol's contracting multiplier at
+`mu = 5`, exactly 7.7386e-38, read 1e-15 to 7e-15. Off the factors it reads
+7.7395e-38, 7.73857e-38 and 7.738555e-38 on 80, 160 and 320 intervals with `m = 4`
+(relative errors 1.2e-4, 1.6e-6, 7.4e-10), and at `mu = 10` on 320 intervals
+3.700e-136 against 3.696e-136.
 
 On the two films the fourth-order schemes could not take below 0.01%, worst
 `floquet_error` over the branch - for Gauss–Legendre that is the estimate above, so the
