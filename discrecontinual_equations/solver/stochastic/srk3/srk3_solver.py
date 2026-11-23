@@ -1,6 +1,13 @@
 import numpy as np
 
+from discrecontinual_equations.curve import Curve
+from discrecontinual_equations.differential_equation import DifferentialEquation
 from discrecontinual_equations.solver.stochastic.coefficients import ItoCoefficients
+from discrecontinual_equations.solver.stochastic.iterated_integrals import (
+    GaussianIteratedIntegralSource,
+    IteratedIntegrals,
+    IteratedIntegralSource,
+)
 from discrecontinual_equations.solver.stochastic.runge_kutta import (
     StochasticRungeKuttaSolver,
 )
@@ -12,7 +19,7 @@ from discrecontinual_equations.solver.stochastic.wiener import (
 
 
 class SRK3Solver(StochasticRungeKuttaSolver):
-    """Platen's explicit strong scheme of order 1.5 for scalar Ito SDEs.
+    """Platen's explicit strong order 1.5 scheme, for one or several noise channels.
 
     This is the explicit order 1.5 strong scheme of Kloeden and Platen, "Numerical
     Solution of Stochastic Differential Equations" (Springer, 1992), equation
@@ -65,28 +72,83 @@ class SRK3Solver(StochasticRungeKuttaSolver):
     In the same run Euler-Maruyama measured strong 0.59 / weak 0.97 and Milstein
     strong 0.97 / weak 0.97, so the harness resolves the orders it is meant to.
 
-    **Systems are refused.** The scheme is derived for one Wiener process. For
-    several channels the order 1.5 Ito-Taylor expansion carries the
-    twofold integrals ``I_(j,k)`` across channels, the mixed ``I_(j,0)`` and
-    ``I_(0,j)`` of each channel, and the triple integrals ``I_(j,k,l)`` - the
-    several-channel form of the last line above, which is ``I_(1,1,1)``. The Levy
-    areas, and with them every ``I_(j,k)``, are sampled since DEQ-36
-    (:class:`~.wiener.LevyAreaSampler`), and ``I_(j,0)`` is each channel's
-    ``delta_z``; what is still missing is a sampler for ``I_(j,k,l)`` with ``j, k,
-    l`` not all equal, and the several-channel form of the step, with one pair of
-    supporting values per channel, that would consume them. Nor would the area
-    sampler serve as it stands: its default truncation is tuned for strong order
-    1.0 (an L2 error of ``h^(3/2)`` per step); order 1.5 needs ``h^2``, so ``n ~
-    h^-1`` terms (Kastner and Rossler, arXiv:2201.08424, (67) with ``gamma =
-    3/2``), and the areas would have to be drawn jointly with the ``I_(j,k,l)``,
-    not independently of them. Diagonal noise whose ``b_i`` depends only on
-    ``x_i`` is the exception: every mixed term vanishes and only ``I_(j,j,j)`` is
-    needed, which the scalar formula already has per channel. Applying the scalar
-    formula component-wise would be a scheme of unknown order, which is the
-    defect this file is being cured of. ``solve`` therefore raises for more than
-    one variable and points at :class:`SRK2Solver`, whose order 1.0 for commuting
-    diagonal noise is established, and at the Milstein solver, which takes any
-    matrix noise at strong order 1.0.
+    **Several channels (DEQ-66).** For ``m`` Wiener processes - an ``n x m``
+    diffusion ``G`` with columns ``b^j``, or a vector of ``n > 1`` coefficients,
+    which is ``G = diag(b)`` - the step is the order 1.5 strong Ito-Taylor scheme
+    for several channels (Kloeden and Platen (10.4.6); Kuznetsov,
+    arXiv:1802.00888, (5)) with its derivatives replaced by differences the same
+    way::
+
+        Ups+-^j       = Y + a h / m +- b^j sqrt(h)                (time t + h / m)
+        Phi+-^(j1,j2) = Ups+^j1 +- b^j2(Ups+^j1) sqrt(h)
+        Y_next = Y + a h + sum_j b^j dW_j
+                 + sum_j (a(Ups+^j) - a(Ups-^j)) I_(j,0) / (2 sqrt(h))
+                 + sum_j (a(Ups+^j) - 2 a + a(Ups-^j)) h / 4
+                 + sum_j sum_k (b^j(Ups+^k) - 2 b^j + b^j(Ups-^k)) I_(0,j) / (2 h)
+                 + sum_(j1,j2) (b^j2(Ups+^j1) - b^j2(Ups-^j1)) I_(j1,j2) / (2 sqrt(h))
+                 + sum_(j1,j2,j3) (b^j3(Phi+^(j1,j2)) - b^j3(Phi-^(j1,j2))
+                                   - b^j3(Ups+^j2) + b^j3(Ups-^j2)) I_(j1,j2,j3) / (2 h)
+
+    with ``I_(0,j) = h dW_j - I_(j,0)``. Expanding each supporting value about
+    ``Y``: the ``I_(j,0)`` line is ``L^j a`` up to ``O(h)``; the ``h / 4`` line is
+    ``(1/2) L^0 a h^2`` up to ``O(h^3)`` - the ``1 / m`` in ``Ups`` is what makes
+    the ``m`` first differences add up to one ``a' a`` (and, with time as a state
+    of drift one, to one ``da / dt``) while each channel contributes its own
+    ``(1/2) a''[b^j, b^j]``; the ``I_(0,j)`` line is ``L^0 b^j`` up to ``O(h)`` by
+    the same count; the ``I_(j1,j2)`` line is ``L^j1 b^j2`` up to ``O(h)``; and in
+    the last line ``b^j3(Phi+-)`` differ by ``2 sqrt(h) L^j2 b^j3(Ups+^j1)``, from
+    which ``b^j3(Ups+-^j2)`` remove ``2 sqrt(h) L^j2 b^j3(Y)``, leaving ``2 h
+    L^j1 L^j2 b^j3`` up to ``O(h^(3/2))``. Every coefficient is thus reproduced to
+    a remainder whose product with its integral has mean zero and an L2 size of
+    ``O(h^2)``, which is what order 1.5 asks of a one-step scheme. (Subtracting
+    ``b^j3(Ups+-^j1)`` instead, as the scalar formula's ``b(Y+-)`` might suggest,
+    leaves ``(L^j2 - L^j1) b^j3 / sqrt(h)`` for ``j1 != j2``, a local error of
+    order ``h`` and so strong order 0.5, which is what that variant measures.) With
+    ``m = 1`` the lines are (11.2.1)'s, term for term. Per step: ``1 + 2 m`` drift
+    and ``1 + 2 m + 2 m^2`` diffusion evaluations, and the ``m^3`` triple
+    integrals.
+
+    The integrals come from the Wiener source, which must then be an
+    :class:`~.iterated_integrals.IteratedIntegralSource`: by default a
+    :class:`~.iterated_integrals.GaussianIteratedIntegralSource` seeded from the
+    configuration, which draws the twofold and threefold integrals jointly by
+    Kuznetsov's Legendre series, truncated for order 1.5; or an
+    :class:`~.iterated_integrals.IteratedIntegralPath` for a convergence study. A
+    plain :class:`~.wiener.BrownianPath` holds no triple integrals and is refused
+    for several channels. Rossler's order 1.5 stochastic Runge-Kutta methods (SIAM
+    J. Numer. Anal. 48, 2010) cover scalar, diagonal and additive noise only, so
+    they do not serve non-commuting noise. Kloeden and Platen give a
+    derivative-free several-channel scheme in Section 11.2; the book was not to
+    hand, so the form above is derived here from the Taylor scheme as quoted by
+    Kuznetsov, and checked against it term by term in the tests.
+
+    **Several channels, as measured.** ``dx = dW_1``, ``dz = mu z dt + z x dW_2``
+    (``mu = 1/2``, ``x(0) = 1/2``, ``z(0) = 1``) on ``[0, 1]``, non-commuting, with
+    three triple-integral terms, against its exact solution ``z = exp(mu t + int x
+    dW_2 - (1/2) int x^2 dt)`` computed from the path's cells; and ``dx = -x/2 dt
+    + cos(y) dW_1``, ``dy = -y/2 dt + cos(x) dW_2`` against srk3 at ``h = 2^-11`` on
+    the same path. Mean error over 200 paths of an
+    :class:`~.iterated_integrals.IteratedIntegralPath` on ``2^-12``, every step
+    size reading the same path; Milstein (Levy areas from the same path) alongside:
+
+    ====== ============ ============ ==============
+    h      z, srk3      cos, srk3    z, Milstein
+    ====== ============ ============ ==============
+    1/8    5.84e-02     9.41e-03     1.27e-01
+    1/16   2.17e-02     3.70e-03     6.87e-02
+    1/32   8.20e-03     1.25e-03     3.85e-02
+    1/64   4.36e-03     4.51e-04     2.19e-02
+    1/128  1.19e-03     1.72e-04     1.12e-02
+    1/256  3.65e-04     6.05e-05     5.12e-03
+    slope  1.43         1.46         0.91
+    ====== ============ ============ ==============
+
+    ``z`` is lognormal and its mean error is carried by a few paths (local slopes
+    0.9 to 1.9); the cosine system, whose errors are not heavy-tailed, shows the
+    order cleanly.
+
+    A single variable with vector noise is integrated by (11.2.1) itself, the code
+    path it always took, number for number.
 
     **Stratonovich.** A Stratonovich equation is integrated as the Ito equation with
     drift ``a + (1/2) b b'`` (see
@@ -100,22 +162,111 @@ class SRK3Solver(StochasticRungeKuttaSolver):
     """
 
     def __init__(self, solver_config: SRK3Config, wiener: WienerSource | None = None):
-        super().__init__(solver_config=solver_config, wiener=wiener)
+        # The default source gives the increments GaussianWienerSource gives for
+        # the seed, so a scalar run is unchanged, and the triple integrals too.
+        super().__init__(
+            solver_config=solver_config,
+            wiener=wiener or GaussianIteratedIntegralSource(solver_config.random_seed),
+        )
+        self._config = solver_config
 
-    def _check_dimension(self, dimension: int) -> None:
-        if dimension != 1:
+    def solve(
+        self,
+        equation: DifferentialEquation,
+        initial_values: list[float],
+    ) -> Curve:
+        config = self._config
+        coefficients = ItoCoefficients(equation, config.calculus)
+        y = np.array(initial_values, dtype=float)
+        diffusion = coefficients.diffusion(y, config.start_time)
+        if y.size == 1 and not ItoCoefficients.is_matrix(diffusion):
+            return super().solve(equation, initial_values)
+        if not isinstance(self._wiener, IteratedIntegralSource):
             message = (
-                "SRK3Solver is the scalar-noise scheme of Kloeden-Platen (11.2.1); "
-                f"it was asked to integrate {dimension} variables. Its order 1.5 "
-                "for several noise channels needs the triple integrals I_(j,k,l) "
-                "across channels, which are not sampled (the Levy areas are, since "
-                "DEQ-36), and a several-channel form of its supporting values, so "
-                "systems are refused rather than integrated at an unknown order. "
-                "Use MilsteinSolver (strong order 1.0 for any matrix noise), "
-                "SRK2Solver (strong order 1.0 for diagonal noise whose coefficients "
-                "commute) or EulerMaruyamaSolver."
+                "SRK3Solver needs the triple integrals I_(j,k,l) for several noise "
+                f"channels, and {type(self._wiener).__name__} does not supply them. "
+                "Pass a GaussianIteratedIntegralSource or an IteratedIntegralPath "
+                "(iterated_integrals.py), or leave the source to the solver."
             )
-            raise ValueError(message)
+            raise ValueError(message)  # noqa: TRY004 (as every refusal here)
+        channels = coefficients.drivers(y, config.start_time)
+
+        self.solution = self._new_solution(equation)
+        self.solution.append([config.start_time, [0] * len(y), y.tolist()])
+        dt = config.dt
+        times = config.times
+        for i in range(len(times) - 1):
+            integrals = self._wiener.iterated_integrals(times[i], dt, channels)
+            y = self._channel_step(y, times[i], dt, coefficients, integrals)
+            self.solution.append([times[i + 1], [0] * len(y), y.tolist()])
+        return self.solution
+
+    @staticmethod
+    def _columns(diffusion: np.ndarray) -> np.ndarray:
+        """``G``, ``n x m``: the matrix as given, or ``diag(b)`` for a vector."""
+        if ItoCoefficients.is_matrix(diffusion):
+            return diffusion
+        return np.diag(diffusion)
+
+    @staticmethod
+    def _channel_step(
+        y: np.ndarray,
+        t: float,
+        h: float,
+        coefficients: ItoCoefficients,
+        integrals: IteratedIntegrals,
+    ) -> np.ndarray:
+        """One step of the several-channel scheme in the class docstring."""
+        columns = SRK3Solver._columns
+        root = np.sqrt(h)
+        drift = coefficients.drift(y, t)
+        g = columns(coefficients.diffusion(y, t))
+        channels = g.shape[1]
+        # Time is a state of drift one and no diffusion, so it moves by h / m too.
+        later = t + h / channels
+        base = y + drift * h / channels
+        plus = base[np.newaxis, :] + g.T * root  # plus[j] = Ups+^j
+        minus = base[np.newaxis, :] - g.T * root
+        drift_plus = np.array([coefficients.drift(p, later) for p in plus])
+        drift_minus = np.array([coefficients.drift(p, later) for p in minus])
+        g_plus = np.array([columns(coefficients.diffusion(p, later)) for p in plus])
+        g_minus = np.array([columns(coefficients.diffusion(p, later)) for p in minus])
+        # phi[j1, j2] = Ups+^j1 +- b^j2(Ups+^j1) sqrt(h); g_phi[j1, j2] = G there.
+        shift = np.swapaxes(g_plus, 1, 2) * root
+        g_phi_plus = np.array(
+            [
+                [
+                    columns(coefficients.diffusion(plus[j1] + s, later))
+                    for s in shift[j1]
+                ]
+                for j1 in range(channels)
+            ],
+        )
+        g_phi_minus = np.array(
+            [
+                [
+                    columns(coefficients.diffusion(plus[j1] - s, later))
+                    for s in shift[j1]
+                ]
+                for j1 in range(channels)
+            ],
+        )
+
+        delta_w = integrals.delta_w
+        delta_z = integrals.delta_z  # I_(j,0)
+        mixed = h * delta_w - delta_z  # I_(0,j)
+        # (b^j3(Phi+^(j1,j2)) - b^j3(Phi-^(j1,j2))) - (b^j3(Ups+^j2) - b^j3(Ups-^j2))
+        third = (g_phi_plus - g_phi_minus) - (g_plus - g_minus)[np.newaxis, :, :, :]
+        return (
+            y
+            + drift * h
+            + g @ delta_w
+            + (drift_plus - drift_minus).T @ delta_z / (2.0 * root)
+            + np.sum(drift_plus - 2.0 * drift + drift_minus, axis=0) * h / 4.0
+            + np.sum(g_plus - 2.0 * g + g_minus, axis=0) @ mixed / (2.0 * h)
+            + np.einsum("aij,aj->i", g_plus - g_minus, integrals.double) / (2.0 * root)
+            + np.einsum("abij,abj->i", third, integrals.triple) / (2.0 * h)
+        )
 
     @staticmethod
     def _step(
