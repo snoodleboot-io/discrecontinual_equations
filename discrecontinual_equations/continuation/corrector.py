@@ -94,7 +94,14 @@ class Corrector(ABC):
 
 
 class NewtonCorrector(Corrector):
-    """Newton on the bordered system with an injected constraint ``g``."""
+    """Newton on the bordered system with an injected constraint ``g``.
+
+    Complexity:
+        Per iteration, one Jacobian from the injected provider (``2n + 2``
+        residual evaluations for the finite-difference one) and one dense solve
+        of the ``(n + 1) x (n + 1)`` bordered system, ``O(n^3)``; ``O(n^2)``
+        memory.
+    """
 
     __slots__ = [
         "_jacobian",

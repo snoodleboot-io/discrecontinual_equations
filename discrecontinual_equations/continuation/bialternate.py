@@ -64,6 +64,13 @@ def bialternate_test_value(matrix: np.ndarray) -> float:
 
     References:
     - Guckenheimer, Myers & Sturmfels (1997), Theorem 3.1 (ii).
+
+    Complexity:
+        One ``O(m^3)`` eigenvalue solve plus the ``m (m - 1) / 2`` pair sums,
+        ``O(m^2)`` time and memory. The dense determinant this replaces was
+        ``O(m^4)`` to build and ``O(m^6)`` to factor (DEQ-46, per call on a random
+        Jacobian: slope 4.14 for ``m`` 8 to 64 before, 1.56 for ``m`` 8 to 128
+        after; 2.9 s against 0.04 s at ``m = 64`` and ``m = 128``).
     """
     dimension = matrix.shape[0]
     if dimension < _MINIMUM_DIMENSION:

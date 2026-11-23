@@ -43,6 +43,11 @@ class EulerSolver(Solver):
     References:
         Euler (1768), Problem 85, section 650. See ``docs/references.md``
         (Euler1768).
+
+    Complexity:
+        ``O(K (n + C_f))`` time and ``O(K n)`` memory for ``K`` steps, all of it
+        Python lists. Each ``solve`` builds a curve of its own, so solving the
+        same equation again costs the same and leaves the first curve as it was.
     """
 
     def __init__(self, solver_config: EulerConfig):

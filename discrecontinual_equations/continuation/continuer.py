@@ -21,7 +21,20 @@ from discrecontinual_equations.solver.solver import Solver
 
 
 class Continuer(Solver):
-    """Trace equilibria of an equation as one parameter varies."""
+    """Trace equilibria of an equation as one parameter varies.
+
+    Complexity:
+        Per accepted point, with ``n`` states, ``I`` corrector iterations and the
+        default collaborators: ``I + 1`` central-difference Jacobians of
+        ``2n + 2`` residual evaluations each (``2g + 2`` for ``g`` column groups
+        when a sparsity pattern is given), since inside :meth:`solve` the
+        tangent, branch-point and Hopf detectors and the point's stability share
+        the converged point's Jacobian through the builder's
+        :class:`~.jacobian.MemoizedJacobian`; and ``I + 3`` dense ``O(n^3)``
+        solves, determinants or eigenvalue problems, the Hopf test among them.
+        Memory is ``O(n^2)`` per point plus the stored branch. See
+        ``docs/development/complexity.md``.
+    """
 
     def __init__(
         self,

@@ -157,7 +157,14 @@ class ManifoldChart:
 
 
 class TaylorManifold:
-    """Compute an invariant-manifold chart order by order."""
+    """Compute an invariant-manifold chart order by order.
+
+    Complexity:
+        For order ``K``, manifold dimension ``d`` and ``M = C(d + K, d)``
+        monomials: ``K - 1`` field evaluations on series whose products visit
+        ``M^2`` term pairs (``O(K^3)`` for ``d = 1``, ``O(K^5)`` for ``d = 2``),
+        and one dense ``O(n^3)`` solve per monomial; ``O(n M)`` memory.
+    """
 
     __slots__ = ["_order"]
 

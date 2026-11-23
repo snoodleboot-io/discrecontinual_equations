@@ -78,6 +78,12 @@ class FiniteDifferenceJacobian(JacobianProvider):
         scaled per component by ``max(|x_j|, typx_j)``. SciPy 1.14.1,
         ``scipy/optimize/_numdiff.py``: the central relative step and the
         division by the width actually stepped. See ``docs/references.md``.
+
+    Complexity:
+        ``state_jacobian`` costs ``2n`` residual evaluations dense, or ``2g`` for
+        ``g`` column groups (a banded or ring field has ``g`` independent of
+        ``n``), and ``parameter_derivative`` two more. The result is a dense
+        ``n x n`` array either way, ``O(n^2)`` memory.
     """
 
     __slots__ = [

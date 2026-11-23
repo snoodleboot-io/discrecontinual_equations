@@ -44,7 +44,14 @@ class DeflationSettings:
 
 
 class DeflatedSolver:
-    """Locate distinct roots of a vector field by deflated Newton iteration."""
+    """Locate distinct roots of a vector field by deflated Newton iteration.
+
+    Complexity:
+        Per Newton iteration, with ``R`` roots already found: dense,
+        ``(n + 1)(C_f + R n)`` plus an ``O(n^3)`` solve; matrix-free,
+        ``g (C_f + R n)`` for ``g`` GMRES iterations and ``O(n)`` memory per
+        Krylov vector.
+    """
 
     __slots__ = ["_function", "_matrix_free", "_settings"]
 

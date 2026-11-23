@@ -18,7 +18,13 @@ _Scalar = complex | float | int
 
 
 class Jet:
-    """A truncated Taylor series in one variable with real or complex coefficients."""
+    """A truncated Taylor series in one variable with real or complex coefficients.
+
+    Complexity:
+        For order ``k``, ``+`` and ``-`` are ``O(k)`` and ``*`` and ``/`` are
+        ``O(k^2)`` Python operations; a product skips zero left coefficients, so
+        a degree-``p`` polynomial in a seed jet costs ``O(p k)``.
+    """
 
     __slots__ = ["_coefficients"]
 

@@ -169,6 +169,10 @@ class FixedStepConfig(SolverConfig):
         :class:`BrownianPath` read a whole number of cells at a time all assume
         it (DEQ-129). See :func:`uniform_grid`.
 
+        Complexity: rebuilt on every access, ``O(K)`` for ``K`` steps, so a
+        loop that indexes it once per step is ``O(K^2)``. Every solver reads it
+        once per solve.
+
         Raises:
             ValueError: If the span is not a whole number of steps, the step is
                 not positive, or ``end_time`` is before ``start_time``.
