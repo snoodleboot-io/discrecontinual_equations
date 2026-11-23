@@ -544,3 +544,63 @@ def test_a_commuting_vector_ensemble_with_a_source_holds_no_cubic_array():
 
     # Assert
     assert peak < _MOST_ENSEMBLE_BYTES
+
+
+class _OwnAreas(WienerSource):
+    """A source that makes its areas itself, never by a LevyAreaSampler."""
+
+    def __init__(self) -> None:
+        self._source = GaussianWienerSource(13)
+        self._generator = np.random.default_rng(13)
+
+    def increments(
+        self,
+        time: float,
+        step: float,
+        dimension: int,
+        *,
+        levy_area: bool = False,
+    ) -> WienerIncrements:
+        draw = self._source.increments(time, step, dimension)
+        area = None
+        if levy_area:
+            upper = np.triu(self._generator.standard_normal((dimension, dimension)), 1)
+            area = 0.5 * step * (upper - upper.T)
+        return WienerIncrements(
+            delta_w=draw.delta_w,
+            delta_z=draw.delta_z,
+            levy_area=area,
+        )
+
+
+@pytest.mark.parametrize("nan", [False, True], ids=["finite", "nan-path"])
+@pytest.mark.parametrize("noise", [DiagonalNoise, CrossVectorNoise])
+def test_with_a_source_the_ensemble_never_draws_areas_of_its_own(
+    noise,
+    nan,
+    monkeypatch,
+):
+    # Arrange: with a source, every area is the source's. The vector verdict
+    # taken before asking it must be the one the O(paths n) step then reaches -
+    # NaN included - or that step would fall through to the generator's sampler.
+    def refuse(*_args, **_kwargs):
+        message = "the ensemble drew areas of its own while given a source"
+        raise AssertionError(message)
+
+    monkeypatch.setattr(LevyAreaSampler, "sample", refuse)
+    config = MilsteinConfig(start_time=0.0, end_time=4 * _STEP, step_size=_STEP)
+    start = np.array([[0.3, -0.2], [0.1, 0.4], [-0.5, 0.2]])
+    if nan:
+        start[0, 0] = np.nan
+
+    # Act
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        final = (
+            StochasticEnsemble(config, scheme="milstein", wiener=_OwnAreas())
+            .solve(_equation(noise, 2), start)
+            .final
+        )
+
+    # Assert
+    assert np.all(np.isfinite(final[1:]))
