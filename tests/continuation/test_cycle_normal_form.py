@@ -18,6 +18,7 @@ from tests.continuation.cycle_oracles import (
     ShearedBautin,
     ShearedTakens,
     ThetaFlip,
+    ThetaFold,
     ThetaTorus,
 )
 
@@ -128,9 +129,9 @@ class TestTorus(TestCase):
         assert abs(sheared.real - 1.0238 / 1.19220) < 2e-3
 
 
-def _theta_cycle(field, start: tuple[float, float], period: float, intervals: int):
-    """The cycle through ``u = start[0], z = start[1]`` on ``theta = 0``, by DOP853."""
-    initial = [math.sqrt(1.0 + start[0]), 0.0, start[1]]
+def _theta_cycle(field, start: tuple[float, ...], period: float, intervals: int):
+    """The cycle through ``u = start[0]`` (and ``z = start[1]``) on ``theta = 0``."""
+    initial = [math.sqrt(1.0 + start[0]), 0.0, *start[1:]]
     run = solve_ivp(
         lambda _t, state: field.eval(list(state)),
         (0.0, period),
@@ -154,12 +155,22 @@ class TestIndependentReturnMap(TestCase):
     reduction (Kuznetsov, Elements, flip and Neimark-Sacker of maps), and the
     cycle's eigenfunction normalised as the code normalises it
     (``int_0^T |v|^2 = 1``, from DOP853 variational equations): then
-    ``c = -C_map / T`` and ``Re d = Re(conj(lambda) c_1) / T``. The same
-    pipeline gives the extended Bautin's exact ``b`` to ten figures. Neither
-    oracle has a symmetry, and both have ``a != 0``: the flip's ``-6 a A v``
-    term is 16% of ``c``, and ``-a int <v*, A v>`` turns ``Re d`` from
-    ``+0.0022`` to ``-0.0539``.
+    ``b = P''(u_0) q_u / (2 T)``, ``c = -C_map / T`` and
+    ``Re d = Re(conj(lambda) c_1) / T``. The same pipeline gives the extended
+    Bautin's exact ``b`` to ten figures. None of the three oracles has a
+    symmetry: ``int <phi*, A v>`` is ``-0.0138`` of ``b``; with ``a != 0`` the
+    flip's ``-6 a A v`` term is 16% of ``c``, and ``-a int <v*, A v>`` turns
+    ``Re d`` from ``+0.0022`` to ``-0.0539``.
     """
+
+    def test_b_on_the_theta_fold(self) -> None:
+        # b = P''(u0) q_u / (2 T): q the section projection of v(0), which
+        # solves (M - I) v(0) = -T f(0). The 2 A v term is -0.0138 of it here.
+        mu, u, period = 0.019397207750353255, -0.10363104477223115, 6.437240885338704
+        field = _field(ThetaFold, [mu, 0.0], 2)
+        states = _theta_cycle(field, (u,), period, 80)
+        b = CycleNormalForm(field, states, period).fold()
+        assert abs(b - 1.8285601067) < 2e-6 * 1.8285601067, b
 
     def test_c_on_the_theta_flip(self) -> None:
         m, u, z, period = (

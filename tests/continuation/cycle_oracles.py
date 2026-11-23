@@ -304,3 +304,21 @@ class ThetaTorus(DeterministicFunction):
         )
         speed = 1.0 + 0.4 * u + 0.3 * z + 0.2 * x + 0.1 * y
         return _theta_forced(x, y, u_rate, z_rate, speed)
+
+
+class ThetaFold(DeterministicFunction):
+    """A planar fold of cycles built as :class:`ThetaFlip`, with no symmetry.
+
+    ``du/dtheta = mu - u^2 + ...``: two cycles merge near ``mu = 0``, and the
+    speed depends on ``u``, which gives the double multiplier its Jordan block.
+    Unlike the rotated and sheared oracles, ``int <phi*, A v>`` does not vanish
+    here: it is ``-0.0138`` of ``b = 1.8286``.
+    """
+
+    def eval(self, point, time=None):  # noqa: ARG002 (base signature)
+        mu = self.parameters[0].value
+        x, y = point[0], point[1]
+        u = x * x + y * y - 1.0
+        u_rate = mu + 0.1 * y - u * u + 0.3 * x * u + 0.3 * y * u * u
+        speed = 1.0 + 0.5 * u + 0.2 * x + 0.1 * y + 0.3 * u * u
+        return _theta_forced(x, y, u_rate, 0.0, speed)[:2]
