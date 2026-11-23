@@ -100,7 +100,9 @@ PLANES = (
 # intervals, with the arclength doubled to cover the same span (which then
 # follows the wave down to a period of 62 at lambda = 0.370), but 0.24% on 20
 # intervals, the same 81 states: at T h = 1.7 per interval four points do not
-# make up for the mesh. The film ships under the default scheme.
+# make up for the mesh. The film ships under the default scheme. Since DEQ-105 a
+# Hermite-Simpson point reports the doubled-mesh estimate rather than the trivial
+# drift alone, and the worst reads 0.165%.
 INTERVALS = 80
 ARCLENGTH = 0.04
 STEPS_DOWN, STEPS_UP = 700, 60
