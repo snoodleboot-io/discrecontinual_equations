@@ -85,7 +85,7 @@ print(round(spectrum.exponents.sum(), 2))  # -13.67, the trace -41/3
 
 Viswanath (1998, Table 5.1) gives $0.90566$, $0$, $-14.57233$ for these
 parameters. The example runs only to $T = 100$, so its top exponent is still a few
-percent low; at $T = 200$ it reads $0.89$. The library's tests check it against
+percent low; at $T = 200$ it reads $0.87$. The library's tests check it against
 $0.906$. The *sum* is exact much sooner, because it is the
 time-average of the trace of $J$, here the constant $-41/3$.
 
