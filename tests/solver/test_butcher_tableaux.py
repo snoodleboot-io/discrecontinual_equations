@@ -216,7 +216,6 @@ class TestTableaux:
         ("tableau", "tolerance"),
         _cases(
             {
-                "cash_karp_54": "DEQ-138: the advancing row is order 4",
                 "dormand_prince_89": "DEQ-139: b8[7] typo, weights sum to 1 - 3.1e-7",
             },
         ),
@@ -234,7 +233,6 @@ class TestTableaux:
         ("tableau", "tolerance"),
         _cases(
             {
-                "cash_karp_54": "DEQ-138: the embedded row is order 5",
                 "dormand_prince_89": "DEQ-139: the embedded row is order 7, not 9",
             },
         ),
