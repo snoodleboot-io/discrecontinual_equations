@@ -69,24 +69,37 @@ class ZhanDuanLiLiSolver(Solver):
     ``(theta - 1/2) c (dW^2 - h)`` has mean zero but size ``h`` per step, so the
     strong order is 0.5. The weak order is 1.0 for every ``theta``.
 
-    Measured on GBM ``dX = X dt + 0.5 X dW``, ``X(0) = 1``, ``T = 1``: strong
-    order against the closed form on 200 shared Brownian paths, weak order
-    against the exact mean on 20000 paths, ``h = 2^-3 ... 2^-7``:
+    Measured on ``dX = X dW``, ``X(0) = 1``, ``T = 1``, with 4000 Brownian
+    paths shared by ``h = 2^-3 ... 2^-7``. The strong error ``E|X_h(1) - X(1)|``
+    is taken against the closed form, ``exp(W(1) - 1/2)`` (Ito) or
+    ``exp(W(1))`` (Stratonovich). The weak error is ``|E[X_h(1) - X(1)]|`` on
+    the same paths. The last column is the slope of the weak error computed
+    exactly from the scheme's mean, ``(1 + f h + theta h + theta f^2 h^2)^(1/h)``
+    with ``f = kappa - theta``, against ``E X(1) = 1`` or ``e^(1/2)``:
 
-    ======== ============ ======== ========
-    theta    calculus     strong   weak
-    ======== ============ ======== ========
-    0.5      Ito          1.00     1.01
-    0.5      Stratonovich 1.00     1.00
-    1.0      Ito          0.52     1.00
-    1.0      Stratonovich 0.51     1.01
-    ======== ============ ======== ========
+    ======== ============ ======== ======== ==============
+    theta    calculus     strong   weak     weak, exact
+    ======== ============ ======== ======== ==============
+    0.5      Ito          0.95     1.02     1.00
+    0.5      Stratonovich 0.93     0.97     0.98
+    1.0      Ito          0.65     1.04     1.02
+    1.0      Stratonovich 0.58     0.89     0.97
+    ======== ============ ======== ======== ==============
+
+    At ``theta = 1`` the strong slopes are still falling towards 0.5 (between
+    successive step sizes 0.73, 0.66, 0.64, 0.57 for Ito). The Stratonovich
+    weak errors at ``theta = 1`` are within one standard error of zero at the
+    finest steps, which is why that row's Monte Carlo slope is low. Before
+    DEQ-133 the weak error on the Ito equation did not shrink: the step's mean
+    was ``(1 + theta h)^(1/h)``, 1.6471 at ``theta = 1/2`` and ``h = 2^-7``,
+    against 1.
 
     **Matrix noise.** ``diffusion()`` may return an ``n x m`` matrix ``G``. The
     increments then act as ``G dW`` with ``dW`` of length ``m``, and ``c`` sums
-    over the columns. The limit's drift is right for any ``G``. With
-    non-commuting noise the step has no Levy areas, so its strong order is 0.5
-    at every ``theta``.
+    over the columns. The limit's drift is right for any ``G``, which the tests
+    pin on ``dX = X dW_1 + X dW_2``. With non-commuting noise the step has no
+    Levy areas, so its strong order should be 0.5 at every ``theta``; that case
+    is not measured here.
 
     **The name.** The solver keeps its historical name. arXiv:2010.07691 by Zhan,
     Duan, Li and Li, which the docstring cited before DEQ-133, is a symplectic

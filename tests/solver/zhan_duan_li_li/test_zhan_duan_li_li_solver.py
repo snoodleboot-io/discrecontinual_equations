@@ -395,3 +395,77 @@ class TestZhanDuanLiLiCalculus:
             for c in ("ito", "stratonovich")
         ]
         np.testing.assert_array_equal(finals[0], finals[1])
+
+
+class _TimeNoise(StochasticFunction):
+    """``dX = t dt + t dW``: drift and additive noise that depend on time alone."""
+
+    def __init__(self, variables, time):
+        super().__init__(variables, [], [Variable(name="dX/dt")], time)
+
+    def eval(self, point, time=None):
+        return [time]
+
+    def diffusion(self, point, time=None):
+        return [time]
+
+
+class TestZhanDuanLiLiStep:
+    @pytest.mark.parametrize("theta", [0.25, 0.5, 1.0])
+    @pytest.mark.parametrize("calculus", ["ito", "stratonovich"])
+    def test_geometric_brownian_motion_step_is_the_written_scheme(
+        self, theta, calculus
+    ):
+        # For dX = mu X dt + sigma X dW the step multiplies X by
+        # R = 1 + f h + theta f h (f h + sigma dW) + sigma dW
+        #     + theta sigma dW (f h + sigma dW),
+        # f = mu + (kappa - theta) sigma^2, written out from the scheme's two
+        # stages. Iterated over the path's own increments it is the solver's
+        # path to the central differences' accuracy; the weights, the time each
+        # stage reads and where the correction is evaluated all enter R.
+        mu, sigma, step = 0.3, 0.8, 2.0**-3
+        kappa = 0.5 if calculus == "stratonovich" else 0.0
+        f = mu + (kappa - theta) * sigma**2
+        path = BrownianPath.sample(0.0, 1.0, step, 1, seed=21)
+        expected = [1.0]
+        for dw in np.diff(path.values[:, 0]):
+            stage = f * step + sigma * dw
+            ratio = 1 + f * step + theta * f * step * stage
+            expected.append(
+                expected[-1] * (ratio + sigma * dw + theta * sigma * dw * stage)
+            )
+        case = GeometricBrownianMotionCase(mu=mu, sigma=sigma, calculus=calculus)
+        config = ZhanDuanLiLiConfig(
+            method_parameter=theta, step_size=step, calculus=calculus
+        )
+        solver = ZhanDuanLiLiSolver(config, wiener=path)
+        solver.solve(case.equation(), [1.0])
+        np.testing.assert_allclose(
+            solver.solution.results[0].discretization, expected, rtol=1e-8
+        )
+
+    @pytest.mark.parametrize("theta", [0.25, 1.0])
+    def test_the_predicted_point_is_read_at_the_end_of_the_step(self, theta):
+        # dX = t dt + t dW: each step adds ((1 - theta) t_n + theta t_{n+1})
+        # (h + dW_n), so the time each stage reads is pinned for both terms.
+        step = 2.0**-3
+        path = BrownianPath.sample(0.0, 1.0, step, 1, seed=22)
+        times = np.arange(9) * step
+        weights = (1 - theta) * times[:-1] + theta * times[1:]
+        expected = np.concatenate(
+            [[0.0], np.cumsum(weights * (step + np.diff(path.values[:, 0])))]
+        )
+        time = Variable(name="t", discretization=[])
+        variables = [Variable(name="X", discretization=[])]
+        equation = DifferentialEquation(
+            variables=variables,
+            time=time,
+            parameters=[],
+            derivative=_TimeNoise(variables, time),
+        )
+        config = ZhanDuanLiLiConfig(method_parameter=theta, step_size=step)
+        solver = ZhanDuanLiLiSolver(config, wiener=path)
+        solver.solve(equation, [0.0])
+        np.testing.assert_allclose(
+            solver.solution.results[0].discretization, expected, atol=1e-12
+        )
