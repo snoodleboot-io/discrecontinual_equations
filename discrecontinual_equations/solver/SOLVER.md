@@ -17,7 +17,7 @@ Solver (Abstract Base)
 │   ├── CashKarpSolver
 │   ├── FehlbergSolver
 │   ├── DormandPrinceSolver
-│   └── DormandPrince89Solver
+│   └── PrinceDormand87Solver
 └── Stochastic Solvers
     ├── EulerMaruyamaSolver
     ├── MilsteinSolver
@@ -95,11 +95,11 @@ class SolverConfig(BaseModel):
 - **Error Estimation**: Local truncation error control
 - **Reference**: Dormand & Prince (1980)
 
-#### Dormand-Prince (8,9)
-- **Embedded Pair**: 8th/9th order Runge-Kutta
+#### Prince-Dormand 8(7)
+- **Embedded Pair**: 8th order to advance, 7th embedded (formerly misnamed 8(9))
 - **Stages**: 13 function evaluations per step
 - **Error Estimation**: Local truncation error control
-- **Reference**: Dormand & Prince (1987)
+- **Reference**: Prince & Dormand (1981)
 
 ## Stochastic Solvers (SDEs)
 
@@ -238,7 +238,7 @@ solver.solve(stochastic_equation, [0.0])
 | Problem Type | Recommended Methods | Key Features |
 |-------------|-------------------|--------------|
 | **Simple ODEs** | Euler, Adams-Bashforth | Fast execution, lower accuracy |
-| **High-Accuracy ODEs** | Dormand-Prince (8,9) | Very accurate, computationally expensive |
+| **High-Accuracy ODEs** | Prince-Dormand 8(7) | Very accurate, computationally expensive |
 | **Stiff ODEs** | Adaptive Runge-Kutta | Automatic step size control |
 | **Basic SDEs** | Euler-Maruyama | Fundamental stochastic method |
 | **Accurate SDEs** | SRK2, Milstein | Higher-order stochastic methods |
@@ -502,7 +502,7 @@ solver.solve(DifferentialEquation(variables=[x], derivative=BrownianMotion(varia
 |-------------|-------------------|-------|
 | Simple ODEs | Euler, Adams-Bashforth | Fast, but lower accuracy |
 | Stiff ODEs | Adaptive Runge-Kutta | Automatic step size control |
-| High Accuracy | Dormand-Prince (8,9) | Expensive but very accurate |
+| High Accuracy | Prince-Dormand 8(7) | Expensive but very accurate |
 | SDEs | Euler-Maruyama | Specialized for stochastic problems |
 | Educational | Euler | Simple to understand |
 
@@ -538,7 +538,7 @@ The implementations are based on the original research papers and established nu
 - **Cash-Karp (4,5)**: Cash, J.R. and Karp, A.H. (1978) - ACM Transactions on Mathematical Software
 - **Fehlberg (4,5)**: Fehlberg, Erwin (1968) - NASA Technical Report R-287
 - **Dormand-Prince (5,4)**: Dormand, J.R. and Prince, P.J. (1980) - Journal of Computational and Applied Mathematics
-- **Dormand-Prince (8,9)**: Dormand, J.R. and Prince, P.J. (1987) - Computational Mathematics with Applications
+- **Prince-Dormand 8(7)**: Prince, P.J. and Dormand, J.R. (1981) - High order embedded Runge-Kutta formulae, J. Comput. Appl. Math. 7(1):67-75
 - **Euler-Maruyama**: Maruyama, Gisiro (1955) - Rendiconti del Circolo Matematico di Palermo
 
 ### Reference Books

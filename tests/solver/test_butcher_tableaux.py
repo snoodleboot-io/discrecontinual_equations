@@ -48,19 +48,19 @@ from discrecontinual_equations.solver.deterministic.dormand_prince.dormand_princ
     DORMAND_PRINCE_54,
     DormandPrinceSolver,
 )
-from discrecontinual_equations.solver.deterministic.dormand_prince89.dormand_prince89_config import (
-    DormandPrince89Config,
-)
-from discrecontinual_equations.solver.deterministic.dormand_prince89.dormand_prince89_solver import (
-    DORMAND_PRINCE_89,
-    DormandPrince89Solver,
-)
 from discrecontinual_equations.solver.deterministic.fehlberg.fehlberg_config import (
     FehlbergConfig,
 )
 from discrecontinual_equations.solver.deterministic.fehlberg.fehlberg_solver import (
     FEHLBERG_45,
     FehlbergSolver,
+)
+from discrecontinual_equations.solver.deterministic.prince_dormand87.prince_dormand87_config import (
+    PrinceDormand87Config,
+)
+from discrecontinual_equations.solver.deterministic.prince_dormand87.prince_dormand87_solver import (
+    PRINCE_DORMAND_87,
+    PrinceDormand87Solver,
 )
 from discrecontinual_equations.solver.stochastic.srk2.srk2_config import SRK2Config
 from discrecontinual_equations.solver.stochastic.srk2.srk2_solver import SRK2Solver
@@ -184,7 +184,7 @@ TABLEAUX = {
     "dormand_prince_54": (DORMAND_PRINCE_54, Fraction(0)),
     "cash_karp_54": (CASH_KARP_54, Fraction(0)),
     "fehlberg_45": (FEHLBERG_45, Fraction(0)),
-    "dormand_prince_89": (DORMAND_PRINCE_89, Fraction(1, 10**16)),
+    "prince_dormand_87": (PRINCE_DORMAND_87, Fraction(1, 10**16)),
 }
 
 
@@ -215,9 +215,7 @@ class TestTableaux:
     @pytest.mark.parametrize(
         ("tableau", "tolerance"),
         _cases(
-            {
-                "dormand_prince_89": "DEQ-139: b8[7] typo, weights sum to 1 - 3.1e-7",
-            },
+            {},
         ),
     )
     def test_advancing_row_has_exactly_its_order(
@@ -232,9 +230,7 @@ class TestTableaux:
     @pytest.mark.parametrize(
         ("tableau", "tolerance"),
         _cases(
-            {
-                "dormand_prince_89": "DEQ-139: the embedded row is order 7, not 9",
-            },
+            {},
         ),
     )
     def test_embedded_row_has_exactly_its_order(
@@ -253,11 +249,11 @@ class TestTableaux:
             (CashKarpSolver, CashKarpConfig, CASH_KARP_54, "b5", "b4"),
             (FehlbergSolver, FehlbergConfig, FEHLBERG_45, "b5", "b4"),
             (
-                DormandPrince89Solver,
-                DormandPrince89Config,
-                DORMAND_PRINCE_89,
+                PrinceDormand87Solver,
+                PrinceDormand87Config,
+                PRINCE_DORMAND_87,
                 "b8",
-                "b9",
+                "b7",
             ),
         ],
     )
