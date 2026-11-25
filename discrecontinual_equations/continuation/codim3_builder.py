@@ -5,6 +5,33 @@ curve), the driver builds the augmented cusp-curve residual, continues it with t
 ordinary engine via :meth:`ContinuerBuilder.assemble`, and scans the result for
 swallowtail points. Strategies are resolved from the registry; the driver imports
 abstractions and orchestration only.
+
+Despite the name, three curves are supported (``Codim3Config.codim3_curve``):
+
+- ``cusp``: the minimally augmented fold system plus the vanishing of the
+  quadratic fold coefficient, scanned for a swallowtail (cubic coefficient zero);
+- ``generalized_hopf``: the minimally augmented Hopf system plus ``l1 = 0``
+  (:mod:`.generalized_hopf_curve`), scanned for a degenerate Bautin point (the
+  second Lyapunov quantity changes sign);
+- ``bogdanov_takens``: the Jordan-chain system of a double zero eigenvalue.
+
+The cusp and generalized-Hopf systems supply their own Jacobians; the
+Bogdanov-Takens system is differenced. Borders of the minimally augmented systems
+are set from the seed's null vectors and adapted at accepted points.
+
+Limits: as for :mod:`.codim2_builder`, the seed must sit on the requested curve,
+and detection is by sign change between accepted points.
+
+References:
+- Govaerts, W., Kuznetsov, Yu. A. and Sijnave, B. "Continuation of codimension-2
+  equilibrium bifurcations in CONTENT", in *Numerical Methods for Bifurcation
+  Problems and Large-Scale Dynamical Systems*, IMA Vol. Math. Appl., Springer
+  (2000) 163-184, sections 6 and 7
+  (cusp and generalized-Hopf curves, minimally and maximally extended systems).
+- Govaerts, W., Kuznetsov, Yu. A., Meijer, H. G. E. et al. "MATCONT: Continuation
+  toolbox for ODEs in Matlab", manual for MatCont 7.1 (August 2019), sections 8.1 and
+  8.2: the minimally extended fold and Hopf systems the cusp and generalized-Hopf curves
+  are built on.
 """
 
 import numpy as np
@@ -29,7 +56,16 @@ _BOGDANOV_TAKENS = "bogdanov_takens_curve_residual"
 
 
 class Codim3Seed:
-    """A codim-2 point used to seed a three-parameter curve continuation."""
+    """A codim-2 point used to seed a three-parameter curve continuation.
+
+    Args:
+        state: The equilibrium at the codim-2 point.
+        parameter_a: The first active parameter there.
+        parameter_b: The second active parameter there; the third is the
+            configuration's ``initial_parameter``.
+        frequency: For a generalized-Hopf seed, the approximate ``omega``;
+            ``None`` otherwise.
+    """
 
     __slots__ = ["frequency", "parameter_a", "parameter_b", "state"]
 
@@ -47,7 +83,13 @@ class Codim3Seed:
 
 
 class Codim3Result:
-    """The continued cusp curve and the codim-3 points found along it."""
+    """The continued curve and the codim-3 points found along it.
+
+    Args:
+        curve: The augmented branch.
+        points: The located codim-3 points.
+        parameters: ``(p_a, p_b, p_c)`` decoded at every branch point.
+    """
 
     __slots__ = ["_curve", "_parameters", "_points"]
 
@@ -63,7 +105,7 @@ class Codim3Result:
 
     @property
     def curve(self) -> Branch:
-        """The continued cusp curve as an augmented branch."""
+        """The continued codim-2 curve as an augmented branch."""
         return self._curve
 
     @property
@@ -86,7 +128,21 @@ class Codim3Driver:
         equation: DifferentialEquation,
         seed: Codim3Seed,
     ) -> Codim3Result:
-        """Continue the cusp curve from ``seed`` and analyze it."""
+        """Continue the configured codim-2 curve from ``seed`` and analyze it.
+
+        Args:
+            config: Which curve, which three parameters, which detectors.
+            equation: The system; its parameters are moved during the run.
+            seed: A point of the configured codim-2 kind.
+
+        Returns:
+            The continued curve, the codim-3 points on it and the decoded
+            parameters along it.
+
+        Raises:
+            sweet_tea.sweet_tea_error.SweetTeaError: If the registry has not
+                been filled, or a configured key is unknown.
+        """
         third = equation.derivative.parameters[config.third_parameter_index]
         problem = Factory.create(
             "two_parameter_problem",

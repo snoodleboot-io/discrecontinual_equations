@@ -1,4 +1,16 @@
-"""Configuration for two-parameter continuation of a bifurcation curve."""
+"""Configuration for two-parameter continuation of a bifurcation curve.
+
+The fields select the curve (fold or Hopf), the two active parameters, the codim-2
+test functions to scan along it, and corrector settings relaxed for the augmented
+system. The detectors are those MatCont runs on the same curves: Bogdanov-Takens,
+zero-Hopf and cusp along a fold curve; Bogdanov-Takens, zero-Hopf, double Hopf and
+generalized Hopf along a Hopf curve.
+
+References:
+- Govaerts, W., Kuznetsov, Yu. A., Meijer, H. G. E. et al. "MATCONT: Continuation
+  toolbox for ODEs in Matlab", manual for MatCont 7.1 (August 2019), sections 8.1.2 and
+  8.2.2: the codim-2 points detected along fold and Hopf curves.
+"""
 
 from typing import Literal
 
