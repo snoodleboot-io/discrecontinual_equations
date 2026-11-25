@@ -857,6 +857,24 @@ continuation corrector's system, either pseudo-arclength or natural parameter.
 
 ::: discrecontinual_equations.continuation.parameterization
 
+The Lorenz row's reference spectrum is Viswanath's (Ph.D. thesis, Cornell, 1998,
+Table 5.1: `0.90566, 0, -14.57233`). The concepts, worked examples and limits are
+on the [Lyapunov exponents and noise](../user-guide/lyapunov-noise.md) page, and
+the sources on the [References](../references.md#lyapunov-exponents-covariant-vectors-and-noise)
+page.
+
+## Lyapunov exponents and stochastic bifurcation
+
+::: discrecontinual_equations.continuation.lyapunov
+
+::: discrecontinual_equations.continuation.covariant_lyapunov
+
+::: discrecontinual_equations.continuation.noise
+
+::: discrecontinual_equations.continuation.stochastic
+
+::: discrecontinual_equations.continuation.stochastic_threshold
+
 ## Continuation
 
 ::: discrecontinual_equations.continuation
