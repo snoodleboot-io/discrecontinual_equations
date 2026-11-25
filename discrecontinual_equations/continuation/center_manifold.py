@@ -14,6 +14,44 @@ delegating each degree to a :class:`HomologicalEquation`; and
 :class:`ReducedField` substitutes the manifold back to obtain the normalised
 planar field. :class:`TaylorCenterManifold` composes them and hands the reduced
 field to the verified planar recursion.
+
+The method: after the linear change of coordinates ``x = x0 + T (u, v)``, with ``u``
+the two centre coordinates and ``v`` the hyperbolic ones, the centre manifold is a
+graph ``v = W(u)`` with ``W`` of order two. Invariance of the graph,
+
+    DW(u) . f_c(u, W(u)) = f_h(u, W(u)),
+
+is solved degree by degree up to six: the degree-``m`` part of ``W`` satisfies the
+linear homological equation ``DW_m . A_c u - A_h W_m = (known terms)``, which is
+uniquely solvable because ``A_h`` has no eigenvalue on the imaginary axis (no
+resonance with ``+-i omega``). Substituting ``W`` into the centre rows gives the
+planar field whose Lyapunov-function recursion (:mod:`.focal`) yields the focal
+values ``eta4`` and ``eta6``. This is the graph-style counterpart of the projection
+method of Kuznetsov (1999), section 4, where the manifold and the normal form are
+found together from the homological equation (4.4); here the normal form is left
+to the planar recursion.
+
+Limits:
+
+- Hopf points only: exactly one pair ``+-i omega`` with ``omega > 0`` is taken as
+  critical (the one with the smallest real part), and every other eigenvalue must
+  be off the imaginary axis. A second critical pair, or a zero eigenvalue, makes
+  the homological operator singular.
+- The truncation is degree six, enough for ``eta4`` and ``eta6`` and no further.
+- The focal values are for the centre coordinates the eigenvector split produces,
+  so ``eta4`` scales with the square, and ``eta6`` with the fourth power, of that
+  basis's scale. Their signs, and ``eta6`` where ``eta4 = 0``, are what the
+  detectors use; the raw numbers are not invariants. On a coupled 3D Hopf point
+  ``eta4 = l1 / 4`` to ``1e-9`` (see the validation table in the API page).
+- The field must propagate the library's truncated-series arithmetic (no NumPy
+  transcendental calls on the state).
+
+References:
+- Kuznetsov, Yu. A. "Numerical normalization techniques for all codim 2
+  bifurcations of equilibria in ODE's", SIAM J. Numer. Anal. 36(4) (1999)
+  1104-1124, doi:10.1137/S0036142998335005: section 4, eqs. (4.1)-(4.5), the
+  homological equation and its order-by-order solution; eq. (2.5), the first
+  Lyapunov coefficient ``eta4`` is compared with.
 """
 
 from abc import ABC, abstractmethod
@@ -32,7 +70,12 @@ _PLANAR_DIMENSION = 2
 
 
 class CoordinateSplit:
-    """A linear change of coordinates separating center from hyperbolic parts."""
+    """A linear change of coordinates separating center from hyperbolic parts.
+
+    Args:
+        transform: Columns: the two center basis vectors, then the hyperbolic ones.
+        frequency: The critical frequency ``omega``.
+    """
 
     __slots__ = ["_frequency", "_inverse", "_transform"]
 
@@ -72,14 +115,39 @@ class SpectralSplit(ABC):
 
     @abstractmethod
     def split(self, jacobian: np.ndarray) -> CoordinateSplit:
-        """Return the coordinate split induced by the Jacobian at the point."""
+        """Return the coordinate split induced by the Jacobian at the point.
+
+        Args:
+            jacobian: The state Jacobian at the Hopf point.
+
+        Returns:
+            The center-then-hyperbolic coordinate split.
+        """
         raise NotImplementedError
 
 
 class EigenvalueSplit(SpectralSplit):
-    """Split using the eigenvectors of the Jacobian."""
+    """Split using the eigenvectors of the Jacobian.
+
+    The center pair is the eigenvalue with positive imaginary part nearest the
+    imaginary axis; its eigenvector ``q`` gives the basis ``(Re q, -Im q)``, in which
+    the linear part is the rotation ``omega (-v, u)``. Every other real eigenvector,
+    and the real and imaginary parts of every other complex one, are the hyperbolic
+    basis.
+    """
 
     def split(self, jacobian: np.ndarray) -> CoordinateSplit:
+        """Split at the eigenvalue pair nearest the imaginary axis.
+
+        Args:
+            jacobian: The state Jacobian at the Hopf point.
+
+        Returns:
+            The coordinate split.
+
+        Raises:
+            ValueError: If no eigenvalue has a positive imaginary part.
+        """
         values, vectors = np.linalg.eig(jacobian)
         dimension = jacobian.shape[0]
         critical = self._critical(values, dimension)
@@ -126,7 +194,13 @@ class EigenvalueSplit(SpectralSplit):
 
 
 class SplitField:
-    """The vector field in split coordinates, as truncated series."""
+    """The vector field in split coordinates, as truncated series.
+
+    Args:
+        center: The two center rows, as series in all coordinates.
+        hyperbolic: The hyperbolic rows.
+        block: The linear part ``A_h`` of the hyperbolic rows.
+    """
 
     __slots__ = ["_block", "_center", "_hyperbolic"]
 
@@ -162,7 +236,14 @@ class SplitField:
 
 
 class FieldExpansion:
-    """Expand a vector field in split coordinates as multivariate series."""
+    """Expand a vector field in split coordinates as multivariate series.
+
+    Args:
+        function: The vector field.
+        equilibrium: The Hopf point ``x0``.
+        split: The coordinates to expand in.
+        time: The time the field is evaluated at.
+    """
 
     __slots__ = ["_equilibrium", "_function", "_split", "_time"]
 
@@ -179,6 +260,7 @@ class FieldExpansion:
         self._time = time
 
     def expand(self) -> SplitField:
+        """Return the field's degree-six Taylor series in split coordinates."""
         rows = self._rows()
         center = rows[:_PLANAR_DIMENSION]
         hyperbolic = rows[_PLANAR_DIMENSION:]
@@ -217,7 +299,11 @@ class FieldExpansion:
 
 
 class CenterCoordinates:
-    """The two center coordinates as seed series, shared across the pipeline."""
+    """The two center coordinates as seed series, shared across the pipeline.
+
+    Args:
+        order: The truncation degree of the series.
+    """
 
     __slots__ = ["_order"]
 
@@ -242,6 +328,11 @@ class HomologicalEquation:
     The operator ``P -> DP . A_c u - A_h P`` is invertible because the hyperbolic
     block ``A_h`` has no eigenvalues on the imaginary axis, so each order is a
     unique solve.
+
+    Args:
+        frequency: The critical frequency ``omega``.
+        block: The hyperbolic linear part ``A_h``.
+        degree: The degree ``m`` solved for.
     """
 
     __slots__ = ["_block", "_degree", "_frequency", "_hyperbolic_dimension"]
@@ -253,7 +344,18 @@ class HomologicalEquation:
         self._hyperbolic_dimension = block.shape[0]
 
     def solve(self, residual: list[Bivariate]) -> list[Bivariate]:
-        """Return the degree-``m`` manifold terms that cancel the residual."""
+        """Return the degree-``m`` manifold terms that cancel the residual.
+
+        Args:
+            residual: The invariance residual, one series per hyperbolic row.
+
+        Returns:
+            The degree-``m`` terms of ``W``, one series per hyperbolic row.
+
+        Raises:
+            numpy.linalg.LinAlgError: If the operator is singular, i.e. ``A_h``
+                has an eigenvalue ``i k omega`` resonant at this degree.
+        """
         basis = [(a, self._degree - a) for a in range(self._degree + 1)]
         operator = self._operator(basis)
         right = self._right_hand_side(residual, basis)
@@ -314,7 +416,13 @@ class HomologicalEquation:
 
 
 class ManifoldExpansion:
-    """Solve the center manifold as a Taylor series, order by order."""
+    """Solve the center manifold as a Taylor series, order by order.
+
+    Args:
+        field: The field in split coordinates.
+        frequency: The critical frequency ``omega``.
+        coordinates: The shared center-coordinate seeds.
+    """
 
     __slots__ = ["_coordinates", "_field", "_frequency"]
 
@@ -329,6 +437,7 @@ class ManifoldExpansion:
         self._coordinates = coordinates
 
     def expand(self) -> list[Bivariate]:
+        """Return ``W``, degrees two to six, one series per hyperbolic row."""
         hyperbolic = self._field.hyperbolic_dimension
         manifold = [Bivariate({}, _ORDER) for _ in range(hyperbolic)]
         for degree in range(_PLANAR_DIMENSION, _ORDER + 1):
@@ -354,7 +463,14 @@ class ManifoldExpansion:
 
 
 class ReducedField:
-    """Substitute the manifold into the center rows and normalise to rotation."""
+    """Substitute the manifold into the center rows and normalise to rotation.
+
+    Args:
+        field: The field in split coordinates.
+        manifold: The solved graph ``W``.
+        frequency: The critical frequency, divided out of time.
+        coordinates: The shared center-coordinate seeds.
+    """
 
     __slots__ = ["_coordinates", "_field", "_frequency", "_manifold"]
 
@@ -400,12 +516,30 @@ class CenterManifold(ABC):
         jacobian: np.ndarray,
         time: float,
     ) -> tuple[float, float]:
-        """Return the first and second Lyapunov quantities at the Hopf point."""
+        """Return the first and second Lyapunov quantities at the Hopf point.
+
+        Args:
+            function: The vector field.
+            equilibrium: The Hopf point.
+            jacobian: The state Jacobian there.
+            time: The time the field is evaluated at.
+
+        Returns:
+            The focal values ``(eta4, eta6)``.
+        """
         raise NotImplementedError
 
 
 class TaylorCenterManifold(CenterManifold):
-    """Center manifold as a truncated Taylor series, reduced to the plane."""
+    """Center manifold as a truncated Taylor series, reduced to the plane.
+
+    Args:
+        splitter: How to choose the center and hyperbolic coordinates; the
+            eigenvector split by default.
+
+    References:
+    - Kuznetsov (1999), section 4.
+    """
 
     __slots__ = ["_coordinates", "_splitter"]
 
@@ -420,6 +554,18 @@ class TaylorCenterManifold(CenterManifold):
         jacobian: np.ndarray,
         time: float,
     ) -> tuple[float, float]:
+        """Reduce to the center manifold and return its focal values.
+
+        Args:
+            function: The vector field.
+            equilibrium: The Hopf point.
+            jacobian: The state Jacobian there.
+            time: The time the field is evaluated at.
+
+        Returns:
+            ``(eta4, eta6)``: the first focal value (negative for a supercritical
+            Hopf) and the second (meaningful where the first vanishes).
+        """
         split = self._splitter.split(jacobian)
         field = FieldExpansion(function, equilibrium, split, time).expand()
         manifold = ManifoldExpansion(

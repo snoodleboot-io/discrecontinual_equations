@@ -5,6 +5,29 @@ driver builds the augmented curve residual, continues it with the ordinary engin
 (via :meth:`ContinuerBuilder.assemble`), and scans the result for codim-2 points.
 Strategies (residual, test functions, helpers) are resolved from the registry;
 the driver imports abstractions and orchestration only.
+
+The idea: a fold or a Hopf point is codimension one, so with two free parameters it
+lies on a curve. Appending to ``f(u, p) = 0`` the condition that makes the point
+singular (a null vector for a fold, an imaginary eigenpair for a Hopf) gives a
+square system in one more unknown than equations, which ordinary pseudo-arclength
+continuation follows. Along it, test functions that change sign at codim-2 points
+are evaluated at every accepted point and refined where they cross zero; the
+normal form at each point found (:mod:`.codim2_normal_form`) then says which
+unfolding it has.
+
+Limits: the seed must be close to a codim-1 point of the requested kind (for a Hopf
+seed, ``frequency`` picks the eigenvalue pair). Detection works by sign changes
+between accepted points, so two codim-2 points closer than a step apart can cancel,
+and a test function that touches zero without crossing is missed.
+
+References:
+- Govaerts, W., Kuznetsov, Yu. A., Meijer, H. G. E. et al. "MATCONT: Continuation
+  toolbox for ODEs in Matlab", manual for MatCont 7.1 (August 2019), sections 8.1 and
+  8.2: defining systems and codim-2 test functions on fold and Hopf curves.
+- Govaerts, W., Kuznetsov, Yu. A. and Sijnave, B. "Continuation of codimension-2
+  equilibrium bifurcations in CONTENT", in *Numerical Methods for Bifurcation
+  Problems and Large-Scale Dynamical Systems*, IMA Vol. Math. Appl., Springer
+  (2000) 163-184, sections 2-7.
 """
 
 import numpy as np
@@ -32,7 +55,15 @@ _FOLD_RESIDUAL = "fold_curve_residual"
 
 
 class CurveSeed:
-    """A codim-1 point used to seed a two-parameter curve continuation."""
+    """A codim-1 point used to seed a two-parameter curve continuation.
+
+    Args:
+        state: The equilibrium at the codim-1 point.
+        parameter_a: The value of the first active parameter there; the second
+            is the configuration's ``initial_parameter``.
+        frequency: For a Hopf seed, the approximate ``omega`` of the critical
+            pair (picks it from the spectrum); ``None`` for a fold.
+    """
 
     __slots__ = ["frequency", "parameter_a", "state"]
 
@@ -48,7 +79,13 @@ class CurveSeed:
 
 
 class Codim2Result:
-    """The continued curve and the codim-2 points found along it."""
+    """The continued curve and the codim-2 points found along it.
+
+    Args:
+        curve: The augmented branch.
+        points: The located codim-2 points.
+        parameters: ``(p_a, p_b, omega)`` decoded at every branch point.
+    """
 
     __slots__ = ["_curve", "_parameters", "_points"]
 
@@ -87,7 +124,22 @@ class Codim2Driver:
         equation: DifferentialEquation,
         seed: CurveSeed,
     ) -> Codim2Result:
-        """Continue the configured curve from ``seed`` and analyze it."""
+        """Continue the configured curve from ``seed`` and analyze it.
+
+        Args:
+            config: Which curve, which parameters, which detectors.
+            equation: The system; its parameters are moved during the run.
+            seed: A fold or Hopf point of ``equation``.
+
+        Returns:
+            The continued curve, the codim-2 points located on it (with their
+            normal-form ``classification`` and ``coefficients``) and the
+            decoded parameters along the curve.
+
+        Raises:
+            sweet_tea.sweet_tea_error.SweetTeaError: If the registry has not
+                been filled, or a configured key is unknown.
+        """
         problem = Factory.create(
             "two_parameter_problem",
             configuration={
