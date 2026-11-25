@@ -16,6 +16,33 @@ whose period instead diverges logarithmically (``T ~ -log|mu - mu_c|``) and whos
 returning the extrapolated critical parameter and how well the inverse-square-root
 law holds. The equilibria that emerge can be confirmed to lie on the former cycle
 with :func:`discrecontinual_equations.continuation.region_analysis.find_equilibria`.
+
+Why ``-1/2``: on the invariant circle, near the point where the saddle-node is about
+to form, the flow is ``x' = mu + x^2 + o(x^2)`` after a change of coordinate and
+parameter, and the orbit spends almost all of its period crossing that bottleneck,
+which takes ``pi / sqrt(mu)`` (Baesens and MacKay, section 1, eq. (2)). Only the
+distance to threshold enters, so the exponent is universal while the prefactor
+depends on the system.
+
+Limits:
+
+- The fit needs samples on one side of ``mu_c``, close enough for the leading term
+  to dominate. Far from threshold the higher-order terms bend the log-log line, and
+  the exponent drifts from ``-1/2``.
+- ``mu_c`` is searched for only *below* the smallest sampled parameter, from
+  ``4`` spans below it up to it. A branch whose period diverges as the parameter
+  *increases* must be passed with the parameter negated.
+- A good inverse-square-root fit is evidence, not proof: a homoclinic divergence
+  sampled over a narrow window can mimic a power law. Confirm that equilibria
+  appear on the former cycle.
+- The thresholds (``R^2 > 0.999``, ``|p + 1/2| < 0.08``) are heuristics, not
+  confidence levels.
+
+References:
+- Baesens, C. and MacKay, R. S. "Interaction of two systems with saddle-node
+  bifurcations on invariant circles. I. Foundations and the mutualistic case",
+  arXiv:1309.6954v1 (2013), section 1, eq. (2) and the sentence after it: the
+  period ``T(mu)`` is asymptotic to ``pi / sqrt(mu)``.
 """
 
 import numpy as np
@@ -27,7 +54,13 @@ _SEARCH_SAMPLES = 600
 
 
 class SnicCharacterization:
-    """The outcome of fitting the SNIC period-divergence law to a branch."""
+    """The outcome of fitting the SNIC period-divergence law to a branch.
+
+    Args:
+        critical_parameter: The extrapolated ``mu_c``.
+        exponent: The fitted power ``p`` of ``T ~ (mu - mu_c) ** p``.
+        linearity: ``R^2`` of the log-log fit at that ``mu_c``.
+    """
 
     __slots__ = ["_critical_parameter", "_exponent", "_linearity"]
 
@@ -87,6 +120,18 @@ def characterize_snic(
     ``mu_c`` is found by searching for the value that best linearises ``log T``
     against ``log(mu - mu_c)``; the fitted exponent ``p`` (``-1/2`` for a SNIC) and
     the fit quality separate a SNIC from a logarithmic homoclinic divergence.
+
+    Args:
+        parameters: Parameter values ``mu`` of the cycles, all on the side of
+            ``mu_c`` where the cycle exists and above it.
+        periods: The cycles' periods ``T``, positive, in the same order.
+
+    Returns:
+        The critical parameter, exponent and fit quality; see
+        :attr:`SnicCharacterization.is_inverse_square_root` for the verdict.
+
+    References:
+    - Baesens & MacKay (2013), arXiv:1309.6954v1, section 1: ``T ~ pi / sqrt(mu)``.
     """
     parameter = np.asarray(parameters, dtype=float)
     log_period = np.log(np.asarray(periods, dtype=float))

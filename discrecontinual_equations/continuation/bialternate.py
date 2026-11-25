@@ -16,6 +16,27 @@ cannot overflow), and its magnitude is replaced by the smallest factor
 does, is continuous, vanishes linearly at a simple crossing, and is measured in the
 units of the eigenvalues, so the localizer's value tolerance means the same thing at
 every dimension. For a planar system it equals the trace, as the determinant did.
+
+This is MatCont's Hopf test ``phi_2`` along an equilibrium curve (MatCont manual,
+eq. (36)), which borders ``2 f_u (.) I_n`` instead of reading its eigenvalues; both
+vanish where the determinant does. An earlier version of this module formed the
+matrix entry by entry and had a sign wrong against Guckenheimer, Myers & Sturmfels
+eq. (9), which moved or missed Hopf points of coupled systems with ``n >= 3``
+(DEQ-46). The eigenvalue reading has no such table to get wrong.
+
+Limits: the test vanishes at a neutral saddle (``lambda, -lambda`` real) as well as
+at a Hopf point, so a sign change is a *candidate* that the caller must confirm by
+looking for a purely imaginary pair (MatCont, section 6.3, makes the same remark).
+Two eigenvalue pairs crossing together cancel in the sign and are not seen.
+
+References:
+- Guckenheimer, J., Myers, M. and Sturmfels, B. "Computing Hopf bifurcations I",
+  SIAM J. Numer. Anal. 34(1) (1997) 1-21, doi:10.1137/S0036142993253461:
+  section 3, the bialternate-product definition, eq. (9) for ``2A (.) I`` and
+  Theorem 3.1 (ii), its eigenvalues ``lambda_i + lambda_j``.
+- Govaerts, W., Kuznetsov, Yu. A., Meijer, H. G. E. et al. "MATCONT: Continuation
+  toolbox for ODEs in Matlab", manual for MatCont 7.1 (August 2019), section 6.3,
+  eqs. (36)-(38): the Hopf test function and the neutral-saddle caveat.
 """
 
 import numpy as np
@@ -32,6 +53,17 @@ def bialternate_test_value(matrix: np.ndarray) -> float:
     part is the same and whose product with it is positive, so counting the
     factors with a negative real part counts each such conjugate pair twice and
     leaves the parity of the negative real factors.
+
+    Args:
+        matrix: The square state Jacobian ``A``.
+
+    Returns:
+        ``sign(det(2A (.) I)) * min_{i<j} |lambda_i + lambda_j|``; ``1.0`` for a
+        ``1 x 1`` matrix (there is no pair to cross), and ``nan`` when ``matrix``
+        has a non-finite entry.
+
+    References:
+    - Guckenheimer, Myers & Sturmfels (1997), Theorem 3.1 (ii).
     """
     dimension = matrix.shape[0]
     if dimension < _MINIMUM_DIMENSION:
