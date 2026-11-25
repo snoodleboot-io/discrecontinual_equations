@@ -14,9 +14,9 @@ page.
 Everything is written locally and nothing is uploaded. An example of the
 harvested kind rewrites the ``images`` directory beside its own source, and
 those files are tracked by git, so expect them to show as modified afterwards.
-The atlas is by far the longest to build - ``--list`` shows rough timings, and
-``--jobs`` runs examples at the same time, which is worth it when the atlas is
-in the set.
+The atlas is by far the longest to build - ``--list`` shows rough timings - and
+it spreads its own pages and films over every CPU, so it cannot finish before
+its largest film does. ``--jobs`` runs the other examples alongside it.
 """
 
 import argparse
