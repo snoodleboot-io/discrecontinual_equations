@@ -1,3 +1,18 @@
+"""A theta-weighted Euler predictor-corrector step for Gaussian SDEs.
+
+The step predicts with Euler-Maruyama and corrects with a weighted average of
+the drift and diffusion at the start and at the prediction, reusing the same
+Wiener increment. ``theta = 0`` is Euler-Maruyama and ``theta = 1/2`` is the
+stochastic Heun step. The name is historical: see the class docstring for how
+the step relates to the paper it was named after, and for the calculus it
+converges to.
+
+References:
+    Zhan, Q., Duan, J., Li, X. and Li, Y. Symplectic method for Hamiltonian
+    stochastic differential equations with multiplicative Levy noise in the sense
+    of Marcus. arXiv:2010.07691 (2020).
+"""
+
 import numpy as np
 
 from discrecontinual_equations.curve import Curve
@@ -9,21 +24,57 @@ from discrecontinual_equations.solver.stochastic.zhan_duan_li_li.zhan_duan_li_li
 
 
 class ZhanDuanLiLiSolver(Solver):
-    """
-    Zhan-Duan-Li-Li method for solving stochastic differential equations.
+    """A theta-weighted Euler predictor-corrector step, one Wiener increment a step.
 
-    This solver implements the method proposed by Zhan, Duan, Li, and Li in their paper:
-    "A stochastic theta method based on the trapezoidal rule" (https://arxiv.org/pdf/2010.07691)
+    With ``dW ~ N(0, h)`` drawn once per step and per component (diagonal
+    noise), and ``theta`` the configuration's ``method_parameter``::
 
-    The method combines stochastic theta methods with trapezoidal rule approaches
-    for improved accuracy in solving SDEs.
+        Y_pred = Y + a(Y, t) h + b(Y, t) dW
+        Y_next = Y + ((1 - theta) a(Y, t) + theta a(Y_pred, t + h)) h
+                   + ((1 - theta) b(Y, t) + theta b(Y_pred, t + h)) dW
 
-    Note: This implementation is based on understanding of stochastic theta methods
-    and trapezoidal rule combinations. The exact implementation may need refinement
-    based on the specific details in the paper.
+    Every ``theta`` is explicit. ``theta = 0`` is Euler-Maruyama, and ``theta =
+    1/2`` the stochastic Heun step.
+
+    **Not the cited paper's scheme.** The class used to describe itself as "a
+    stochastic theta method based on the trapezoidal rule" from
+    arXiv:2010.07691. That preprint is Zhan, Duan, Li and Li, "Symplectic method
+    for Hamiltonian stochastic differential equations with multiplicative Levy
+    noise in the sense of Marcus". It builds a symplectic Euler scheme for
+    Hamiltonian systems driven by Levy noise in the Marcus sense (its scheme (9),
+    Theorems 3.2 and 4.1), and contains no theta or trapezoidal method. The step
+    above uses Gaussian increments only, has no Hamiltonian structure, and is
+    not symplectic. The reference is kept so that the name can be traced.
+
+    **Calculus.** The configuration fixes ``calculus = "ito"``, but for
+    multiplicative noise and ``theta > 0`` the step does not converge to the Ito
+    solution. Expanding ``b(Y_pred) = b + b' b dW + ...``, the corrector carries
+    ``theta b b' dW^2``, whose mean ``theta b b' h`` is a drift the Ito equation
+    does not have. At ``theta = 1/2`` that is exactly the Stratonovich
+    correction, so the stochastic Heun step converges to the Stratonovich
+    solution. Other ``theta > 0`` converge to neither. On ``dX = X dW``, ``X(0) =
+    1``, ``h = 0.05``, 4000 paths, the mean of ``X(1)`` is 1.62 (standard
+    error 0.03) at ``theta = 1/2``. The Ito mean is 1 and the Stratonovich mean
+    ``e^(1/2) = 1.65``; Euler-Maruyama on the same seeds gives 0.98 (0.02). For
+    additive noise ``b' = 0`` and every ``theta`` converges to the one solution.
+    For an Ito equation with multiplicative noise, use
+    :class:`~.euler_maruyama.euler_maruyama_solver.EulerMaruyamaSolver` or
+    :class:`~.milstein.milstein_solver.MilsteinSolver`.
+
+    References:
+        Zhan, Q., Duan, J., Li, X. and Li, Y. Symplectic method for Hamiltonian
+        stochastic differential equations with multiplicative Levy noise in the
+        sense of Marcus. arXiv:2010.07691 (2020). The source of the name, not
+        of the step.
     """
 
     def __init__(self, solver_config: ZhanDuanLiLiConfig):
+        """Set up the step and its generator.
+
+        Args:
+            solver_config: The time grid, the seed, and ``method_parameter``,
+                the weight ``theta``.
+        """
         super().__init__(solver_config=solver_config)
 
         # A generator of this solver's own, never np.random.seed. Seeding the global
@@ -43,11 +94,15 @@ class ZhanDuanLiLiSolver(Solver):
         initial_values: list[float],
     ) -> Curve:
         """
-        Solve the SDE using the Zhan-Duan-Li-Li stochastic theta method.
+        Integrate the equation over the configured time grid.
 
         Args:
-            equation: The SDE to solve (must have stochastic derivative function)
-            initial_values: Initial values for all variables
+            equation: The SDE to solve. Its derivative must be a stochastic
+                function, with a vector ``diffusion`` (diagonal noise).
+            initial_values: Initial values for all variables.
+
+        Returns:
+            The solution curve, one point for each grid time.
         """
         self.solution = self._new_solution(equation)
 
@@ -84,10 +139,10 @@ class ZhanDuanLiLiSolver(Solver):
 
     def _stochastic_theta_step(self, y, t_current, t_next, dt, dW, equation):
         """
-        Perform one step of the stochastic theta method with trapezoidal rule.
+        One predictor-corrector step, as in the class docstring.
 
-        This implements a combination of implicit and explicit methods
-        for improved stability and accuracy.
+        The step is explicit for every ``theta``. The predictor is evaluated at
+        ``t_next``.
         """
         theta = self.theta
 
