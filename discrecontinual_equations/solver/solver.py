@@ -65,16 +65,14 @@ class Solver:
         Solve the differential equation with given initial conditions.
 
         This method must be implemented by all concrete solver subclasses.
-        The solution is returned and also stored in the 'solution' attribute.
+        The solution is returned and also stored in the 'solution' attribute:
+        a curve whose ``time`` holds the nodes and whose ``results`` hold the
+        state at each node.
 
         Args:
             equation: The differential equation to solve, containing
                      variables, parameters, and derivative function.
             initial_values: Initial values for all variables at start time.
-
-        Returns:
-            In subclasses, the solution curve: ``time`` holds the nodes and
-            ``results`` the state at each node.
 
         Raises:
             NotImplementedError: This is an abstract method.
