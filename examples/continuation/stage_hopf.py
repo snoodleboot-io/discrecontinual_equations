@@ -12,6 +12,7 @@ Watch the two eigenvalues walk across the Hopf line on the clock while the
 cycle opens out on the stage.
 """
 
+import functools
 import math
 import sys
 
@@ -71,14 +72,23 @@ class Hopf(DeterministicFunction):
 
 
 def cycle_branch() -> list[CyclePoint]:
-    """The cycle, which the normal form puts at radius sqrt(mu)."""
+    """The cycle, which the normal form puts at radius sqrt(mu).
+
+    The noisy Hopf film draws the same branch, so it is traced once per process
+    (DEQ-76) and each caller gets its own list of the shared, read-only points.
+    """
+    return list(_traced_cycle_branch())
+
+
+@functools.cache
+def _traced_cycle_branch() -> tuple[CyclePoint, ...]:
     eq = equation(Hopf, [Mu(value=SEED_MU)])
     seed = circle_seed(math.sqrt(SEED_MU), 2.0 * math.pi, SEED_MU, INTERVALS)
     continuation = CycleContinuation(eq, 0, INTERVALS, phase_index=1, phase_value=0.0)
     downward, _ = continuation.trace(seed, 0.2, 50, direction=-1.0)
     upward, _ = continuation.trace(seed, 0.2, 35, direction=1.0)
     ordered = list(reversed(keep_cycles(upward))) + keep_cycles(downward)[1:]
-    return within(ordered, (P_LO, P_HI))
+    return tuple(within(ordered, (P_LO, P_HI)))
 
 
 def describe(frame: Frame) -> str | None:
