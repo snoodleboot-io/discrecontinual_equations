@@ -37,10 +37,32 @@ import numpy as np
 
 from discrecontinual_equations.curve import Curve
 from discrecontinual_equations.differential_equation import DifferentialEquation
+from discrecontinual_equations.solver.deterministic.butcher_tableau import (
+    ButcherTableau,
+    row,
+)
 from discrecontinual_equations.solver.deterministic.fehlberg.fehlberg_config import (
     FehlbergConfig,
 )
 from discrecontinual_equations.solver.solver import Solver
+
+# Table III of Fehlberg (1969), "Coefficients for RK4(5), Formula 2".
+FEHLBERG_45 = ButcherTableau(
+    name="Runge-Kutta-Fehlberg 4(5)",
+    a=(
+        row(""),
+        row("1/4"),
+        row("3/32 9/32"),
+        row("1932/2197 -7200/2197 7296/2197"),
+        row("439/216 -8 3680/513 -845/4104"),
+        row("-8/27 2 -3544/2565 1859/4104 -11/40"),
+    ),
+    c=row("0 1/4 3/8 12/13 1 1/2"),
+    b=row("16/135 0 6656/12825 28561/56430 -9/50 2/55"),
+    b_hat=row("25/216 0 1408/2565 2197/4104 -1/5 0"),
+    order=5,
+    embedded_order=4,
+)
 
 
 class FehlbergSolver(Solver):
@@ -63,26 +85,7 @@ class FehlbergSolver(Solver):
         """
         super().__init__(solver_config=solver_config)
 
-        # Fehlberg coefficients
-        self.a = np.array(
-            [
-                [0, 0, 0, 0, 0, 0],
-                [1 / 4, 0, 0, 0, 0, 0],
-                [3 / 32, 9 / 32, 0, 0, 0, 0],
-                [1932 / 2197, -7200 / 2197, 7296 / 2197, 0, 0, 0],
-                [439 / 216, -8, 3680 / 513, -845 / 4104, 0, 0],
-                [-8 / 27, 2, -3544 / 2565, 1859 / 4104, -11 / 40, 0],
-            ],
-        )
-
-        self.b4 = np.array(
-            [25 / 216, 0, 1408 / 2565, 2197 / 4104, -1 / 5, 0],
-        )  # 4th order
-        self.b5 = np.array(
-            [16 / 135, 0, 6656 / 12825, 28561 / 56430, -9 / 50, 2 / 55],
-        )  # 5th order
-
-        self.c = np.array([0, 1 / 4, 3 / 8, 12 / 13, 1, 1 / 2])
+        self.a, self.c, self.b5, self.b4 = FEHLBERG_45.arrays()
 
     def solve(
         self,

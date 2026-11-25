@@ -36,10 +36,32 @@ import numpy as np
 
 from discrecontinual_equations.curve import Curve
 from discrecontinual_equations.differential_equation import DifferentialEquation
+from discrecontinual_equations.solver.deterministic.butcher_tableau import (
+    ButcherTableau,
+    row,
+)
 from discrecontinual_equations.solver.deterministic.cash_karp.cash_karp_config import (
     CashKarpConfig,
 )
 from discrecontinual_equations.solver.solver import Solver
+
+# The six-stage tableau as transcribed here; see the class docstring.
+CASH_KARP_54 = ButcherTableau(
+    name="Cash-Karp 5(4)",
+    a=(
+        row(""),
+        row("1/5"),
+        row("3/40 9/40"),
+        row("3/10 -9/10 6/5"),
+        row("-11/54 5/2 -70/27 35/27"),
+        row("1631/55296 175/512 575/13824 44275/110592 253/4096"),
+    ),
+    c=row("0 1/5 3/10 3/5 1 7/8"),
+    b=row("2825/27648 0 18575/48384 13525/55296 277/14336 1/4"),
+    b_hat=row("37/378 0 250/621 125/594 0 512/1771"),
+    order=5,
+    embedded_order=4,
+)
 
 
 class CashKarpSolver(Solver):
@@ -64,26 +86,7 @@ class CashKarpSolver(Solver):
         """
         super().__init__(solver_config=solver_config)
 
-        # Cash-Karp coefficients
-        self.a = np.array(
-            [
-                [0, 0, 0, 0, 0, 0],
-                [1 / 5, 0, 0, 0, 0, 0],
-                [3 / 40, 9 / 40, 0, 0, 0, 0],
-                [3 / 10, -9 / 10, 6 / 5, 0, 0, 0],
-                [-11 / 54, 5 / 2, -70 / 27, 35 / 27, 0, 0],
-                [1631 / 55296, 175 / 512, 575 / 13824, 44275 / 110592, 253 / 4096, 0],
-            ],
-        )
-
-        self.b4 = np.array(
-            [37 / 378, 0, 250 / 621, 125 / 594, 0, 512 / 1771],
-        )  # 4th order
-        self.b5 = np.array(
-            [2825 / 27648, 0, 18575 / 48384, 13525 / 55296, 277 / 14336, 1 / 4],
-        )  # 5th order
-
-        self.c = np.array([0, 1 / 5, 3 / 10, 3 / 5, 1, 7 / 8])
+        self.a, self.c, self.b5, self.b4 = CASH_KARP_54.arrays()
 
     def solve(
         self,

@@ -49,10 +49,33 @@ import numpy as np
 
 from discrecontinual_equations.curve import Curve
 from discrecontinual_equations.differential_equation import DifferentialEquation
+from discrecontinual_equations.solver.deterministic.butcher_tableau import (
+    ButcherTableau,
+    row,
+)
 from discrecontinual_equations.solver.deterministic.dormand_prince.dormand_prince_config import (
     DormandPrinceConfig,
 )
 from discrecontinual_equations.solver.solver import Solver
+
+# The seven-stage tableau as transcribed here; see the class docstring.
+DORMAND_PRINCE_54 = ButcherTableau(
+    name="Dormand-Prince 5(4)",
+    a=(
+        row(""),
+        row("1/5"),
+        row("3/40 9/40"),
+        row("44/45 -56/15 32/9"),
+        row("19372/6561 -25360/2187 64448/6561 -212/729"),
+        row("9017/3168 -355/33 46732/5247 49/176 -5103/18656"),
+        row("35/384 0 500/1113 125/192 -2187/6784 11/84"),
+    ),
+    c=row("0 1/5 3/10 4/5 7/9 1 1"),
+    b=row("35/384 0 500/1113 125/192 -2187/6784 11/84 0"),
+    b_hat=row("5179/57600 0 7571/16695 393/640 -92097/339200 187/2100 1/40"),
+    order=5,
+    embedded_order=4,
+)
 
 
 class DormandPrinceSolver(Solver):
@@ -77,35 +100,7 @@ class DormandPrinceSolver(Solver):
         """
         super().__init__(solver_config=solver_config)
 
-        # Dormand-Prince coefficients
-        self.a = np.array(
-            [
-                [0, 0, 0, 0, 0, 0, 0],
-                [1 / 5, 0, 0, 0, 0, 0, 0],
-                [3 / 40, 9 / 40, 0, 0, 0, 0, 0],
-                [44 / 45, -56 / 15, 32 / 9, 0, 0, 0, 0],
-                [19372 / 6561, -25360 / 2187, 64448 / 6561, -212 / 729, 0, 0, 0],
-                [9017 / 3168, -355 / 33, 46732 / 5247, 49 / 176, -5103 / 18656, 0, 0],
-                [35 / 384, 0, 500 / 1113, 125 / 192, -2187 / 6784, 11 / 84, 0],
-            ],
-        )
-
-        self.b5 = np.array(
-            [35 / 384, 0, 500 / 1113, 125 / 192, -2187 / 6784, 11 / 84, 0],
-        )  # 5th order
-        self.b4 = np.array(
-            [
-                5179 / 57600,
-                0,
-                7571 / 16695,
-                393 / 640,
-                -92097 / 339200,
-                187 / 2100,
-                1 / 40,
-            ],
-        )  # 4th order
-
-        self.c = np.array([0, 1 / 5, 3 / 10, 4 / 5, 7 / 9, 1, 1])
+        self.a, self.c, self.b5, self.b4 = DORMAND_PRINCE_54.arrays()
 
     def solve(
         self,
