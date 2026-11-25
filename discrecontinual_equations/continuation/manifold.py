@@ -131,10 +131,17 @@ class TaylorManifold:
         chosen = selection.indices(values)
         eigenvalues = [float(values[i].real) for i in chosen]
         basis = np.column_stack([vectors[:, i].real for i in chosen])
+        # A complex pair's plane is spanned by the real and imaginary parts of
+        # one eigenvector; the real parts of both are one vector twice
+        # (DEQ-71). Its higher orders need complex coordinates, so the chart of
+        # a pair stops at the tangent plane.
+        spiral = any(abs(values[i].imag) > _IMAGINARY for i in chosen)
+        if spiral:
+            basis = _real_basis(vectors, values, chosen)
         dimension = len(chosen)
         state = jacobian.shape[0]
         coefficients = self._seed(equilibrium, basis, state, dimension)
-        for degree in range(_LINEAR_DEGREE, self._order + 1):
+        for degree in range(_LINEAR_DEGREE, 1 if spiral else self._order + 1):
             self._solve_degree(
                 function,
                 jacobian,
@@ -202,3 +209,19 @@ class TaylorManifold:
                 for rest in self._monomials(degree - first, dimension - 1)
             )
         return monomials
+
+
+def _real_basis(
+    vectors: np.ndarray,
+    values: np.ndarray,
+    chosen: list[int],
+) -> np.ndarray:
+    """A real basis of the chosen eigenspace: ``Re v, Im v`` for a pair."""
+    columns: list[np.ndarray] = []
+    for index in chosen:
+        vector = vectors[:, index]
+        if abs(values[index].imag) <= _IMAGINARY:
+            columns.append(vector.real)
+        elif values[index].imag > 0.0:
+            columns.extend([vector.real, vector.imag])
+    return np.column_stack(columns)
