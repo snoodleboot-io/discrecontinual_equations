@@ -350,6 +350,26 @@ class TestDegenerateBogdanovTakensScan(TestCase):
                 ], (seed, points)
                 assert abs(points[0].parameter_c - CROSS_ZERO) < LOCATION_TOLERANCE
 
+    def test_test_functions_follow_the_curve_null_vector(self):
+        # Along a BT curve its own q (c . q = 1) fixes the orientation, whatever
+        # the SVD returns and whatever the previous point said.
+        equation = _equation(GenericCurve, -0.1)
+        problem = _problem(equation)
+        null_vector = _direction(-0.1)
+        for seed in SEEDS:
+            for detector in (DegenerateBogdanovTakens(), DegenerateBogdanovTakensB()):
+                with _flipped(seed):
+                    for sign in (1.0, -1.0, 1.0):
+                        decoded = Codim3Decoded(
+                            np.zeros(3),
+                            0.0,
+                            0.0,
+                            -0.1,
+                            null_vector=sign * null_vector,
+                        )
+                        value = detector.value(problem, decoded)
+                        assert abs(value - sign * SCALE) < REFERENCE_TOLERANCE
+
     def test_test_functions_track_by_continuity_without_a_null_vector(self):
         equation = _equation(GenericCurve)
         problem = _problem(equation)
