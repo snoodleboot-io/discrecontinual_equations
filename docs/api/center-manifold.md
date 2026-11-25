@@ -166,3 +166,22 @@ model, is unchanged.
 - Yu. A. Kuznetsov and N. Neirynck, MatCont tutorial IV (2021).
 - Yu. A. Kuznetsov, *Elements of Applied Bifurcation Theory*, 3rd ed., Springer
   (2004), chapter 8.
+
+The concepts, runnable examples and limits for every module of this area are on the
+[Bifurcations, normal forms and centre manifolds](../user-guide/normal-forms-detection.md)
+page, and the checked citations, with the equations each module uses, are on the
+[References](../references.md) page.
+
+## API reference
+
+::: discrecontinual_equations.continuation.codim2_normal_form
+
+::: discrecontinual_equations.continuation.critical_forms
+
+::: discrecontinual_equations.continuation.center_manifold
+
+::: discrecontinual_equations.continuation.bialternate
+
+::: discrecontinual_equations.continuation.snic
+
+::: discrecontinual_equations.continuation.stability
