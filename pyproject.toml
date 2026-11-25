@@ -352,5 +352,6 @@ dev = [
     "mkdocstrings[python]>=1.0.0",
     "mypy==2.4.1",
     "pymdown-extensions>=10.19.1",
+    "pytest-xdist>=3.8.0",
     "ruff==0.17.6",
 ]
