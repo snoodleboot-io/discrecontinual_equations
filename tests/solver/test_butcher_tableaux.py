@@ -28,6 +28,8 @@ from functools import cache
 import numpy as np
 import pytest
 
+from discrecontinual_equations.differential_equation import DifferentialEquation
+from discrecontinual_equations.function.stochastic import StochasticFunction
 from discrecontinual_equations.solver.deterministic.butcher_tableau import (
     ButcherTableau,
     row,
@@ -60,6 +62,13 @@ from discrecontinual_equations.solver.deterministic.fehlberg.fehlberg_solver imp
     FEHLBERG_45,
     FehlbergSolver,
 )
+from discrecontinual_equations.solver.stochastic.srk2.srk2_config import SRK2Config
+from discrecontinual_equations.solver.stochastic.srk2.srk2_solver import SRK2Solver
+from discrecontinual_equations.solver.stochastic.srk3.srk3_config import SRK3Config
+from discrecontinual_equations.solver.stochastic.srk3.srk3_solver import SRK3Solver
+from discrecontinual_equations.solver.stochastic.srk4.srk4_config import SRK4Config
+from discrecontinual_equations.solver.stochastic.srk4.srk4_solver import SRK4Solver
+from discrecontinual_equations.variable import Variable
 from discrecontinual_equations.webplot import manifold_flow
 
 Tree = tuple
@@ -197,7 +206,7 @@ def _cases(failing: dict[str, str]):
 class TestTableaux:
     @pytest.mark.parametrize(
         ("tableau", "tolerance"),
-        _cases({"dormand_prince_54": "DEQ-137: c_5 is 7/9, not 8/9"}),
+        _cases({}),
     )
     def test_nodes_are_the_row_sums(self, tableau: ButcherTableau, tolerance):
         for node, stage in zip(tableau.c, tableau.a, strict=True):
@@ -270,9 +279,6 @@ class TestTableaux:
         np.testing.assert_array_equal(getattr(built, embedded), b_hat)
 
 
-@pytest.mark.xfail(
-    strict=True, reason="DEQ-137: the solver's c_5 is 7/9, the film's 8/9"
-)
 def test_manifold_flow_steps_with_the_dormand_prince_tableau():
     """The film's vectorised Dormand-Prince pair is the solver's, entry for entry.
 
@@ -287,3 +293,50 @@ def test_manifold_flow_steps_with_the_dormand_prince_tableau():
     np.testing.assert_array_equal(manifold_flow.B, b[:6])
     error = [float(h - w) for h, w in zip(tableau.b_hat, tableau.b, strict=True)]
     np.testing.assert_allclose(manifold_flow.E, error, rtol=1e-15, atol=0)
+
+
+class _DriftOnly(StochasticFunction):
+    """``dy = y cos t dt + 0 dW``: an SDE that is the ODE ``y' = y cos t``."""
+
+    def eval(self, point, time=None):
+        return [point[0] * math.cos(time)]
+
+    def diffusion(self, point, time=None):  # noqa: ARG002
+        return [0.0]
+
+
+@pytest.mark.parametrize(
+    ("solver", "config", "order"),
+    [
+        (SRK2Solver, SRK2Config, 1),
+        (SRK3Solver, SRK3Config, 2),
+        (SRK4Solver, SRK4Config, 2),
+    ],
+)
+def test_stochastic_runge_kutta_drift_has_its_deterministic_order(
+    solver, config, order
+):
+    """With no noise each stochastic Runge-Kutta step is a deterministic tableau.
+
+    The ``srk*`` steps are written as formulas, not stored tableaux, so their
+    drift part is checked by its measured order on a field that depends on
+    ``t``: SRK2 reduces to Euler, SRK3 and SRK4 to Heun's method with the
+    predictor at ``t + h`` (``c = (0, 1)``, the row sum). A node at the wrong
+    time would cost an order, as it did for Dormand-Prince (DEQ-137).
+    """
+    t, y, r = Variable(name="t"), Variable(name="y"), Variable(name="r")
+    errors = []
+    steps = [0.1, 0.05, 0.025, 0.0125]
+    for h in steps:
+        equation = DifferentialEquation(
+            variables=[y], time=t, parameters=[], derivative=_DriftOnly([y], [], [r], t)
+        )
+        curve = solver(
+            config(start_time=0.0, end_time=2.0, step_size=h, random_seed=1),
+        ).solve(equation, [1.0])
+        assert abs(curve.time.discretization[-1] - 2.0) < 1e-12
+        errors.append(
+            abs(curve.results[0].discretization[-1] - math.exp(math.sin(2.0)))
+        )
+    observed = [math.log2(errors[i] / errors[i + 1]) for i in range(len(steps) - 1)]
+    assert all(abs(p - order) < 0.1 for p in observed), observed

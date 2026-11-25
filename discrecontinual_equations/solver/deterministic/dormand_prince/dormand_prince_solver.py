@@ -13,16 +13,15 @@ fifth-order solution has small error coefficients: it is the one to advance with
 the new point (the "first same as last" property); this solver does not reuse
 it, so a step costs seven evaluations, not six.
 
-Known defects, found while documenting and not yet fixed (no behaviour changes
-in this pass):
+The node ``c_5`` is ``8/9``, the sum of ``a_5j`` and Hairer and Wanner's
+``C5=8.D0/9.D0``. It was ``7/9`` until DEQ-137: the ``a`` and ``b`` rows were
+right, so an autonomous field was integrated at fifth order, but a field that
+depends on ``t`` saw the fifth stage at the wrong time and the global error fell
+to first order (1.3e-2 to 1.6e-3 on ``y' = y cos t`` to ``t = 2`` with steps 0.1
+to 0.0125; now 2.9e-9 to 7.3e-14, order 5).
 
-* The node ``c_5`` is ``7/9`` here; Dormand and Prince's is ``8/9``, the sum of
-  ``a_5j`` (Hairer and Wanner's ``CDOPRI`` has ``C5=8.D0/9.D0``). The ``a`` and
-  ``b`` rows are right, so an autonomous field (``f`` not depending on ``t``)
-  is integrated at fifth order; a field that depends on ``t`` sees the fifth
-  stage at the wrong time, and the global error drops to first order. On
-  ``y' = y cos t`` to ``t = 2`` with fixed steps 0.1 to 0.0125 the error halves
-  with ``h`` (1.3e-2 to 1.6e-3), where an autonomous field gains ``2^5``.
+Known defects, found while documenting and not yet fixed:
+
 * The controller is not the PI ("Lund-stabilized") controller its comment
   names: it scales by ``err^(-(1 + beta)/5)`` with no previous error, where
   Hairer and Wanner's ``DOPRI5`` uses ``err^(-(0.2 - 0.75 beta)) err_old^beta``.
@@ -70,7 +69,7 @@ DORMAND_PRINCE_54 = ButcherTableau(
         row("9017/3168 -355/33 46732/5247 49/176 -5103/18656"),
         row("35/384 0 500/1113 125/192 -2187/6784 11/84"),
     ),
-    c=row("0 1/5 3/10 4/5 7/9 1 1"),
+    c=row("0 1/5 3/10 4/5 8/9 1 1"),
     b=row("35/384 0 500/1113 125/192 -2187/6784 11/84 0"),
     b_hat=row("5179/57600 0 7571/16695 393/640 -92097/339200 187/2100 1/40"),
     order=5,
@@ -83,7 +82,7 @@ class DormandPrinceSolver(Solver):
 
     Seven stages per step. ``a``, ``c``, ``b5`` and ``b4`` hold the tableau;
     ``b5`` advances the solution and ``|y5 - y4|`` is the error estimate. See the
-    module docstring for the step control and the known ``c_5`` defect.
+    module docstring for the step control.
 
     References:
         Dormand and Prince (1980), the seven-stage tableau; Hairer and Wanner
