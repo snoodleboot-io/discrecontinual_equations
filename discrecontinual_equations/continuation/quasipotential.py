@@ -317,6 +317,50 @@ claimed to the order above. ``U`` near the boundary of the box is wrong wherever
 true minimum action path would leave the box, so the box should contain the sublevel set
 of ``U`` being asked about: ``U`` increases along every minimum action path, so the
 path to ``x`` stays inside ``{U <= U(x)}``.
+
+*Errata and departures*, each measured above:
+
+  - The linear quasipotential is ``(1/2) x^T S^{-1} x``, not ``x^T S^{-1} x``
+    as the DEQ-31 ticket wrote (*Normalisation*).
+  - OLIM-MID here tries every triangle, not the paper's hierarchical subset,
+    which doubled the rotating Ornstein-Uhlenbeck error (*Method*).
+  - Dahiya and Cameron's radius rule, Eq. (28), is opt-in through
+    :func:`default_radius`: it pays on strongly rotating drifts and costs on
+    nearly gradient ones (*Radius*).
+  - The parabolic update is opt-in and not a published method: exact to
+    rounding on a linear drift with a constant ``D``, worse than the
+    straight base on every nonlinear drift measured (*Order*).
+  - The default straight base finds ``s`` with ``f`` and ``A`` frozen, not by
+    the paper's exact Eq. (23), which was better on linear drifts and worse
+    on nonlinear ones (*Triangle minimisation*).
+  - The grid-free reference's error estimate is not a bound everywhere;
+    where it cannot be shown to be one it is reported as ``inf``
+    (*Where the reference has no bound*).
+
+References:
+    - Dahiya, D. and Cameron, M. (2018). Ordered line integral methods for
+      computing the quasi-potential. Journal of Scientific Computing.
+      arXiv:1706.07509, doi:10.1007/s10915-017-0590-9. Eqs. (2), (3): the
+      geometric action and the Hamilton-Jacobi equation; (9)-(12): the start
+      beside a cycle; (14), (15), (B-7), (B-8): the OLIM-MID updates; (21),
+      (24): test systems; (28): the radius rule.
+    - Dahiya, D. and Cameron, M. (2018). An ordered line integral method for
+      computing the quasi-potential in the case of variable anisotropic
+      diffusion. Physica D. arXiv:1806.05321,
+      doi:10.1016/j.physd.2018.07.002. Eqs. (14)-(18): the start at an
+      equilibrium; (19), (21), (22): the updates with a matrix ``D``; (23)
+      and Wilkinson's hybrid secant/bisection solver: the exact triangle
+      minimisation; Sec. 3.3.2: ``U`` need not be smooth across the front.
+    - Heymann, M. and Vanden-Eijnden, E. (2008). The geometric minimum action
+      method: a least action principle on the space of curves. Communications
+      on Pure and Applied Mathematics 61(8), 1052-1117. doi:10.1002/cpa.20238.
+      The gMAM; not read here, used as Grafke et al. restate it.
+    - Grafke, T., Schafer, T. and Vanden-Eijnden, E. (2017). Long term effects
+      of small random perturbations on dynamical systems: theoretical and
+      computational tools. Fields Institute Communications, Springer.
+      arXiv:1604.03818, doi:10.1007/978-1-4939-6969-2_2. Eq. (19): the gMAM
+      descent flow, with the additive-noise Hamiltonian of Eqs. (32)-(35);
+      Eqs. (38)-(42): the simplified flow for a state-dependent ``D``.
 """
 
 import heapq
@@ -395,6 +439,18 @@ def default_radius(grid: DensityGrid) -> int:
     it as ``update_radius`` for a strongly rotating drift on a fine grid, where
     it pays, and not for one that is nearly a gradient, where it costs (the
     module docstring's *Radius*).
+
+    Args:
+        grid: The grid the march will run on.
+
+    Returns:
+        The radius in cells, at least 8.
+
+    References:
+        - Dahiya, D. and Cameron, M. (2018). Ordered line integral methods for computing
+          the quasi-potential. Journal of Scientific Computing. arXiv:1706.07509,
+          doi:10.1007/s10915-017-0590-9. Eq. (28), the rule of thumb for the update
+          factor ``K``. Departure: held at 8 below 128 points, and not the default.
     """
     sides = max(grid.shape)
     rule = _RULE_BASE + _RULE_SLOPE * (round(np.log2(sides)) - _RULE_START)
@@ -408,6 +464,20 @@ class EquilibriumAttractor:
     line integrals take over. It is a fixed number of cells, so the region shrinks
     with the spacing and the error it carries (of order ``|x - x*|^3``) shrinks
     faster than the method's own.
+
+    Near ``x*`` the drift is ``J (x - x*)`` and the noise ``D(x*)``, and the
+    quasipotential of that linear system is ``(1/2) (x - x*)^T S^{-1} (x -
+    x*)`` with ``J S + S J^T + D(x*) = 0`` - the stationary covariance of the
+    linearisation. Dahiya and Cameron write the same matrix in closed form
+    after a change of variables; the Lyapunov solve is equivalent and works for
+    any ``D``. The equilibrium must be stable: a quasipotential is measured
+    from an attractor.
+
+    References:
+        - Dahiya, D. and Cameron, M. (2018). An ordered line integral method for
+          computing the quasi-potential in the case of variable anisotropic diffusion.
+          Physica D. arXiv:1806.05321, doi:10.1016/j.physd.2018.07.002. Eqs. (14)-(18),
+          the initialisation by the quasi-potential of the linearisation.
     """
 
     __slots__ = ["_radius", "_state"]
@@ -633,6 +703,21 @@ class CycleAttractor:
     it left ``U`` next to the cycle off by 5.45e-3 and 3.27e-3 at 161 and 321
     points (order 0.74); from this start, 1.47e-3 and 3.0e-4 (order 2.3), the
     same as from the exact values.
+
+    *Limit.* Taking ``l`` parallel to ``f(x*)`` is exact when the rotation
+    keeps its direction across the cycle, as on SDE (24)'s circle. Where it
+    turns - an elliptic cycle run round fast - the start's ``U`` can be off by
+    a large share of itself (DEQ-117 measured 0.0241 against an exact 0.0146
+    on the reference's outer start curve, at 81 points on an ellipse with
+    rotation 3, and values below zero inside it), and
+    the grid-free check beside such a cycle labels its points as not
+    bounded rather than trust it (see :meth:`OrderedLineIntegral.reference`).
+
+    References:
+        - Dahiya, D. and Cameron, M. (2018). Ordered line integral methods for computing
+          the quasi-potential. Journal of Scientific Computing. arXiv:1706.07509,
+          doi:10.1007/s10915-017-0590-9. Eqs. (9)-(12), the start next to a limit cycle,
+          here with a matrix ``D``.
     """
 
     __slots__ = ["_states", "_width"]
@@ -1155,6 +1240,33 @@ class OrderedLineIntegral:
     a drift that is linear or nearly so; see the module docstring's *Order*
     for where it helps and where it does not). See the module docstring for
     both, the method, the normalisation, and its limits.
+
+    The march accepts grid points in increasing order of ``U``, as Dijkstra's
+    method does, and offers each unaccepted point within the radius a
+    one-point update - the midpoint-rule action of the straight segment from
+    the accepted point - and a triangle update from every segment between the
+    accepted point and an accepted neighbour, minimised over the point where
+    the path leaves that segment. It is first order in general (the straight
+    interpolation of ``U`` along the front) and exact to rounding on a linear
+    drift with a constant ``D`` with the parabola.
+
+    References:
+        - Dahiya, D. and Cameron, M. (2018). Ordered line integral methods for computing
+          the quasi-potential. Journal of Scientific Computing. arXiv:1706.07509,
+          doi:10.1007/s10915-017-0590-9. The OLIM family and OLIM-MID: the geometric
+          action, Eq. (2); the Hamilton-Jacobi equation, Eq. (3); the one-point and
+          triangle updates, Eqs. (14), (15), (B-7), (B-8); the update radius, Eq. (28).
+          Departure: every triangle is tried, not the hierarchical subset; Eq. (28) is
+          not the default.
+        - Dahiya, D. and Cameron, M. (2018). An ordered line integral method for
+          computing the quasi-potential in the case of variable anisotropic diffusion.
+          Physica D. arXiv:1806.05321, doi:10.1016/j.physd.2018.07.002. The midpoint
+          update with a matrix ``D``, Eq. (19); the triangle update with ``f`` and ``A =
+          D^{-1}`` linear along the base, Eqs. (21), (22); its exact derivative, Eq.
+          (23), solved by Wilkinson's hybrid secant/bisection method. Departure: the
+          default straight base freezes ``f`` and ``A`` at the current ``s`` instead of
+          solving Eq. (23) (measured; see the module docstring's *Triangle
+          minimisation*); the parabolic update solves it.
     """
 
     __slots__ = ["_drift", "_grid", "_noise", "_offsets", "_quadratic", "update_radius"]
@@ -1906,6 +2018,29 @@ class GeometricMinimumAction:
     is off by 1.36e-4, 3.11e-5 and 1.04e-5 with 41, 81 and 161
     nodes. A ``D`` that is the same at every state of the chain and at the
     states moved a little along each axis is taken as constant.
+
+    *Limits.* A chain of nodes cannot follow a path that winds round its
+    start - the minimiser out of a rotating equilibrium or cycle winds
+    infinitely often - so the chain finds the least action among the paths
+    it can resolve; :meth:`OrderedLineIntegral.reference` starts it off a
+    small surface for that reason. Which minimiser it reaches depends on the
+    starting chain.
+
+    References:
+        - Heymann, M. and Vanden-Eijnden, E. (2008). The geometric minimum action
+          method: a least action principle on the space of curves. Communications on
+          Pure and Applied Mathematics 61(8), 1052-1117. doi:10.1002/cpa.20238. The
+          method; not read here (the publisher refused the fetch) - used as Grafke et
+          al. restate it.
+        - Grafke, T., Schafer, T. and Vanden-Eijnden, E. (2017). Long term effects of
+          small random perturbations on dynamical systems: theoretical and computational
+          tools. Fields Institute Communications, Springer. arXiv:1604.03818,
+          doi:10.1007/978-1-4939-6969-2_2. Eq. (19), the gMAM descent flow, taken with
+          the additive-noise Hamiltonian of Eqs. (32)-(35) after ``z = L^{-1} x``; Eqs.
+          (38)-(42), the simplified flow for a state-dependent ``D``.
+        - Vanden-Eijnden, E. and Heymann, M. (2008). The geometric minimum action method
+          for computing minimum energy paths. Journal of Chemical Physics 128, 061103.
+          doi:10.1063/1.2833040. The semi-implicit form; not read here.
     """
 
     __slots__ = ["_drift", "_iterations", "_noise", "_step", "_tolerance"]
