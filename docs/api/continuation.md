@@ -1011,3 +1011,13 @@ All three scale linearly in `T` (fitted log-log slopes 1.07, 0.97, 1.01). Jets
 buy exactness, not speed; the closed form buys both.
 
 ::: discrecontinual_equations.continuation.jacobian_field
+
+## Stationary densities and the quasipotential
+
+The [quasipotential guide](../user-guide/quasipotential-first-passage.md)
+explains the grid density, the ordered line integral method and the minimum
+action paths, with examples and limits.
+
+::: discrecontinual_equations.continuation.fokker_planck
+
+::: discrecontinual_equations.continuation.quasipotential
