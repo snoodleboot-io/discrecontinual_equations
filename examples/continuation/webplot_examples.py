@@ -352,6 +352,11 @@ _EQUATIONS = {
 }
 
 
+def _rossler_cascade() -> Scene:
+    """The Rossler cascade's page, under the name the driver reads it by."""
+    return rossler.cascade_page()
+
+
 def _raw_catalogue() -> list[tuple[str, Scene]]:
     return [
         ("saddle_node.html", _saddle_node()),
@@ -409,6 +414,7 @@ def _raw_catalogue() -> list[tuple[str, Scene]]:
         ("stochastic_lyapunov.html", _lyapunov()),
         ("coloured_noise_thresholds.html", _coloured_thresholds()),
         (rossler.CASCADE_FILENAME, rossler.cascade_page()),
+        ("rossler_cascade.html", _rossler_cascade()),
     ]
 
 
