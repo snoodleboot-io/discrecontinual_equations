@@ -438,3 +438,13 @@ def test_the_ensemble_stops_at_end_time():
     # Assert
     assert result.times.shape == (231,)
     assert result.times[-1] == 2.3
+
+
+def test_adams_bashforth3_without_a_step_or_a_count_is_refused():
+    # Arrange: neither field given, where np.arange(start, end, None) raised a
+    # TypeError.
+    config = AdamsBashforth3Config(start_time=0.0, end_time=1.0)
+
+    # Act / Assert
+    with pytest.raises(ValueError, match="step_size or a number_of_steps"):
+        _ = config.times

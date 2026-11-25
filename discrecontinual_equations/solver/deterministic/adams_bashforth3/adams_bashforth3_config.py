@@ -35,4 +35,7 @@ class AdamsBashforth3Config(SolverConfig):
         """
         if self.number_of_steps is not None:
             return np.linspace(self.start_time, self.end_time, self.number_of_steps)
+        if self.step_size is None:
+            message = "give AdamsBashforth3Config a step_size or a number_of_steps"
+            raise ValueError(message)
         return uniform_grid(self.start_time, self.end_time, self.step_size)
