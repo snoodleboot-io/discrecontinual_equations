@@ -27,7 +27,7 @@ are forced to take small steps (see [Limits](#limits-common-to-all-the-solvers))
     - **Cash-Karp** has its two weight rows swapped, so it advances with the
       *fourth*-order solution.
     - **`DormandPrince89Solver`** is an 8(7) pair, not 8(9), and one of its
-      eighth-order weights is mistyped. Its error stalls near $10^{-7}$.
+      eighth-order weights is mistyped. Its error stalls between $10^{-7}$ and $10^{-6}$.
     - **Adams-Bashforth 3** is second order, not third, because of how it is started.
 
     The table below gives the order each solver actually reaches.
@@ -40,7 +40,7 @@ are forced to take small steps (see [Limits](#limits-common-to-all-the-solvers))
 | `CashKarpSolver` | adaptive | 4(5) | **4** | 6 |
 | `FehlbergSolver` | adaptive | 4(5) | 5 (it advances with the fifth-order row) | 6 |
 | `DormandPrinceSolver` | adaptive | 5(4) | 5 if $f$ does not depend on $t$, **1** if it does | 7 |
-| `DormandPrince89Solver` | adaptive | "8(9)" | **none**: the error stalls at about $10^{-7}$ | 13 |
+| `DormandPrince89Solver` | adaptive | "8(9)" | **none**: the error stalls between $10^{-7}$ and $10^{-6}$ | 13 |
 
 We measured the orders by running each solver with fixed steps on
 $y' = -y^2$ and on $y' = y\cos t$ up to $t = 2$, halving $h$ three times. The adaptive
@@ -378,7 +378,9 @@ $561292735/797845732 \approx 0.7035103561$. Prince and Dormand's value, as RKSUI
 carries it, is $0.7035106694\ldots = 561292985/797845732$. Every other coefficient
 agrees to $10^{-16}$. Because of the typo the weights sum to $1 - 3.1\times10^{-7}$,
 so the formula used to advance is not even consistent. Each step loses about
-$3.1\times10^{-7}\, h f$, and the global error stays near $10^{-7}$ whatever the step.
+$3.1\times10^{-7}\, h f$, and the global error stays between $10^{-7}$ and $10^{-6}$
+whatever the step: $7\times10^{-8}$ on $y' = -y^2$ and $7\times10^{-7}$ on
+$y' = y\cos t$, both to $t = 2$.
 A tight tolerance makes it worse: the error estimate now contains that same
 inconsistency, so the controller shrinks the step (194 steps above) without gaining
 accuracy. Until the weight is fixed, use Dormand-Prince 5(4) or Fehlberg when you need
