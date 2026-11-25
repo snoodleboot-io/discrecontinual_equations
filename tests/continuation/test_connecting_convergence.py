@@ -41,6 +41,7 @@ from discrecontinual_equations.continuation.connecting_orbit import (
 from discrecontinual_equations.continuation.heteroclinic_network import (
     HeteroclinicNetwork,
 )
+from discrecontinual_equations.function.deterministic import DeterministicFunction
 from tests.continuation.fields import HeteroclinicField, State, _saddle
 from tests.continuation.test_connecting_newton import (
     NonAnalyticSaddle,
@@ -292,6 +293,53 @@ class TestConvergedSolveCarriesItsResidual(TestCase):
         direct = float(np.max(np.abs(_trapezoid(derivative, point.orbit))))
         assert point.residual.largest == pytest.approx(direct, rel=1e-6, abs=1e-15)
         assert point.orbit.residual is point.residual
+
+
+class _ScaledDoubleWell(DeterministicFunction):
+    """The double well in coordinates ``1e8`` times larger.
+
+    Rounding then leaves a Newton residual near 1e-7 at the solution, above
+    the 1e-9 tolerance, so only the correction test can say it converged.
+    """
+
+    scale = 1.0e8
+
+    def eval(self, point, time=None):  # noqa: ARG002 (base signature)
+        x, y = point[0] / self.scale, point[1] / self.scale
+        return [self.scale * y, self.scale * (-x + x * x * x)]
+
+
+class TestConvergedAtTheRoundingFloor(TestCase):
+    """A residual that rounding keeps above tolerance is still converged."""
+
+    def test_large_coordinates_converge_by_the_correction_test(self):
+        scale = _ScaledDoubleWell.scale
+        field = _ScaledDoubleWell(
+            variables=[State(), State()],
+            parameters=[],
+            results=[State(), State()],
+            time=None,
+        )
+
+        def jacobian(x: float) -> np.ndarray:
+            return np.array([[0.0, 1.0], [-1.0 + 3.0 * x * x, 0.0]])
+
+        solver = HeteroclinicOrbit(
+            field,
+            Terminus(np.array([-scale, 0.0]), jacobian(-1.0)),
+            Terminus(np.array([scale, 0.0]), jacobian(1.0)),
+            MeshSpec(half_length=8.0, intervals=200),
+        )
+        times = np.linspace(-8.0, 8.0, 201)
+        seed = scale * np.column_stack([np.tanh(times / 2.0), np.zeros_like(times)])
+        root = math.sqrt(2.0)
+        exact = scale * np.column_stack(
+            [np.tanh(times / root), (1.0 / root) / np.cosh(times / root) ** 2],
+        )
+        solution = solver.solve(seed)
+        # Measured 3.8e-4, the trapezoidal error of the unscaled problem.
+        assert np.max(np.abs(solution.states - exact)) / scale < 1.0e-3
+        assert solution.residual.is_trajectory
 
 
 class TestTheCertificateBelongsToTheReturnedIterate(TestCase):
