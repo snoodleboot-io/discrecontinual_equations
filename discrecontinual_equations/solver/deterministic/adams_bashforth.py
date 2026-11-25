@@ -119,23 +119,43 @@ class AdamsBashforthSolver(Solver):
             at the first node). It is also kept as ``solution``.
         """
         self.solution = self._new_solution(equation)
-        times = np.asarray(cast("_FixedGrid", self.solver_config).times, dtype=float)
+        times = [float(t) for t in cast("_FixedGrid", self.solver_config).times]
         steps = len(self.weights)
-        y = np.array(initial_values, dtype=float)
-        self.solution.append([times[0], [0.0] * len(y), y.tolist()])
+        y = [float(value) for value in initial_values]
+        self.solution.append([times[0], [0.0] * len(y), y])
 
-        history = [_field(equation, times[0], y)]
+        # Plain lists, not arrays: a step touches a handful of numbers, and the
+        # per-call overhead of small arrays would dominate (DEQ-141).
+        history = [list(equation.derivative.eval(point=y, time=times[0]))]
         for n in range(len(times) - 1):
             h = times[n + 1] - times[n]
             if n + 1 < steps:
-                y_next = classical_runge_kutta_step(equation, times[n], y, h)
+                y_next = classical_runge_kutta_step(
+                    equation,
+                    times[n],
+                    np.array(y),
+                    h,
+                ).tolist()
             else:
-                y_next = y + h * sum(
-                    beta * history[-1 - j] for j, beta in enumerate(self.weights)
-                )
-            self.solution.append([times[n + 1], y.tolist(), y_next.tolist()])
+                newest_first = history[::-1]
+                y_next = [
+                    value
+                    + h
+                    * sum(
+                        beta * derivative[i]
+                        for beta, derivative in zip(
+                            self.weights,
+                            newest_first,
+                            strict=True,
+                        )
+                    )
+                    for i, value in enumerate(y)
+                ]
+            self.solution.append([times[n + 1], y, y_next])
             y = y_next
             if n + 2 < len(times):
-                history.append(_field(equation, times[n + 1], y))
+                history.append(
+                    list(equation.derivative.eval(point=y, time=times[n + 1])),
+                )
                 del history[:-steps]
         return self.solution
