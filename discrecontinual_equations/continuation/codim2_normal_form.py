@@ -23,6 +23,42 @@ The Bogdanov-Takens unfolding follows Bosschaert and Kuznetsov, "Interplay betwe
 normal forms and center manifold reduction for homoclinic predictors near
 Bogdanov-Takens bifurcation", SIAM J. Appl. Dyn. Syst. (2024), arXiv:2109.12570,
 section 2.2.3 (through the ``beta2^2`` term of the parameter map).
+
+Errata and decisions carried here:
+
+- Lorenz-84 ``G300``: Kuznetsov (1999), section 10, prints
+  ``G300 = 25602814720/36130026241 = 0.7086`` for the "new" Lorenz model. Under the
+  paper's own normal form (3.4), whose ``w0^3`` term is ``G300/6``, the coefficient
+  is three times that, ``2.1259``; this module, an independent Poincare-Dulac
+  reference and exact arithmetic agree. The printed ``e(0) = 0.2106514716`` is the
+  formula at the printed ``G300``; at the consistent value it is ``1.6503``. The
+  sign, and the paper's conclusion, are unchanged.
+- The cubic cusp coefficient includes the center manifold's ``3 B(q, h2)``
+  (Kuznetsov 1999, section 5); dropping it is right only in one dimension (DEQ-83).
+- Orientation: ``c`` here is independent of the sign of ``q``, because ``p`` is
+  rescaled so that ``<p, q> = 1`` and ``c`` is even in ``q``. The *quadratic* fold
+  coefficient ``a = <p, B(q, q)>/2`` is odd in ``q``, so its sign along a fold
+  curve is fixed by continuity of ``q``, as MatCont does, not by requiring
+  ``<p, q> > 0`` (DEQ-102; that lives in :mod:`.normal_form` and the detectors).
+
+Limits: the Bogdanov-Takens unfolding stops at ``beta2^2``; the double Hopf is
+cubic only (the fifth-order coefficients of the difficult case are not computed);
+the zero-Hopf ``e`` is exact but the higher-order terms that can change the
+topology of the unfolding (Kuznetsov 1999, section 3 (iv)) are not computed.
+
+References:
+- Kuznetsov, Yu. A. "Numerical normalization techniques for all codim 2 bifurcations of
+  equilibria in ODE's", SIAM J. Numer. Anal. 36(4) (1999) 1104-1124,
+  doi:10.1137/S0036142998335005: section 3, the normal forms (3.1)-(3.6) and the
+  resonance condition (3.5); section 4, eqs. (4.4)-(4.6); sections 5-9, the coefficient
+  formulas; section 10, the Lorenz-84 example.
+- Bosschaert, M. M. and Kuznetsov, Yu. A. "Interplay between normal forms and
+  center manifold reduction for homoclinic predictors near Bogdanov-Takens
+  bifurcation", arXiv:2109.12570v1 (2021): eq. (8), the unfolding; sections 2.2.3
+  and 2.2.7, the parameter map ``K10``, ``K01``, ``K02``.
+- Govaerts, W., Kuznetsov, Yu. A., Meijer, H. G. E. et al. "MATCONT: Continuation
+  toolbox for ODEs in Matlab", manual for MatCont 7.1 (August 2019), section 6.3, eq.
+  (40): the ``l1 = Re G21 / 2`` MatCont prints.
 """
 
 import math
@@ -78,7 +114,8 @@ class HopfNormalForm:
         """``Re G21 / (2 omega)``; negative means supercritical.
 
         This is the convention of :func:`.normal_form.first_lyapunov` and of the
-        normal form time-scaled to unit frequency.
+        normal form time-scaled to unit frequency. ``p`` is normalised at the
+        positive frequency ``+i omega`` (DEQ-96).
         """
         return self.g21.real / (2.0 * self.omega)
 
@@ -94,7 +131,23 @@ def hopf_normal_form(
     parameter_a: float,
     parameter_b: float,
 ) -> HopfNormalForm:
-    """Kuznetsov (1999), eqs. (7.2), (7.3), (7.6)."""
+    """Kuznetsov (1999), eqs. (7.2), (7.3), (7.6).
+
+    Args:
+        problem: The two-parameter problem.
+        state: The Hopf equilibrium.
+        parameter_a: The first active parameter there.
+        parameter_b: The second active parameter there.
+
+    Returns:
+        ``omega``, the eigenvectors and ``G21`` at the pair nearest the axis.
+
+    Raises:
+        IndexError: If the Jacobian has no eigenvalue with positive imaginary part.
+
+    References:
+    - Kuznetsov (1999), eqs. (7.2), (7.3), (7.6); eq. (2.5) for ``l1``.
+    """
     jacobian = problem.state_jacobian(state, parameter_a, parameter_b)
     size = jacobian.shape[0]
     omega = float(_critical_pairs(jacobian)[0].imag)
@@ -219,6 +272,19 @@ def bogdanov_takens_normal_form(
     ``A q0 = 0``, ``A q1 = q0``, ``A^T p1 = 0``, ``A^T p0 = p1``, with
     ``<p_i, q_j> = delta_ij`` and MatCont's ``|q0| = 1``, ``q1 . q0 = 0``. Then
     ``a = <p1, B(q0, q0)>/2`` and ``b = <p0, B(q0, q0)> + <p1, B(q0, q1)>``.
+
+    Args:
+        problem: The two-parameter problem.
+        state: The Bogdanov-Takens equilibrium.
+        parameter_a: The first active parameter there.
+        parameter_b: The second active parameter there.
+
+    Returns:
+        ``a``, ``b``, the Jordan chains and the second-order unfolding.
+
+    References:
+    - Kuznetsov (1999), section 6, eqs. (6.1)-(6.3), for ``a`` and ``b``.
+    - Bosschaert & Kuznetsov (2021), sections 2.2.3 and 2.2.7, for the unfolding.
     """
     jacobian = problem.state_jacobian(state, parameter_a, parameter_b)
     q0 = _real_unit(right_null(jacobian))
@@ -325,7 +391,12 @@ class ZeroHopfNormalForm:
 
     @property
     def e(self) -> float:
-        """``e(0)`` of ``z' = ... + e u^2 z`` (Kuznetsov 1999, section 3 (iv))."""
+        """``e(0)`` of ``z' = ... + e u^2 z`` (Kuznetsov 1999, section 3 (iv)).
+
+        For the Lorenz-84 example the paper prints ``0.2106514716``, which is
+        this formula at its misprinted ``G300``; the consistent value is
+        ``1.6503`` (see the module docstring).
+        """
         bracket = (
             self.g210
             + self.g110
@@ -367,7 +438,23 @@ def zero_hopf_normal_form(
     parameter_a: float,
     parameter_b: float,
 ) -> ZeroHopfNormalForm:
-    """Kuznetsov (1999), section 8: eqs. (8.2)-(8.6) and the cubic coefficients."""
+    """Kuznetsov (1999), section 8: eqs. (8.2)-(8.6) and the cubic coefficients.
+
+    Args:
+        problem: The two-parameter problem.
+        state: The zero-Hopf equilibrium.
+        parameter_a: The first active parameter there.
+        parameter_b: The second active parameter there.
+
+    Returns:
+        The quadratic and cubic coefficients ``G200 ... G021`` of (3.4).
+
+    Raises:
+        IndexError: If the Jacobian has no eigenvalue with positive imaginary part.
+
+    References:
+    - Kuznetsov (1999), eq. (3.4) and section 3 (iv), eqs. (8.2)-(8.6).
+    """
     jacobian = problem.state_jacobian(state, parameter_a, parameter_b)
     size = jacobian.shape[0]
     identity = np.eye(size)
@@ -438,6 +525,17 @@ def strong_resonance(omega1: float, omega2: float) -> tuple[int, int] | None:
     Kuznetsov's normal form (3.6) assumes ``k omega1 != l omega2`` for ``k, l > 0``,
     ``k + l <= 5`` (eq. 3.5); otherwise resonant terms of order up to five survive
     and the double Hopf is a different, codim-2 strong resonance.
+
+    Args:
+        omega1: The larger frequency.
+        omega2: The smaller frequency.
+
+    Returns:
+        The first ``(k, l)`` with ``k omega1 = l omega2`` to a relative ``1e-6``,
+        or ``None``.
+
+    References:
+    - Kuznetsov (1999), eq. (3.5).
     """
     for first in range(1, _RESONANCE_ORDER):
         for second in range(1, _RESONANCE_ORDER + 1 - first):
@@ -514,7 +612,23 @@ def hopf_hopf_normal_form(
     parameter_a: float,
     parameter_b: float,
 ) -> HopfHopfNormalForm:
-    """Kuznetsov (1999), section 9: eqs. (9.2)-(9.7) and the resonant cubics."""
+    """Kuznetsov (1999), section 9: eqs. (9.2)-(9.7) and the resonant cubics.
+
+    Args:
+        problem: The two-parameter problem.
+        state: The double-Hopf equilibrium.
+        parameter_a: The first active parameter there.
+        parameter_b: The second active parameter there.
+
+    Returns:
+        The four resonant cubic coefficients, ordered so ``omega1 > omega2``.
+
+    Raises:
+        ResonanceError: If ``k omega1 = l omega2`` with ``k + l <= 5``.
+
+    References:
+    - Kuznetsov (1999), eqs. (3.5), (3.6) and (9.2)-(9.7).
+    """
     jacobian = problem.state_jacobian(state, parameter_a, parameter_b)
     pairs = _critical_pairs(jacobian)[:2]
     omega1, omega2 = sorted((float(pair.imag) for pair in pairs), reverse=True)
@@ -595,6 +709,18 @@ def cusp_normal_form(
 
     The ``B(q, h2)`` term is the center manifold's curvature; it vanishes only in
     one dimension.
+
+    Args:
+        problem: The two-parameter problem.
+        state: The cusp equilibrium.
+        parameter_a: The first active parameter there.
+        parameter_b: The second active parameter there.
+
+    Returns:
+        ``c`` and the null vectors; ``c`` does not depend on the sign of ``q``.
+
+    References:
+    - Kuznetsov (1999), section 5, eqs. (5.1)-(5.2) and the formula for ``c``.
     """
     jacobian = problem.state_jacobian(state, parameter_a, parameter_b)
     q = _real_unit(right_null(jacobian))
@@ -698,6 +824,22 @@ def classify(
     of ``theta``, and ``torus`` when ``s theta < 0``. ``hopf_hopf``: ``simple`` when
     ``p11 p22 > 0``, else ``difficult``. ``cusp``: the sign of ``c``. Other kinds,
     and points where the eigenstructure cannot be resolved, get no label.
+
+    Args:
+        kind: The detector's kind: ``bogdanov_takens``, ``zero_hopf``,
+            ``hopf_hopf`` or ``cusp``.
+        problem: The two-parameter problem.
+        state: The located equilibrium.
+        parameter_a: The first active parameter there.
+        parameter_b: The second active parameter there.
+
+    Returns:
+        The label (``None`` for other kinds or on numerical failure) and the
+        coefficients behind it. A strongly resonant double Hopf is labelled
+        ``resonant k:l`` with no coefficients.
+
+    References:
+    - Kuznetsov (1999), section 3.
     """
     classifier = _CLASSIFIERS.get(kind)
     if classifier is None:

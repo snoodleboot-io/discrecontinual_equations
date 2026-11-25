@@ -27,6 +27,40 @@ Borders are frozen through a Newton solve and adapted at accepted points, where
 the pair of ``G`` entries is also re-chosen to keep the system best conditioned.
 A degenerate Bautin point is where the second Lyapunov quantity ``l2`` changes
 sign along this curve.
+
+Normalisation of ``l1``: ``<p, q> = 1`` is imposed at the *positive* frequency
+``+i omega`` (DEQ-96). Before that fix the adjoint was normalised at whichever sign
+of ``omega`` the eigen-solver returned, and ``l1`` came out wrong for 31 of 34
+random similarity transforms of one system; with ``omega = sqrt(kappa)`` here the
+frequency is positive by construction. ``l1`` is ``Re G21 / (2 omega)``;
+MatCont prints ``Re G21 / 2`` (manual eq. (40)), ``omega`` times this. Only the
+zero set matters for the curve, and it is the same.
+
+CONTENT's minimally extended Bautin system (Govaerts, Kuznetsov and Sijnave, eqs.
+(7.2)-(7.4)) asks for ``det G = 0``, one equation; here two entries of ``G`` are set
+to zero, as MatCont's ``hopf.m`` does (manual eq. (61)). At a Hopf point
+``f_u^2 + kappa I`` has a two-dimensional kernel and the whole of ``G`` vanishes, so
+both conditions hold; the pair of entries is the better conditioned choice.
+
+Limits: ``kappa > 0`` is assumed (``omega = sqrt(kappa)``); a curve that runs into a
+neutral saddle (``kappa < 0``) or a Bogdanov-Takens point (``kappa = 0``) leaves the
+domain of the ``l1`` row. The Jacobian columns of ``l1`` are exact only up to the
+finite-difference columns of the three parameters.
+
+References:
+- Govaerts, W., Kuznetsov, Yu. A., Meijer, H. G. E. et al. "MATCONT: Continuation
+  toolbox for ODEs in Matlab", manual for MatCont 7.1 (August 2019), section 8.2.1, eqs.
+  (61)-(62): the minimally extended Hopf system and its bordered ``G``; eq. (40):
+  ``l1``.
+- Govaerts, W., Kuznetsov, Yu. A. and Sijnave, B. "Continuation of codimension-2
+  equilibrium bifurcations in CONTENT", in *Numerical Methods for Bifurcation
+  Problems and Large-Scale Dynamical Systems*, IMA Vol. Math. Appl., Springer
+  (2000) 163-184, section 7.1, eqs. (7.1)-(7.4): the
+  minimally extended generalized-Hopf (Bautin) curve with ``l1 = 0``.
+- Kuznetsov, Yu. A. "Numerical normalization techniques for all codim 2 bifurcations of
+  equilibria in ODE's", SIAM J. Numer. Anal. 36(4) (1999) 1104-1124,
+  doi:10.1137/S0036142998335005: eqs. (7.2), (7.3), (7.6), the vectors ``h20``, ``h11``
+  and ``G21`` of ``l1``; eq. (2.5), the invariant formula for ``l1``.
 """
 
 import itertools
@@ -96,7 +130,20 @@ class _HopfLinearization:
 
 
 class GeneralizedHopfCurveResidual(DifferentiableResidual):
-    """Minimally augmented Hopf system with the condition ``l1 = 0``."""
+    """Minimally augmented Hopf system with the condition ``l1 = 0``.
+
+    Args:
+        problem: The two-parameter problem (``p_a``, ``p_b``).
+        dimension: The state dimension ``n``.
+        right_border: ``n x 2`` border ``V_bor``, orthonormalised.
+        left_border: ``n x 2`` border ``W_bor``, orthonormalised.
+        third: The third active parameter ``p_c``, the curve coordinate; it is
+            set on every evaluation.
+
+    References:
+    - MatCont manual (2019), eqs. (61)-(62).
+    - Govaerts, Kuznetsov & Sijnave (2000), section 7.1.
+    """
 
     __slots__ = [
         "_cache",
@@ -133,6 +180,15 @@ class GeneralizedHopfCurveResidual(DifferentiableResidual):
         return self._cache[1]
 
     def evaluate(self, state: np.ndarray, parameter: float) -> np.ndarray:
+        """Return ``(f, G_i1j1, G_i2j2, l1)``.
+
+        Args:
+            state: ``(u, kappa, p_a, p_b)``.
+            parameter: The continuation coordinate ``p_c``.
+
+        Returns:
+            The ``n + 3`` residual rows.
+        """
         point = self._linearize(np.asarray(state, dtype=float), parameter)
         return self._rows(point, self._entries)
 
@@ -151,6 +207,17 @@ class GeneralizedHopfCurveResidual(DifferentiableResidual):
         parameter: float,
         epsilon: float,
     ) -> np.ndarray:
+        """Return the ``(n + 3) x (n + 4)`` Jacobian in ``(u, kappa, p_a, p_b, p_c)``.
+
+        Args:
+            state: ``(u, kappa, p_a, p_b)``.
+            parameter: The continuation coordinate ``p_c``.
+            epsilon: The central-difference step for the three parameter
+                columns; the state and ``kappa`` columns are analytic.
+
+        Returns:
+            The extended Jacobian.
+        """
         return self._jacobian(
             np.asarray(state, dtype=float),
             parameter,
@@ -232,6 +299,10 @@ class GeneralizedHopfCurveResidual(DifferentiableResidual):
         The borders become orthonormal bases of the computed ``V`` and ``W``. Of
         the six pairs of entries of ``G``, the one whose augmented Jacobian has the
         largest smallest singular value is kept until the next accepted point.
+
+        Args:
+            state: The accepted point ``(u, kappa, p_a, p_b)``.
+            parameter: Its ``p_c``.
         """
         state = np.asarray(state, dtype=float)
         point = self._linearize(state, parameter)
@@ -250,7 +321,15 @@ class GeneralizedHopfCurveResidual(DifferentiableResidual):
         self._cache = None
 
     def decode(self, state: np.ndarray, parameter: float) -> Codim3Decoded:
-        """Recover the original-system point from the augmented vector."""
+        """Recover the original-system point from the augmented vector.
+
+        Args:
+            state: ``(u, kappa, p_a, p_b)``.
+            parameter: ``p_c``.
+
+        Returns:
+            The equilibrium and the three parameters.
+        """
         n = self._dimension
         self._third.value = float(parameter)
         return Codim3Decoded(
