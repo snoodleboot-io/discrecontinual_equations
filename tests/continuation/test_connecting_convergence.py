@@ -341,6 +341,48 @@ class TestConvergedAtTheRoundingFloor(TestCase):
         assert np.max(np.abs(solution.states - exact)) / scale < 1.0e-3
         assert solution.residual.is_trajectory
 
+    def test_a_square_system_converges_by_the_correction_test(self):
+        """The normal-equation defect is scaled by ``|r|``: measured against
+        ``|J dx + r|``, which is rounding here, it would refuse this orbit.
+        Measured: Newton residual 7.2e-8, trapezoidal worst 2.1e-11.
+        """
+        scale = _ScaledDampedWell.scale
+        field = _ScaledDampedWell(
+            variables=[State(), State()],
+            parameters=[],
+            results=[State(), State()],
+            time=None,
+        )
+        solver = HeteroclinicOrbit(
+            field,
+            Terminus(np.zeros(2), np.array([[0.0, 1.0], [1.0, -0.5]])),
+            Terminus(np.array([scale, 0.0]), np.array([[0.0, 1.0], [-2.0, -0.5]])),
+            MeshSpec(half_length=15.0, intervals=300, phase_value=0.5 * scale),
+        )
+        times = np.linspace(-15.0, 15.0, 301)
+        seed = scale * np.column_stack(
+            [(1.0 + np.tanh(times / 2.0)) / 2.0, np.zeros_like(times)],
+        )
+        solution = solver.solve(seed)
+        assert solution.residual.is_trajectory
+
+
+class _ScaledDampedWell(DeterministicFunction):
+    """``x'' = x - x^3 - x'/2`` in coordinates ``1e8`` times larger.
+
+    The saddle at the origin connects to the spiral sink at ``x = 1``: one stable
+    direction at the source, none unstable at the target, and the phase
+    condition make two boundary rows for two dimensions, so the Newton system is
+    square and its correction solves it exactly - the remainder ``J dx + r`` is
+    rounding, not orthogonal to the range of ``J``.
+    """
+
+    scale = 1.0e8
+
+    def eval(self, point, time=None):  # noqa: ARG002 (base signature)
+        x, y = point[0] / self.scale, point[1] / self.scale
+        return [self.scale * y, self.scale * (x - x * x * x - 0.5 * y)]
+
 
 class TestTheCertificateBelongsToTheReturnedIterate(TestCase):
     """A small correction certifies the iterate it was computed at, no other."""
