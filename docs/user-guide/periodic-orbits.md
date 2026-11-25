@@ -213,8 +213,8 @@ $$
 with $\mu_{2N}$ the same cycle re-solved on twice the intervals. The factor 2 is the
 whole argument: if doubling the mesh at least halves the error,
 $e_N \le |\mu_N - \mu_{2N}| + e_{2N} \le |\mu_N - \mu_{2N}| + e_N/2$, so
-$e_N \le 2 |\mu_N - \mu_{2N}|$. At order $2m$ it over-reads by
-$2/(1 - 4^{-m})$, about 2. Against DOP853 references on 211 cycles (van der Pol and
+$e_N \le 2 |\mu_N - \mu_{2N}|$. At order $2m$ the gap is $(1 - 4^{-m})\,e_N$, so
+the bound asymptotically over-reads by $2(1 - 4^{-m})$, between 1.5 and 2. Against DOP853 references on 211 cycles (van der Pol and
 the Brusselator, $m$ 1 to 4, 8 to 96 intervals) it never read below the true error,
 with a median over-read of 2.0 (DEQ-55).
 
@@ -224,15 +224,20 @@ the drift sees only the monodromy's quadrature. The orbit's share is the
 multipliers' sensitivity to the field, and on a period-doubled orbit that grows by
 about Feigenbaum's $\delta \approx 4.669$ per doubling (Feigenbaum 1978) while the
 drift grows only with the number of turns: on Rössler's cascade at 16 turns the
-drift read 43 times low and passed cycles 6.2–6.7% wrong. DEQ-105 (PR #74, open
-at the time of writing) gives Hermite–Simpson points the same
+drift read 43 times low and passed cycles 6.2–6.7% wrong.
+
+!!! note "Pending: DEQ-105 (PR #74, not yet merged)"
+    Until PR #74 merges, a Hermite–Simpson point's `floquet_error` on `main` is
+    the drift alone, with the failure just described.
+
+DEQ-105 gives Hermite–Simpson points the same
 $\max(\text{drift}, 2\,\text{gap})$; on 45 cascade cycles it never read low, with a
-median over-read of 1.87, the $2(1 - 2^{-4})$ that order four predicts. Until it
-merges, a Hermite–Simpson point's `floquet_error` is the drift.
+median over-read of 1.87, the $2(1 - 2^{-4})$ that order four predicts.
 
 **Limits.**
 
-- *Trapezoidal (DEQ-125).* A trapezoidal point's estimate is still the drift. On the
+- *Trapezoidal (DEQ-125, pending).* A trapezoidal point's estimate is still the drift;
+  the fix is not yet merged. On the
   DEQ-125 verifier's grid of 243 cases it passed 16 cycles whose true error was
   above the gate, 15 of them multi-turn Rössler cycles, reading as low as 0.007
   times the truth. Prefer the default scheme for multi-turn orbits.
