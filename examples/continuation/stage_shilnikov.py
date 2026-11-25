@@ -14,7 +14,9 @@ Three-dimensional, so the stage sees it through a view, and the viewer picks
 which plane. The origin's one-dimensional unstable manifold is drawn - the
 orbit that leaves along the real direction, which is the half of Shilnikov's
 picture a line can carry; the two-dimensional stable surface it returns along
-is left to the particles, integrated in all three coordinates.
+is drawn faintly as a fan of orbits started on its Taylor chart, which for
+the spiralling pair is solved in complex coordinates, and the particles,
+integrated in all three coordinates, fill it in.
 """
 
 import sys
@@ -149,8 +151,10 @@ def shilnikov_stage() -> StageScene:
             "unstable branch is the orbit that leaves along the real direction, "
             "which is the half of Shilnikov's picture a line can carry. The "
             "origin's stable manifold is the two-dimensional surface it spirals "
-            "back along, and a surface is not drawn - the particles, integrated "
-            "in all three coordinates, are what shows it."
+            "back along, drawn faintly as a fan of twelve orbits started around "
+            "a circle on its order-5 TaylorManifold chart - for the complex "
+            "pair a chart in the pair's complex coordinates - and the "
+            "particles, integrated in all three coordinates, fill it in."
         ),
     )
     return stage_scene(

@@ -35,9 +35,14 @@ retries fail. At the SIADS / IJBC settings the band distances are the papers'
 exactly (25, 40, 55 bands at 62.75, 92.75, 122.75) and the last circle has
 2,330 points against the published 2,300.
 
-Remaining: complex (spiral) manifolds need the conjugate-coordinate variant (the
-level-set grower seeds a spiral manifold on its tangent plane meanwhile). The
-strict Lorenz growth stops at distance 165.25 (step 1.5, spacing 1.5 to 4.5) and
+A complex pair (a saddle-focus) is charted in the pair's complex coordinates
+(DEQ-62): on a saddle-focus whose stable manifold is an exact degree-9 graph the
+order-N chart is off it by O(rho^(N+1)) (fitted slopes 3.13 to 9.00 for N = 2
+to 8) and on it to 5e-17 from N = 9, and the level-set grower seeded on it is
+31 to 36,000 times closer on its first five rings than seeded on the tangent
+plane.
+
+Remaining: the strict Lorenz growth stops at distance 165.25 (step 1.5, spacing 1.5 to 4.5) and
 says so in `GeodesicMesh.stopped`: 1 of 1,248 landings fails at the smallest
 step, 0.094, and seven rings from 157.09 on were accepted there turning by up
 to 0.95. It stopped at 157.4 while the continuation in the flight time gave a

@@ -207,9 +207,9 @@ class GeodesicMesh:
     residual of any BVP solved, ``lost`` the number of points whose BVP did
     not converge and were dropped, and ``seed`` says what the first ring came
     from: ``"taylor"`` for the parameterisation-method chart, ``"eigenspace"``
-    for the tangent plane where the chart does not exist (a complex pair, or a
-    resonance). ``stopped`` is ``None`` when the growth reached the distance
-    asked for, and otherwise says why it stopped where it did; the last of
+    for the tangent plane where the chart does not exist (a resonance).
+    ``stopped`` is ``None`` when the growth reached the distance asked for,
+    and otherwise says why it stopped where it did; the last of
     ``ring_distances`` is how far it got. ``warnings`` lists the rings that
     were accepted at the smallest step although they turned more sharply than
     :class:`GeodesicSettings` allows - the paper's warning message.
@@ -419,30 +419,31 @@ class GeodesicLevelSets:
     ) -> tuple[Callable[[np.ndarray], np.ndarray], str]:
         """The Taylor chart, or the tangent plane where there is none.
 
-        A complex pair spans a plane the Taylor chart does not parameterise
-        (see :mod:`~.manifold`), and a resonance - an exact ``k . lambda`` in
-        the spectrum - leaves its order-by-order solve singular. Either way the
-        tangent plane is the chart, which is first-order accurate, so the seed
-        radius should then be small.
+        A complex pair is charted in its complex coordinates (see
+        :mod:`~.manifold`), so a saddle-focus's spiralling manifold gets a
+        curved seed as a saddle's does. A resonance - an exact ``k . lambda``
+        in the spectrum - leaves the order-by-order solve singular, and then
+        the tangent plane is the chart, which is first-order accurate, so the
+        seed radius should then be small.
         """
+        try:
+            taylor = TaylorManifold(order=self._order).compute(
+                function,
+                equilibrium,
+                jacobian,
+                selection,
+            )
+        except np.linalg.LinAlgError:
+            pass
+        else:
+
+            def curved(theta: np.ndarray) -> np.ndarray:
+                return np.asarray(taylor.point(list(theta)), dtype=float)
+
+            return curved, "taylor"
         values, vectors = np.linalg.eig(jacobian)
         chosen = selection.indices(values)
         if all(abs(values[i].imag) <= _COMPLEX for i in chosen):
-            try:
-                taylor = TaylorManifold(order=self._order).compute(
-                    function,
-                    equilibrium,
-                    jacobian,
-                    selection,
-                )
-            except np.linalg.LinAlgError:
-                pass
-            else:
-
-                def curved(theta: np.ndarray) -> np.ndarray:
-                    return np.asarray(taylor.point(list(theta)), dtype=float)
-
-                return curved, "taylor"
             frame = np.column_stack([vectors[:, i].real for i in chosen])
         else:
             first = vectors[:, chosen[0]]
