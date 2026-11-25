@@ -9,6 +9,43 @@ as a parameter sweeps through the homoclinic value, so a bracketing search locat
 The trajectory this produces is a natural seed for the projection boundary-value
 problem in :mod:`.connecting_orbit`, which refines it to high accuracy: shooting
 finds the connection, the boundary-value problem sharpens it.
+
+The method, step by step, at one parameter value:
+
+1. refine the saddle from ``Departure.equilibrium_seed`` (Newton, via
+   :func:`.region_analysis.find_equilibria`);
+2. take the eigenvector of the eigenvalue with the largest real part, oriented to
+   agree with ``Departure.direction``, and start at
+   ``saddle + offset * direction`` - the explicit start ``u(tau_-) = xi + eps v``
+   of Doedel et al. (2008, eq. 6);
+3. integrate with fixed-step classical RK4 for ``horizon`` time units;
+4. once the orbit has been further than ``departure_radius`` from the saddle,
+   keep its closest approach inside ``0.4`` of it, and return that point's
+   component along the unstable direction.
+
+Limits:
+
+* the saddle must have a one-dimensional unstable manifold with a real leading
+  eigenvalue. Nothing checks this; with a complex leading pair the real part of
+  its eigenvector is used and the gap has no meaning;
+* ``locate`` assumes the gap changes sign in ``[lower, upper]``. It does not
+  check, and always returns a point of the bracket after 32 halvings. A gap of
+  NaN (no equilibrium, no return, or divergence before any return) compares as
+  "same sign", so a bracket that straddles a NaN region quietly converges to its
+  edge. Check ``gap`` at both ends first;
+* the radii are absolute distances, so a system whose orbit is much smaller or
+  larger than order one needs its own ``ReturnSettings``;
+* ``gap`` and ``trace`` set parameter values on the function and leave them set.
+
+References:
+- Doedel, E. J., Kooi, B. W., Kuznetsov, Yu. A. and van Voorn, G. A. K.
+  "Continuation of connecting orbits in 3D-ODEs: (I) Point-to-cycle
+  connections", Int. J. Bifurcation and Chaos 18 (2008) 1889-1903,
+  arXiv:0706.1688, doi:10.1142/S0218127408021439. Eq. (6), the start along the
+  unstable eigenvector.
+- Beyn, W.-J. "The numerical computation of connecting orbits in dynamical
+  systems", IMA J. Numer. Anal. 10 (1990) 379-405, doi:10.1093/imanum/10.3.379.
+  The boundary-value problem the located orbit seeds.
 """
 
 import numpy as np
@@ -29,7 +66,15 @@ _DEFAULT_BISECTIONS = 32
 
 
 class ReturnSettings:
-    """Controls for integrating the unstable manifold and detecting its return."""
+    """Controls for integrating the unstable manifold and detecting its return.
+
+    Args:
+        dt: The fixed RK4 step.
+        horizon: How long to integrate before giving up on a return.
+        departure_radius: The distance from the saddle the orbit must exceed
+            before a close approach counts as a return.
+        offset: The initial displacement along the unstable eigenvector.
+    """
 
     __slots__ = ["departure_radius", "dt", "horizon", "offset"]
 
@@ -47,7 +92,13 @@ class ReturnSettings:
 
 
 class Departure:
-    """Where and in which sense to leave the saddle: a seed and a direction hint."""
+    """Where and in which sense to leave the saddle: a seed and a direction hint.
+
+    Args:
+        equilibrium_seed: A guess for the saddle, refined at every parameter value.
+        direction: Any vector on the side of the unstable manifold to follow; the
+            unstable eigenvector is flipped to have a positive component along it.
+    """
 
     __slots__ = ["direction", "equilibrium_seed"]
 
@@ -57,7 +108,17 @@ class Departure:
 
 
 class HomoclinicShooting:
-    """Find the parameter at which a saddle has a homoclinic orbit."""
+    """Find the parameter at which a saddle has a homoclinic orbit.
+
+    Args:
+        function: The vector field; its parameters are changed in place.
+        parameter_index: Which parameter to search over.
+        departure: The saddle seed and the branch of its unstable manifold.
+        settings: Integration and return-detection controls.
+
+    References:
+        Doedel et al. (2008), eq. (6); Beyn (1990).
+    """
 
     __slots__ = ["_departure", "_function", "_parameter_index", "_settings"]
 
@@ -97,6 +158,13 @@ class HomoclinicShooting:
 
         Returns NaN if the equilibrium cannot be found or the trajectory diverges
         before returning.
+
+        Args:
+            parameter: The value to set the searched parameter to.
+
+        Returns:
+            The component, along the unstable eigenvector, of the orbit's closest
+            return to the saddle; zero at a homoclinic orbit.
         """
         self._function.parameters[self._parameter_index].value = parameter
         equilibria = find_equilibria(self._function, [self._departure.equilibrium_seed])
@@ -121,7 +189,16 @@ class HomoclinicShooting:
         return float((closest - equilibrium) @ unstable)
 
     def locate(self, lower: float, upper: float) -> float:
-        """Bracketing search for the homoclinic parameter in ``[lower, upper]``."""
+        """Bracketing search for the homoclinic parameter in ``[lower, upper]``.
+
+        Args:
+            lower: One end of a bracket on which the gap changes sign.
+            upper: The other end.
+
+        Returns:
+            The midpoint of the final bracket, after 32 bisections. The sign
+            change is assumed, not checked.
+        """
         low_gap = self.gap(lower)
         for _ in range(_DEFAULT_BISECTIONS):
             middle = 0.5 * (lower + upper)
@@ -144,6 +221,16 @@ class HomoclinicShooting:
         For each value of the ``control_index`` parameter, locate the primary
         parameter in a bracket centred on the previous result. Returns the
         ``(control_value, located_parameter)`` pairs of the homoclinic curve.
+
+        Args:
+            control_index: The parameter swept along the curve.
+            control_values: Its values, in order.
+            guess: The searched parameter at the first control value.
+            half_width: Half the bracket around the previous result; it must
+                contain the next point.
+
+        Returns:
+            The curve as ``(control_value, located_parameter)`` pairs.
         """
         centre = guess
         curve: list[tuple[float, float]] = []

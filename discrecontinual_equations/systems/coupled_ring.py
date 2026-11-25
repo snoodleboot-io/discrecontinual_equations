@@ -13,6 +13,31 @@ gain, and the target-field bias. At zero bias each device's symmetric state brea
 symmetry as the coupling is varied; the ferroelectric ring additionally carries a
 rotating wave, the oscillation its sensing exploits. How that wave is born depends
 on the sign of the gain, and :class:`FerroelectricRing` says how.
+
+Why this belongs with connecting orbits: in a unidirectional ring of an odd number
+of bistable cells the oscillation is born with infinite period, out of a
+heteroclinic cycle between the ring's saddle states (Bulsara et al. 2004, section
+III and Fig. 3: "the branch of periodic solutions that emerges via a
+heteroclinic orbit" is the stable one). Its period diverges at the threshold, so
+the passage times near the saddles - the quantity the sensor reads - are those of
+a trajectory shadowing a heteroclinic cycle.
+
+Departures from the printed models, deliberate and kept:
+
+* Bulsara et al. (2004, eq. 2) write the fluxgate cell as
+  ``-x_i + tanh(c (x_i + lambda x_{i+1} + eps))``; :class:`FluxgateRing` uses
+  ``-x_i + tanh(c x_i + lambda x_{i+1} + eps)``, so its ``lambda`` and ``eps`` are
+  the paper's multiplied by ``c``;
+* their Duffing ring (eq. 1) couples by ``lambda (x_i - x_{i+1})``;
+  :class:`FerroelectricRing` couples by ``-lambda x_{i+1}`` alone, which is their
+  ring with ``a`` replaced by ``a + lambda`` (and ``b = 1``). Their Hopf value
+  ``a_c = -(3/2) lambda`` becomes ``lambda = -2a`` here.
+
+References:
+- Bulsara, A. R., In, V., Kho, A., Longhini, P., Palacios, A., Rappel, W.-J.,
+  Acebron, J., Baglio, S. and Ando, B. "Emergent oscillations in unidirectionally
+  coupled overdamped bistable systems", Phys. Rev. E 70 (2004) 036103,
+  doi:10.1103/PhysRevE.70.036103. Eqs. (1) and (2), section III.
 """
 
 import math
@@ -26,6 +51,11 @@ class UnidirectionalRing(DeterministicFunction, ABC):
 
     The ring size is the number of state variables, so the same class serves any
     odd length: a three-cell prototype or a seven-cell array are the same dynamics.
+    Coupling-induced oscillation needs an odd ring; an even one settles to a
+    steady state (Bulsara et al. 2004, section III).
+
+    References:
+        Bulsara et al. (2004), eqs. (1) and (2).
     """
 
     def eval(
@@ -33,7 +63,15 @@ class UnidirectionalRing(DeterministicFunction, ABC):
         point: list[float],
         time: float | None = None,  # noqa: ARG002 (base signature)
     ) -> list[float]:
-        """Assemble the ring derivative from the per-cell dynamics."""
+        """Assemble the ring derivative from the per-cell dynamics.
+
+        Args:
+            point: One state per cell.
+            time: Unused; the ring is autonomous.
+
+        Returns:
+            Each cell's derivative, given its state and its downstream neighbour's.
+        """
         count = len(point)
         return [self._cell(point[i], point[(i + 1) % count]) for i in range(count)]
 
@@ -50,6 +88,10 @@ class FluxgateRing(UnidirectionalRing):
     ``eps``. At zero bias the trivial state breaks symmetry at ``lambda = 1 - c``.
     The cell uses a transcendental nonlinearity, so it is intended for numeric
     continuation rather than the jet-based automatic-differentiation backend.
+
+    References:
+        Bulsara et al. (2004), eq. (2), with the coupling outside the ``c``
+        (see the module docstring).
     """
 
     def _cell(self, state: float, neighbour: float) -> float:
@@ -101,6 +143,10 @@ class FerroelectricRing(UnidirectionalRing):
     A target field sweeps the double well, whose fold thresholds the coupling
     tunes. The cell is polynomial, so it is fully compatible with the
     automatic-differentiation backend.
+
+    References:
+        Bulsara et al. (2004), eq. (1), with ``a`` shifted by ``lambda`` (see the
+        module docstring).
     """
 
     def _cell(self, state: float, neighbour: float) -> float:

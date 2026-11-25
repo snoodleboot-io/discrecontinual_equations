@@ -16,6 +16,27 @@ is less than one, i.e. the one-dimensional direction dominates the spiral. When
 linear condition; whether a homoclinic connection actually exists, and the resulting
 chaos, can be confirmed with the flow's top Lyapunov exponent
 (:func:`discrecontinual_equations.continuation.lyapunov.lyapunov_spectrum`).
+
+In Shilnikov's setting the saddle-focus has eigenvalues ``lambda +- i omega`` and
+``gamma`` with ``lambda < 0 < gamma`` and ``omega != 0``, and the condition is a
+positive saddle value ``lambda + gamma > 0``, i.e. ``|lambda| / gamma < 1``. The
+time-reversed case (a real stable eigenvalue and an expanding spiral) reduces to
+it by ``t -> -t``, and the index is the same ratio, so both orientations are
+accepted here.
+
+Limits: only three-dimensional spectra (one real eigenvalue and one pair) are
+classified; anything else returns ``None``. A saddle index below one says what a
+homoclinic loop *would* produce; it does not say the loop exists - that needs
+:mod:`.homoclinic_shooting` or :mod:`.connecting_orbit`. At ``delta = 1`` exactly
+the criterion is degenerate and is reported as not satisfied.
+
+References:
+- Shilnikov, L. P. "A case of the existence of a denumerable set of periodic
+  motions", Doklady Akademii Nauk SSSR 160 (1965) 558-561.
+- Gonchenko, S., Kazakov, A., Turaev, D. and Shilnikov, A. L. "Leonid Shilnikov
+  and mathematical theory of dynamical chaos", Chaos 32 (2022) 010402,
+  arXiv:2112.02423, doi:10.1063/5.0080836, section II (the saddle-focus loop and
+  its condition ``lambda + gamma > 0``).
 """
 
 import numpy as np
@@ -25,7 +46,11 @@ _CHAOS_THRESHOLD = 1.0
 
 
 class SaddleFocus:
-    """The eigenstructure of a three-dimensional saddle-focus equilibrium."""
+    """The eigenstructure of a three-dimensional saddle-focus equilibrium.
+
+    References:
+        Shilnikov (1965); Gonchenko et al. (2022), section II.
+    """
 
     __slots__ = ["_real_eigenvalue", "_spiral_imaginary", "_spiral_real"]
 
@@ -70,6 +95,15 @@ def classify_saddle_focus(jacobian: np.ndarray) -> SaddleFocus | None:
 
     The Jacobian must have exactly one real eigenvalue and one complex-conjugate
     pair whose real part has the opposite sign to the real eigenvalue.
+
+    Args:
+        jacobian: The ``3 x 3`` Jacobian at an equilibrium.
+
+    Returns:
+        The saddle-focus, or ``None`` when the spectrum is not of that form.
+
+    References:
+        Shilnikov (1965); Gonchenko et al. (2022), section II.
     """
     eigenvalues = np.linalg.eigvals(np.asarray(jacobian, dtype=float))
     reals = [
