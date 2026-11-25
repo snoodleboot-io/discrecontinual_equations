@@ -42,7 +42,11 @@ from discrecontinual_equations.continuation.heteroclinic_network import (
     HeteroclinicNetwork,
 )
 from tests.continuation.fields import HeteroclinicField, State, _saddle
-from tests.continuation.test_connecting_newton import _bogdanov_takens_problem
+from tests.continuation.test_connecting_newton import (
+    NonAnalyticSaddle,
+    _bogdanov_takens_problem,
+    _saddle_problem,
+)
 from tests.continuation.test_heteroclinic_network_subspace import (
     _EDGES,
     _SHEAR4,
@@ -202,6 +206,27 @@ class TestNonFiniteIteratesAreRefused(TestCase):
             warnings.simplefilter("ignore", RuntimeWarning)
             with pytest.raises(NotConvergedError):
                 solver.solve(seed)
+
+    def test_a_field_that_raises_on_overflow_refuses(self):
+        """``math.pow`` raises ``OverflowError`` where numpy would return inf."""
+        solver, _, seed = _saddle_problem(
+            60,
+            NonAnalyticSaddle(
+                variables=[State(), State()],
+                parameters=[],
+                results=[State(), State()],
+                time=None,
+            ),
+        )
+
+        def overflow(_self, _jacobian, residual):
+            return np.full(seed.size, 1.0e200) * (1.0 + 0.0 * residual[0])
+
+        with (
+            mock.patch.object(HomoclinicOrbit, "_least_squares", overflow),
+            pytest.raises(NotConvergedError),
+        ):
+            solver.solve(seed)
 
     def test_a_non_finite_seed_refuses(self):
         solver, seed, _, _ = _tanh_problem()
