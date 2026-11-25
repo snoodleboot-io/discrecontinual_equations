@@ -6,7 +6,9 @@ links them, so a set of analyses becomes a small browsable site.
 """
 
 from pathlib import Path
+from urllib.parse import quote
 
+from discrecontinual_equations.webplot.escaping import escape_text
 from discrecontinual_equations.webplot.renderer import HtmlRenderer
 
 
@@ -68,18 +70,18 @@ def _atlas_html(entries: list[AtlasEntry]) -> str:
 
 
 def _card(entry: AtlasEntry) -> str:
+    """One card. Its link is the filename as a relative URL path: escaping
+    alone keeps a name inside the attribute, but a name such as
+    ``javascript:...`` would still be a URL that runs when clicked, and
+    percent-encoding its colon makes it the file it names."""
     stage = entry.kind == "stage"
     classes = "card stage" if stage else "card"
     tag = '<span class="tag">&#9654; play</span>' if stage else ""
     return (
-        f'<a class="{classes}" href="{entry.filename}">'
-        f"{tag}<h2>{_escape(entry.title)}</h2>"
-        f"<p>{_escape(entry.subtitle)}</p></a>"
+        f'<a class="{classes}" href="{escape_text(quote(entry.filename))}">'
+        f"{tag}<h2>{escape_text(entry.title)}</h2>"
+        f"<p>{escape_text(entry.subtitle)}</p></a>"
     )
-
-
-def _escape(text: str) -> str:
-    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
 _ATLAS_TEMPLATE = """<!DOCTYPE html>
