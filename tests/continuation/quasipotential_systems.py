@@ -222,3 +222,45 @@ def kronecker_covariance(drift: np.ndarray, diffusion: np.ndarray) -> np.ndarray
 
 def system(field_class) -> DeterministicFunction:
     return field_class(_states(), [], _states(), None)
+
+
+# U from the left well at grid points of the Maier-Stein box, by the same
+# independent L-BFGS minimisation as MAIER_STEIN_BARRIER: chains of 100, 200
+# and 400 nodes from (-1, 0), the last two extrapolated at second order (the
+# 200-to-400 change is 1.4e-5 at (-1.3, 0.4) and at most 5e-6 elsewhere).
+MAIER_STEIN_VALUES = {
+    (-0.4, 0.3): 0.2587345,
+    (-0.7, -0.2): 0.1280867,
+    (-1.3, 0.4): 1.0204491,
+    (-0.2, 0.5): 0.4192326,
+}
+
+
+# --- A rotating well with every cubic term (verification of DEQ-57) ---------
+#
+# f = -(1/2) grad U + c R grad U, D = I, R the rotation by a right angle: grad U
+# . f = -(1/2) |grad U|^2 and (1/2) |grad U|^2 cancel it, so U solves the
+# Hamilton-Jacobi equation exactly for any U and c. With U = x^2 + 2 y^2 + U3
+# and every coefficient of U3 nonzero, the cubic term at the origin is U3
+# itself, and with c = 4 the flow B = J + 2 D M along which paths leave the
+# well is far from symmetric.
+CUBIC_TERMS = (0.3, -0.2, 0.15, 0.1)
+CUBIC_ROTATION = 4.0
+
+
+class RotatingCubicField(DeterministicFunction):
+    """``f = -(1/2) grad U + c R grad U`` for ``U = x^2 + 2 y^2 + U3``."""
+
+    def eval(
+        self,
+        point: list[float],
+        time: float | None = None,  # noqa: ARG002 (base signature)
+    ) -> list[float]:
+        x, y = float(point[0]), float(point[1])
+        a, b, c, d = CUBIC_TERMS
+        slope_x = 2.0 * x + 3.0 * a * x * x + 2.0 * b * x * y + c * y * y
+        slope_y = 4.0 * y + b * x * x + 2.0 * c * x * y + 3.0 * d * y * y
+        return [
+            -0.5 * slope_x - CUBIC_ROTATION * slope_y,
+            -0.5 * slope_y + CUBIC_ROTATION * slope_x,
+        ]

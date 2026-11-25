@@ -29,11 +29,18 @@ from discrecontinual_equations.continuation.fokker_planck import (
 )
 from discrecontinual_equations.continuation.noise import NoiseMatrix
 from discrecontinual_equations.continuation.quasipotential import (
+    CHECKED,
+    GRID,
+    REFINED,
     CycleAttractor,
     EquilibriumAttractor,
     GeometricMinimumAction,
+    GridQuasipotential,
     OrderedLineIntegral,
     _action,
+    _cubic_coefficients,
+    _guide,
+    _relax_from,
     _stationary_fraction,
 )
 from discrecontinual_equations.continuation.stochastic import Ito
@@ -46,7 +53,9 @@ from tests.continuation.fields import (
 )
 from tests.continuation.quasipotential_systems import (
     ANISOTROPIC_AMPLITUDE,
+    CUBIC_TERMS,
     MAIER_STEIN_BARRIER,
+    MAIER_STEIN_VALUES,
     NON_NORMAL_AMPLITUDE,
     NON_NORMAL_DRIFT,
     OTHER_WELL,
@@ -57,6 +66,7 @@ from tests.continuation.quasipotential_systems import (
     NonNormalField,
     PaperCycleField,
     PaperLinearField,
+    RotatingCubicField,
     constant_noise,
     double_well,
     kronecker_covariance,
@@ -261,6 +271,24 @@ class TestMinimumActionPath(TestCase):
             for step in (0.05, 0.01)
         ]
         assert abs(actions[0] - actions[1]) < 1.0e-6
+
+    def test_gmam_on_a_strongly_rotating_drift_settles_at_the_default_step(self):
+        # Dahiya and Cameron's SDE (21), rotation ten times the gradient: the
+        # explicit part of the flow is stiff there, and at the default step
+        # the chain once blew up to nan and scipy's banded solve raised. The
+        # answer must not depend on the step it took to get there.
+        target = np.array([0.5, 0.3])
+        paths = [
+            GeometricMinimumAction(
+                system(PaperLinearField),
+                constant_noise(_IDENTITY),
+                **options,
+            ).path(np.linspace([0.0, 0.0], target, 41))
+            for options in ({}, {"step": 0.01})
+        ]
+        assert all(path.converged for path in paths)
+        assert np.all(np.isfinite(paths[0].states))
+        assert abs(paths[0].action - paths[1].action) < 1.0e-6
 
     def test_gmam_refuses_a_state_dependent_diffusion(self):
         parameters = [Alpha(value=1.0), Sigma(value=0.7)]
@@ -635,3 +663,299 @@ class TestMaierStein(TestCase):
         assert abs(traced.action - relaxed.action) < 3.0e-4
         distance = cKDTree(relaxed.states).query(traced.states)[0]
         assert np.max(distance) < _grid.spacings[0]
+
+
+# --- Error estimates and refinement ----------------------------------------
+#
+# The check of a grid value is a grid-free value at the same point: the
+# minimum action path relaxed from a small surface about the attractor, where U
+# is known from the attractor's own expansion. These tests hold the estimate
+# against the true error on the four reference problems of the verification,
+# wherever that error is above 1e-4: each estimate must be within a factor of
+# three of it or above it.
+
+_INDICATOR_FLOOR = 1.0e-4
+_INDICATOR_FACTOR = 3.0
+
+
+def _nonnormal_exact(points):
+    diffusion = NON_NORMAL_AMPLITUDE @ NON_NORMAL_AMPLITUDE.T
+    inverse = np.linalg.inv(kronecker_covariance(NON_NORMAL_DRIFT, diffusion))
+    return 0.5 * np.einsum("ki,ij,kj->k", points, inverse, points)
+
+
+def _gradient_exact(points):
+    return 2.0 * (potential(points[:, 0], points[:, 1]) - potential(*WELL))
+
+
+def _cycle_exact(points):
+    return 0.5 * (np.sum(points * points, axis=1) - 1.0) ** 2
+
+
+@functools.cache
+def _checked(name):
+    """A reference problem's field at 81 points, checked at four grid points."""
+    if name == "nonnormal":
+        grid = DensityGrid.box([-1.5, -1.5], [1.5, 1.5], [81, 81])
+        solver = OrderedLineIntegral(
+            system(NonNormalField),
+            constant_noise(NON_NORMAL_AMPLITUDE),
+            grid,
+        )
+        attractor, exact = EquilibriumAttractor([0.0, 0.0]), _nonnormal_exact
+        targets = [(0.4, 0.3), (-0.375, 0.1875), (0.225, -0.3), (-0.6, 0.0)]
+    elif name == "gradient":
+        grid = DensityGrid.box([-2.0, -1.5], [1.0, 1.5], [81, 81])
+        solver = OrderedLineIntegral(
+            system(AnisotropicGradientField),
+            constant_noise(ANISOTROPIC_AMPLITUDE),
+            grid,
+        )
+        attractor, exact = EquilibriumAttractor(WELL), _gradient_exact
+        targets = [(-0.7, 0.6), (-1.5, -0.8), (-0.6, -0.3), (-1.2, 0.9)]
+    else:
+        grid = DensityGrid.box([-2.0, -2.0], [2.0, 2.0], [81, 81])
+        solver = OrderedLineIntegral(
+            system(PaperCycleField),
+            constant_noise(_IDENTITY),
+            grid,
+        )
+        attractor, exact = _paper_cycle(), _cycle_exact
+        targets = [(0.5, 0.0), (1.0, 1.0), (-1.2, -1.2), (0.0, -0.6)]
+    field = solver.solve(attractor)
+    indices = [np.ravel_multi_index(grid.nearest(t), grid.shape) for t in targets]
+    checked = solver.check(field, indices)
+    points = grid.points()[indices]
+    true = field.values.ravel()[indices] - exact(points)
+    return solver, field, checked, indices, true
+
+
+def _assert_tracks(estimate, true):
+    large = np.abs(true) > _INDICATOR_FLOOR
+    assert large.any()
+    above = estimate[large] >= np.abs(true[large])
+    close = estimate[large] >= np.abs(true[large]) / _INDICATOR_FACTOR
+    close &= estimate[large] <= _INDICATOR_FACTOR * np.abs(true[large])
+    assert np.all(above | close), (estimate, true)
+
+
+class TestErrorEstimate(TestCase):
+    """DEQ-57: an estimated error per checked point, against the true one."""
+
+    def test_a_field_from_the_march_has_measured_nothing(self):
+        _solver, field, _checked_field, _indices, _true = _checked("gradient")
+        assert np.all(np.isnan(field.errors))
+        assert np.all(field.status == GRID)
+        assert isinstance(field.attractor, EquilibriumAttractor)
+
+    def test_checking_marks_the_points_and_leaves_the_field_alone(self):
+        _solver, field, checked, indices, _true = _checked("gradient")
+        assert np.all(checked.status.ravel()[indices] == CHECKED)
+        assert np.all(np.isfinite(checked.errors.ravel()[indices]))
+        others = np.ones(field.grid.size, dtype=bool)
+        others[indices] = False
+        assert np.all(checked.status.ravel()[others] == GRID)
+        assert np.array_equal(checked.values, field.values)
+        assert np.all(np.isnan(field.errors))
+
+    def test_the_estimate_tracks_the_error_on_the_non_normal_system(self):
+        _solver, _field, checked, indices, true = _checked("nonnormal")
+        _assert_tracks(checked.errors.ravel()[indices], true)
+
+    def test_the_estimate_tracks_the_error_on_the_anisotropic_gradient(self):
+        _solver, _field, checked, indices, true = _checked("gradient")
+        _assert_tracks(checked.errors.ravel()[indices], true)
+
+    def test_the_estimate_tracks_the_error_about_the_cycle_of_sde_24(self):
+        _solver, _field, checked, indices, true = _checked("cycle")
+        _assert_tracks(checked.errors.ravel()[indices], true)
+
+    def test_the_estimate_tracks_the_error_on_maier_stein(self):
+        # The truth here is the independent L-BFGS minimisation of the
+        # discretised action (MAIER_STEIN_VALUES), not a closed form.
+        grid, solver, field = _maier_stein_field(2)
+        targets = list(MAIER_STEIN_VALUES)
+        indices = [np.ravel_multi_index(grid.nearest(t), grid.shape) for t in targets]
+        checked = solver.check(field, indices)
+        true = field.values.ravel()[indices] - np.array(
+            [MAIER_STEIN_VALUES[t] for t in targets],
+        )
+        _assert_tracks(checked.errors.ravel()[indices], true)
+
+    def test_the_grid_free_value_is_closer_than_the_grid(self):
+        # Where the path from a rotating equilibrium winds round it: from the
+        # surface a quarter of the way out, the chain never sees the winding.
+        grid = DensityGrid.box([-1.5, -1.5], [1.5, 1.5], [81, 81])
+        solver = OrderedLineIntegral(
+            rotating_drift(),
+            constant_noise(rotating_noise_matrix()),
+            grid,
+        )
+        field = solver.solve(EquilibriumAttractor([0.0, 0.0]))
+        target = np.array([0.8, -0.3])
+        exact = float(rotating_quasipotential(target[None, :])[0])
+        value, own = solver.reference(field, target)
+        # Measured 1.8e-5 (own estimate 4.3e-5) against the grid's 6.9e-4.
+        assert abs(value - exact) < 3.0e-5
+        assert abs(value - exact) <= own
+        assert abs(field.at(target) - exact) > 10.0 * abs(value - exact)
+
+    def test_a_strongly_rotating_drift_can_be_checked(self):
+        # SDE (21), rotation ten times the gradient: the chain's flow is stiff
+        # at the default step, and checking a point once raised from scipy.
+        grid = DensityGrid.box([-1.0, -1.0], [1.0, 1.0], [41, 41])
+        solver = OrderedLineIntegral(
+            system(PaperLinearField),
+            constant_noise(_IDENTITY),
+            grid,
+        )
+        field = solver.solve(EquilibriumAttractor([0.0, 0.0]))
+        index = np.ravel_multi_index(grid.nearest([0.5, 0.3]), grid.shape)
+        target = grid.points()[index]
+        exact = 2.0 * target[0] ** 2 + target[1] ** 2
+        value, own = solver.reference(field, target)
+        checked = solver.check(field, [index])
+        # The chain from the surface is no better than the grid here - the
+        # path spirals out of the origin ten times faster than it climbs -
+        # but its own estimate says so, and the grid's estimate stays a bound.
+        assert abs(value - exact) <= own
+        grid_error = abs(field.values.ravel()[index] - exact)
+        assert checked.errors.ravel()[index] >= grid_error
+
+    def test_the_references_own_estimate_bounds_its_error(self):
+        # About a nonlinear well, where the chain's error goes at second order
+        # in the nodes rather than the fourth of the linear systems: measured
+        # -4.9e-5 at 81 nodes and -1.3e-5 at 161 at (-1.5, -0.8).
+        solver, field, _checked_field, _indices, _true = _checked("gradient")
+        target = np.array([[-1.5, -0.8]])
+        value, own = solver.reference(field, target[0])
+        error = abs(value - float(_gradient_exact(target)[0]))
+        assert error < 1.0e-4
+        assert error <= own <= 10.0 * error
+
+    def test_the_reference_beside_a_cycle_starts_on_the_targets_side(self):
+        # From the band's edge on the side of the target, with the march's
+        # Simpson-rule start there: at r = sqrt(2), U = 1/2 exactly.
+        solver, field, _checked_field, _indices, _true = _checked("cycle")
+        value, own = solver.reference(field, [1.0, 1.0])
+        # Measured 5.5e-5 below; the grid at 81 points is 3.3e-2 below here.
+        assert abs(value - 0.5) < 1.0e-4
+        assert abs(value - 0.5) <= own
+
+    def test_the_estimate_is_the_distance_to_the_reference_plus_its_error(self):
+        solver, field, checked, indices, _true = _checked("nonnormal")
+        target = field.grid.points()[indices[0]]
+        value, own = solver.reference(field, target)
+        estimate = abs(field.values.ravel()[indices[0]] - value) + own
+        assert checked.errors.ravel()[indices[0]] == pytest.approx(estimate, rel=1e-9)
+
+    def test_the_start_slides_to_where_u_plus_the_action_is_least(self):
+        # Started half a radian round the surface from the traced crossing, the
+        # secant must still bring the start to the stationary point: anywhere
+        # else U + S is larger, by the square of the distance. About the
+        # nonlinear well the surface is not a level set of U, so only the root
+        # of (grad U - p) . t is that point (on a linear system grad U . t
+        # vanishes on the surface and (grad U + p) . t has the same root).
+        solver, field, _checked_field, _indices, _true = _checked("gradient")
+        drift = system(AnisotropicGradientField)
+        noise = constant_noise(ANISOTROPIC_AMPLITUDE)
+        target = np.array([-1.5, -0.8])
+        surface = field.attractor.start(field.grid, drift, noise, target)
+        chain, parameter = _guide(
+            surface,
+            solver.minimum_action_path(field, target).states,
+            81,
+        )
+        gmam = GeometricMinimumAction(drift, noise, tolerance=1.0e-8)
+        value, _chain, _place = _relax_from(gmam, surface, (chain, parameter + 0.5))
+        exact = float(_gradient_exact(target[None, :])[0])
+        assert abs(value - exact) < 1.0e-4
+
+    def test_a_field_without_its_attractor_cannot_be_checked(self):
+        _solver, field, _checked_field, _indices, _true = _checked("gradient")
+        bare = GridQuasipotential(field.grid, field.values, field.floor)
+        solver = _checked("gradient")[0]
+        with pytest.raises(ValueError, match="attractor"):
+            solver.check(bare, [0])
+
+
+class TestRefinement(TestCase):
+    """DEQ-57: past a tolerance, the grid value is replaced by the grid-free one."""
+
+    def test_every_refined_point_is_within_the_tolerance(self):
+        solver, field, _checked_field, indices, _true = _checked("gradient")
+        tolerance = 5.0e-4
+        refined = solver.check(field, indices, tolerance=tolerance)
+        status = refined.status.ravel()[indices]
+        assert np.any(status == REFINED)
+        points = field.grid.points()[indices]
+        error = np.abs(refined.values.ravel()[indices] - _gradient_exact(points))
+        assert np.all(error[status == REFINED] <= tolerance)
+        assert np.all(refined.errors.ravel()[indices][status == REFINED] <= tolerance)
+        # A point refined was one whose grid value was off by more than that.
+        grid_error = np.abs(field.values.ravel()[indices] - _gradient_exact(points))
+        assert np.all(grid_error[status == REFINED] > error[status == REFINED])
+
+    def test_a_reference_not_good_to_the_tolerance_only_flags(self):
+        # No reference here is good to 1e-7, so nothing may be replaced, however
+        # far off the grid value is; each point is flagged by its error instead.
+        solver, field, _checked_field, indices, _true = _checked("gradient")
+        flagged = solver.check(field, indices[:2], tolerance=1.0e-7)
+        assert np.all(flagged.status.ravel()[indices[:2]] == CHECKED)
+        assert np.array_equal(flagged.values, field.values)
+
+
+class TestCubicTerm(TestCase):
+    def test_the_cubic_term_at_a_well_is_twice_the_potentials(self):
+        # U = 2 (V - V_min) and V - V_min = d^2 - d^3 + d^4 / 4 + y^2 / 2 with
+        # d = x + 1, whatever the constant D: U3 = -2 d^3.
+        coefficients = _cubic_coefficients(
+            system(AnisotropicGradientField),
+            constant_noise(ANISOTROPIC_AMPLITUDE),
+            np.array(WELL),
+            np.diag([2.0, 1.0]),
+        )
+        assert np.allclose(coefficients, [-2.0, 0.0, 0.0, 0.0], atol=1.0e-5)
+
+    def test_the_cubic_term_of_a_rotating_well_is_its_own(self):
+        # Off the gradient case, with every coefficient of U3 nonzero: U is
+        # exact by construction (see RotatingCubicField), M = diag(1, 2).
+        drift = system(RotatingCubicField)
+        noise = constant_noise(_IDENTITY)
+        origin = np.zeros(2)
+        start = EquilibriumAttractor(origin).start(None, drift, noise, [0.4, 0.2])
+        assert start.value([0.1, 0.0]) == pytest.approx(0.01 + 0.3e-3)
+        coefficients = _cubic_coefficients(drift, noise, origin, np.diag([1.0, 2.0]))
+        assert np.allclose(coefficients, CUBIC_TERMS, atol=1.0e-6)
+
+    def test_the_inner_surface_is_at_half_the_distance(self):
+        # The reference's second surface, which measures the expansion's error,
+        # is the same level set scaled by one half about the equilibrium.
+        drift = system(RotatingCubicField)
+        noise = constant_noise(_IDENTITY)
+        outer = EquilibriumAttractor([0.0, 0.0]).start(None, drift, noise, [0.4, 0.2])
+        inner = outer.shrunk()
+        for angle in (0.0, 1.0, 2.5):
+            assert np.allclose(inner.point(angle), 0.5 * outer.point(angle))
+
+
+class TestArrival(TestCase):
+    """A trace has reached a cycle when it stops inside the band, by distance."""
+
+    def test_a_trace_stopping_inside_the_band_has_arrived(self):
+        # mu = 0.2: the trace from inside stops 1.48 cells from the cycle, U
+        # 0.002 above the floor. The band is 1.5 cells wide, so it is in it;
+        # by the old reading of U against the floor it had stalled.
+        grid, solver, field = _hopf_cycle_field(0.2)
+        path = solver.minimum_action_path(field, [0.3, 0.0])
+        off = abs(np.linalg.norm(path.states[-1]) - math.sqrt(0.2))
+        assert off < 1.5 * grid.spacings[0]
+        assert path.arrived
+
+    def test_a_trace_stopping_outside_the_band_has_not(self):
+        # The trace from outside stops 2.1 cells from the cycle at mu = 0.2.
+        grid, solver, field = _hopf_cycle_field(0.2)
+        path = solver.minimum_action_path(field, [1.35, 0.85])
+        off = abs(np.linalg.norm(path.states[-1]) - math.sqrt(0.2))
+        assert off > 1.5 * grid.spacings[0]
+        assert not path.arrived

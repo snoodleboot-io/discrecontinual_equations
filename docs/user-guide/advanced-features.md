@@ -112,7 +112,15 @@ path = solver.minimum_action_path(field, [-0.3, 0.6], end=[-1.0, 0.0])
 path.states, path.action                       # back along -(f + D grad U)
 
 between = GeometricMinimumAction(drift, noise).path(initial_chain)  # across a saddle
+
+checked = solver.check(field, stride=8, tolerance=1e-3)  # optional, seconds a point
+checked.errors, checked.status                 # estimated error; GRID, CHECKED or REFINED
 ```
+
+The march says nothing about how accurate a value is. `check` estimates it at
+chosen points against a value computed without the grid, by the geometric
+minimum action method from a small surface about the attractor, and with a
+`tolerance` replaces the grid values that miss it.
 
 `U` is normalised as the rest of the library writes `dx = f dt + G dW`:
 `D = G G^T`, so a gradient drift `-grad V` with `G = I` has `U = 2 V`, and the

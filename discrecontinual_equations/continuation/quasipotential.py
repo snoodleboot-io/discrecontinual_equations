@@ -116,6 +116,36 @@ and Vanden-Eijnden restate it (arXiv 1604.03818, Eq. (19)); the letter usually
 cited for that form is Vanden-Eijnden and Heymann, J. Chem. Phys. 128, 061103
 (2008). It needs no grid and crosses saddles, which a descent on ``U`` cannot.
 
+*Errors.* The march is a single pass: a value is final once accepted, and nothing
+in it says how accurate any value is. :meth:`OrderedLineIntegral.check` says so
+point by point, on request, from a value computed without the grid
+(:meth:`OrderedLineIntegral.reference`): the chain of
+:class:`GeometricMinimumAction` relaxed to the point from a small surface about
+the attractor - a level set of the quadratic form a quarter of the way out from
+an equilibrium, the curve at the band's edge beside a cycle - on which ``U`` is
+the attractor's own expansion (for an equilibrium the quadratic form plus the
+cubic term of the Taylor series, so wrong at fourth order). The chain's start
+slides along the surface to where ``U + S`` is least. Each check also estimates
+the reference's own error, from a surface at twice the distance and a chain of
+half the nodes, and the error of the grid value is estimated as its distance
+from the reference plus that. With a tolerance the grid value is replaced where
+the estimate exceeds it and the reference is good to it. The estimate tracks the
+true error on the four reference problems (the tests, at 81 points): on the
+non-normal linear system, the anisotropic gradient, SDE (24) and Maier-Stein,
+every estimate is above the true error or within a factor of three of it
+wherever that exceeds ``1e-4``.
+
+The traced path's action was the first candidate, being cheap, and was measured
+and rejected: its own error, from a path that follows the grid's gradient, is
+the size of the grid's (at 81 points the median 3.6e-4 against a largest grid
+error of 9.0e-4 on the non-normal system, 1.0e-3 against 3.4e-2 on the
+anisotropic gradient), so the gap between the two was within a factor of three
+of the true error, or above it, at only 90%, 82% and 94% of the points where
+that exceeds ``1e-4`` on the non-normal system, the anisotropic gradient and
+SDE (24), and beside the cycle the trace does not move at all. The grid-free
+value costs a few seconds a point against about ten milliseconds for a trace,
+which is why it is asked for point by point and never part of the march.
+
 *Limits.* The method is planar - a two-dimensional :class:`DensityGrid` only; the
 ordered line integral idea extends to three dimensions at a much higher cost and is
 not implemented. The drift and noise must be time-independent: ``U`` is a static
@@ -165,6 +195,24 @@ _CONSTANT_TOLERANCE = 1.0e-9
 _DESCENT_STEP = 0.5
 _DESCENT_MAX_STEPS = 20000
 _ARRIVAL_CELLS = 2.0
+_CUBIC_DIRECTIONS = 8
+_TAYLOR_STEP = 1.0e-3
+_REFERENCE_NODES = 81
+_START_SHARE = 0.25
+_SECANT_STEPS = 6
+_SECANT_TOLERANCE = 1.0e-4
+_SECANT_SETTLED = 1.0e-9
+# A chain that blows up is relaxed again at half the step, this many times in all.
+_STEP_HALVINGS = 6
+# A node moving by this share of the distance between the chain's ends in one
+# step is unstable.
+_JUMP_SHARE = 0.25
+# The chain stops when no node moves by this much in a step. The action is
+# stationary on the minimiser, so what is left of the chain's error enters the
+# value squared; 1e-10, the default, costs twice the steps for nothing visible.
+_REFERENCE_SETTLED = 1.0e-8
+_BAND_SAMPLES_PER_CELL = 16
+GRID, CHECKED, REFINED = 0, 1, 2
 
 
 class EquilibriumAttractor:
@@ -215,6 +263,162 @@ class EquilibriumAttractor:
     def end(self) -> np.ndarray | None:
         """Where a path traced back to this attractor finishes."""
         return self._state
+
+    def reached(self, state: np.ndarray, grid: DensityGrid) -> bool:
+        """Whether ``state`` lies within the region the attractor initialised."""
+        cells = np.linalg.norm((np.asarray(state) - self._state) / grid.spacings)
+        return bool(cells <= self._radius)
+
+    def start(
+        self,
+        grid: DensityGrid,  # noqa: ARG002 (a cycle's start is set in cells)
+        drift: Function,
+        noise: NoiseMatrix,
+        target: np.ndarray,
+    ) -> "_EllipseStart":
+        """Where a grid-free path to ``target`` starts: a small level set of ``U``.
+
+        The level set of the quadratic form through the point a quarter of the
+        way to ``target``. It is not tied to the grid: ``U`` on it is right to
+        fourth order in its size, and the start of the path, where a rotating
+        equilibrium makes it wind, is better left out than resolved.
+        """
+        jacobian = jacobian_at(drift, self._state)
+        diffusion = diffusion_matrix(noise.columns_at(self._state))
+        form = _HALF * np.linalg.inv(solve_continuous_lyapunov(jacobian, -diffusion))
+        cubic = _cubic_coefficients(drift, noise, self._state, form)
+        offset = _START_SHARE * (np.asarray(target, dtype=float) - self._state)
+        level = float(offset @ form @ offset)
+        return _EllipseStart(self._state, form, cubic, level)
+
+
+class _EllipseStart:
+    """The level set ``(x - x*)^T M (x - x*) = c`` about an equilibrium.
+
+    ``U`` there is the quadratic form plus the cubic term of its Taylor expansion
+    (see :func:`_cubic_coefficients`), so it is wrong only at fourth order in the
+    distance from the equilibrium. Points on it are ``x* + sqrt(c) W (cos t,
+    sin t)`` with ``W = M^{-1/2}``.
+    """
+
+    __slots__ = ["_centre", "_cubic", "_form", "_level", "_root", "_unroot"]
+
+    def __init__(
+        self,
+        centre: np.ndarray,
+        form: np.ndarray,
+        cubic: np.ndarray,
+        level: float,
+    ) -> None:
+        self._centre = centre
+        self._form = form
+        self._cubic = cubic
+        self._level = level
+        values, vectors = np.linalg.eigh(form)
+        self._root = vectors @ np.diag(values**-_HALF) @ vectors.T
+        self._unroot = vectors @ np.diag(values**_HALF) @ vectors.T
+
+    def shrunk(self) -> "_EllipseStart":
+        """The same surface at half the distance from the equilibrium."""
+        return _EllipseStart(self._centre, self._form, self._cubic, self._level / 4.0)
+
+    @property
+    def step(self) -> float:
+        """A parameter step of the order of a tenth of the surface's size."""
+        return 0.1
+
+    def point(self, parameter: float) -> np.ndarray:
+        """The point of the surface at angle ``parameter``."""
+        circle = np.array([np.cos(parameter), np.sin(parameter)])
+        return self._centre + np.sqrt(self._level) * self._root @ circle
+
+    def parameter(self, state: np.ndarray) -> float:
+        """The angle of the surface point nearest ``state`` in the form's metric."""
+        unit = self._unroot @ (np.asarray(state) - self._centre)
+        return float(np.arctan2(unit[1], unit[0]))
+
+    def inside(self, state: np.ndarray) -> bool:
+        """Whether ``state`` lies within the surface."""
+        offset = np.asarray(state) - self._centre
+        return bool(offset @ self._form @ offset < self._level)
+
+    def value(self, state: np.ndarray) -> float:
+        """``U`` at ``state``, to fourth order."""
+        offset = np.asarray(state) - self._centre
+        return float(offset @ self._form @ offset + _cubic_value(self._cubic, offset))
+
+    def gradient(self, state: np.ndarray) -> np.ndarray:
+        """``grad U`` at ``state``, to third order."""
+        offset = np.asarray(state) - self._centre
+        return 2.0 * self._form @ offset + _cubic_gradient(self._cubic, offset)
+
+
+def _cubic_monomials(offset: np.ndarray) -> np.ndarray:
+    first, second = offset[0], offset[1]
+    return np.array([first**3, first**2 * second, first * second**2, second**3])
+
+
+def _cubic_value(coefficients: np.ndarray, offset: np.ndarray) -> float:
+    return float(coefficients @ _cubic_monomials(offset))
+
+
+def _cubic_gradient(coefficients: np.ndarray, offset: np.ndarray) -> np.ndarray:
+    first, second = offset[0], offset[1]
+    by_first = np.array([3.0 * first**2, 2.0 * first * second, second**2, 0.0])
+    by_second = np.array([0.0, first**2, 2.0 * first * second, 3.0 * second**2])
+    return np.array([coefficients @ by_first, coefficients @ by_second])
+
+
+def _cubic_coefficients(
+    drift: Function,
+    noise: NoiseMatrix,
+    state: np.ndarray,
+    form: np.ndarray,
+) -> np.ndarray:
+    """The cubic term ``U3`` of ``U`` at a stable equilibrium ``x*``.
+
+    With ``x = x* + y``, ``f = J y + (1/2) F2[y, y] + ...``, ``D = D0 + D1[y] +
+    ...`` and ``U = y^T M y + U3(y) + ...``, the third-order terms of
+    ``grad U . f + (1/2) grad U^T D grad U = 0`` are
+
+        ``grad U3(y) . B y = -(y^T M F2[y, y] + 2 y^T M D1[y] M y)``,
+        ``B = J + 2 D0 M``,
+
+    a linear equation for the four coefficients of ``U3``. ``B`` is the linear
+    flow along which minimum action paths leave ``x*`` (eigenvalues of positive
+    real part), so the derivative along it is invertible on cubics. ``F2`` and
+    ``D1`` are central differences; the equation is collocated at eight
+    directions and solved by least squares.
+    """
+    jacobian = jacobian_at(drift, state)
+    centre = diffusion_matrix(noise.columns_at(state))
+    flow = jacobian + 2.0 * centre @ form
+    rows, right = [], []
+    for angle in np.linspace(0.0, np.pi, _CUBIC_DIRECTIONS, endpoint=False):
+        unit = np.array([np.cos(angle), np.sin(angle)])
+        ahead, behind = state + _TAYLOR_STEP * unit, state - _TAYLOR_STEP * unit
+        curvature = (
+            field_at(drift, ahead)
+            - 2.0 * field_at(drift, state)
+            + field_at(drift, behind)
+        ) / _TAYLOR_STEP**2
+        change = (
+            diffusion_matrix(noise.columns_at(ahead))
+            - diffusion_matrix(noise.columns_at(behind))
+        ) / (2.0 * _TAYLOR_STEP)
+        pulled = form @ unit
+        right.append(-(unit @ form @ curvature + 2.0 * pulled @ change @ pulled))
+        along = flow @ unit
+        first, second = unit
+        rows.append(
+            [
+                3.0 * first**2 * along[0],
+                2.0 * first * second * along[0] + first**2 * along[1],
+                second**2 * along[0] + 2.0 * first * second * along[1],
+                3.0 * second**2 * along[1],
+            ],
+        )
+    return np.linalg.lstsq(np.array(rows), np.array(right), rcond=None)[0]
 
 
 class CycleAttractor:
@@ -277,6 +481,140 @@ class CycleAttractor:
         """A cycle has no single end point; a traced path stops on reaching it."""
         return None
 
+    def reached(self, state: np.ndarray, grid: DensityGrid) -> bool:
+        """Whether ``state`` lies within the band the attractor initialised."""
+        cell = float(np.min(grid.spacings))
+        samples = _resample_closed(self._states, cell / _CYCLE_SAMPLES_PER_CELL)
+        distance, _ = cKDTree(samples).query(np.asarray(state, dtype=float))
+        return bool(distance <= self._width * cell)
+
+    def start(
+        self,
+        grid: DensityGrid,
+        drift: Function,
+        noise: NoiseMatrix,
+        target: np.ndarray,
+    ) -> "_BandStart":
+        """Where a grid-free path to ``target`` starts: the edge of the band.
+
+        The curve ``width`` cells from the cycle on ``target``'s side, capped at
+        half the distance to ``target``, with ``U`` there from the same
+        Simpson-rule start the march uses.
+        """
+        cell = float(np.min(grid.spacings))
+        samples = _resample_closed(self._states, cell / _BAND_SAMPLES_PER_CELL)
+        distance, _ = cKDTree(samples).query(np.asarray(target, dtype=float))
+        offset = min(self._width * cell, _HALF * float(distance))
+        return _BandStart(samples, drift, noise, target, offset)
+
+
+class _BandStart:
+    """The curve at a fixed distance from a cycle, on one side of it.
+
+    Points on it are ``c(s) + d n(s)`` for the cycle ``c`` by arc length ``s``
+    and ``n`` its unit normal towards the side of the target, interpolated
+    between the samples' normals so that the curve has no corners.
+    """
+
+    __slots__ = [
+        "_arc",
+        "_drift",
+        "_noise",
+        "_normals",
+        "_offset",
+        "_samples",
+        "_target",
+        "_tree",
+    ]
+
+    def __init__(
+        self,
+        samples: np.ndarray,
+        drift: Function,
+        noise: NoiseMatrix,
+        target: np.ndarray,
+        offset: float,
+    ) -> None:
+        self._samples = samples
+        self._drift = drift
+        self._noise = noise
+        self._target = np.asarray(target, dtype=float)
+        self._offset = offset
+        self._tree = cKDTree(samples)
+        closed = np.vstack([samples, samples[:1]])
+        chords = np.diff(closed, axis=0)
+        lengths = np.linalg.norm(chords, axis=1)
+        self._arc = np.concatenate([[0.0], np.cumsum(lengths)])
+        across = np.column_stack([chords[:, 1], -chords[:, 0]]) / lengths[:, None]
+        normals = across + np.roll(across, 1, axis=0)
+        normals /= np.linalg.norm(normals, axis=1)[:, None]
+        _, nearest = self._tree.query(np.asarray(target, dtype=float))
+        if float((np.asarray(target) - samples[nearest]) @ normals[nearest]) < 0.0:
+            normals = -normals
+        self._normals = normals
+
+    def shrunk(self) -> "_BandStart":
+        """The same curve at half the distance from the cycle."""
+        return _BandStart(
+            self._samples,
+            self._drift,
+            self._noise,
+            self._target,
+            _HALF * self._offset,
+        )
+
+    @property
+    def step(self) -> float:
+        """A parameter step of a few times the offset."""
+        return 4.0 * self._offset
+
+    def point(self, parameter: float) -> np.ndarray:
+        """The point of the curve at arc length ``parameter`` along the cycle."""
+        closed = np.vstack([self._samples, self._samples[:1]])
+        normals = np.vstack([self._normals, self._normals[:1]])
+        length = self._arc[-1]
+        place = parameter % length
+        base = np.array([np.interp(place, self._arc, closed[:, a]) for a in range(2)])
+        normal = np.array(
+            [np.interp(place, self._arc, normals[:, a]) for a in range(2)],
+        )
+        return base + self._offset * normal / np.linalg.norm(normal)
+
+    def parameter(self, state: np.ndarray) -> float:
+        """The arc length of the cycle point nearest ``state``."""
+        point = np.asarray(state, dtype=float)
+        _, index = self._tree.query(point)
+        following = (index + 1) % len(self._samples)
+        chord = self._samples[following] - self._samples[index]
+        share = float((point - self._samples[index]) @ chord / (chord @ chord))
+        if share < 0.0:
+            index = (index - 1) % len(self._samples)
+            chord = (
+                self._samples[(index + 1) % len(self._samples)] - self._samples[index]
+            )
+            share = float((point - self._samples[index]) @ chord / (chord @ chord))
+        share = min(max(share, 0.0), 1.0)
+        return float(self._arc[index] + share * np.linalg.norm(chord))
+
+    def inside(self, state: np.ndarray) -> bool:
+        """Whether ``state`` is nearer the cycle than the curve."""
+        distance, _ = self._tree.query(np.asarray(state, dtype=float))
+        return bool(distance < self._offset)
+
+    def value(self, state: np.ndarray) -> float:
+        """``U`` at ``state`` by the cycle's Simpson-rule start."""
+        point = np.asarray(state, dtype=float)
+        _, index = self._tree.query(point)
+        return _cycle_start(self._drift, self._noise, self._samples, int(index), point)
+
+    def gradient(self, state: np.ndarray) -> np.ndarray:
+        """``grad U`` at ``state`` from the split of the drift at its foot."""
+        point = np.asarray(state, dtype=float)
+        _, index = self._tree.query(point)
+        foot = _cycle_foot(self._samples, int(index), point)
+        along = field_at(self._drift, foot)
+        return _cycle_slope(self._drift, self._noise, along, point)
+
 
 def _resample_closed(states: np.ndarray, spacing: float) -> np.ndarray:
     closed = np.vstack([states, states[:1]])
@@ -297,6 +635,22 @@ def _cycle_start(
     point: np.ndarray,
 ) -> float:
     """``U`` at ``point`` from the cycle sample ``index`` nearest it (see above)."""
+    foot = _cycle_foot(samples, index, point)
+    along = field_at(drift, foot)
+    step = point - foot
+    middle = _HALF * (foot + point)
+    return float(
+        (
+            4.0 * _cycle_slope(drift, noise, along, middle)
+            + _cycle_slope(drift, noise, along, point)
+        )
+        @ step
+        / 6.0,
+    )
+
+
+def _cycle_foot(samples: np.ndarray, index: int, point: np.ndarray) -> np.ndarray:
+    """The projection of ``point`` on the chord from sample ``index`` to its side."""
     closest = samples[index]
     neighbours = (samples[index - 1], samples[(index + 1) % len(samples)])
     beside = max(
@@ -304,19 +658,21 @@ def _cycle_start(
         key=lambda other: float((point - closest) @ (other - closest)),
     )
     tangent = (beside - closest) / np.linalg.norm(beside - closest)
-    foot = closest + float((point - closest) @ tangent) * tangent
-    along = field_at(drift, foot)
-    step = point - foot
+    return closest + float((point - closest) @ tangent) * tangent
 
-    def slope(state: np.ndarray) -> np.ndarray:
-        metric = np.linalg.inv(diffusion_matrix(noise.columns_at(state)))
-        velocity = field_at(drift, state)
-        weight = float(along @ metric @ along)
-        share = float(velocity @ metric @ along) / weight if weight > 0.0 else 0.0
-        return -2.0 * metric @ (velocity - share * along)
 
-    middle = _HALF * (foot + point)
-    return float((4.0 * slope(middle) + slope(point)) @ step / 6.0)
+def _cycle_slope(
+    drift: Function,
+    noise: NoiseMatrix,
+    along: np.ndarray,
+    state: np.ndarray,
+) -> np.ndarray:
+    """``grad U = -2 D^{-1} (f - c f(x*))`` at ``state``, ``along = f(x*)``."""
+    metric = np.linalg.inv(diffusion_matrix(noise.columns_at(state)))
+    velocity = field_at(drift, state)
+    weight = float(along @ metric @ along)
+    share = float(velocity @ metric @ along) / weight if weight > 0.0 else 0.0
+    return -2.0 * metric @ (velocity - share * along)
 
 
 def _geometric(step: np.ndarray, velocity: np.ndarray, metric: np.ndarray) -> float:
@@ -341,15 +697,50 @@ class GridQuasipotential:
     reached: behind a point where the noise vanishes, or where the grid does not
     connect. ``floor`` is the largest ``U`` on the points the attractor
     initialised, as the march left them: the level below which a state is as close
-    to the attractor as the grid resolves.
+    to the attractor as the grid resolves. ``attractor`` is the one the march
+    started from, when it is known.
+
+    ``errors`` and ``status`` are shaped like the grid and say how far to trust
+    each value. A field fresh from the march has every status :data:`GRID` and
+    every error ``nan``: nothing has been measured. After
+    :meth:`OrderedLineIntegral.check` a checked point has status :data:`CHECKED`
+    and an estimated error, and a point whose value was replaced by the grid-free
+    one has status :data:`REFINED` and the estimated error of the new value.
     """
 
-    __slots__ = ["_floor", "_grid", "_interpolator", "_values"]
+    __slots__ = [
+        "_attractor",
+        "_errors",
+        "_floor",
+        "_grid",
+        "_interpolator",
+        "_status",
+        "_values",
+    ]
 
-    def __init__(self, grid: DensityGrid, values: np.ndarray, floor: float) -> None:
+    def __init__(  # noqa: PLR0913 (the field and what is known about it)
+        self,
+        grid: DensityGrid,
+        values: np.ndarray,
+        floor: float,
+        attractor: "EquilibriumAttractor | CycleAttractor | None" = None,
+        errors: np.ndarray | None = None,
+        status: np.ndarray | None = None,
+    ) -> None:
         self._grid = grid
         self._values = np.asarray(values, dtype=float).reshape(grid.shape)
         self._floor = float(floor)
+        self._attractor = attractor
+        self._errors = (
+            np.full(grid.shape, np.nan)
+            if errors is None
+            else np.asarray(errors, dtype=float).reshape(grid.shape)
+        )
+        self._status = (
+            np.full(grid.shape, GRID, dtype=np.int8)
+            if status is None
+            else np.asarray(status, dtype=np.int8).reshape(grid.shape)
+        )
         # Built once: a traced path asks for U at every step, and building the
         # interpolator per call was most of what tracing a path cost.
         self._interpolator = RegularGridInterpolator(
@@ -373,6 +764,21 @@ class GridQuasipotential:
     def floor(self) -> float:
         """The largest ``U`` the march left on the initialised points."""
         return self._floor
+
+    @property
+    def attractor(self) -> "EquilibriumAttractor | CycleAttractor | None":
+        """The attractor ``U`` is measured from, if the field knows it."""
+        return self._attractor
+
+    @property
+    def errors(self) -> np.ndarray:
+        """The estimated error of each value, ``nan`` where none was estimated."""
+        return self._errors
+
+    @property
+    def status(self) -> np.ndarray:
+        """:data:`GRID`, :data:`CHECKED` or :data:`REFINED` per value."""
+        return self._status
 
     def at(self, state: Sequence[float] | np.ndarray) -> float:
         """``U`` at a state, bilinearly interpolated; ``inf`` off the grid."""
@@ -564,7 +970,7 @@ class OrderedLineIntegral:
         # three cells from the singular origin, 31 of 56, from 0.0208 to 0.0156 -
         # and what it leaves is the level the grid resolves next to the attractor.
         floor = float(np.max(march.values.ravel()[indices]))
-        return GridQuasipotential(self._grid, march.values, floor)
+        return GridQuasipotential(self._grid, march.values, floor, attractor)
 
     def minimum_action_path(
         self,
@@ -584,10 +990,14 @@ class OrderedLineIntegral:
         where the grid does not resolve ``U``, as beside a point where the noise
         vanishes. ``arrived`` on the result says which. A path is counted as
         arrived when it stopped within two cells of ``end`` - an equilibrium's own
-        state, which is then appended as the last state - or, with no ``end``, when
-        ``U`` where it stopped is no more than the field's ``floor``, the largest
-        ``U`` the march left on the points the attractor initialised: no lower than
-        the grid resolves next to the attractor.
+        state, which is then appended as the last state. With no ``end`` it is
+        the field's attractor that decides: an equilibrium is its own ``end``,
+        and a cycle has been reached when the path stopped inside the band of
+        points the attractor initialised - within its ``width`` of the cycle,
+        by distance to the cycle's samples. That is a fixed place, unlike the
+        level ``U`` reaches there, which moves with the march's error. (Only a
+        field built without its attractor falls back on that level: arrived
+        when ``U`` where the path stopped is no more than ``floor``.)
         A path that has not arrived is returned as far as it got, without ``end``.
         Paths that must cross a saddle are what :class:`GeometricMinimumAction` is
         for.
@@ -598,6 +1008,9 @@ class OrderedLineIntegral:
         """
         spacing = float(np.min(self._grid.spacings))
         length = step or _DESCENT_STEP * spacing
+        attractor = field.attractor
+        if end is None and attractor is not None:
+            end = attractor.end()
         gradient = field.gradient()
         current = np.asarray(start, dtype=float)
         level = field.at(current)
@@ -623,7 +1036,9 @@ class OrderedLineIntegral:
             current = following
             states.append(current)
         remaining = field.at(current)
-        if end is None:
+        if end is None and attractor is not None:
+            arrived = attractor.reached(current, self._grid)
+        elif end is None:
             arrived = remaining <= field.floor
         else:
             target = np.asarray(end, dtype=float)
@@ -633,6 +1048,113 @@ class OrderedLineIntegral:
             if arrived:
                 states.append(target)
         return MinimumActionPath(np.array(states), action + remaining, arrived=arrived)
+
+    def check(
+        self,
+        field: GridQuasipotential,
+        indices: Sequence[int] | np.ndarray | None = None,
+        stride: int = 1,
+        tolerance: float | None = None,
+        nodes: int = _REFERENCE_NODES,
+    ) -> GridQuasipotential:
+        """Estimate the error of ``field`` at chosen points, and refine the worst.
+
+        At each point the grid-free value of :meth:`reference` is computed, and
+        the error of the grid value is estimated as its distance from it plus
+        the reference's own estimated error - an upper bound whenever that one
+        is. ``indices`` are flat grid indices; by default every ``stride``-th
+        point along each axis. Points inside the region the attractor
+        initialised, and points the march did not reach, are left as they are.
+
+        With a ``tolerance``, a point whose estimated error exceeds it has its
+        value replaced by the reference, provided the reference's own estimated
+        error is within the tolerance; otherwise it is only flagged, by its
+        error. The field returned is a new one; ``field`` is not changed.
+
+        This costs a few relaxations of a chain of ``nodes`` states per point -
+        of the order of a second each - against well under a millisecond per
+        point for the march, which is why it is a separate step.
+        """
+        attractor = field.attractor
+        if attractor is None:
+            message = "checking a field needs the attractor it was marched from"
+            raise ValueError(message)
+        grid = field.grid
+        points = grid.points()
+        if indices is None:
+            every = np.arange(points.shape[0]).reshape(grid.shape)
+            indices = every[::stride, ::stride].ravel()
+        values = field.values.copy().ravel()
+        errors = field.errors.copy().ravel()
+        status = field.status.copy().ravel()
+        for index in np.asarray(indices, dtype=int).tolist():
+            target = points[index]
+            if not np.isfinite(values[index]) or attractor.reached(target, grid):
+                continue
+            reference, own = self.reference(field, target, nodes)
+            estimate = abs(float(field.values.ravel()[index]) - reference) + own
+            if tolerance is not None and estimate > tolerance and own <= tolerance:
+                values[index], errors[index], status[index] = reference, own, REFINED
+            else:
+                errors[index], status[index] = estimate, CHECKED
+        return GridQuasipotential(
+            grid,
+            values,
+            field.floor,
+            attractor,
+            errors,
+            status,
+        )
+
+    def reference(
+        self,
+        field: GridQuasipotential,
+        state: Sequence[float] | np.ndarray,
+        nodes: int = _REFERENCE_NODES,
+    ) -> tuple[float, float]:
+        """``U`` at ``state`` without the grid, and an estimate of its error.
+
+        The minimum action path is relaxed by :class:`GeometricMinimumAction`
+        from a small surface about the attractor - a level set of the quadratic
+        form about an equilibrium, a curve beside a cycle - on which ``U`` is
+        known from the attractor's own expansion, to ``state``. The chain starts
+        from the path traced on ``field``, and its first state slides along the
+        surface to where ``U + S`` is least: there the chain's momentum matches
+        ``grad U`` along the surface, found by the secant method. Starting off
+        the attractor matters: the path from a rotating equilibrium or a cycle
+        winds round it infinitely often, which a chain of nodes cannot follow,
+        while from the surface it does not.
+
+        The error estimate is the sum of two differences: from the value
+        from a surface at twice the distance, which measures the expansion's
+        error, and from the value on a chain of half the nodes, which measures
+        the chain's.
+        """
+        attractor = field.attractor
+        if attractor is None:
+            message = "a reference value needs the attractor the field was marched from"
+            raise ValueError(message)
+        target = np.asarray(state, dtype=float)
+        trace = self.minimum_action_path(field, target).states
+        gmam = GeometricMinimumAction(
+            self._drift,
+            self._noise,
+            tolerance=_REFERENCE_SETTLED,
+        )
+        outer = attractor.start(field.grid, self._drift, self._noise, target)
+        inner = outer.shrunk()
+        far, _, _ = _relax_from(gmam, outer, _guide(outer, trace, nodes))
+        near, chain, parameter = _relax_from(gmam, inner, _guide(inner, trace, nodes))
+        start = inner.point(parameter)
+        coarse = _equal_arc_length(_resample(chain, nodes // 2 + 1))
+        coarse[0] = start
+        rough = inner.value(start) + gmam.path(coarse).action
+        # Each difference is taken whole, not divided by 2^p - 1 as a Richardson
+        # estimate would: the chain's error goes at fourth order on the linear
+        # systems (1.04e-3, 8.4e-5, 5.9e-6 at 41, 81, 161 nodes, non-normal)
+        # but at second order on the anisotropic gradient (-4.9e-5, -1.3e-5 at
+        # 81, 161 at (-1.5, -0.8)), and the whole difference bounds both.
+        return near, abs(far - near) + abs(rough - near)
 
     def _backward(self, state: np.ndarray, gradient) -> np.ndarray:
         slope = np.array([component(state[None, :])[0] for component in gradient])
@@ -853,29 +1375,54 @@ class GeometricMinimumAction:
         self._iterations = iterations
         self._tolerance = tolerance
 
-    def path(self, initial: Sequence[Sequence[float]]) -> MinimumActionPath:
+    @property
+    def drift(self) -> Function:
+        """The drift ``f``."""
+        return self._drift
+
+    @property
+    def noise(self) -> NoiseMatrix:
+        """The noise amplitude ``G``."""
+        return self._noise
+
+    def path(
+        self,
+        initial: Sequence[Sequence[float]] | np.ndarray,
+    ) -> MinimumActionPath:
         """Relax ``initial`` (states from one end to the other) to the minimiser.
 
         The chain is relaxed until no node moves by more than ``tolerance`` in a
         step, or for ``iterations`` steps; the result's ``converged`` says which,
         and a chain still moving is returned as it stands rather than refused.
+
+        The explicit part of the flow is stiff where the drift rotates fast
+        against its gradient - on Dahiya and Cameron's SDE (21), rotation ten
+        times the gradient, a chain of 41 nodes blew up at a step of 0.05 - so
+        a chain that stops being finite, or jumps, is started again from
+        ``initial`` at half the step, a few times over, and the step that held
+        is kept for later paths. The step decides only how fast the chain settles, not
+        where.
         """
         states = np.asarray(initial, dtype=float)
         factor = self._constant_factor(states)
         inverse = np.linalg.inv(factor)
-        chain = states @ inverse.T
-        nodes = chain.shape[0]
-        spacing = 1.0 / (nodes - 1)
-        converged = False
-        taken = 0
-        for taken in range(1, self._iterations + 1):  # noqa: B007 (read after)
-            following = self._relax(chain, factor, inverse, spacing)
-            following = _equal_arc_length(following)
-            change = float(np.max(np.abs(following - chain)))
-            chain = following
-            if change < self._tolerance:
-                converged = True
+        step = self._step
+        for _ in range(_STEP_HALVINGS):
+            # A chain that blows up overflows on its way to nan; that is
+            # caught below, not warned about.
+            with np.errstate(over="ignore", invalid="ignore"):
+                relaxed = self._relax_all(states @ inverse.T, factor, inverse, step)
+            if relaxed is not None:
+                self._step = step
                 break
+            step *= _HALF
+        else:
+            message = (
+                f"the minimum action path did not stay finite at any step down to "
+                f"{step / _HALF:g}"
+            )
+            raise ValueError(message)
+        chain, converged, taken = relaxed
         result = chain @ factor.T
         return MinimumActionPath(
             result,
@@ -883,6 +1430,35 @@ class GeometricMinimumAction:
             converged=converged,
             iterations=taken,
         )
+
+    def _relax_all(self, chain, factor, inverse, step):
+        """Relax at one step: the chain, whether it settled, the steps taken.
+
+        ``None`` if the chain stopped being finite, or if one step moved a node
+        by more than a quarter of the distance between its ends: no relaxation
+        moves that far at once, while an unstable step does - on SDE (21) at a
+        step of 0.0125 the nodes jumped by twice that distance every step,
+        and the chain neither blew up nor settled.
+        """
+        spacing = 1.0 / (chain.shape[0] - 1)
+        reach = _JUMP_SHARE * float(np.linalg.norm(chain[-1] - chain[0]))
+        converged = False
+        taken = 0
+        for taken in range(1, self._iterations + 1):
+            following = self._relax(chain, factor, inverse, spacing, step)
+            if not np.all(np.isfinite(following)):
+                return None
+            following = _equal_arc_length(following)
+            change = float(np.max(np.abs(following - chain)))
+            # The first step may move nodes far by reparametrising a chain
+            # that was spaced evenly in x rather than z; only later ones count.
+            if taken > 1 and change > reach:
+                return None
+            chain = following
+            if change < self._tolerance:
+                converged = True
+                break
+        return chain, converged, taken
 
     def _constant_factor(self, states: np.ndarray) -> np.ndarray:
         cells = np.array(
@@ -900,18 +1476,18 @@ class GeometricMinimumAction:
         return np.tril(lower)
 
     def _drift_at(self, chain, factor, inverse):
-        velocity = np.array(
-            [inverse @ field_at(self._drift, factor @ state) for state in chain],
-        )
+        states = chain @ factor.T
+        fields = [field_at(self._drift, state) for state in states]
+        velocity = np.array(fields) @ inverse.T
         jacobians = np.array(
             [
-                inverse @ jacobian_at(self._drift, factor @ state) @ factor
-                for state in chain
+                inverse @ jacobian_at(self._drift, state, base) @ factor
+                for state, base in zip(states, fields, strict=True)
             ],
         )
         return velocity, jacobians
 
-    def _relax(self, chain, factor, inverse, spacing):
+    def _relax(self, chain, factor, inverse, spacing, step):
         velocity, jacobians = self._drift_at(chain, factor, inverse)
         tangent = np.gradient(chain, spacing, axis=0)
         speed = np.linalg.norm(tangent, axis=1)
@@ -931,8 +1507,10 @@ class GeometricMinimumAction:
         # converges as nodes are added.
         unit = tangent / np.where(speed > 0.0, speed, 1.0)[:, None]
         force -= np.sum(force * unit, axis=1)[:, None] * unit
-        explicit = chain + self._step * force
-        weight = self._step * scale * scale / (spacing * spacing)
+        explicit = chain + step * force
+        weight = step * scale * scale / (spacing * spacing)
+        if not (np.all(np.isfinite(explicit)) and np.all(np.isfinite(weight))):
+            return np.full_like(chain, np.nan)
         nodes = chain.shape[0]
         bands = np.zeros((3, nodes))
         bands[1] = 1.0 + 2.0 * weight
@@ -958,6 +1536,99 @@ class GeometricMinimumAction:
                 - np.sum(velocity * steps, axis=1),
             ),
         )
+
+
+def _guide(surface, trace: np.ndarray, nodes: int) -> tuple[np.ndarray, float]:
+    """A chain from ``surface`` to ``trace[0]`` along the traced path, and its start.
+
+    The traced path runs from the target towards the attractor; it is cut where
+    it enters the surface, or at its end if it stalled outside, and its last
+    state outside is moved onto the surface.
+    """
+    outside = 0
+    while outside < len(trace) and not surface.inside(trace[outside]):
+        outside += 1
+    kept = trace[: max(outside, 1)]
+    parameter = surface.parameter(kept[-1])
+    chain = np.vstack([surface.point(parameter), kept[::-1]])
+    return _resample(chain, nodes), parameter
+
+
+def _resample(chain: np.ndarray, count: int) -> np.ndarray:
+    """``count`` states at equal arc length along the polygon through ``chain``."""
+    lengths = np.linalg.norm(np.diff(chain, axis=0), axis=1)
+    arc = np.concatenate([[0.0], np.cumsum(lengths)])
+    target = np.linspace(0.0, arc[-1], count)
+    return np.column_stack(
+        [np.interp(target, arc, chain[:, axis]) for axis in range(_PLANE)],
+    )
+
+
+def _momentum(drift: Function, noise: NoiseMatrix, states: np.ndarray) -> np.ndarray:
+    """``p = |f|_A A t / |t|_A - A f`` at a chain's first state, ``A = D^{-1}``.
+
+    The derivative of the geometric action by the path's velocity, which on a
+    minimum action path is ``grad U``. The tangent ``t`` is the second-order
+    one-sided difference, the chain being evenly spaced in its parameter.
+    """
+    tangent = -3.0 * states[0] + 4.0 * states[1] - states[2]
+    metric = np.linalg.inv(diffusion_matrix(noise.columns_at(states[0])))
+    velocity = field_at(drift, states[0])
+    speed = np.sqrt(velocity @ metric @ velocity)
+    return speed * metric @ tangent / np.sqrt(tangent @ metric @ tangent) - (
+        metric @ velocity
+    )
+
+
+def _relax_from(
+    gmam: "GeometricMinimumAction",
+    surface,
+    guide: tuple[np.ndarray, float],
+) -> tuple[float, np.ndarray, float]:
+    """``U(start) + S(start -> end)`` least over starts on ``surface``.
+
+    Its derivative along the surface is ``(grad U - p) . t`` for the chain's
+    momentum ``p`` and the surface's tangent ``t``, and the secant method finds
+    its root, each step relaxing the previous chain from the new start. Returns
+    the value, the chain and the parameter of the start with the smallest
+    derivative found.
+    """
+    chain, parameter = guide
+    nudge = surface.step * _SECANT_TOLERANCE
+
+    def attempt(where: float, previous: np.ndarray) -> tuple[float, np.ndarray, float]:
+        start = surface.point(where)
+        initial = previous.copy()
+        initial[0] = start
+        path = gmam.path(_equal_arc_length(initial))
+        tangent = (surface.point(where + nudge) - surface.point(where - nudge)) / (
+            2.0 * nudge
+        )
+        momentum = _momentum(gmam.drift, gmam.noise, path.states)
+        slope = float((surface.gradient(start) - momentum) @ tangent)
+        return surface.value(start) + path.action, path.states, slope
+
+    best_place = parameter
+    best = attempt(parameter, chain)
+    behind_place, behind = best_place, best
+    place = parameter - np.copysign(surface.step, best[2])
+    for _ in range(_SECANT_STEPS):
+        here = attempt(place, behind[1])
+        if abs(here[2]) < abs(best[2]):
+            best, best_place = here, place
+        change = (here[2] - behind[2]) / (place - behind_place)
+        if change == 0.0 or not np.isfinite(change):
+            break
+        following = place - here[2] / change
+        reach = 4.0 * surface.step
+        following = min(max(following, place - reach), place + reach)
+        # F changes by about half the slope times the step still to go: once
+        # that is far below any error asked about, the start is good enough.
+        if abs(_HALF * here[2] * (following - place)) < _SECANT_SETTLED:
+            break
+        behind_place, behind = place, here
+        place = following
+    return best[0], best[1], best_place
 
 
 def _equal_arc_length(chain: np.ndarray) -> np.ndarray:
