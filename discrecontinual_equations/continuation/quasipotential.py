@@ -44,13 +44,12 @@ where ``Q(a, x) = |x - a|_A |f_m|_A - <x - a, f_m>_A`` is the geometric action o
 straight segment by the midpoint rule, in the metric ``A = D^{-1}`` taken at the
 midpoint. Midpoints of two grid points always lie on the grid of half the spacing,
 so ``f`` and ``A`` are evaluated once there and looked up; along a triangle's
-segment they are interpolated linearly between its two end midpoints, which makes
-the one-dimensional minimisation over ``s`` for a straight ``U(x_s)`` a quadratic
-with a closed-form root, refined twice from the midpoint of the segment. This
+segment they are interpolated linearly between its two end midpoints. This
 matches Dahiya and Cameron's handling of a variable anisotropic ``D`` (Physica D
 2018, arXiv 1806.05321, their Eqs. (19), (21), (22)): ``A`` is ``D^{-1}`` at each
 midpoint, not the inverse of an averaged ``D``, and ``f`` and ``A`` are linear
-along the base. The update radius is what lets the
+along the base. How the minimum over ``s`` is found is the subject of *Triangle
+minimisation* below. The update radius is what lets the
 method see around an anisotropic or rotating drift: a minimum action path can meet
 the accepted front at a shallow angle, and only a stencil wide enough to reach back
 along it finds the right predecessor. Every triangle is tried rather than the
@@ -93,17 +92,17 @@ the error is 0.0107, 0.0112 and 0.0420 for radii 2, 4 and 8.
 the parabola through ``x0``, ``x1 = x0 + e`` and a third accepted point on the
 same line, ``x0 - e`` or else ``x0 + 2 e`` - straight only where neither is
 accepted - so its interpolation error is ``O(h^3)`` rather than ``O(h^2)``.
-``F(s)`` is then minimised by Newton steps from the straight base's closed-form
-root, keeping the lower of the two. This is not a published method, and it is
-not the default. The ticket proposed a Hermite cubic with ``grad U`` from the
-march; it was built first and failed: ``grad U`` at a point can only come from
-the update that set it, by the momentum ``|f|_A A t / |t|_A - A f`` along the
-segment's direction ``t``, which is first order (the chord), or second order if
-the start's own ``grad U`` fixes the curvature (the chord's reflection) - and
-then each point's error feeds the next. On the rotating case at 41 points the
-median ``grad U`` was off by 25% from the chord and 80% by reflection, and ``U``
-by 0.32. Dahiya and Cameron also warn that ``U`` need not be smooth across the
-front (arXiv 1806.05321, Sec. 3.3.2); the parabola uses accepted values only.
+``F(s)`` is then minimised exactly (see *Triangle minimisation*). This is not a
+published method, and it is not the default. The ticket proposed a Hermite cubic
+with ``grad U`` from the march; it was built first and failed: ``grad U`` at a
+point can only come from the update that set it, by the momentum ``|f|_A A t /
+|t|_A - A f`` along the segment's direction ``t``, which is first order (the
+chord), or second order if the start's own ``grad U`` fixes the curvature (the
+chord's reflection) - and then each point's error feeds the next. On the
+rotating case at 41 points the median ``grad U`` was off by 25% from the chord
+and 80% by reflection, and ``U`` by 0.32. Dahiya and Cameron also warn that
+``U`` need not be smooth across the front (arXiv 1806.05321, Sec. 3.3.2); the
+parabola uses accepted values only.
 
 The parabola does not raise the order: the quadrature term above is ``O(K^2
 h^2)`` either way. What it does is make the update exact where ``U`` is
@@ -112,46 +111,99 @@ quadratic - a linear drift with a constant ``D``. There the midpoint rule's
 (``grad U`` at the midpoint is exact for a quadratic ``U``, and
 ``grad U . (x - a) <= Q(a, x)`` with equality along it), the parabola is
 exact, and what is left is how well ``s`` is found: on the rotating
-Ornstein-Uhlenbeck process at 41 points the parabola gives 1.70e-4 with the
-Newton steps and 5.5e-8 with ``s`` minimised by brute force. On a nonlinear
-drift the straight base's overestimate of a convex ``U`` partly cancels the
-midpoint rule's underestimate, and the parabola takes that away.
+Ornstein-Uhlenbeck process the Newton steps with ``f`` and ``A`` frozen that
+the parabola used before DEQ-116 left 1.70e-4, 4.25e-5 and 1.16e-5 at 41, 81
+and 161 points, and the exact root leaves 3.1e-15, 4.4e-15 and 8.0e-15 -
+rounding; the non-normal linear system likewise goes from 1.08e-3 and
+5.16e-4 at 41 and 81 points to 1.5e-15 and 1.1e-15. A linear drift that
+rotates faster than the radius reaches is still limited by the radius (SDE
+(21): 1.38e-3, 4.62e-4, 5.38e-4). On a nonlinear drift the straight base's
+overestimate of a convex ``U`` partly cancels the midpoint rule's
+underestimate, and the parabola takes that away; the exact minimum takes
+away more (below).
 
 When it helps - linear or nearly linear drifts. Max error at 321 points,
-radius 8, straight against parabolic, on the sets above: rotating
-Ornstein-Uhlenbeck 3.34e-4 and 3.41e-6 (94 times); their SDE (21) 1.34e-3 and
-3.73e-4 (3.6 times); the non-normal linear system 2.36e-4 and 9.26e-5 (2.5
-times); Maier-Stein's barrier at 161 x 129 points (radius 10) 5.6e-4 and
-2.0e-5.
+radius 8, straight against parabolic, measured before DEQ-116 made the
+parabola's minimisation exact: rotating Ornstein-Uhlenbeck 3.34e-4 and
+3.41e-6; their SDE (21) 1.34e-3 and 3.73e-4; the non-normal linear system
+2.36e-4 and 9.26e-5; Maier-Stein's barrier at 161 x 129 points (radius 10)
+5.6e-4 and 2.0e-5. Since then the rotating and the non-normal systems are
+exact to rounding at every size measured (above).
 
-When it does not - nonlinear drifts. At 321 points, straight against
-parabolic: double well 2.85e-3 both; anisotropic gradient 2.09e-3 and 2.15e-3;
-SDE (24) 4.66e-3 and 5.15e-3; and on the verification's nonlinear rotating
-systems (``f = -D grad V + c R grad V`` with ``c = 4``, a multiplicative-noise
-one, an elliptic cycle with rotation 3) 7.1e-4 and 5.3e-4, 8.2e-4 and 1.27e-3,
-8.5e-3 and 5.3e-3 - and at 161 points the parabola was worse on all three
-(1.23e-3 and 2.23e-3, 4.28e-3 and 5.16e-3, 1.88e-2 and 3.17e-2). It costs 2.3
-to 2.8 times the march's time (measured at 321 points, best of one under
-load), so at equal cost the comparison is the straight base at 321 points
-against the parabola at 161, and the straight base wins on every nonlinear
-problem measured:
+When it does not - nonlinear drifts. Before DEQ-116, at 321 points, straight
+against parabolic: double well 2.85e-3 both; anisotropic gradient 2.09e-3 and
+2.15e-3; SDE (24) 4.66e-3 and 5.15e-3; and on the verification's nonlinear
+rotating systems (``f = -D grad V + c R grad V`` with ``c = 4``, a
+multiplicative-noise one, an elliptic cycle with rotation 3) 7.1e-4 and 5.3e-4,
+8.2e-4 and 1.27e-3, 8.5e-3 and 5.3e-3. The exact minimisation made the parabola
+worse again on every one of these, by 1.2 to 1.45 times at 41, 81 and 161 points
+(on the verification's masks, before against after: double well 0.153, 0.0420,
+0.0113 against 0.210, 0.0524, 0.0136; anisotropic gradient 0.145, 0.0395,
+8.70e-3 against 0.207, 0.0442, 0.0110; SDE (24) 0.381, 0.0907, 0.0219 against
+0.525, 0.129, 0.0306; ``c = 4`` 0.0464, 9.85e-3, 2.23e-3 against 0.0654, 0.0143,
+3.06e-3; multiplicative 0.0867, 0.0215, 5.16e-3 against 0.108, 0.0280, 6.86e-3;
+elliptic cycle 0.505, 0.133, 0.0317 against 0.594, 0.161, 0.0390): the frozen
+steps' shortfall had been offsetting the midpoint rule's underestimate there
+too. The parabola also costs more than the straight base: 2.3 to 2.8 times its
+march before DEQ-116, and the exact root a further 1.6 to 1.9 times at 61 to 161
+points (best of three, under load; the march stays near linear in the number of
+points, a log-log slope of 1.04 to 1.05 against 0.91 to 0.93 before), so at
+equal cost the comparison is the straight base at 321 points against the
+parabola at 161, and the straight base wins on every nonlinear problem measured:
 
   ==========================  ===============  ================
   problem                     straight, 321    parabolic, 161
   ==========================  ===============  ================
-  double well                 2.85e-3          1.13e-2
-  anisotropic gradient        2.09e-3          8.70e-3
-  SDE (24)                    4.66e-3          2.19e-2
-  rotating, c = 4             7.13e-4          2.23e-3
-  multiplicative noise        8.19e-4          5.16e-3
-  elliptic cycle              8.54e-3          3.17e-2
-  rotating Ornstein-Uhlenbeck 3.34e-4          1.16e-5
+  double well                 2.85e-3          1.36e-2
+  anisotropic gradient        2.09e-3          1.10e-2
+  SDE (24)                    4.66e-3          3.06e-2
+  rotating, c = 4             7.13e-4          3.06e-3
+  multiplicative noise        8.19e-4          6.86e-3
+  elliptic cycle              8.54e-3          3.90e-2
+  rotating Ornstein-Uhlenbeck 3.34e-4          8.0e-15
   ==========================  ===============  ================
 
+(The parabolic column is on the verification's masks; before DEQ-116 those
+gave the same three digits as the masks the straight column was measured on.)
 So the parabola is for a drift that is linear, or nearly so on the region
-asked about; ``update_order="midpoint"``, the default, is OLIM-MID as
-published. On the noisy Hopf film's grid, near its singular origin, the worst
-frame is 0.054 straight and 0.056 parabolic.
+asked about; ``update_order="midpoint"``, the default, is OLIM-MID with the
+departures listed at the end. On the noisy Hopf film's grid, near its
+singular origin, the worst frame was 0.054 straight and 0.056 parabolic
+(before DEQ-116).
+
+*Triangle minimisation.* Dahiya and Cameron minimise over ``s`` exactly: they
+solve ``F'(s) = 0`` for the full derivative - their Eq. (23), which includes
+the change of ``f`` and ``A`` along the base - by Wilkinson's hybrid secant and
+bisection method, where ``F'`` changes sign between the ends. The default
+straight base here does not: it freezes ``f`` and ``A`` at the current ``s``,
+where ``F'(s) = 0`` is a quadratic with a closed-form root, and refines that
+twice from the middle of the segment. The exact root was built and measured
+(DEQ-116; max error at 41, 81, 161 points, radius 8, on the verification's
+masks, frozen against exact): on linear drifts it is better - rotating
+Ornstein-Uhlenbeck 2.89e-3, 1.23e-3, 6.14e-4 against 1.90e-3, 7.53e-4,
+4.10e-4; SDE (21) 5.35e-3, 3.23e-3, 2.28e-3 against 4.38e-3, 2.13e-3,
+1.71e-3 - and on nonlinear ones worse at every size: double well 0.153,
+0.0420, 0.0113 against 0.210, 0.0524, 0.0135; anisotropic gradient 0.145,
+0.0391, 8.67e-3 against 0.203, 0.0433, 0.0106; rotating, ``c = 4``, 3.89e-2,
+6.55e-3, 1.23e-3 against 5.70e-2, 1.09e-2, 1.64e-3; elliptic cycle 0.472,
+0.119, 1.88e-2 against 0.566, 0.141, 2.75e-2. The frozen step stops short of
+the least value, and that partly offsets the midpoint rule's underestimate of
+a convex integrand, which the exact minimum takes in full. So the default keeps
+the frozen step, a departure from the paper made on these measurements.
+
+The parabolic base solves Eq. (23) - with ``U(x_s)`` the parabola - by the same
+kind of hybrid: ``F'`` at the frozen root and at the end it points away from
+bracket the minimum, and secant steps are taken inside the bracket, a
+bisection whenever a step is not half the one before last (Brent's rule); the
+least of ``F`` at that root, at the frozen root and at both ends is kept, the
+ends being the one-point updates, so the triangle never offers more than they
+do. Unlike the paper's, the bracket need not span the whole base: a minimum
+next to the frozen root is found where ``F'`` has one sign at both ends. On a
+march it reaches the least ``F`` over a fine grid of ``s`` on all but about
+one triangle in ten thousand (59 of 529,376 on the rotating process at 41
+points, by at most 8e-4: a second local minimum that neither bracket holds),
+where the Newton steps it replaces missed it on one in five (107,958, by up to
+0.21).
 
 *Radius.* The radius is 8 cells on every grid unless ``update_radius`` says
 otherwise. Dahiya and Cameron's rule of thumb ``K = 10 + 4 (round(log2 N) -
@@ -282,7 +334,11 @@ _CYCLE_CELLS = 1.5
 _CYCLE_SAMPLES_PER_CELL = 4
 _ELLIPTICITY_FLOOR = 1.0e-10
 _REFINEMENTS = 2
-_NEWTON_STEPS = 3
+# The triangle's root on its base: at most this many secant or bisection
+# steps, stopping once F anywhere in the bracket is within the tolerance of
+# its least value there.
+_ROOT_STEPS = 40
+_ROOT_TOLERANCE = 1.0e-13
 _HALF = 0.5
 _NEIGHBOURS = ((-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1))
 _UNKNOWN, _ACCEPTED = 0, 2
@@ -1471,70 +1527,180 @@ def _triangle(own, other, edge, reach, midpoints):
 
 
 def _curved_triangle(own, other, bend, edge, reach, midpoints):  # noqa: PLR0913
-    """The triangle update with ``U`` a parabola along the base.
+    """The triangle update with ``U`` a parabola along the base, minimised exactly.
 
-    ``U(x_s) = U0 + s dU + c s (s - 1)`` in place of the straight line, so
-    ``F(s) = U(x_s) + Q(x_s, x)`` is no longer minimised in closed form. It
-    starts from the straight line's root, takes Newton steps on
-    ``F'(s) = dU + c (2 s - 1) + Q'(s)`` with ``f`` and ``A`` frozen at the
-    current ``s``, and keeps whichever of the two values is lower.
+    ``U(x_s) = U0 + s dU + c s (s - 1)`` in place of the straight line, and
+    ``f`` and ``A`` in ``Q`` linear in ``s`` between the two end midpoints, as
+    Dahiya and Cameron take them (arXiv 1706.07509, Eqs. (15), (B-7)). The
+    minimum of ``F(s) = U(x_s) + Q(x_s, x)`` is where ``F'(s) = 0``, with
+    ``F'`` the exact derivative of that ``F`` (:func:`_base_slope`), the change
+    of ``f`` and ``A`` along the base included - their Eq. (B-8) - and its
+    root is found by :func:`_root_on_base`, a secant iteration safeguarded by
+    bisection like the paper's hybrid solver, from the straight base's
+    frozen-coefficient root. The value returned is the least of ``F`` at that
+    root, at the starting point and at both ends of the base, the ends being
+    the one-point updates through ``x0`` and ``x1``: the update never offers
+    more than they do.
+
+    On a linear drift with a constant ``D`` this ``F`` is exact - the midpoint
+    rule is exact along the characteristic through the segment's midpoint and
+    the parabola is exact for a quadratic ``U`` - so what was left of the error
+    was the minimisation: Newton steps with ``f`` and ``A`` frozen at the
+    current ``s`` left the rotating Ornstein-Uhlenbeck process 1.70e-4 off at
+    41 points, and the exact root leaves it 3e-15 off.
     """
-    near, far = midpoints
     rise = other - own
-    fraction = np.full(rise.shape[0], _HALF)
+    near, far = midpoints
+    start = np.full(rise.shape[0], _HALF)
     for _ in range(_REFINEMENTS):
-        coefficients = near + fraction[:, None] * (far - near)
-        fraction = _stationary_fraction(edge, reach, rise, coefficients)
-    linear = fraction
-    for _ in range(_NEWTON_STEPS):
-        coefficients = near + fraction[:, None] * (far - near)
-        reach_slope, reach_curvature = _action_derivatives(
-            edge,
-            reach,
-            fraction,
-            coefficients,
-        )
-        total = 2.0 * bend + reach_curvature
-        with np.errstate(divide="ignore", invalid="ignore"):
-            step = (rise + bend * (2.0 * fraction - 1.0) + reach_slope) / total
-        step = np.where(np.isfinite(step) & (total > 0.0), step, 0.0)
-        fraction = np.clip(fraction - step, 0.0, 1.0)
-    value = _curved_cost(own, rise, bend, edge, reach, fraction, midpoints)
-    fallback = _curved_cost(own, rise, bend, edge, reach, linear, midpoints)
-    return np.minimum(value, fallback)
+        coefficients = near + start[:, None] * (far - near)
+        start = _stationary_fraction(edge, reach, rise, coefficients)
+    root = _root_on_base(rise, bend, edge, reach, midpoints, start)
+    candidates = [
+        _base_cost(own, rise, bend, edge, reach, midpoints, fraction)
+        for fraction in (root, start, np.zeros_like(start), np.ones_like(start))
+    ]
+    return np.minimum.reduce(candidates)
 
 
-def _action_derivatives(edge, reach, fraction, coefficients):
-    """``dQ/ds`` and ``d2Q/ds2`` along the base, ``f`` and ``A`` frozen.
-
-    With ``d = reach - s edge``: ``Q' = <edge, f>_A - |f|_A <edge, d>_A / |d|_A``
-    and ``Q'' = |f|_A (|edge|_A^2 |d|_A^2 - <edge, d>_A^2) / |d|_A^3``.
-    """
-    edge_x, edge_y = edge
-    step_x = reach[0] - fraction * edge_x
-    step_y = reach[1] - fraction * edge_y
-    velocity_x, velocity_y = coefficients[:, 0], coefficients[:, 1]
-    speed = np.sqrt(_form(velocity_x, velocity_y, coefficients, velocity_x, velocity_y))
-    squared = _form(step_x, step_y, coefficients, step_x, step_y)
-    length = np.sqrt(squared)
-    along = _form(edge_x, edge_y, coefficients, step_x, step_y)
-    edge_squared = _form(edge_x, edge_y, coefficients, edge_x, edge_y)
-    drift = _form(edge_x, edge_y, coefficients, velocity_x, velocity_y)
-    with np.errstate(divide="ignore", invalid="ignore"):
-        slope = drift - speed * along / length
-        curvature = (
-            speed * (edge_squared * squared - along * along) / (squared * length)
-        )
-    return slope, curvature
-
-
-def _curved_cost(own, rise, bend, edge, reach, fraction, midpoints):  # noqa: PLR0913
+def _base_cost(own, rise, bend, edge, reach, midpoints, fraction):  # noqa: PLR0913
+    """``F(s) = U0 + s rise + bend s (s - 1) + Q(x_s, x)``."""
     near, far = midpoints
     coefficients = near + fraction[:, None] * (far - near)
     step_x = reach[0] - fraction * edge[0]
     step_y = reach[1] - fraction * edge[1]
     curve = own + fraction * rise + bend * fraction * (fraction - 1.0)
     return curve + _action(step_x, step_y, coefficients)
+
+
+def _base_slope(rise, bend, edge, reach, base, fraction):  # noqa: PLR0913
+    """``F'(s)`` with ``f`` and ``A`` linear along the base, not frozen.
+
+    ``base`` is the pair ``(near, far - near)``: ``f`` and ``A`` at ``s`` are
+    ``near + s (far - near)``. With ``d = reach - s edge``, ``a = |d|_A^2``,
+    ``b = |f|_A^2`` and ``c = <d, f>_A``, all three depending on ``s`` through
+    ``d``, ``f`` and ``A``, ``Q = sqrt(a b) - c`` and ``Q' = (a' b + a b') /
+    (2 sqrt(a b)) - c'`` - Dahiya and Cameron's Eq. (B-8) in the metric
+    ``A``. ``nan`` where ``Q`` is not differentiable: a vanishing ``f``, or
+    ``A`` undefined beside a point where ``D`` vanishes.
+    """
+    near, change = base
+    coefficients = near + fraction[:, None] * change
+    edge_x, edge_y = edge
+    step_x = reach[0] - fraction * edge_x
+    step_y = reach[1] - fraction * edge_y
+    velocity_x, velocity_y = coefficients[:, 0], coefficients[:, 1]
+    turn_x, turn_y = change[:, 0], change[:, 1]
+    first, mixed, second = coefficients[:, 2], coefficients[:, 3], coefficients[:, 4]
+    # A d, A f, A' d and A' f, component by component.
+    pulled_x = first * step_x + mixed * step_y
+    pulled_y = mixed * step_x + second * step_y
+    carried_x = first * velocity_x + mixed * velocity_y
+    carried_y = mixed * velocity_x + second * velocity_y
+    first, mixed, second = change[:, 2], change[:, 3], change[:, 4]
+    bent_x = first * step_x + mixed * step_y
+    bent_y = mixed * step_x + second * step_y
+    swept_x = first * velocity_x + mixed * velocity_y
+    swept_y = mixed * velocity_x + second * velocity_y
+    squared = step_x * pulled_x + step_y * pulled_y
+    speed = velocity_x * carried_x + velocity_y * carried_y
+    squared_slope = (
+        step_x * bent_x
+        + step_y * bent_y
+        - 2.0 * (edge_x * pulled_x + edge_y * pulled_y)
+    )
+    speed_slope = (
+        velocity_x * swept_x
+        + velocity_y * swept_y
+        + 2.0 * (turn_x * carried_x + turn_y * carried_y)
+    )
+    cross_slope = (
+        turn_x * pulled_x
+        + turn_y * pulled_y
+        + step_x * swept_x
+        + step_y * swept_y
+        - edge_x * carried_x
+        - edge_y * carried_y
+    )
+    with np.errstate(divide="ignore", invalid="ignore"):
+        action_slope = (squared_slope * speed + squared * speed_slope) / (
+            2.0 * np.sqrt(squared * speed)
+        ) - cross_slope
+    return rise + bend * (2.0 * fraction - 1.0) + action_slope
+
+
+def _root_on_base(rise, bend, edge, reach, midpoints, start):  # noqa: PLR0913
+    """Where ``F'`` changes sign from negative to positive in ``[0, 1]``.
+
+    ``F'`` is evaluated at ``start`` and at the end it points away from:
+    where the two differ in sign they bracket a minimum, and a secant step
+    from the last two iterates is taken whenever it falls inside the bracket
+    and at most half its width from the last iterate, a bisection otherwise
+    - the hybrid secant and bisection solver Dahiya and Cameron use
+    (Wilkinson 1967). The bracket shrinks at every step and the iterate never
+    leaves it. Where nothing is bracketed, ``start`` is returned: the caller
+    compares ``F`` at the ends anyway.
+    """
+    base = (midpoints[0], midpoints[1] - midpoints[0])
+    start_slope = _base_slope(rise, bend, edge, reach, base, start)
+    end = np.where(start_slope < 0.0, 1.0, 0.0)
+    end_slope = _base_slope(rise, bend, edge, reach, base, end)
+    fraction = start.copy()
+    active = np.flatnonzero(
+        ((start_slope < 0.0) & (end_slope > 0.0))
+        | ((start_slope > 0.0) & (end_slope < 0.0)),
+    )
+    if active.size == 0:
+        return fraction
+    upward = end[active] == 1.0
+    low = np.where(upward, start[active], 0.0)
+    high = np.where(upward, 1.0, start[active])
+    low_slope = np.where(upward, start_slope[active], end_slope[active])
+    high_slope = np.where(upward, end_slope[active], start_slope[active])
+    # The secant starts from the two ends of the bracket, start the later.
+    previous, previous_slope = end[active], end_slope[active]
+    current, slope = start[active], start_slope[active]
+    rise, bend = rise[active], bend[active]
+    edge = (edge[0][active], edge[1][active])
+    reach = (reach[0][active], reach[1][active])
+    base = (base[0][active], base[1][active])
+    # The last step's length and the one before it.
+    last, lagged = np.full(active.size, np.inf), np.full(active.size, np.inf)
+    for _ in range(_ROOT_STEPS):
+        with np.errstate(divide="ignore", invalid="ignore"):
+            secant = current - slope * (current - previous) / (slope - previous_slope)
+        # A secant step that leaves the bracket, or is not half as long as
+        # the step before last, gives way to a bisection (Brent's rule).
+        inside = (secant > low) & (secant < high)
+        inside &= np.abs(secant - current) < _HALF * lagged
+        following = np.where(inside, secant, _HALF * (low + high))
+        last, lagged = np.abs(following - current), last
+        following_slope = _base_slope(rise, bend, edge, reach, base, following)
+        below = following_slope < 0.0
+        low = np.where(below, following, low)
+        high = np.where(below, high, following)
+        low_slope = np.where(below, following_slope, low_slope)
+        high_slope = np.where(below, high_slope, following_slope)
+        # F' rises through zero across the bracket, so F at the end where
+        # |F'| is smaller is within |F'| times the width of its least value.
+        closer = -low_slope < high_slope
+        fraction[active] = np.where(closer, low, high)
+        spread = np.minimum(-low_slope, high_slope) * (high - low)
+        settled = (spread <= _ROOT_TOLERANCE) | ~np.isfinite(following_slope)
+        moving = ~settled
+        if not np.any(moving):
+            break
+        active = active[moving]
+        rise, bend = rise[moving], bend[moving]
+        edge = (edge[0][moving], edge[1][moving])
+        reach = (reach[0][moving], reach[1][moving])
+        base = (base[0][moving], base[1][moving])
+        low, high = low[moving], high[moving]
+        low_slope, high_slope = low_slope[moving], high_slope[moving]
+        last, lagged = last[moving], lagged[moving]
+        previous, previous_slope = current[moving], slope[moving]
+        current, slope = following[moving], following_slope[moving]
+    return fraction
 
 
 def _stationary_fraction(edge, reach, rise, coefficients):

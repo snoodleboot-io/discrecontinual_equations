@@ -17,7 +17,7 @@ successive errors.
 import functools
 import itertools
 import math
-from unittest import TestCase
+from unittest import TestCase, mock
 
 import numpy as np
 import pytest
@@ -41,6 +41,8 @@ from discrecontinual_equations.continuation.quasipotential import (
     GridQuasipotential,
     OrderedLineIntegral,
     _action,
+    _base_cost,
+    _base_slope,
     _cubic_coefficients,
     _curved_triangle,
     _guide,
@@ -1287,16 +1289,34 @@ class TestDefaultUpdate(TestCase):
             )
 
 
+def _random_rows(rng, count):
+    """Half-lattice rows - ``f`` and a positive definite ``A`` - at random."""
+    factor = rng.normal(size=(count, 2, 2))
+    metric = factor @ factor.transpose(0, 2, 1) + 0.1 * np.eye(2)
+    drift = rng.normal(size=(count, 2)) * rng.choice([0.3, 1.0, 3.0], (count, 1))
+    return np.column_stack([drift, metric[:, 0, 0], metric[:, 0, 1], metric[:, 1, 1]])
+
+
+def _kept(edge, reach):
+    """Bases that move, to targets off them: the cases a march can offer."""
+    moving = (edge[0] != 0.0) | (edge[1] != 0.0)
+    degenerate = ((reach[0] == 0.0) & (reach[1] == 0.0)) | (
+        (reach[0] == edge[0]) & (reach[1] == edge[1])
+    )
+    return moving & ~degenerate
+
+
 class TestQuadraticUpdate(TestCase):
     """``U`` a parabola along the triangle's base, through a third front point."""
 
     @pytest.mark.slow
-    def test_the_rotating_case_converges_at_second_order(self):
-        # Measured 1.70e-4, 4.25e-5, 1.16e-5 at 41, 81, 161 (radius 8): orders
-        # 2.00, 1.87. The midpoint update: 2.27e-3, 9.68e-4, 5.00e-4.
+    def test_the_rotating_case_is_exact_at_every_size(self):
+        # DEQ-116. On a linear drift with a constant D the parabola's F is
+        # exact, so only the minimisation over s was left: Newton steps with f
+        # and A frozen gave 1.70e-4, 4.25e-5, 1.16e-5 at 41, 81, 161 points;
+        # the exact root of F' gives 3.1e-15, 4.7e-15, 8.4e-15 - rounding.
         errors = [_rotating_error_by_order(count, QUADRATIC) for count in _COUNTS]
-        assert errors[2] < 2.0e-5
-        assert min(_orders(errors)) > 1.8
+        assert max(errors) < 1.0e-10
 
     @pytest.mark.slow
     def test_it_is_ten_times_closer_than_the_midpoint_update(self):
@@ -1342,6 +1362,85 @@ class TestQuadraticUpdate(TestCase):
         kept = moving & ~degenerate
         assert kept.sum() > count // 2
         assert np.max(value[kept] - brute[kept]) < 1.0e-8
+
+    def test_the_base_is_minimised_with_its_coefficients_moving_along_it(self):
+        # DEQ-116. On the grid f and A change along the base, from the midpoint
+        # of x0-x to that of x1-x, half a cell apart. With them frozen at the
+        # current s the old Newton steps missed the minimum on 18% of these
+        # (3,500 of 20,000, by up to 54); F' with their change included finds
+        # it on all but the few where F has a second local minimum that F' at
+        # the start and at the end does not bracket.
+        rng = np.random.default_rng(7)
+        count = 20000
+        near = _random_rows(rng, count)
+        far = near + 0.05 * _random_rows(rng, count)
+        edge = tuple(rng.integers(-1, 2, count).astype(float) for _ in range(2))
+        reach = tuple(rng.integers(-8, 9, count).astype(float) for _ in range(2))
+        rise = 0.5 * rng.normal(size=count)
+        bend = 0.05 * rng.normal(size=count)
+        value = _curved_triangle(0.0, rise, bend, edge, reach, (near, far))
+
+        def cost(s):
+            return (
+                s * rise
+                + bend * s * (s - 1.0)
+                + _action(
+                    reach[0] - s * edge[0],
+                    reach[1] - s * edge[1],
+                    near + s[:, None] * (far - near),
+                )
+            )
+
+        samples = [cost(np.full(count, s)) for s in np.linspace(0, 1, 2001)]
+        brute = np.min(samples, 0)
+        kept = _kept(edge, reach)
+        missed = value[kept] - brute[kept] > 1.0e-8
+        assert missed.sum() < 1.0e-3 * kept.sum()
+        # The ends are the one-point updates: the triangle never offers more.
+        ends = np.minimum(samples[0], samples[-1])
+        assert np.all(value[kept] <= ends[kept] + 1.0e-12)
+
+    def test_the_root_takes_secant_steps_not_only_bisections(self):
+        # Bisection alone would reach the same root, but in some 40 steps;
+        # the secant steps settle these in well under twenty.
+        rng = np.random.default_rng(5)
+        count = 2000
+        near = _random_rows(rng, count)
+        far = near + 0.05 * _random_rows(rng, count)
+        edge = tuple(rng.integers(-1, 2, count).astype(float) for _ in range(2))
+        reach = tuple(rng.integers(-8, 9, count).astype(float) for _ in range(2))
+        rise = 0.5 * rng.normal(size=count)
+        bend = 0.05 * np.abs(rng.normal(size=count))
+        with mock.patch(
+            "discrecontinual_equations.continuation.quasipotential._base_slope",
+            side_effect=_base_slope,
+        ) as slope:
+            _curved_triangle(0.0, rise, bend, edge, reach, (near, far))
+        assert slope.call_count < 20
+
+    def test_the_slope_along_the_base_is_the_derivative_of_f(self):
+        # F' with f and A linear in s, against central differences of F.
+        rng = np.random.default_rng(11)
+        count = 2000
+        near = _random_rows(rng, count)
+        far = near + 0.3 * _random_rows(rng, count)
+        edge = tuple(rng.integers(-1, 2, count).astype(float) for _ in range(2))
+        reach = tuple(rng.integers(-8, 9, count).astype(float) for _ in range(2))
+        rise = 0.5 * rng.normal(size=count)
+        bend = 0.05 * rng.normal(size=count)
+        place = rng.uniform(0.05, 0.95, count)
+        step = 1.0e-6
+        midpoints = (near, far)
+        ahead = _base_cost(0.0, rise, bend, edge, reach, midpoints, place + step)
+        behind = _base_cost(0.0, rise, bend, edge, reach, midpoints, place - step)
+        slope = _base_slope(rise, bend, edge, reach, (near, far - near), place)
+        kept = _kept(edge, reach)
+        np.testing.assert_allclose(
+            slope[kept],
+            ((ahead - behind) / (2.0 * step))[kept],
+            rtol=1.0e-5,
+            atol=1.0e-6,
+        )
 
     def test_the_bend_is_the_parabola_through_the_third_point(self):
         # U = x^2 along a row: U(x0 + s h) = U0 + s dU + h^2 s (s - 1), so the
