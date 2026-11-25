@@ -32,10 +32,10 @@ Limits:
   check, and always returns a point of the bracket after 32 halvings. The gap
   is NaN where there is no equilibrium or no return within ``horizon`` - which,
   away from the homoclinic value, is common: the manifold settles on another
-  attractor or escapes. A NaN never counts as a sign change, so the search moves
-  ``lower`` past it. That is harmless for a NaN at the lower end, but a NaN
-  midpoint between the root and ``upper`` sends the result to ``upper``. Check
-  ``gap`` at both ends first;
+  attractor or escapes. A NaN never counts as a sign change: when the gap at
+  ``lower`` or at a midpoint is NaN, ``lower`` moves to that point and then on to
+  the next midpoint without a test. If that skips the root, the bracket no longer
+  changes sign and the result is ``upper``. Check ``gap`` at both ends first;
 * the radii are absolute distances, so a system whose orbit is much smaller or
   larger than order one needs its own ``ReturnSettings``;
 * ``gap`` and ``trace`` set parameter values on the function and leave them set.

@@ -199,9 +199,10 @@ mu = -0.0857; Melnikov, first order: -0.0857
 
 - The gap is `NaN` where there is no return. Here that means $\mu = -0.2$, where
   the manifold settles on the centre, and $\mu = 0$, where it escapes. `locate`
-  does not check its bracket. A `NaN` never counts as a sign change, so a `NaN`
-  between the root and `upper` sends the answer to `upper`. Evaluate `gap` at
-  both ends first, as above.
+  does not check its bracket. A `NaN` never counts as a sign change: when the
+  gap at `lower`, or at a midpoint, is `NaN`, the search moves `lower` to that
+  point and then on to the next midpoint without a test. If that skips the root,
+  the answer is `upper`. Evaluate `gap` at both ends first, as above.
 - The saddle needs a one-dimensional unstable manifold with a real leading
   eigenvalue. The departure and return radii are absolute (0.5 and 0.4), so a
   system far from unit scale needs its own `ReturnSettings`.
@@ -574,11 +575,13 @@ $\lambda_i$ keeps the reflections but breaks any cyclic symmetry.
 
 **Unidirectional sensor rings.** `FluxgateRing` and `FerroelectricRing` couple $N$
 identical bistable cells in a ring, with cell $i$ driven by cell $i+1$. For odd
-$N$ the ring oscillates past a critical coupling. The stable oscillation is born
-out of a heteroclinic cycle between the ring's saddle states, with infinite
-period (Bulsara et al. 2004, section III and Fig. 3). Near the threshold the
-period diverges because the orbit lingers near those saddles, as in the passage
-times of section 5. At zero field, the ferroelectric ring's trivial state has the
+$N$ the ring oscillates past a critical coupling. In the fluxgate ring the stable
+oscillation is born out of a heteroclinic cycle between the ring's saddle states,
+with infinite period (Bulsara et al. 2004, section III and Fig. 3). Near the
+threshold the period diverges because the orbit lingers near those saddles, as in
+the passage times of section 5. The ferroelectric ring does the same with
+double-well cells ($a > 0$); with monostable cells ($a < 0$) its wave is born
+instead at a Hopf bifurcation, as below. At zero field, the ferroelectric ring's trivial state has the
 eigenvalues $a - \lambda$ and $a + \lambda/2 \pm i\lambda\sqrt3/2$:
 
 ```python
@@ -628,8 +631,9 @@ linear period 4 pi / (lambda sqrt 3) = 11.16
   $-x_i + \tanh(c x_i + \lambda x_{i+1} + \varepsilon)$, so its $\lambda$ and
   $\varepsilon$ are the paper's multiplied by $c$.
 - Their Duffing ring (eq. 1) couples by $\lambda(x_i - x_{i+1})$.
-  `FerroelectricRing` couples by $-\lambda x_{i+1}$ alone. This is their ring with
-  $a$ replaced by $a + \lambda$, and $b = 1$. Their Hopf value
+  `FerroelectricRing` couples by $-\lambda x_{i+1}$ alone. With $b = 1$ their
+  cell's linear part is $(a + \lambda)x_i - \lambda x_{i+1}$, so the library's
+  gain $a$ stands for their $a + \lambda$. Their Hopf value
   $a_c = -\tfrac32\lambda$ becomes $\lambda = -2a$.
 
 The docstring of `FerroelectricRing` maps both signs of the gain $a$. That

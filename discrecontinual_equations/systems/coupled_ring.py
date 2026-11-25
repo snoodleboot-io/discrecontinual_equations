@@ -29,9 +29,11 @@ Departures from the printed models, deliberate and kept:
   ``-x_i + tanh(c x_i + lambda x_{i+1} + eps)``, so its ``lambda`` and ``eps`` are
   the paper's multiplied by ``c``;
 * their Duffing ring (eq. 1) couples by ``lambda (x_i - x_{i+1})``;
-  :class:`FerroelectricRing` couples by ``-lambda x_{i+1}`` alone, which is their
-  ring with ``a`` replaced by ``a + lambda`` (and ``b = 1``). Their Hopf value
-  ``a_c = -(3/2) lambda`` becomes ``lambda = -2a`` here.
+  :class:`FerroelectricRing` couples by ``-lambda x_{i+1}`` alone. With ``b = 1``
+  their cell's linear part is ``(a + lambda) x_i - lambda x_{i+1}``, so this ring
+  is theirs with their ``a`` equal to this gain minus ``lambda``: the gain here is
+  their ``a + lambda``. Their Hopf value ``a_c = -(3/2) lambda`` becomes
+  ``lambda = -2a`` here.
 
 References:
 - Bulsara, A. R., In, V., Kho, A., Longhini, P., Palacios, A., Rappel, W.-J.,
@@ -145,8 +147,8 @@ class FerroelectricRing(UnidirectionalRing):
     automatic-differentiation backend.
 
     References:
-        Bulsara et al. (2004), eq. (1), with ``a`` shifted by ``lambda`` (see the
-        module docstring).
+        Bulsara et al. (2004), eq. (1), with the gain ``a`` standing for their
+        ``a + lambda`` (see the module docstring).
     """
 
     def _cell(self, state: float, neighbour: float) -> float:
