@@ -67,8 +67,6 @@ ignore_missing_imports = true
 # call the stochastic methods through a plain Function
 [[tool.mypy.overrides]]
 module = [
-    "discrecontinual_equations.solver.deterministic.adams_bashforth2.adams_bashforth2_solver",
-    "discrecontinual_equations.solver.deterministic.adams_bashforth3.adams_bashforth3_solver",
     "discrecontinual_equations.solver.deterministic.euler.euler_solver",
     "discrecontinual_equations.solver.stochastic.coefficients",
     "discrecontinual_equations.solver.stochastic.ensemble",
