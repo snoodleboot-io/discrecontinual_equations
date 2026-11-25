@@ -66,7 +66,8 @@ $$
 where `v_i` are the eigenvectors. Cabré, Fontich and de la Llave state the
 method for maps as `F ∘ K = K ∘ R` (their eq. (1.4)), with `R` linear when
 there are no internal resonances. Flows follow through time-`t` maps (their
-p. 288). The equation above is the flow's infinitesimal form.
+Remark 6, announced on p. 288). The equation above is the flow's infinitesimal
+form, written out here rather than taken from the paper.
 
 Write `P(θ) = Σ_m p_m θ^m` over multi-indices `m`. Matching the coefficients of
 `θ^m` for `|m| ≥ 2` gives one linear solve per monomial:
@@ -79,9 +80,11 @@ Here the right-hand side is the `θ^m` coefficient of the field evaluated on the
 series known so far. `TaylorManifold.compute` does exactly this. It evaluates
 `f` on truncated multivariate series, one degree at a time, and solves each
 system with `numpy.linalg.solve`. The solve is non-singular as long as no
-`m · λ` is an eigenvalue of `A`. That is the non-resonance condition, condition
-(4) of Cabré–Fontich–de la Llave's Theorem 1.1: no product of at most `L`
-eigenvalues of the map lies in the rest of its spectrum.
+`m · λ` is an eigenvalue of `A`. For the time-`t` map, whose eigenvalues are
+`e^{λt}`, this is Cabré–Fontich–de la Llave's Theorem 1.1 with two
+conditions together: (4), no product of 2 to `L` of the selected eigenvalues is
+an eigenvalue of the rest of the spectrum, and (1.7), none is one of the
+selected eigenvalues themselves, which is what lets `R` be the linear `Λ`.
 
 ### Example
 
@@ -169,7 +172,7 @@ $$
 \lVert b_r - r\rVert = \Delta
 $$
 
-These are their eqs. (3.1)–(3.3), or (11) in the IJBC survey. The step `Δ` is
+These are their eqs. (3.1)–(3.3), or (9)–(11) in the IJBC survey. The step `Δ` is
 accepted if the radial line turns gently. With `α_r` the angle between
 `p_r → r` and `r → b_r`, they require
 
