@@ -31,13 +31,14 @@ import numpy as np
 
 from discrecontinual_equations.continuation.jacobian_field import JacobianField
 from discrecontinual_equations.continuation.stochastic import NoiseConvention
+from discrecontinual_equations.finite_difference import (
+    CENTRAL_STEP,
+    FORWARD_STEP,
+    step_scales,
+)
 from discrecontinual_equations.function.function import Function
 from discrecontinual_equations.function.stochastic import StochasticFunction
 
-# Dennis and Schnabel's relative steps: sqrt(eps) balances a forward difference's
-# truncation against its rounding, eps^(1/3) a central difference's.
-_FORWARD_STEP = float(np.sqrt(np.finfo(float).eps))
-_CENTRAL_STEP = float(np.cbrt(np.finfo(float).eps))
 _UNIT = 1.0
 _VECTOR = 1
 # A batch of vector fields is one row per point.
@@ -132,10 +133,10 @@ def jacobian_at(
     if isinstance(function, JacobianField):
         return function.jacobian(state)
     point = np.asarray(state, dtype=float)
-    scale = np.maximum(np.abs(point), _typical_sizes(typical, point.size))
+    scale = step_scales(point, typical)
     if central:
-        return _central_jacobian(function, point, _CENTRAL_STEP * scale)
-    steps = _FORWARD_STEP * scale * np.where(point < 0.0, -1.0, 1.0)
+        return _central_jacobian(function, point, CENTRAL_STEP * scale)
+    steps = FORWARD_STEP * scale * np.where(point < 0.0, -1.0, 1.0)
     if base is None:
         base = field_at(function, point)
     columns = np.empty((base.size, point.size))
@@ -168,10 +169,10 @@ def jacobians_along(
     if isinstance(function, JacobianField):
         return np.stack([function.jacobian(state) for state in states])
     dimension = states.shape[1]
-    scale = np.maximum(np.abs(states), _typical_sizes(typical, dimension))
+    scale = step_scales(states, typical)
     if central:
-        return _central_jacobians(function, states, _CENTRAL_STEP * scale)
-    steps = _FORWARD_STEP * scale * np.where(states < 0.0, -1.0, 1.0)
+        return _central_jacobians(function, states, CENTRAL_STEP * scale)
+    steps = FORWARD_STEP * scale * np.where(states < 0.0, -1.0, 1.0)
     if base is None:
         base = fields_at(function, states)
     jacobians = np.empty((states.shape[0], base.shape[1], dimension))
@@ -198,18 +199,6 @@ def _central_jacobians(
         difference = fields_at(function, up) - fields_at(function, down)
         columns.append(difference / (up[:, j] - down[:, j])[:, None])
     return np.stack(columns, axis=2)
-
-
-def _typical_sizes(typical: float | np.ndarray | None, dimension: int) -> np.ndarray:
-    """The typical size of each component, checked to be positive."""
-    sizes = np.broadcast_to(
-        np.asarray(_UNIT if typical is None else typical, dtype=float),
-        (dimension,),
-    )
-    if not np.all(sizes > 0.0):
-        message = "typical sizes must be positive"
-        raise ValueError(message)
-    return sizes
 
 
 def _central_jacobian(

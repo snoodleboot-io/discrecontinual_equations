@@ -36,6 +36,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from discrecontinual_equations.differential_equation import DifferentialEquation
+from discrecontinual_equations.finite_difference import CENTRAL_STEP, step_scales
 from discrecontinual_equations.function.stochastic import StochasticFunction
 from discrecontinual_equations.solver.solver_config import StochasticConfig
 from discrecontinual_equations.solver.stochastic.coefficients import (
@@ -73,20 +74,37 @@ class BatchedCoefficients:
     conventions (the Stratonovich correction is added, the derivative is a
     central difference with the same step), applied to a ``(paths, n)`` array
     of points so that the ensemble's per-step cost does not grow with the paths
-    when the equation's batch methods are arrays.
+    when the equation's batch methods are arrays. The step is relative, as
+    there: ``slope_step * max(|x_j|, typical_j)`` for each path and component,
+    each quotient divided by the width actually stepped, so that a single path
+    differences exactly as the per-path solver does (DEQ-118).
+
+    References:
+        Dennis and Schnabel (1983), Sec. 5.4 and Algorithm A5.4.1; SciPy
+        1.14.1, ``scipy/optimize/_numdiff.py``. See
+        :class:`~.coefficients.ItoCoefficients` and ``docs/references.md``.
     """
 
-    __slots__ = ["_checked", "_declared", "_equation", "_slope_step", "_stratonovich"]
+    __slots__ = [
+        "_checked",
+        "_declared",
+        "_equation",
+        "_slope_step",
+        "_stratonovich",
+        "_typical",
+    ]
 
     def __init__(
         self,
         equation: DifferentialEquation,
         calculus: str,
-        slope_step: float = 1.0e-6,
+        slope_step: float = CENTRAL_STEP,
+        typical: float | np.ndarray | None = None,
     ) -> None:
         self._equation = equation
         self._stratonovich = calculus == "stratonovich"
         self._slope_step = slope_step
+        self._typical = typical
         derivative = equation.derivative
         self._declared = (
             isinstance(derivative, StochasticFunction) and derivative.diagonal_noise
@@ -188,10 +206,12 @@ class BatchedCoefficients:
         """
         self.confirm_declaration(points, time)
         if self._declared:
-            return (
-                self.diffusion(points + self._slope_step, time)
-                - self.diffusion(points - self._slope_step, time)
-            ) / (2.0 * self._slope_step)
+            steps = self.steps(points)
+            forward = points + steps
+            backward = points - steps
+            return (self.diffusion(forward, time) - self.diffusion(backward, time)) / (
+                forward - backward
+            )
         slopes = np.empty(points.shape)
         for j in range(points.shape[1]):
             slopes[:, j] = self._difference(points, time, j)[:, j]
@@ -210,15 +230,23 @@ class BatchedCoefficients:
         for j in range(points.shape[1]):
             yield j, self._difference(points, time, j)
 
+    def steps(self, points: np.ndarray) -> np.ndarray:
+        """The step of every path and component, ``(paths, n)``."""
+        return self._slope_step * step_scales(points, self._typical)
+
     def _difference(self, points: np.ndarray, time: float, j: int) -> np.ndarray:
-        """The central difference of the diffusion in direction ``j``."""
+        """The central difference of the diffusion in direction ``j``.
+
+        Divided, path by path, by the width the machine actually stepped.
+        """
+        step = self.steps(points)[:, j]
         forward = points.copy()
         backward = points.copy()
-        forward[:, j] += self._slope_step
-        backward[:, j] -= self._slope_step
-        return (self.diffusion(forward, time) - self.diffusion(backward, time)) / (
-            2.0 * self._slope_step
-        )
+        forward[:, j] += step
+        backward[:, j] -= step
+        width = forward[:, j] - backward[:, j]
+        difference = self.diffusion(forward, time) - self.diffusion(backward, time)
+        return difference / width.reshape((-1,) + (1,) * (difference.ndim - 1))
 
     def column_jacobians(self, points: np.ndarray, time: float) -> np.ndarray:
         """``dG_k / dx`` for every path and driver, ``(paths, m, n, n)``.
@@ -233,13 +261,7 @@ class BatchedCoefficients:
         drivers = diffusion.shape[2] if matrix else diffusion.shape[1]
         jacobians = np.zeros((paths, drivers, dimension, dimension))
         for j in range(dimension):
-            forward = points.copy()
-            backward = points.copy()
-            forward[:, j] += self._slope_step
-            backward[:, j] -= self._slope_step
-            difference = (
-                self.diffusion(forward, time) - self.diffusion(backward, time)
-            ) / (2.0 * self._slope_step)
+            difference = self._difference(points, time, j)
             if matrix:
                 jacobians[:, :, :, j] = np.transpose(difference, (0, 2, 1))
             else:

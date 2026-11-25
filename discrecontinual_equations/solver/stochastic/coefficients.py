@@ -29,8 +29,10 @@ With a matrix it is ``(1/2) sum_k (dG_k / dx) G_k`` over the columns - the same
 algebra :mod:`discrecontinual_equations.continuation.noise` uses on the analysis
 side - and that reduces to the diagonal form when ``G = diag(b)``. The derivatives
 are taken by central differences, which is what the rest of the package does
-rather than ask the user for one more function; :meth:`ItoCoefficients.column_jacobians`
-is the same differences arranged as the Milstein scheme needs them.
+rather than ask the user for one more function, at a step relative to each
+component's size (:mod:`discrecontinual_equations.finite_difference`);
+:meth:`ItoCoefficients.column_jacobians` is the same differences arranged as the
+Milstein scheme needs them.
 """
 
 import warnings
@@ -38,13 +40,15 @@ import warnings
 import numpy as np
 
 from discrecontinual_equations.differential_equation import DifferentialEquation
+from discrecontinual_equations.finite_difference import CENTRAL_STEP, step_scales
 from discrecontinual_equations.function.stochastic import StochasticFunction
 
 _MATRIX = 2
 
 # Relative to the largest entry: how far a Milstein product may be from commuting,
 # and an off-diagonal slope of a declared diagonal diffusion from zero, before
-# either counts. Far above the central differences' error (about 1e-10 relative).
+# either counts. Far above the central differences' error (about eps^(2/3), or
+# 4e-11, relative to each component's size; DEQ-118).
 COMMUTATIVITY_TOLERANCE = 1.0e-6
 
 
@@ -69,19 +73,49 @@ def warn_wrong_declaration(function: object, cross: float, scale: float) -> None
 
 
 class ItoCoefficients:
-    """Evaluate ``a`` and ``b`` of the Ito form of an equation at a point."""
+    """Evaluate ``a`` and ``b`` of the Ito form of an equation at a point.
 
-    __slots__ = ["_checked", "_declared", "_equation", "_slope_step", "_stratonovich"]
+    The slopes of ``b`` that the Stratonovich correction, the Milstein step and
+    its commutativity check read are central differences. Component ``j`` is
+    moved by ``h_j = slope_step * max(|x_j|, typical_j)``, and each quotient is
+    divided by the width actually stepped (DEQ-118): ``slope_step`` is a
+    *relative* step, ``eps^(1/3)`` by default, and ``typical`` - one per
+    component, one for all, or ``None`` for one - is the size of a component
+    whose value is near zero or lives far below one. On components no larger
+    than their typical size the step is ``slope_step`` itself, as it was when
+    the step was absolute; above it the step grows with the component, where an
+    absolute step would round away and report a slope of zero.
+
+    References:
+        Dennis and Schnabel (1983), Sec. 5.4 and Algorithm A5.4.1: the step
+        scaled per component by ``max(|x_j|, typx_j)``. SciPy 1.14.1,
+        ``scipy/optimize/_numdiff.py``, ``_eps_for_method`` and
+        ``_compute_absolute_step``: the central (``"3-point"``) relative step
+        ``eps^(1/3)``, and the division by the width ``x2 - x1`` actually
+        stepped. See :mod:`discrecontinual_equations.finite_difference` and
+        ``docs/references.md``.
+    """
+
+    __slots__ = [
+        "_checked",
+        "_declared",
+        "_equation",
+        "_slope_step",
+        "_stratonovich",
+        "_typical",
+    ]
 
     def __init__(
         self,
         equation: DifferentialEquation,
         calculus: str,
-        slope_step: float = 1.0e-6,
+        slope_step: float = CENTRAL_STEP,
+        typical: float | np.ndarray | None = None,
     ) -> None:
         self._equation = equation
         self._stratonovich = calculus == "stratonovich"
         self._slope_step = slope_step
+        self._typical = typical
         derivative = equation.derivative
         self._declared = (
             isinstance(derivative, StochasticFunction) and derivative.diagonal_noise
@@ -183,13 +217,7 @@ class ItoCoefficients:
         drivers = diffusion.shape[1] if matrix else diffusion.size
         jacobians = np.zeros((drivers, dimension, dimension))
         for j in range(dimension):
-            forward = point.copy()
-            backward = point.copy()
-            forward[j] += self._slope_step
-            backward[j] -= self._slope_step
-            difference = (
-                self.diffusion(forward, time) - self.diffusion(backward, time)
-            ) / (2.0 * self._slope_step)
+            difference = self._difference(point, time, j)
             if matrix:
                 jacobians[:, :, j] = difference.T
             else:
@@ -206,13 +234,7 @@ class ItoCoefficients:
         """
         jacobian = np.empty((point.size, point.size))
         for j in range(point.size):
-            forward = point.copy()
-            backward = point.copy()
-            forward[j] += self._slope_step
-            backward[j] -= self._slope_step
-            jacobian[:, j] = (
-                self.diffusion(forward, time) - self.diffusion(backward, time)
-            ) / (2.0 * self._slope_step)
+            jacobian[:, j] = self._difference(point, time, j)
         return jacobian
 
     def diagonal_slopes(self, point: np.ndarray, time: float) -> np.ndarray:
@@ -225,18 +247,31 @@ class ItoCoefficients:
         """
         self.confirm_declaration(point, time)
         if self._declared:
-            return (
-                self.diffusion(point + self._slope_step, time)
-                - self.diffusion(point - self._slope_step, time)
-            ) / (2.0 * self._slope_step)
+            steps = self.steps(point)
+            forward = point + steps
+            backward = point - steps
+            return (self.diffusion(forward, time) - self.diffusion(backward, time)) / (
+                forward - backward
+            )
         slope = np.empty(len(point))
         for index in range(len(point)):
-            forward = point.copy()
-            backward = point.copy()
-            forward[index] += self._slope_step
-            backward[index] -= self._slope_step
-            slope[index] = (
-                self.diffusion(forward, time)[index]
-                - self.diffusion(backward, time)[index]
-            ) / (2.0 * self._slope_step)
+            slope[index] = self._difference(point, time, index)[index]
         return slope
+
+    def steps(self, point: np.ndarray) -> np.ndarray:
+        """The step of each component: ``slope_step * max(|x_j|, typical_j)``."""
+        return self._slope_step * step_scales(point, self._typical)
+
+    def _difference(self, point: np.ndarray, time: float, j: int) -> np.ndarray:
+        """The central difference of the diffusion in direction ``j``.
+
+        Divided by the width the machine actually stepped, not ``2 h_j``.
+        """
+        step = self.steps(point)[j]
+        forward = point.copy()
+        backward = point.copy()
+        forward[j] += step
+        backward[j] -= step
+        return (self.diffusion(forward, time) - self.diffusion(backward, time)) / (
+            forward[j] - backward[j]
+        )
