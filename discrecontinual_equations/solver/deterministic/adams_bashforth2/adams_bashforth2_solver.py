@@ -1,3 +1,35 @@
+"""The two-step Adams-Bashforth method on a fixed grid.
+
+Adams's idea (Bashforth 1883, p. 18) is to integrate, over the next step, the
+polynomial that interpolates the derivative values already computed. With the
+backward differences of ``f_n = f(t_n, y_n)`` his step reads
+``y_{n+1} - y_n = h (f_n + 1/2 Df_n + 5/12 D^2 f_n + 3/8 D^3 f_n + ...)``.
+A multistep method reuses one new field evaluation per step, so it is cheap
+per step, but it needs a fixed step and past values that the initial
+condition does not supply.
+
+Stopping after the first difference gives
+``y_{n+1} = y_n + h/2 (3 f_n - f_{n-1})``, second order. The first step is
+taken with forward Euler (local error ``O(h^2)``, enough for second order).
+
+Departure, found while documenting and not changed here: the history is
+misaligned at the start. The derivative stored for node 1 is the one the Euler
+step used, ``f(t_1, y_0)``, not ``f(t_1, y_1)``, so steps 2 and 3 use it in
+place of ``f_1``. It costs a fixed number of ``O(h^2)`` local errors and the
+global order stays 2 (on ``y' = -y^2`` and ``y' = y cos t`` the error falls
+as ``h^2``).
+
+References:
+    Bashforth, F. (1883). An Attempt to Test the Theories of Capillary Action
+    ..., with an Explanation of the Method of Integration ..., by J. C. Adams.
+    Cambridge University Press. P. 18: Adams's step formula, here truncated
+    after the first difference. (The code's earlier citation of Adams (1855),
+    "On the correction of the aberrations of the planets", was not checked
+    and is dropped.)
+
+    See ``docs/references.md`` (Bashforth1883).
+"""
+
 from discrecontinual_equations.curve import Curve
 from discrecontinual_equations.differential_equation import DifferentialEquation
 from discrecontinual_equations.solver.deterministic.adams_bashforth2.adams_bashforth2_config import (
@@ -7,20 +39,21 @@ from discrecontinual_equations.solver.solver import Solver
 
 
 class AdamsBashforth2Solver(Solver):
-    """
-    Adams-Bashforth 2nd order method for solving ODEs.
+    """Two-step Adams-Bashforth, ``y_{n+1} = y_n + h/2 (3 f_n - f_{n-1})``.
 
-    A 2nd-order linear multistep method using the current and previous derivative values:
-    y_{n+1} = y_n + (h/2) * (3*f_n - f_{n-1})
-
-    This method requires one previous step (startup) and achieves 2nd-order accuracy.
+    Second order, on the config's fixed grid, started with one Euler step (see
+    the module docstring for how the start is stored).
 
     References:
-    - Adams, John Couch. "On the correction of the aberrations of the planets" (1855)
-    - Bashforth, Francis. "An attempt to test the theories of capillary action" (1883)
+        Bashforth (1883), p. 18. See ``docs/references.md`` (Bashforth1883).
     """
 
     def __init__(self, solver_config: AdamsBashforth2Config):
+        """Store the configuration.
+
+        Args:
+            solver_config: The interval and ``step_size``.
+        """
         super().__init__(solver_config=solver_config)
 
     def solve(
@@ -28,6 +61,18 @@ class AdamsBashforth2Solver(Solver):
         equation: DifferentialEquation,
         initial_values: list[float],
     ) -> Curve:
+        """Integrate over the config's fixed grid ``times``.
+
+        Args:
+            equation: The equation; its ``derivative.eval(point, time)`` is the
+                field ``f(t, y)``.
+            initial_values: The state at ``times[0]``.
+
+        Returns:
+            The curve on ``times``: ``results`` holds the state ``y_n``;
+            ``variables`` holds the state one node earlier, ``y_{n-1}`` (zeros
+            at the first node). It is also kept as ``solution``.
+        """
         self.solution = self._new_solution(equation)
 
         # Store derivatives for multi-step method

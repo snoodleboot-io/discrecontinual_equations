@@ -1,3 +1,38 @@
+"""The Runge-Kutta-Fehlberg 4(5) pair, with adaptive steps.
+
+Fehlberg (1969) chose six stages that carry two formulas: a fourth-order ``y``
+to advance and a fifth-order ``y_hat``, with ``y_hat - y`` an estimate of the
+leading error of ``y`` (his eqs. (2)-(3)). His "Formula 2" (Table III, nodes
+``0, 1/4, 3/8, 12/13, 1, 1/2``) is the RKF45 pair in common use, and every
+coefficient here matches it.
+
+Fehlberg minimized the error of the fourth-order formula and advanced with it.
+This solver advances with the fifth-order ``y_hat`` instead (local
+extrapolation, the usual practice with the Dormand-Prince pairs): the returned
+solution is fifth order, and the error estimate is a bound for the formula it
+does not use. On ``y' = y cos t`` with fixed steps the global error falls as
+``h^5``.
+
+Known defects, found while documenting and not yet fixed (no behaviour changes
+in this pass):
+
+* The step-size controller and the endless retry at ``min_step_size`` are as
+  in the Dormand-Prince 5(4) solver: an integral controller
+  ``h S err^(-(1 + beta)/5)`` with no previous error, a max-norm error, and a
+  ``RuntimeError("Step size became too small")`` that cannot be reached.
+
+References:
+    Fehlberg, E. (1969). Low-order classical Runge-Kutta formulas with
+    stepsize control and their application to some heat transfer problems.
+    NASA Technical Report R-315, George C. Marshall Space Flight Center.
+    Eqs. (2)-(3) and Table III, "Coefficients for RK4(5), Formula 2" (p. 13).
+    The code's earlier citation was Fehlberg's NASA TR R-287 (1968), whose
+    title names fifth- to eighth-order formulas; the coefficients here are
+    those of R-315.
+
+    See ``docs/references.md`` (Fehlberg1969, HairerWanner1996).
+"""
+
 import numpy as np
 
 from discrecontinual_equations.curve import Curve
@@ -9,21 +44,23 @@ from discrecontinual_equations.solver.solver import Solver
 
 
 class FehlbergSolver(Solver):
-    """
-    Fehlberg Runge-Kutta method (4,5) for solving ODEs.
+    """Runge-Kutta-Fehlberg 4(5) pair on six stages, with adaptive steps.
 
-    A 4th-order Runge-Kutta method with embedded 5th-order solution for error estimation.
-    Uses 6 stages and provides adaptive step size control through local error estimation.
-
-    The method provides both 4th-order (y4) and 5th-order (y5) solutions, where the
-    difference |y5 - y4| serves as an estimate of the local truncation error.
+    ``a`` and ``c`` are Fehlberg's ``beta_kl`` and ``alpha_k``, ``b4`` his
+    fourth-order ``c_k`` and ``b5`` his fifth-order ``c_hat_k`` (Table III).
+    The solver advances with ``b5``; ``|y5 - y4|`` is the error estimate.
 
     References:
-    - Fehlberg, Erwin. "Classical fifth-, sixth-, seventh-, and eighth-order Runge-Kutta formulas
-      with stepsize control" NASA Technical Report R-287, 1968
+        Fehlberg (1969), Table III. See ``docs/references.md`` (Fehlberg1969).
     """
 
     def __init__(self, solver_config: FehlbergConfig):
+        """Store the configuration and build the tableau.
+
+        Args:
+            solver_config: The interval, first step, tolerances, step bounds,
+                ``safety_factor`` and ``beta``.
+        """
         super().__init__(solver_config=solver_config)
 
         # Fehlberg coefficients
@@ -52,6 +89,29 @@ class FehlbergSolver(Solver):
         equation: DifferentialEquation,
         initial_values: list[float],
     ) -> Curve:
+        """Integrate from ``start_time`` to ``end_time`` with adaptive steps.
+
+        Starting from ``initial_step_size``, each step is tried, accepted when
+        the scaled error estimate is at most 1, and the next step size is set
+        from that estimate; a rejected step is retried with the smaller size.
+        The last step is shortened to land on ``end_time``. The accepted
+        points are recorded, so their spacing varies.
+
+        Args:
+            equation: The equation; its ``derivative.eval(point, time)`` is the
+                field ``f(t, y)``.
+            initial_values: The state at ``start_time``.
+
+        Returns:
+            The curve of accepted points: ``time`` holds ``t_n``, ``results``
+            the state ``y_n`` and ``variables`` zeros (this solver records no
+            derivative). It is also kept as ``solution``.
+
+        Raises:
+            RuntimeError: Declared for a step below ``min_step_size``, but not
+                reached: a step rejected at ``min_step_size`` is retried there
+                indefinitely (see the module docstring).
+        """
         self.solution = self._new_solution(equation)
 
         # Initialize
@@ -85,7 +145,12 @@ class FehlbergSolver(Solver):
         return self.solution
 
     def _step(self, equation: DifferentialEquation, t: float, y: np.ndarray, h: float):
-        """Perform one Fehlberg step."""
+        """Take one trial step of size ``h`` from ``(t, y)``.
+
+        Evaluates the six stages, forms both weight rows and returns the
+        advancing solution ``y5``, the componentwise estimate ``|y4 - y5|``
+        and the proposed next step from :meth:`_compute_new_step_size`.
+        """
         k = np.zeros((6, len(y)))
 
         # Compute stages
@@ -115,7 +180,9 @@ class FehlbergSolver(Solver):
         y_new: np.ndarray,
         h: float,
     ) -> bool:
-        """Check if the step should be accepted based on error."""
+        """Accept the step when ``max_i err_i / (atol + rtol max(|y_i|, |y_new_i|))``
+        is at most 1 (a max norm; Hairer and Wanner's ``DOPRI5`` uses the RMS
+        norm of the same ratios)."""
         # Compute scaled error
         tol = (
             self.solver_config.absolute_tolerance
@@ -132,7 +199,15 @@ class FehlbergSolver(Solver):
         y: np.ndarray,
         h: float,
     ) -> float:
-        """Compute new step size using PI control."""
+        """Propose the next step: ``h S r^(-1/5) r^(-beta/5)``, clipped to the bounds.
+
+        ``r`` is the max-norm error ratio, scaled by ``atol + rtol |y|`` (the old
+        state only), and ``S`` is ``safety_factor``; ``r = 0`` gives
+        ``max_step_size``. This is an integral controller with exponent
+        ``(1 + beta)/5``: although the name says PI, no earlier error enters,
+        unlike the Lund-stabilized ``err^(-(0.2 - 0.75 beta)) err_old^beta``
+        of Hairer and Wanner's ``DOPRI5`` for its 5(4) pair.
+        """
         tol = (
             self.solver_config.absolute_tolerance
             + self.solver_config.relative_tolerance * np.abs(y)

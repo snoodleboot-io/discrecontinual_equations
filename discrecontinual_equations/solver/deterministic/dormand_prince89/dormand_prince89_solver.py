@@ -1,3 +1,46 @@
+"""The Prince-Dormand 13-stage embedded Runge-Kutta pair, with adaptive steps.
+
+Prince and Dormand (1981) give a thirteen-stage 8(7) pair: an
+eighth-order formula to advance with and an embedded seventh-order formula for
+the error estimate. The tableau here is that pair. Despite the class name and
+the attribute ``b9``, there is no ninth-order formula: ``b9`` is the
+seventh-order row (it satisfies the order conditions through order 7 to 1e-17
+and not at order 8, and RKSUITE's copy of the pair calls it "the one of order
+7"). The error estimate ``|y9 - y8|`` is therefore a seventh-order estimate,
+which is what the controller's exponent ``1/8`` assumes.
+
+Known defects, found while documenting and not yet fixed (no behaviour changes
+in this pass):
+
+* One eighth-order weight is mistyped. ``b8[7]`` is ``561292735/797845732``
+  (0.7035103561); Prince and Dormand's, as RKSUITE carries it to 30 digits, is
+  0.7035106694034430, i.e. ``561292985/797845732``. The weights then sum to
+  ``1 - 3.1e-7``, so the advancing formula is not even consistent: every step
+  loses about ``3.1e-7 h f``, and the global error stops falling near
+  ``1e-7``-``1e-6`` whatever the step (``y' = -y^2`` to ``t = 2``: 8.8e-8 at
+  ``h = 0.4``, 7.2e-8 at ``h = 0.05``). Every other ``a_ij``, ``c_i`` and the
+  seventh-order weights agree with RKSUITE to 1e-16.
+* The step-size controller and the endless retry at ``min_step_size`` are as
+  in the Dormand-Prince 5(4) solver: an integral controller
+  ``h S err^(-(1 + beta)/8)`` with no previous error, a max-norm error, and a
+  ``RuntimeError("Step size became too small")`` that cannot be reached.
+
+References:
+    Prince, P. J. and Dormand, J. R. (1981). High order embedded Runge-Kutta
+    formulae. Journal of Computational and Applied Mathematics 7(1):67-75.
+    DOI: 10.1016/0771-050X(81)90010-3. The thirteen-stage tableau (not read
+    directly: checked against RKSUITE and by the order conditions). The code's
+    earlier citation, Dormand and Prince's "Runge-Kutta triples" (1987), was
+    not checked; RKSUITE attributes this tableau to the 1981 paper.
+
+    Brankin, R. W., Gladwell, I. and Shampine, L. F. (1991). RKSUITE, Release
+    1.0, Netlib ``ode/rksuite``. Subroutine ``CONST``, ``METHD = 3``: the same
+    pair to 30 digits.
+
+    See ``docs/references.md`` (PrinceDormand1981,
+    BrankinGladwellShampine1991, HairerWanner1996).
+"""
+
 import numpy as np
 
 from discrecontinual_equations.curve import Curve
@@ -9,22 +52,28 @@ from discrecontinual_equations.solver.solver import Solver
 
 
 class DormandPrince89Solver(Solver):
-    """
-    Dormand-Prince Runge-Kutta method (8,9) for solving ODEs.
+    """Prince-Dormand 8(7): thirteen stages, eighth order to advance.
 
-    An 8th-order Runge-Kutta method with embedded 9th-order solution for error estimation.
-    Uses 13 stages and provides adaptive step size control through local error estimation.
-
-    This is a very high-order method suitable for problems requiring high accuracy.
-    The method provides both 8th-order (y8) and 9th-order (y9) solutions, where the
-    difference |y9 - y8| serves as an estimate of the local truncation error.
+    ``a`` and ``c`` hold the tableau, ``b8`` the eighth-order weights that
+    advance the solution and ``b9`` the *seventh*-order weights of the error
+    estimate (the name is historical). Because of the mistyped ``b8[7]``
+    (module docstring) the returned solution carries a relative error of a
+    few times ``1e-7`` however small the step, so it is not yet the
+    high-accuracy solver its order promises.
 
     References:
-    - Dormand, John R. and Prince, Peter J. "Runge-Kutta triples"
-      Computational Mathematics with Applications, 1987
+        Prince and Dormand (1981), the 8(7) pair; Brankin, Gladwell and Shampine
+        (1991), RKSUITE. See ``docs/references.md`` (PrinceDormand1981,
+        BrankinGladwellShampine1991).
     """
 
     def __init__(self, solver_config: DormandPrince89Config):
+        """Store the configuration and build the tableau.
+
+        Args:
+            solver_config: The interval, first step, tolerances, step bounds,
+                ``safety_factor`` and ``beta``.
+        """
         super().__init__(solver_config=solver_config)
 
         # Dormand-Prince (8,9) coefficients - 13 stages
@@ -206,6 +255,29 @@ class DormandPrince89Solver(Solver):
         equation: DifferentialEquation,
         initial_values: list[float],
     ) -> Curve:
+        """Integrate from ``start_time`` to ``end_time`` with adaptive steps.
+
+        Starting from ``initial_step_size``, each step is tried, accepted when
+        the scaled error estimate is at most 1, and the next step size is set
+        from that estimate; a rejected step is retried with the smaller size.
+        The last step is shortened to land on ``end_time``. The accepted
+        points are recorded, so their spacing varies.
+
+        Args:
+            equation: The equation; its ``derivative.eval(point, time)`` is the
+                field ``f(t, y)``.
+            initial_values: The state at ``start_time``.
+
+        Returns:
+            The curve of accepted points: ``time`` holds ``t_n``, ``results``
+            the state ``y_n`` and ``variables`` zeros (this solver records no
+            derivative). It is also kept as ``solution``.
+
+        Raises:
+            RuntimeError: Declared for a step below ``min_step_size``, but not
+                reached: a step rejected at ``min_step_size`` is retried there
+                indefinitely (see the module docstring).
+        """
         self.solution = self._new_solution(equation)
 
         # Initialize
@@ -239,7 +311,12 @@ class DormandPrince89Solver(Solver):
         return self.solution
 
     def _step(self, equation: DifferentialEquation, t: float, y: np.ndarray, h: float):
-        """Perform one Dormand-Prince (8,9) step."""
+        """Take one trial step of size ``h`` from ``(t, y)``.
+
+        Evaluates the thirteen stages, forms both weight rows and returns the
+        advancing solution ``y8``, the componentwise estimate ``|y9 - y8|``
+        and the proposed next step from :meth:`_compute_new_step_size`.
+        """
         k = np.zeros((13, len(y)))
 
         # Compute stages
@@ -269,7 +346,9 @@ class DormandPrince89Solver(Solver):
         y_new: np.ndarray,
         h: float,
     ) -> bool:
-        """Check if the step should be accepted based on error."""
+        """Accept the step when ``max_i err_i / (atol + rtol max(|y_i|, |y_new_i|))``
+        is at most 1 (a max norm; Hairer and Wanner's ``DOPRI5`` uses the RMS
+        norm of the same ratios)."""
         # Compute scaled error
         tol = (
             self.solver_config.absolute_tolerance
@@ -286,7 +365,15 @@ class DormandPrince89Solver(Solver):
         y: np.ndarray,
         h: float,
     ) -> float:
-        """Compute new step size using PI control."""
+        """Propose the next step: ``h S r^(-1/8) r^(-beta/8)``, clipped to the bounds.
+
+        ``r`` is the max-norm error ratio, scaled by ``atol + rtol |y|`` (the old
+        state only), and ``S`` is ``safety_factor``; ``r = 0`` gives
+        ``max_step_size``. This is an integral controller with exponent
+        ``(1 + beta)/8``: although the name says PI, no earlier error enters,
+        unlike the Lund-stabilized ``err^(-(0.2 - 0.75 beta)) err_old^beta``
+        of Hairer and Wanner's ``DOPRI5`` for its 5(4) pair.
+        """
         tol = (
             self.solver_config.absolute_tolerance
             + self.solver_config.relative_tolerance * np.abs(y)
