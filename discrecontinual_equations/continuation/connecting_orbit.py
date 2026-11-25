@@ -829,14 +829,14 @@ def _relative_correction(
     step at an iterate that is not stationary would otherwise certify it: there
     the defect is ``|J^T r|``, a fair fraction of the scale. Measured on every
     step taken on the problems in the tests, the defect is 1e-15 of it or less.
+    A step that is not finite makes the defect NaN, and fails the test too.
     """
-    if not np.all(np.isfinite(step)):
-        return math.inf
-    remainder = jacobian @ step + residual
     scale = float(np.sqrt(jacobian.multiply(jacobian).sum())) * float(
         np.linalg.norm(residual),
     )
-    gradient = float(np.linalg.norm(jacobian.T @ remainder))
+    with np.errstate(over="ignore", invalid="ignore"):
+        remainder = jacobian @ step + residual
+        gradient = float(np.linalg.norm(jacobian.T @ remainder))
     if not gradient <= _NORMAL_EQUATIONS * scale:
         return math.inf
     return float(np.max(np.abs(step) / (1.0 + np.abs(unknowns))))
