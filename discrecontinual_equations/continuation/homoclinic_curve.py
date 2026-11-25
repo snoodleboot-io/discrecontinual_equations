@@ -77,7 +77,7 @@ class EigenvalueCountError(ValueError):
         Champneys, A. R., Kuznetsov, Yu. A. & Sandstede, B. (1996). A numerical
             toolbox for homoclinic bifurcation analysis. *International Journal
             of Bifurcation and Chaos* 6(5), 867-887. DOI 10.1142/S0218127496000485.
-            The defining system continued here. See ``docs/references.md``.
+            The defining system continued here.
         Beyn, W.-J. (1990). The numerical computation of connecting orbits in
             dynamical systems. *IMA Journal of Numerical Analysis* 10(3),
             379-405. DOI 10.1093/imanum/10.3.379. Projection boundary
@@ -611,7 +611,7 @@ class HomoclinicCurve:
             Champneys, A. R., Kuznetsov, Yu. A. & Sandstede, B. (1996). A numerical
                 toolbox for homoclinic bifurcation analysis. *International Journal
                 of Bifurcation and Chaos* 6(5), 867-887. DOI 10.1142/S0218127496000485.
-                The defining system continued here. See ``docs/references.md``.
+                The defining system continued here.
             Beyn, W.-J. (1990). The numerical computation of connecting orbits in
                 dynamical systems. *IMA Journal of Numerical Analysis* 10(3),
                 379-405. DOI 10.1093/imanum/10.3.379. Projection boundary
@@ -680,7 +680,7 @@ class HomoclinicCurve:
             Champneys, A. R., Kuznetsov, Yu. A. & Sandstede, B. (1996). A numerical
                 toolbox for homoclinic bifurcation analysis. *International Journal
                 of Bifurcation and Chaos* 6(5), 867-887. DOI 10.1142/S0218127496000485.
-                The defining system continued here. See ``docs/references.md``.
+                The defining system continued here.
             Beyn, W.-J. (1990). The numerical computation of connecting orbits in
                 dynamical systems. *IMA Journal of Numerical Analysis* 10(3),
                 379-405. DOI 10.1093/imanum/10.3.379. Projection boundary
