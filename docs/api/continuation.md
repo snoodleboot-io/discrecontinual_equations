@@ -1679,8 +1679,8 @@ print(jacobian.extended_jacobian(np.array([2.0, 2.0e12]), 4.0))
 component, or one for all) or its step is floored at one; the builder passes
 only `epsilon`, so `typical` is reachable by constructing the provider yourself.
 Continuation states and parameters of size above one now take larger steps than
-before, so their converged points move by the change in the difference error,
-which is below the Newton tolerance. The residuals that difference their own
+before, so the Jacobian Newton is handed changes by the change in the difference
+error, and a converged point can move within the Newton tolerance. The residuals that difference their own
 columns (`AnalyticJacobian` over a `DifferentiableResidual`, the cusp and
 generalised-Hopf curves) still take `epsilon` as an absolute step.
 
