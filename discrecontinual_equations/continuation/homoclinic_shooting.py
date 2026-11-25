@@ -29,10 +29,13 @@ Limits:
   eigenvalue. Nothing checks this; with a complex leading pair the real part of
   its eigenvector is used and the gap has no meaning;
 * ``locate`` assumes the gap changes sign in ``[lower, upper]``. It does not
-  check, and always returns a point of the bracket after 32 halvings. A gap of
-  NaN (no equilibrium, no return, or divergence before any return) compares as
-  "same sign", so a bracket that straddles a NaN region quietly converges to its
-  edge. Check ``gap`` at both ends first;
+  check, and always returns a point of the bracket after 32 halvings. The gap
+  is NaN where there is no equilibrium or no return within ``horizon`` - which,
+  away from the homoclinic value, is common: the manifold settles on another
+  attractor or escapes. A NaN never counts as a sign change, so the search moves
+  ``lower`` past it. That is harmless for a NaN at the lower end, but a NaN
+  midpoint between the root and ``upper`` sends the result to ``upper``. Check
+  ``gap`` at both ends first;
 * the radii are absolute distances, so a system whose orbit is much smaller or
   larger than order one needs its own ``ReturnSettings``;
 * ``gap`` and ``trace`` set parameter values on the function and leave them set.
