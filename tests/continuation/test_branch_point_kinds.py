@@ -35,21 +35,37 @@ def _returned_literals(function: object) -> set[str]:
     }
 
 
-def _literal_branch_matches(tree: ast.AST) -> list[ast.Compare]:
-    """Comparisons of a ``.kind`` against a branch-point kind spelled out."""
-    found = []
+def _is_kind(node: ast.AST) -> bool:
+    """Whether ``node`` reads a kind: ``p.kind``, ``p["kind"]`` or a name ``kind``."""
+    if isinstance(node, ast.Attribute):
+        return node.attr == "kind"
+    if isinstance(node, ast.Subscript):
+        return isinstance(node.slice, ast.Constant) and node.slice.value == "kind"
+    return isinstance(node, ast.Name) and node.id == "kind"
+
+
+def _strings(nodes: list[ast.AST]) -> set[str]:
+    return {
+        leaf.value
+        for node in nodes
+        for leaf in ast.walk(node)
+        if isinstance(leaf, ast.Constant) and isinstance(leaf.value, str)
+    }
+
+
+def _literal_branch_matches(tree: ast.AST) -> list[ast.Compare | ast.Match]:
+    """Comparisons and ``match`` cases of a kind against a branch-point literal."""
+    found: list[ast.Compare | ast.Match] = []
     for node in ast.walk(tree):
-        if not isinstance(node, ast.Compare):
+        if isinstance(node, ast.Compare):
+            sides = [node.left, *node.comparators]
+            if not any(_is_kind(side) for side in sides):
+                continue
+            literals = _strings(sides)
+        elif isinstance(node, ast.Match) and _is_kind(node.subject):
+            literals = _strings([case.pattern for case in node.cases])
+        else:
             continue
-        sides = [node.left, *node.comparators]
-        if not any(isinstance(s, ast.Attribute) and s.attr == "kind" for s in sides):
-            continue
-        literals = {
-            leaf.value
-            for side in sides
-            for leaf in ast.walk(side)
-            if isinstance(leaf, ast.Constant) and isinstance(leaf.value, str)
-        }
         if literals & set(BRANCH_POINT_KINDS):
             found.append(node)
     return found
@@ -73,6 +89,16 @@ class TestBranchPointKinds(TestCase):
         assert len(_literal_branch_matches(ast.parse('p.kind in ("pitchfork",)'))) == 1
         assert _literal_branch_matches(ast.parse("is_branch_point(p.kind)")) == []
         assert _literal_branch_matches(ast.parse('p.kind == "hopf"')) == []
+
+    def test_the_finder_sees_a_payload_a_local_name_and_a_match(self):
+        for source in (
+            'p["kind"] == "transcritical"',
+            'kind == "pitchfork"',
+            'match p.kind:\n    case "hopf" | "pitchfork":\n        pass',
+        ):
+            assert len(_literal_branch_matches(ast.parse(source))) == 1, source
+        clean = 'match p.kind:\n    case "hopf":\n        pass'
+        assert _literal_branch_matches(ast.parse(clean)) == []
 
     def test_no_example_matches_a_branch_point_kind_by_name(self):
         found = [
