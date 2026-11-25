@@ -246,6 +246,18 @@ def _normalizations():
     return (start, -start)
 
 
+class _Recorder(DegenerateBogdanovTakens):
+    """The ``a`` test function, recording the orientation each scan starts from."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.starts: list[np.ndarray | None] = []
+
+    def reset(self) -> None:
+        super().reset()
+        self.starts.append(self._previous)
+
+
 class TestTheCurveTurnsItsNullVector(TestCase):
     def test_largest_component_of_q0_changes_index_along_the_curve(self):
         # The precondition of the bug: argmax |q0| is not constant along the curve.
@@ -386,22 +398,16 @@ class TestDegenerateBogdanovTakensScan(TestCase):
                 assert len(signs) == 1, (seed, detector.kind)
 
     def test_each_scan_starts_without_an_orientation(self):
-        starts = []
-
-        class Recorder(DegenerateBogdanovTakens):
-            def reset(self) -> None:
-                super().reset()
-                starts.append(self._previous)
-
+        recorder = _Recorder()
         equation = _equation(GenericCurve)
         problem = _problem(equation)
         third = equation.derivative.parameters[2]
         normalization = _normalizations()[0]
         residual = BogdanovTakensCurveResidual(problem, 3, normalization, third)
-        analyzer = Codim3Analyzer([Recorder()], third)
+        analyzer = Codim3Analyzer([recorder], third)
         for _ in range(2):
             analyzer.analyze(_Curve(normalization), residual, problem)
-        assert starts == [None, None]
+        assert recorder.starts == [None, None]
 
 
 class TestDegenerateBogdanovTakensContinuation(TestCase):
