@@ -1,8 +1,12 @@
+import functools
+
 import numpy as np
+import pytest
 
 from discrecontinual_equations.differential_equation import DifferentialEquation
 from discrecontinual_equations.function.stochastic import StochasticFunction
 from discrecontinual_equations.parameter import Parameter
+from discrecontinual_equations.solver.stochastic.wiener import BrownianPath
 from discrecontinual_equations.solver.stochastic.zhan_duan_li_li.zhan_duan_li_li_config import (
     ZhanDuanLiLiConfig,
 )
@@ -10,6 +14,7 @@ from discrecontinual_equations.solver.stochastic.zhan_duan_li_li.zhan_duan_li_li
     ZhanDuanLiLiSolver,
 )
 from discrecontinual_equations.variable import Variable
+from tests.solver.geometric_brownian_motion import GeometricBrownianMotionCase, slope
 
 
 class TestStochasticFunction(StochasticFunction):
@@ -218,3 +223,175 @@ class TestZhanDuanLiLiSolver:
 
         # Currently just a placeholder - actual usage would depend on paper implementation
         assert hasattr(solver.solver_config, "method_parameter")
+
+
+# The calculus (DEQ-133). Until DEQ-133 the config forced calculus="ito" while the
+# step, a two-stage Runge-Kutta step whose second stage carries weight theta on
+# the increment, converged to the Ito equation with drift a + theta b b' - at
+# theta = 1/2 the Stratonovich solution (Rumelin's theorem, as Saito and Mitsui
+# state it). These tests pin the limit in each calculus.
+
+_STEPS = [2.0**-k for k in range(3, 8)]
+_RESOLUTION = 2.0**-10
+_MEAN_PATHS = 1000
+
+
+class _MultiplicativeNoise(StochasticFunction):
+    """``dX = X dW`` (one driver) or ``dX = X dW_1 + X dW_2`` (a 1 x 2 matrix)."""
+
+    def __init__(self, variables, time, drivers):
+        super().__init__(variables, [], [Variable(name="dX/dt")], time)
+        self._drivers = drivers
+
+    def eval(self, point, time=None):
+        return [0.0]
+
+    def diffusion(self, point, time=None):
+        if self._drivers == 1:
+            return [point[0]]
+        return [[point[0]] * self._drivers]
+
+
+def _multiplicative(drivers: int = 1) -> DifferentialEquation:
+    time = Variable(name="t", discretization=[])
+    variables = [Variable(name="X", discretization=[])]
+    return DifferentialEquation(
+        variables=variables,
+        time=time,
+        parameters=[],
+        derivative=_MultiplicativeNoise(variables, time, drivers),
+    )
+
+
+def _theta_config(theta: float):
+    return functools.partial(ZhanDuanLiLiConfig, method_parameter=theta)
+
+
+class TestZhanDuanLiLiCalculus:
+    def test_the_configured_calculus_is_kept(self):
+        config = ZhanDuanLiLiConfig(calculus="stratonovich")
+        assert config.calculus == "stratonovich"
+
+    @pytest.mark.parametrize("theta", [0.5, 1.0])
+    @pytest.mark.parametrize(
+        ("calculus", "expected", "other"),
+        [("ito", 1.0, np.exp(0.5)), ("stratonovich", np.exp(0.5), 1.0)],
+    )
+    def test_geometric_brownian_motion_mean_pins_the_calculus(
+        self, theta, calculus, expected, other
+    ):
+        # dX = X dW from X(0) = 1: E X(1) is 1 in the Ito sense and e^(1/2) in the
+        # Stratonovich sense. The scheme's bias at h = 0.05 is below 0.02 in either
+        # (its mean is a polynomial in h that matches the exact one to O(h)), and
+        # the standard error over 1000 paths is about 0.05, so the bound of four
+        # standard errors plus that bias still sits more than eight standard errors
+        # from the other calculus's mean.
+        equation = _multiplicative()
+        finals = np.array(
+            [
+                ZhanDuanLiLiSolver(
+                    ZhanDuanLiLiConfig(
+                        method_parameter=theta,
+                        step_size=0.05,
+                        random_seed=seed,
+                        calculus=calculus,
+                    )
+                )
+                .solve(equation, [1.0])
+                .results[0]
+                .discretization[-1]
+                for seed in range(_MEAN_PATHS)
+            ]
+        )
+        error = finals.std(ddof=1) / np.sqrt(_MEAN_PATHS)
+        assert abs(finals.mean() - expected) < 4.0 * error + 0.02, finals.mean()
+        assert abs(finals.mean() - other) > 8.0 * error, finals.mean()
+
+    @pytest.mark.parametrize("calculus", ["ito", "stratonovich"])
+    def test_strong_order_one_at_one_half(self, calculus):
+        # At theta = 1/2 the step is the stochastic Heun step, strong order 1.0 for
+        # scalar noise. A drift built for the wrong calculus leaves an error that
+        # does not shrink with h, which the bound on the finest step catches.
+        errors = GeometricBrownianMotionCase(seed=300, calculus=calculus).errors(
+            ZhanDuanLiLiSolver,
+            ZhanDuanLiLiConfig,
+            _STEPS,
+            paths=40,
+            resolution=_RESOLUTION,
+        )
+        strong = slope({h: e[0] for h, e in errors.items()})
+        assert 0.85 < strong < 1.3, errors
+        assert errors[_STEPS[-1]][0] < 0.02, errors
+
+    @pytest.mark.parametrize("calculus", ["ito", "stratonovich"])
+    def test_other_thetas_converge_to_the_same_solution(self, calculus):
+        # Away from 1/2 the step's increment term is theta b b' dW^2 rather than
+        # (1/2) b b' dW^2, a mean-zero error of size h per step, so the strong
+        # order is 1/2; but the drift correction puts the limit on the right
+        # solution, so the error still falls to zero.
+        errors = GeometricBrownianMotionCase(seed=400, calculus=calculus).errors(
+            ZhanDuanLiLiSolver,
+            _theta_config(1.0),
+            _STEPS,
+            paths=40,
+            resolution=_RESOLUTION,
+        )
+        strong = slope({h: e[0] for h, e in errors.items()})
+        assert 0.35 < strong < 0.8, errors
+        assert errors[_STEPS[-1]][0] < 0.2, errors
+
+    @pytest.mark.parametrize("calculus", ["ito", "stratonovich"])
+    def test_systems_with_diagonal_noise(self, calculus):
+        errors = GeometricBrownianMotionCase(
+            seed=500, calculus=calculus, dimension=2
+        ).errors(
+            ZhanDuanLiLiSolver,
+            ZhanDuanLiLiConfig,
+            _STEPS[-2:],
+            paths=10,
+            resolution=_RESOLUTION,
+        )
+        assert errors[_STEPS[-1]][0] < 0.02, errors
+
+    @pytest.mark.parametrize("theta", [0.5, 1.0])
+    @pytest.mark.parametrize("calculus", ["ito", "stratonovich"])
+    def test_matrix_noise_takes_the_correction_over_every_driver(self, theta, calculus):
+        # dX = X dW_1 + X dW_2 has X(1) = exp(W_1 + W_2 - 1) (Ito) or
+        # exp(W_1 + W_2) (Stratonovich): the correction is the sum over both
+        # columns, and dropping either column's half leaves an error near
+        # |e^(-1/2) - 1| X(1) at every step size.
+        path = BrownianPath.sample(0.0, 1.0, _RESOLUTION, 2, seed=11)
+        w = float(np.sum(path.value(1.0)))
+        exact = np.exp(w - (1.0 if calculus == "ito" else 0.0))
+        config = ZhanDuanLiLiConfig(
+            method_parameter=theta, step_size=2.0**-9, calculus=calculus
+        )
+        final = (
+            ZhanDuanLiLiSolver(config, wiener=path)
+            .solve(_multiplicative(drivers=2), [1.0])
+            .results[0]
+            .discretization[-1]
+        )
+        assert abs(final - exact) < 0.1 * exact, (final, exact)
+
+    def test_additive_noise_is_unchanged_by_the_calculus(self):
+        # b' = 0, so no correction: both calculi give the same numbers.
+        time = Variable(name="t", discretization=[])
+        variables = [Variable(name="Z", discretization=[])]
+        parameters = [Parameter(name="mu", value=0.1), Parameter(name="s", value=0.2)]
+        equation = DifferentialEquation(
+            variables=variables,
+            time=time,
+            parameters=parameters,
+            derivative=TestStochasticFunction(variables, parameters, time),
+        )
+        finals = [
+            ZhanDuanLiLiSolver(
+                ZhanDuanLiLiConfig(method_parameter=0.7, random_seed=3, calculus=c)
+            )
+            .solve(equation, [0.0])
+            .results[0]
+            .discretization
+            for c in ("ito", "stratonovich")
+        ]
+        np.testing.assert_array_equal(finals[0], finals[1])
