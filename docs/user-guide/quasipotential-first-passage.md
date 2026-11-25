@@ -153,7 +153,7 @@ The marched $U$ at $(0.8, -0.3)$ is `0.9993` against the exact `0.9986`. The las
 
 The radius must be at least comparable to the drift's rotation-to-gradient ratio on the region in question. A minimum action path crosses the level sets of $U$ at a shallow angle when the rotation is strong, so its predecessor lies many cells back along the front. On the paper's SDE (21), where that ratio is 10, a radius of 2 or 4 does not converge at all: radius 2 gives errors of 0.381, 0.370 and 0.371 at 129, 257 and 513 points. The default of 8 converges there, slowly. **If $U$ does not settle as the grid is refined, the radius is too small.**
 
-The paper's rule of thumb, its Eq. (28), $K = 10 + 4\,(\operatorname{round}(\log_2 N) - 7)$ for $2^7 \le N \le 2^{12}$, grows the radius with the grid. The library does not apply it; to use it, pass `update_radius` yourself. A larger radius also lengthens the one-point updates, whose midpoint-rule error grows like the square of their length, and on the steep double well that term dominates: at 81 points the error is 0.0107, 0.0112 and 0.0420 at radii 2, 4 and 8. The radius is therefore left to the caller.
+The paper's rule of thumb, its Eq. (28), $K = 10 + 4\,(\operatorname{round}(\log_2 N) - 7)$ for $2^7 \le N \le 2^{12}$, grows the radius with the grid. The library offers it as an opt-in, not as the default: [`default_radius(grid)`](../api/continuation.md#discrecontinual_equations.continuation.quasipotential.default_radius) returns it, held at 8 below 128 points, and you pass it as `update_radius`. A larger radius also lengthens the one-point updates, whose midpoint-rule error grows like the square of their length, and on the steep double well that term dominates: at 81 points the error is 0.0107, 0.0112 and 0.0420 at radii 2, 4 and 8. At 321 points, radius 14 against 8, Eq. (28) gains on the rotating systems (rotating Ornstein-Uhlenbeck 9.30e-5 against 3.34e-4, SDE (21) 2.55e-4 against 1.34e-3) and loses on the gradient-dominated ones (double well 9.05e-3 against 2.85e-3). Use it for a drift whose rotation-to-gradient ratio is near or above 8.
 
 **Limits.**
 
@@ -161,12 +161,34 @@ The paper's rule of thumb, its Eq. (28), $K = 10 + 4\,(\operatorname{round}(\log
 - The drift and noise must be time-independent. A periodically forced system needs the quasipotential of its Poincare map instead.
 - $D$ must be non-singular at every grid point. A point between grid points where $D$ vanishes, such as the origin of the conformal noise $\sigma z\, dB$, is treated as impassable. That matches the quasipotential's own behaviour there, where it diverges logarithmically, but the values in the surrounding cells are not claimed to the orders above.
 - $U$ near the edge of the box is wrong wherever the true minimum action path would leave the box. Choose a box that contains the sublevel set $\{U \le U(x)\}$ you ask about.
-- The error is first order in general (the linear interpolation along each triangle's base). Treat $U$ as accurate to the measured figures above, not to machine precision.
+- With the default straight base the error is first order in general (the linear interpolation along each triangle's base). Treat $U$ as accurate to the measured figures above, not to machine precision, or check the points that matter with `check`.
 - `GridQuasipotential.values` is `inf` where no path from the attractor reached. `floor` is the level below which a state is as close to the attractor as the grid resolves.
 
-**Work in progress.** Three open pull requests change `continuation.quasipotential` and are not yet on `main`: DEQ-57 (PR #58, a pointwise error estimate and refinement where it is large), DEQ-58 (PR #59, an opt-in parabolic update) and DEQ-59 (PR #60, minimum action paths through a state-dependent noise). This page describes `main`; the measured figures above, and the constant-$D$ limit of `GeometricMinimumAction` below, will be revisited as they merge.
+**Two further opt-ins.** `OrderedLineIntegral(..., update_order="quadratic")` interpolates $U$ along each triangle's base by a parabola through three accepted points instead of a straight line. This is the library's own variant, not a published method. It makes the update exact where $U$ is quadratic, so it pays on a drift that is linear or nearly so: on the rotating Ornstein-Uhlenbeck process at 321 points the maximum error falls from 3.34e-4 to 3.41e-6. On a nonlinear drift it does not help, and at equal cost (it takes 2.3 to 2.8 times as long) the default straight base was better on every nonlinear problem measured.
 
-**Sources.** [FreidlinWentzell2012](../references.md#quasipotential-minimum-action-paths-fokker-planck-and-first-passage) for the action and the quasipotential. [DahiyaCameron2018](../references.md#quasipotential-minimum-action-paths-fokker-planck-and-first-passage) for OLIM-MID: the geometric action, eq. (2); the Hamilton-Jacobi equation, eq. (3); the cycle start, eqs. (9)-(12); the test systems, SDEs (21) and (24); and the radius rule, eq. (28). API: [`OrderedLineIntegral`](../api/continuation.md#discrecontinual_equations.continuation.quasipotential.OrderedLineIntegral), [`EquilibriumAttractor`](../api/continuation.md#discrecontinual_equations.continuation.quasipotential.EquilibriumAttractor), [`CycleAttractor`](../api/continuation.md#discrecontinual_equations.continuation.quasipotential.CycleAttractor), [`GridQuasipotential`](../api/continuation.md#discrecontinual_equations.continuation.quasipotential.GridQuasipotential).
+`OrderedLineIntegral.check(field, indices)` estimates the error point by point. At each chosen point it relaxes a `GeometricMinimumAction` chain from a small surface around the attractor, which needs no grid, and reports the gap to the grid value plus the reference's own estimated error. With a `tolerance`, points whose estimate exceeds it are replaced by the reference. Each point costs of the order of a second, against well under a millisecond for the march, so ask for it where it matters.
+
+```python
+from discrecontinual_equations.continuation.quasipotential import default_radius
+
+print("Eq. (28) radius at 257 points:", default_radius(DensityGrid.box([-1.5, -1.5], [1.5, 1.5], [257, 257])))
+
+parabolic = OrderedLineIntegral(drift, noise, grid, update_order="quadratic")
+V = parabolic.solve(EquilibriumAttractor([0.0, 0.0]))
+print(f"parabolic U {V.at(target):.4f}")
+
+solver = OrderedLineIntegral(drift, noise, grid)
+index = np.ravel_multi_index(grid.nearest(target), grid.shape)
+checked = solver.check(U, indices=[index])
+point = grid.points()[index]
+print(f"at {point}: grid {U.values.ravel()[index]:.5f}, "
+      f"exact {0.5 * point @ inverse @ point:.5f}, "
+      f"estimated error {checked.errors.ravel()[index]:.1e}")
+```
+
+This continues the example above. It prints a radius of `14`; a parabolic $U$ of `0.9990` against the exact `0.9986`; and, at the grid point `(0.7875, -0.3)`, a grid value of `0.97241` against the exact `0.97223`, with an estimated error of `3.0e-04` that bounds the true `1.8e-4`.
+
+**Sources.** [FreidlinWentzell2012](../references.md#quasipotential-minimum-action-paths-fokker-planck-and-first-passage) for the action and the quasipotential. [DahiyaCameron2018a](../references.md#quasipotential-minimum-action-paths-fokker-planck-and-first-passage) for OLIM-MID: the geometric action, eq. (2); the Hamilton-Jacobi equation, eq. (3); the cycle start, eqs. (9)-(12); the test systems, SDEs (21) and (24); and the radius rule, eq. (28). [DahiyaCameron2018b](../references.md#quasipotential-minimum-action-paths-fokker-planck-and-first-passage) for the midpoint metric $A = D^{-1}$ and its linear interpolation along a triangle's base with a variable $D$, eqs. (19), (21) and (22). API: [`OrderedLineIntegral`](../api/continuation.md#discrecontinual_equations.continuation.quasipotential.OrderedLineIntegral), [`EquilibriumAttractor`](../api/continuation.md#discrecontinual_equations.continuation.quasipotential.EquilibriumAttractor), [`CycleAttractor`](../api/continuation.md#discrecontinual_equations.continuation.quasipotential.CycleAttractor), [`GridQuasipotential`](../api/continuation.md#discrecontinual_equations.continuation.quasipotential.GridQuasipotential).
 
 ## Minimum action paths
 
@@ -180,11 +202,11 @@ In the example above, the traced path arrives, and the relaxed chain of 41 nodes
 
 **Limits.**
 
-- `GeometricMinimumAction` assumes a constant $D$. A state-dependent $D$ needs the metric's own derivatives in the flow, so it is refused rather than silently ignored.
+- `GeometricMinimumAction` handles a state-dependent $D$ through the general form of the flow (Grafke, Schäfer and Vanden-Eijnden, eqs. (38)–(42)), which brings in the derivatives of $D$. On the tests' multiplicative system, where $D$ varies by a factor of two, the action is off by 1.36e-4, 3.11e-5 and 1.04e-5 with 41, 81 and 161 nodes. A $D$ that is the same along the chain is detected and the cheaper constant-$D$ flow is used.
 - A traced path inherits the grid's error in $\nabla U$. It cannot cross a saddle; use the relaxed path for that.
 - Check `arrived` and `converged`. Neither method raises when it falls short.
 
-**Sources.** [HeymannVandenEijnden2008](../references.md#quasipotential-minimum-action-paths-fokker-planck-and-first-passage) for the gMAM; [VandenEijndenHeymann2008](../references.md#quasipotential-minimum-action-paths-fokker-planck-and-first-passage) for its semi-implicit form with additive noise; [GrafkeSchaferVandenEijnden2017](../references.md#quasipotential-minimum-action-paths-fokker-planck-and-first-passage), eq. (19), for the relaxation flow as implemented. API: [`OrderedLineIntegral.minimum_action_path`](../api/continuation.md#discrecontinual_equations.continuation.quasipotential.OrderedLineIntegral.minimum_action_path), [`GeometricMinimumAction`](../api/continuation.md#discrecontinual_equations.continuation.quasipotential.GeometricMinimumAction).
+**Sources.** [HeymannVandenEijnden2008](../references.md#quasipotential-minimum-action-paths-fokker-planck-and-first-passage) for the gMAM; [VandenEijndenHeymann2008](../references.md#quasipotential-minimum-action-paths-fokker-planck-and-first-passage) for its semi-implicit form with additive noise; [GrafkeSchaferVandenEijnden2017](../references.md#quasipotential-minimum-action-paths-fokker-planck-and-first-passage), eq. (19) for the relaxation flow with additive noise and eqs. (38)–(42) for a state-dependent noise. API: [`OrderedLineIntegral.minimum_action_path`](../api/continuation.md#discrecontinual_equations.continuation.quasipotential.OrderedLineIntegral.minimum_action_path), [`GeometricMinimumAction`](../api/continuation.md#discrecontinual_equations.continuation.quasipotential.GeometricMinimumAction).
 
 ## Residence times near a heteroclinic cycle
 
