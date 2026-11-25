@@ -36,6 +36,8 @@ from discrecontinual_equations.function.stochastic import StochasticFunction
 _JACOBIAN_STEP = 1.0e-7
 _UNIT = 1.0
 _VECTOR = 1
+# A batch of vector fields is one row per point.
+_BATCH_AXES = 2
 
 
 def stratonovich_factor(convention: NoiseConvention) -> float:
@@ -59,9 +61,19 @@ def fields_at(function: Function, states: np.ndarray) -> np.ndarray:
 
     Row ``p`` equals :func:`field_at` at ``states[p]`` exactly; the evaluation goes
     through :meth:`Function.eval_batch`, so a field with array arithmetic does it in
-    one call.
+    one call. A batch whose shape is not one row per state is refused rather than
+    broadcast: an ``eval_batch`` written for one point at a time, returning the
+    ``n`` components as a flat vector, would otherwise pass for a column.
     """
-    return function.eval_batch(states)
+    states = np.asarray(states, dtype=float)
+    values = np.asarray(function.eval_batch(states), dtype=float)
+    if values.ndim != _BATCH_AXES or values.shape[0] != states.shape[0]:
+        message = (
+            f"eval_batch returned shape {values.shape} for {states.shape[0]} states; "
+            f"it must return one row per state"
+        )
+        raise ValueError(message)
+    return values
 
 
 def jacobians_along(

@@ -1,5 +1,9 @@
 """The systems the quasipotential is checked against, each with its closed form.
 
+Each field also offers ``eval_batch``, the same arithmetic on columns of
+points, which the march uses to evaluate the field at every half-lattice point
+in one call (and the tests check it gives the same field as ``eval``).
+
 *The double well with a transverse direction.* ``V = x^4/4 - x^2/2 + y^2/2`` has
 minima at ``(+-1, 0)`` and a saddle at the origin. With ``f = -grad V`` and
 ``G = I`` the stationary density is ``exp(-2 V)``, so in the library's
@@ -56,6 +60,13 @@ class DoubleWellField(DeterministicFunction):
         x, y = point[0], point[1]
         return [x - x**3, -y]
 
+    def eval_batch(
+        self,
+        points: np.ndarray,
+        time: float | None = None,  # noqa: ARG002 (base signature)
+    ) -> np.ndarray:
+        return np.column_stack(self.eval(list(np.asarray(points).T)))
+
 
 class LinearField(DeterministicFunction):
     """``f = A x`` for the rotating Ornstein-Uhlenbeck drift matrix."""
@@ -66,6 +77,13 @@ class LinearField(DeterministicFunction):
         time: float | None = None,  # noqa: ARG002 (base signature)
     ) -> list[float]:
         return list(RotatingOrnsteinUhlenbeck.drift_matrix @ np.asarray(point))
+
+    def eval_batch(
+        self,
+        points: np.ndarray,
+        time: float | None = None,  # noqa: ARG002 (base signature)
+    ) -> np.ndarray:
+        return np.asarray(points) @ RotatingOrnsteinUhlenbeck.drift_matrix.T
 
 
 class MatrixColumn(DeterministicFunction):
@@ -81,6 +99,13 @@ class MatrixColumn(DeterministicFunction):
         time: float | None = None,  # noqa: ARG002 (base signature)
     ) -> list[float]:
         return list(self._column)
+
+    def eval_batch(
+        self,
+        points: np.ndarray,
+        time: float | None = None,  # noqa: ARG002 (base signature)
+    ) -> np.ndarray:
+        return np.tile(self._column, (np.asarray(points).shape[0], 1))
 
 
 def constant_noise(matrix) -> NoiseMatrix:
@@ -134,6 +159,13 @@ class PaperLinearField(DeterministicFunction):
         x, y = point[0], point[1]
         return [-2.0 * x - PAPER_ROTATION * y, 2.0 * PAPER_ROTATION * x - y]
 
+    def eval_batch(
+        self,
+        points: np.ndarray,
+        time: float | None = None,  # noqa: ARG002 (base signature)
+    ) -> np.ndarray:
+        return np.column_stack(self.eval(list(np.asarray(points).T)))
+
 
 class PaperCycleField(DeterministicFunction):
     """Their Eq. (24): ``b = (y + x (1 - r^2), -x + y (1 - r^2))``, ``D = I``.
@@ -150,6 +182,13 @@ class PaperCycleField(DeterministicFunction):
         x, y = point[0], point[1]
         shrink = 1.0 - x * x - y * y
         return [y + x * shrink, -x + y * shrink]
+
+    def eval_batch(
+        self,
+        points: np.ndarray,
+        time: float | None = None,  # noqa: ARG002 (base signature)
+    ) -> np.ndarray:
+        return np.column_stack(self.eval(list(np.asarray(points).T)))
 
 
 # f = -D grad V with an anisotropic constant D: the stationary density is
@@ -171,6 +210,13 @@ class AnisotropicGradientField(DeterministicFunction):
         x, y = point[0], point[1]
         diffusion = ANISOTROPIC_AMPLITUDE @ ANISOTROPIC_AMPLITUDE.T
         return list(-(diffusion @ np.array([x**3 - x, y])))
+
+    def eval_batch(
+        self,
+        points: np.ndarray,
+        time: float | None = None,  # noqa: ARG002 (base signature)
+    ) -> np.ndarray:
+        return np.column_stack(self.eval(list(np.asarray(points).T)))
 
 
 # The Maier-Stein model b = (x - x^3 - beta x y^2, -(1 + x^2) y), D = I, at
@@ -194,6 +240,13 @@ class MaierSteinField(DeterministicFunction):
         x, y = point[0], point[1]
         return [x - x**3 - MAIER_STEIN_BETA * x * y * y, -(1.0 + x * x) * y]
 
+    def eval_batch(
+        self,
+        points: np.ndarray,
+        time: float | None = None,  # noqa: ARG002 (base signature)
+    ) -> np.ndarray:
+        return np.column_stack(self.eval(list(np.asarray(points).T)))
+
 
 # A non-normal drift (A A^T != A^T A: real eigenvalues -1 and -2 but strongly
 # sheared eigenvectors) with a coupled G.
@@ -210,6 +263,13 @@ class NonNormalField(DeterministicFunction):
         time: float | None = None,  # noqa: ARG002 (base signature)
     ) -> list[float]:
         return list(NON_NORMAL_DRIFT @ np.asarray(point, dtype=float))
+
+    def eval_batch(
+        self,
+        points: np.ndarray,
+        time: float | None = None,  # noqa: ARG002 (base signature)
+    ) -> np.ndarray:
+        return np.asarray(points, dtype=float) @ NON_NORMAL_DRIFT.T
 
 
 def kronecker_covariance(drift: np.ndarray, diffusion: np.ndarray) -> np.ndarray:
