@@ -207,3 +207,113 @@ class TestController:
             np.array([1.0]),
         )
         assert ratio == math.inf
+
+
+def dopri5_times(solver, settings, equation, y0):
+    """The accepted times of DOPRI5's DOPCOR, written out from the Fortran.
+
+    An independent loop: only the tableau is borrowed from ``solver``. The
+    error norm, ``FAC11 = ERR**EXPO1``, ``FAC = FAC11 / FACOLD**BETA``, the
+    limits ``FACC1 = 1/0.2``, ``FACC2 = 1/10``, ``FACOLD = MAX(ERR, 1e-4)``,
+    ``HNEW = MIN(HNEW, H)`` after a rejection and the last-step rule
+    ``X + 1.01 H - XEND > 0`` follow ``dopri5.f`` line by line.
+    """
+    a, c, b, b_hat = solver.a, solver.c, solver.b, solver.b_hat
+    f = equation.derivative
+    expo1 = 1 / (solver.tableau.error_order + 1) - 0.75 * settings.beta
+    facold, reject = 1e-4, False
+    x, y, h, xend = (
+        settings.start_time,
+        np.array(y0, float),
+        settings.initial_step_size,
+        settings.end_time,
+    )
+    times = [x]
+    while x < xend:
+        last = (x + 1.01 * h - xend) > 0
+        if last:
+            h = xend - x
+        k = np.zeros((len(b), len(y)))
+        for i in range(len(b)):
+            k[i] = f.eval(
+                point=(y + h * (a[i, :i] @ k[:i])).tolist(), time=x + c[i] * h
+            )
+        y1 = y + h * (b @ k)
+        sk = settings.absolute_tolerance + settings.relative_tolerance * np.maximum(
+            np.abs(y), np.abs(y1)
+        )
+        err = math.sqrt(np.mean((h * ((b - b_hat) @ k) / sk) ** 2))
+        fac11 = err**expo1
+        fac = max(
+            1 / 10, min(1 / 0.2, fac11 / facold**settings.beta / settings.safety_factor)
+        )
+        hnew = h / fac
+        if err <= 1:
+            facold = max(err, 1e-4)
+            x = xend if last else x + h
+            y = y1
+            times.append(x)
+            hnew = min(max(hnew, settings.min_step_size), settings.max_step_size)
+            if reject:
+                hnew = min(hnew, h)
+            reject = False
+        else:
+            hnew = max(
+                h / min(1 / 0.2, fac11 / settings.safety_factor), settings.min_step_size
+            )
+            reject = True
+        h = hnew
+    return times
+
+
+class VanDerPol(DeterministicFunction):
+    """``x'' = (1 - x^2) x' - x`` as a first-order system."""
+
+    def eval(self, point, time=None):  # noqa: ARG002
+        return [point[1], (1.0 - point[0] ** 2) * point[1] - point[0]]
+
+
+@pytest.mark.parametrize(("solver", "config"), PAIRS)
+@pytest.mark.parametrize("tolerance", [1e-4, 1e-7])
+def test_step_sequence_is_dopri5s(solver, config, tolerance):
+    """Every accepted time agrees with the hand-written DOPCOR loop.
+
+    Van der Pol to ``t = 6.05`` rejects steps at both tolerances, so the
+    no-growth rule after a rejection, the error floor and the last-step rule
+    are all exercised.
+    """
+    t = Variable(name="t")
+    ys = [Variable(name="x"), Variable(name="v")]
+    rs = [Variable(name="rx"), Variable(name="rv")]
+    equation = DifferentialEquation(
+        variables=ys,
+        time=t,
+        parameters=[],
+        derivative=VanDerPol(ys, [], rs, t),
+    )
+    settings = config(
+        end_time=6.05,
+        absolute_tolerance=tolerance,
+        relative_tolerance=tolerance,
+    )
+    stepper = solver(settings)
+    curve = stepper.solve(equation, [2.0, 0.0])
+    expected = dopri5_times(stepper, settings, equation, [2.0, 0.0])
+    assert len(curve.time.discretization) == len(expected)
+    np.testing.assert_allclose(curve.time.discretization, expected, rtol=1e-12)
+    assert curve.time.discretization[-1] == 6.05
+
+
+@pytest.mark.parametrize(("solver", "config"), PAIRS)
+def test_last_step_stretches_within_one_percent(solver, config):
+    """``t + 1.01 h >= end`` ends the solve in one step, as DOPRI5's rule does."""
+    settings = config(
+        end_time=1.005,
+        initial_step_size=0.5,
+        min_step_size=0.001,
+        max_step_size=0.5,
+        absolute_tolerance=1e30,
+        relative_tolerance=0.0,
+    )
+    curve = solver(settings).solve(equation(Decay), [1.0])
+    assert curve.time.discretization == [0.0, 0.5, 1.005]
