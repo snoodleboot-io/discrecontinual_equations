@@ -86,6 +86,10 @@ class ConformalNoise(StochasticFunction):
         return s * np.stack([np.stack([x, -y], 1), np.stack([y, x], 1)], 1)
 ```
 
+`StochasticEnsemble(config, scheme="milstein")` takes the same noise as
+`MilsteinSolver`: when the columns do not commute it draws the Levy areas of every
+path at once (DEQ-65) and warns once about their cost.
+
 ### Quasipotential and minimum action paths
 
 How a planar system gets from one attractor to another under small noise is

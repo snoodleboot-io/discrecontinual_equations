@@ -322,9 +322,11 @@ _LAST_AT_ZERO = np.array([0.5, 1.0, 0.0])
 
 
 @pytest.mark.parametrize("start", [_START, _LAST_AT_ZERO], ids=["start", "last-zero"])
-def test_ensemble_refuses_coupling_just_above_the_tolerance(start):
+def test_ensemble_finds_coupling_just_above_the_tolerance(start):
+    # Judged non-commuting, the step draws Levy areas and says so (it refused
+    # such noise before DEQ-65).
     config = MilsteinConfig(start_time=0.0, end_time=_STEP, step_size=_STEP)
-    with pytest.raises(ValueError, match="commuting noise"):
+    with pytest.warns(UserWarning, match="Levy areas"):
         StochasticEnsemble(config, scheme="milstein").solve(
             _equation(_noise(_coupling_at_ratio(2.0 * _TOLERANCE, start)), 3),
             start,
