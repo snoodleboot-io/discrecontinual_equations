@@ -217,18 +217,25 @@ class TestResolvedCoefficient(TestCase):
             assert not _resolved(1.0e-7 * scale, scale, 1.0e-12 * scale)
 
 
+class _Expansions:
+    """A stand-in for ``_branch_expansion`` that returns given ``(a, c)`` per step."""
+
+    def __init__(self, values: dict[float, tuple[float, float]]) -> None:
+        self._values = values
+
+    def __call__(self, context, null_pair, step: float):
+        _ = context, null_pair
+        quadratic, cubic = self._values[step]
+        return quadratic, cubic, 1.0, 1.0
+
+
 class TestNoiseEstimate(TestCase):
     """The error of ``a`` and ``c`` is read from both neighbouring steps."""
 
     @staticmethod
     def _label(values: dict[float, tuple[float, float]]) -> str:
-        def expansion(context, null_pair, step):
-            _ = context, null_pair
-            quadratic, cubic = values[step]
-            return quadratic, cubic, 1.0, 1.0
-
         context = _context(CASES["cancelled"][0], 1.0, exact=True)
-        with mock.patch.object(detection, "_branch_expansion", expansion):
+        with mock.patch.object(detection, "_branch_expansion", _Expansions(values)):
             return _branch_label(context)
 
     def test_steady_coefficients_are_resolved(self):
