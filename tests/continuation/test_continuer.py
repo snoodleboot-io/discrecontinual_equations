@@ -236,7 +236,9 @@ class TestContinuer(TestCase):
         assert any(abs(point.parameter) < LOCATION_TOLERANCE for point in branch_points)
 
         seed_state, seed_parameter = continuer.seed_secondary_branch(branch_points[0])
-        assert abs(seed_state[0]) + abs(seed_parameter) > 0.0
+        # On the secondary branch mu = x^2, not polished back to x = 0.
+        assert abs(seed_state[0]) > config.initial_step / 2.0
+        assert abs(seed_parameter - seed_state[0] ** 2) < 1.0e-6
 
     def test_branch_point_classification_separates_pitchfork_and_transcritical(self):
         def kinds_for(function_type: type) -> set[str]:
