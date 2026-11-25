@@ -14,6 +14,36 @@ refining every saddle from where it was, reporting each connection's margins and
 each cycle's stability ratio, and optionally re-solving every connection seeded by
 the previous one. :meth:`NetworkContinuation.locate_break` marches until a margin
 changes sign and bisects on that margin.
+
+The margins are the two open conditions of (H1) for one connection inside its
+subspace ``P``: the source's largest eigenvalue on ``P`` (positive: it expands
+into ``P``) and minus the target's (positive: it attracts within ``P``). They come
+from :meth:`.HeteroclinicNetwork.connection_margins`.
+
+Limits:
+
+* only the eigenvalue conditions are followed. The invariance of each subspace
+  is assumed to hold at every parameter value - which is why the parameter must
+  keep the symmetry that makes the subspaces invariant. A parameter that breaks
+  it destroys every connection at once, and no margin will say so;
+* a break is located only to the resolution of the march: two margins that
+  change sign within one step are both bisected and the earlier crossing wins,
+  but a margin that dips below zero and recovers within a step is missed;
+* the existence of a connection inside ``P`` needs more than (H1) in general
+  (the unstable manifold must actually reach the target's basin in ``P``); for
+  two-dimensional ``P`` with one saddle and one sink, as in every example here,
+  the two margins decide it;
+* the stability ratio reported per cycle is Krupa and Melbourne's ``rho``, which
+  decides asymptotic stability only for cycles without positive transverse
+  eigenvalues; use :mod:`.network_stability` for cycles in a network.
+
+References:
+- Krupa, M. and Melbourne, I. "Asymptotic stability of heteroclinic cycles in
+  systems with symmetry", Ergodic Theory Dynam. Systems 15 (1995) 121-147,
+  doi:10.1017/S0143385700008270. Hypothesis (H1), Proposition 2.5, Theorem 2.7.
+- Krupa, M. "Robust heteroclinic cycles", J. Nonlinear Sci. 7 (1997) 129-176,
+  doi:10.1007/BF02677976. Section 2: the Guckenheimer-Holmes example, eqs.
+  (2.1)-(2.3), Proposition 1 (existence).
 """
 
 import itertools
@@ -30,7 +60,16 @@ _SIDES = ("source", "target")
 
 
 class NetworkPoint:
-    """The network at one parameter value."""
+    """The network at one parameter value.
+
+    Attributes:
+        parameter: The parameter value.
+        equilibria: Each saddle's position, by name.
+        margins: ``(source expansion, target contraction)`` per connection key.
+        stability_ratios: Krupa and Melbourne's ``rho`` per cycle.
+        orbits: The solved connections, empty unless a mesh was given to
+            :meth:`NetworkContinuation.trace`.
+    """
 
     __slots__ = ["equilibria", "margins", "orbits", "parameter", "stability_ratios"]
 
@@ -74,6 +113,13 @@ class NetworkContinuation:
 
     The parameter is ``network.function.parameters[parameter_index]``. Both methods
     restore its value, and the saddles, when they finish.
+
+    Args:
+        network: The network to follow; its saddles are refreshed in place.
+        parameter_index: Which parameter of ``network.function`` to vary.
+
+    References:
+        Krupa and Melbourne (1995), hypothesis (H1) and Proposition 2.5.
     """
 
     __slots__ = ["_index", "_network"]
@@ -92,6 +138,19 @@ class NetworkContinuation:
 
         Each connection is seeded by its own orbit at the previous value, so the
         solve is a correction rather than a fresh search.
+
+        Args:
+            values: The parameter values, in order.
+            half_length: Half the truncated interval for each connection solve.
+            intervals: The number of mesh intervals; connections are solved only
+                when both this and ``half_length`` are given.
+
+        Returns:
+            One :class:`NetworkPoint` per value.
+
+        Raises:
+            ValueError: If a saddle cannot be refined at some value, or a
+                connection's persistence margin is not positive when solving.
         """
         network = self._network
         original = self._value()
@@ -125,6 +184,22 @@ class NetworkContinuation:
         Marches ``steps`` equal steps; at the first step where any margin is no
         longer positive, bisects every margin that changed sign there and returns
         the crossing nearest ``start``. Every margin must be positive at ``start``.
+
+        Args:
+            start: The parameter value to start from, where every connection exists.
+            stop: The far end of the search.
+            steps: The number of equal march steps.
+            tolerance: The width at which bisection stops.
+
+        Returns:
+            The break nearest ``start``: its parameter, connection and side.
+
+        Raises:
+            ValueError: If a margin is not positive at ``start``, or every margin
+                stays positive up to ``stop``.
+
+        References:
+            Krupa and Melbourne (1995), hypothesis (H1).
         """
         original = self._value()
         try:

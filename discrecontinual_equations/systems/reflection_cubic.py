@@ -24,6 +24,23 @@ stability and residence-time results depend on - unchanged.
 Parameters, in order: the ``n`` growth rates ``lam_i``, then ``A`` row-major. A
 growth rate is the natural symmetry-breaking parameter: changing one of them keeps
 every reflection (every plane stays invariant) but breaks the cyclic shift.
+
+At a saddle on axis ``j`` with unit growth and ``A_jj = -1`` (so ``x_j = 1``) the
+Jacobian is diagonal, with ``-2`` along the axis and ``1 + A_kj`` along axis ``k``:
+every eigenvalue is placed by one coupling coefficient, which is how the network
+tests build cycles of a prescribed type.
+
+References:
+- Guckenheimer, J. and Holmes, P. "Structurally stable heteroclinic cycles",
+  Math. Proc. Cambridge Philos. Soc. 103 (1988) 189-192,
+  doi:10.1017/S0305004100064732.
+- Krupa, M. "Robust heteroclinic cycles", J. Nonlinear Sci. 7 (1997) 129-176,
+  doi:10.1007/BF02677976. Eqs. (2.1)-(2.3), Proposition 1, Theorem 1; eq. (7.1).
+- Krupa, M. and Melbourne, I. "Asymptotic stability of heteroclinic cycles in
+  systems with symmetry", Ergodic Theory Dynam. Systems 15 (1995) 121-147,
+  doi:10.1017/S0143385700008270. Hypothesis (H1), Proposition 2.5.
+- Kirk, V. and Silber, M. "A competition between heteroclinic cycles",
+  Nonlinearity 7 (1994) 1605-1621, doi:10.1088/0951-7715/7/6/005.
 """
 
 import numpy as np
@@ -46,7 +63,12 @@ class Interaction(Parameter, name="interaction", abbreviation="a"):
 
 
 class ReflectionCubic(DeterministicFunction):
-    """``x_i' = x_i (lam_i + sum_j A_ij x_j^2)``; parameters ``lam`` then ``A``."""
+    """``x_i' = x_i (lam_i + sum_j A_ij x_j^2)``; parameters ``lam`` then ``A``.
+
+    References:
+        Krupa (1997), eqs. (2.1) and (7.1); Krupa and Melbourne (1995),
+        Proposition 2.5.
+    """
 
     def eval(
         self,
@@ -74,7 +96,18 @@ def _value(parameter: Parameter) -> float:
 
 
 def reflection_cubic(growth: np.ndarray, interaction: np.ndarray) -> ReflectionCubic:
-    """Build the field from growth rates ``lam`` and the interaction matrix ``A``."""
+    """Build the field from growth rates ``lam`` and the interaction matrix ``A``.
+
+    Args:
+        growth: The ``n`` growth rates ``lam_i``.
+        interaction: The ``n x n`` matrix ``A``.
+
+    Returns:
+        The field ``x_i' = x_i (lam_i + sum_j A_ij x_j^2)``.
+
+    Raises:
+        ValueError: If ``interaction`` is not ``n x n``.
+    """
     size = len(growth)
     if interaction.shape != (size, size):
         message = (
@@ -110,6 +143,19 @@ def guckenheimer_holmes(
 
     Each growth rate is its own parameter (indices 0-2), so the cyclic symmetry can
     be broken by changing one of them.
+
+    Args:
+        growth: ``lam``, the common growth rate.
+        self_coupling: ``a1``.
+        forward: ``a2``, the coupling to the next coordinate.
+        backward: ``a3``, the coupling to the one after.
+
+    Returns:
+        The three-dimensional field.
+
+    References:
+        Krupa (1997), eq. (2.1), Proposition 1 and Theorem 1; Guckenheimer and
+        Holmes (1988).
     """
     row = np.array([self_coupling, forward, backward])
     interaction = np.array([np.roll(row, shift) for shift in range(3)])

@@ -49,6 +49,30 @@ coordinates a type B cycle still comes out unchanged (its contracting and
 expanding lines coincide, and the rest is their complement), but a type C cycle
 is refused, as is a node whose repeated transverse eigenvalue leaves its
 eigenvectors undetermined.
+
+Erratum carried: for a type C4- cycle with ``b_1 < 0 < b_2, b_3, b_4`` the closed
+forms printed by Podvigina and Ashwin (2011, section 4.2.2, pp. 908-909) keep only
+the eigenvector terms and are wrong in most cases. Lohse (2015, Lemma B.5) prints
+the corrected forms, agreed with Podvigina, and the general Theorem 3.10 used here
+agrees with them, not with the original (1458 of 1458 sampled cases against 77).
+
+References:
+- Podvigina, O. and Ashwin, P. "On local attraction properties and a stability
+  index for heteroclinic connections", Nonlinearity 24 (2011) 887-929,
+  arXiv:1008.3063, doi:10.1088/0951-7715/24/3/009. Definition 5, Theorem 2.2,
+  section 2.3 (local index), ``f^index`` (p. 905), section 4.2 (closed forms).
+- Garrido-da-Silva, L. and Castro, S. B. S. D. "Stability of quasi-simple
+  heteroclinic cycles", Dynamical Systems 34 (2019) 14-39, arXiv:1606.02592,
+  doi:10.1080/14689367.2018.1445701. Eqs. (3) and (7), Assumption A, Lemmas 3.2,
+  3.5 and 3.9, Theorems 3.4 and 3.10, Appendix A, Lemma 4.1.
+- Castro, S. B. S. D. and Lohse, A. "Stability in simple heteroclinic networks in
+  R^4", Dynamical Systems 29 (2014) 451-481, arXiv:1401.3993,
+  doi:10.1080/14689367.2014.940853. Theorem 2.6, Table 1, eq. (3), Lemma 5.1,
+  Propositions 5.2 and 5.3.
+- Lohse, A. "Non-asymptotic stabilty of heteroclinic cycles", Hamburger Beitrage
+  zur Angewandten Mathematik Nr. 2015-08 (2015). Theorem 3.1, Lemma B.5.
+- Kirk, V. and Silber, M. "A competition between heteroclinic cycles",
+  Nonlinearity 7 (1994) 1605-1621, doi:10.1088/0951-7715/7/6/005.
 """
 
 import math
@@ -81,6 +105,19 @@ def f_index(alpha: np.ndarray) -> float:
     ``-sum alpha / min alpha`` otherwise (Garrido-da-Silva and Castro 2019, Lemma
     3.9 and Appendix A). For two components it is Podvigina and Ashwin's
     ``f^index(alpha, beta)`` (2011, p. 905).
+
+    Args:
+        alpha: The exponents ``alpha_i``, one per coordinate.
+
+    Returns:
+        The index, possibly ``+inf`` or ``-inf``.
+
+    Raises:
+        ValueError: If every component of ``alpha`` is zero.
+
+    References:
+        Garrido-da-Silva and Castro (2019), Lemma 3.9 and Appendix A;
+        Podvigina and Ashwin (2011), p. 905.
     """
     values = np.asarray(alpha, dtype=float)
     if not np.any(values):
@@ -116,6 +153,17 @@ def stability_indices(matrices: list[np.ndarray]) -> np.ndarray:
       whose matrix has a negative entry, ``v^max_j`` being the row of the
       eigenvector matrix's inverse belonging to the leading eigenvalue (Theorem
       3.10(b)).
+
+    Args:
+        matrices: The basic transition matrices ``M_j``, in cycle order.
+
+    Returns:
+        One index per connection, entry ``j`` for the connection into node ``j``.
+
+    References:
+        Garrido-da-Silva and Castro (2019), Lemmas 3.2 and 3.5, Theorems 3.4 and
+        3.10. For type C4- cycles the result agrees with Lohse (2015), Lemma B.5,
+        which corrects Podvigina and Ashwin (2011), pp. 908-909.
     """
     count = len(matrices)
     negative = [
@@ -147,6 +195,22 @@ def transition_matrices(
     Rows and columns are ordered ``(w, z_1, ..., z_nt)`` at each node: the
     expanding direction, then the transverse eigenvectors in the order their
     eigenvalues are listed by :func:`transverse_eigenvalues`.
+
+    Args:
+        network: The network whose saddles and connections form the cycle.
+        cycle: The node names, in order.
+
+    Returns:
+        ``M_j`` for each node ``j``.
+
+    Raises:
+        KeyError: If a consecutive pair of nodes has no connection.
+        ValueError: If the cycle is not quasi-simple, has complex transverse
+            eigenvalues, or fails Assumption A.
+
+    References:
+        Garrido-da-Silva and Castro (2019), eqs. (3) and (7), Assumption A;
+        Podvigina and Ashwin (2011), section 4.2.2 (``[[b, 1], [a, 0]]`` for type C).
     """
     count = len(cycle)
     planes = _planes(network, cycle)
@@ -177,6 +241,16 @@ def transverse_eigenvalues(
     These are the eigenvalues of the Jacobian induced on the complement of
     ``P_{j-1} + P_j``; :class:`CycleSpectrum` keeps only the largest of them. A
     quasi-simple cycle has the same number ``nt`` at every node.
+
+    Args:
+        network: The network whose saddles and connections form the cycle.
+        cycle: The node names, in order.
+
+    Returns:
+        The array of ``t_{j,s}`` at each node.
+
+    References:
+        Garrido-da-Silva and Castro (2019), section 3 (the ``t_{j,s}`` of eq. 3).
     """
     pairs = _transverse(network, cycle, _planes(network, cycle))
     return [pair[0] for pair in pairs]
@@ -187,6 +261,11 @@ class CycleStability:
 
     ``indices[j]`` is the local stability index along the connection into node
     ``j``, i.e. ``nodes[j - 1] -> nodes[j]``.
+
+    References:
+        Podvigina and Ashwin (2011), Definition 5 and section 2.3;
+        Garrido-da-Silva and Castro (2019), Theorems 3.4 and 3.10;
+        Castro and Lohse (2014), Theorem 2.6; Lohse (2015), Theorem 3.1.
     """
 
     __slots__ = ["indices", "matrices", "nodes"]
@@ -206,7 +285,11 @@ class CycleStability:
         return cls(tuple(cycle), transition_matrices(network, cycle))
 
     def index(self, source: str, target: str) -> float:
-        """The local stability index along the connection ``source -> target``."""
+        """The local stability index along the connection ``source -> target``.
+
+        Raises:
+            KeyError: If ``source -> target`` is not a connection of this cycle.
+        """
         count = len(self.nodes)
         for j in range(count):
             if (self.nodes[j - 1], self.nodes[j]) == (source, target):
@@ -253,6 +336,11 @@ class CycleStability:
         ``(rho - 1, delta)``; with ``rho > 1`` the cycle attracts a set of positive
         measure iff ``delta > 0``. For the Kirk-Silber network this is Castro and
         Lohse's (2014) eq. (3), ``delta = b1 a2 a3 + b3 a2 + b2`` (Lemma 5.1).
+
+        Raises:
+            ValueError: If the cycle does not have one transverse direction and
+                exactly one node with a positive transverse eigenvalue, or its
+                return matrix is not triangular (not type B).
         """
         negative = [
             index
@@ -281,6 +369,9 @@ class NetworkCompetition:
     competition; the others are ``survivors``. Kirk and Silber (1994) and Castro
     and Lohse (2014, Proposition 5.3) give networks in which exactly one cycle
     survives although neither cycle is asymptotically stable.
+
+    References:
+        Kirk and Silber (1994); Castro and Lohse (2014), Propositions 5.2 and 5.3.
     """
 
     __slots__ = ["stabilities"]

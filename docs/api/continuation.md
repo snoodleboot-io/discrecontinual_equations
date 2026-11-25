@@ -608,7 +608,16 @@ stage draws this distribution behind the exponent.
 
 ## Connecting orbits
 
+The concepts, worked examples and limits are on the
+[connecting orbits concept page](../user-guide/connecting-orbits.md).
+
 ::: discrecontinual_equations.continuation.connecting_orbit
+
+::: discrecontinual_equations.continuation.homoclinic_shooting
+
+::: discrecontinual_equations.continuation.homoclinic_curve
+
+::: discrecontinual_equations.continuation.shilnikov
 
 ## Heteroclinic networks
 
@@ -619,3 +628,9 @@ stage draws this distribution behind the exponent.
 ::: discrecontinual_equations.continuation.network_stability
 
 ::: discrecontinual_equations.continuation.residence
+
+### Systems with robust cycles
+
+::: discrecontinual_equations.systems.reflection_cubic
+
+::: discrecontinual_equations.systems.coupled_ring
