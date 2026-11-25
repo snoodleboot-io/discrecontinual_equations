@@ -839,6 +839,24 @@ chart to another's stable chart, by damped Gauss-Newton with DOP853, seeded by
 scanning the flowed source ring for its nearest approach to the target ring. The
 charts' conjugacies supply both infinite tails (`connection.orbit(tail)`).
 
+## Invariant manifolds
+
+A saddle's stable or unstable manifold is computed in two parts. Near the
+equilibrium `TaylorManifold` solves the parameterization method's invariance
+equation order by order and returns a polynomial chart. Further out,
+`GeodesicLevelSets` grows a two-dimensional manifold ring by ring, each ring at
+one geodesic distance from the equilibrium, and returns a triangulated mesh. The
+[invariant manifolds guide](../user-guide/manifolds.md) explains both methods,
+gives short examples and lists their limits. `parameterization` is a different
+module despite its name: it holds the scalar constraint that closes the
+continuation corrector's system, either pseudo-arclength or natural parameter.
+
+::: discrecontinual_equations.continuation.manifold
+
+::: discrecontinual_equations.continuation.geodesic_level_sets
+
+::: discrecontinual_equations.continuation.parameterization
+
 ## Continuation
 
 ::: discrecontinual_equations.continuation
