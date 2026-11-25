@@ -59,6 +59,7 @@ from discrecontinual_equations.continuation.connecting_orbit import (
     HeteroclinicOrbit,
     HomoclinicOrbit,
     MeshSpec,
+    NotConvergedError,
     OrbitSolution,
     Terminus,
 )
@@ -403,6 +404,7 @@ __all__ = [
     "NoiseMatrix",
     "NoiseMatrixFunction",
     "NotATrajectoryError",
+    "NotConvergedError",
     "OrbitSolution",
     "OrderedLineIntegral",
     "ParameterFamily",

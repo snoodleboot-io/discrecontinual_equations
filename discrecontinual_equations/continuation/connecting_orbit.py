@@ -23,6 +23,7 @@ parameter (the codim-1 global bifurcation) is the next step and is described in
 complex-eigenvector projection and are deferred.
 """
 
+import math
 import warnings
 from abc import ABC, abstractmethod
 
@@ -45,9 +46,18 @@ _STEP = 1.0e-7
 # converged iterate into a divergent one. ``lstsq`` truncates them instead.
 _RCOND = 1.0e-8
 # The collocation system is overdetermined by the phase condition, so its
-# least-squares minimum is nonzero and ``_DEFAULT_TOLERANCE`` is unreachable.
+# least-squares minimum can be nonzero and ``_DEFAULT_TOLERANCE`` unreachable.
 # Stop once repeated iterations stop improving on the best residual seen.
 _STAGNATION_LIMIT = 3
+# An iterate whose residual is above ``_DEFAULT_TOLERANCE`` is converged only if
+# its Gauss-Newton correction is below this, component by component, relative to
+# ``1 + |x|``: the test of AUTO's EPSU and COLNEW's CONTRL, at the low end of the
+# range AUTO recommends. Measured: converged least-squares minima stop at 1e-14,
+# the diverged solves this refuses at 1.1 to 14.
+_CORRECTION_TOLERANCE = 1.0e-7
+# How nearly a Newton correction must satisfy the normal equations, relative to
+# ``|J|_F |J dx + r|``, before its size is trusted; see ``_relative_correction``.
+_NORMAL_EQUATIONS = 1.0e-6
 # Convergence tolerance for the iterative least squares, the fallback when the
 # sparse factorisation fails. Tight enough that the step matches a dense
 # factorisation to well below the accuracy of the orbit.
@@ -95,13 +105,28 @@ class MeshSpec:
 
 
 class OrbitSolution:
-    """A computed connecting orbit: mesh times and the state at each node."""
+    """A computed connecting orbit: mesh times and the state at each node.
 
-    __slots__ = ["_states", "_times"]
+    ``residual`` is the path's :class:`CollocationResidual`, attached by the solver
+    that returned it; a path assembled by hand has none until measured.
+    """
 
-    def __init__(self, times: np.ndarray, states: np.ndarray) -> None:
+    __slots__ = ["_residual", "_states", "_times"]
+
+    def __init__(
+        self,
+        times: np.ndarray,
+        states: np.ndarray,
+        residual: "CollocationResidual | None" = None,
+    ) -> None:
         self._times = times
         self._states = states
+        self._residual = residual
+
+    @property
+    def residual(self) -> "CollocationResidual | None":
+        """The collocation residual measured when the path was solved, if it was."""
+        return self._residual
 
     @property
     def times(self) -> np.ndarray:
@@ -139,6 +164,12 @@ class OrbitResolution:
 
     ``estimate`` is therefore the larger of the two, and ``limited_by`` names which
     one it was, since that is what says where to spend the next solve.
+
+    A component whose refinement solve did not converge is ``inf``, not a shift:
+    a refused solve has no orbit to compare. On sheared Kirk-Silber both
+    refinements once returned their seeds unchanged and the estimate read 0.0.
+    So ``estimate`` is 0.0 only when both refinements converged and moved
+    nothing, and ``valid`` says whether both converged.
     """
 
     __slots__ = ["discretisation", "truncation"]
@@ -146,6 +177,11 @@ class OrbitResolution:
     def __init__(self, discretisation: float, truncation: float) -> None:
         self.discretisation = discretisation
         self.truncation = truncation
+
+    @property
+    def valid(self) -> bool:
+        """Whether both refinement solves converged, so both components are shifts."""
+        return math.isfinite(self.discretisation) and math.isfinite(self.truncation)
 
     @property
     def estimate(self) -> float:
@@ -216,6 +252,30 @@ class CollocationResidual:
         return self.worst <= 1.0
 
 
+class NotConvergedError(RuntimeError):
+    """A connecting-orbit solve whose best iterate is not converged.
+
+    ``solution`` is that iterate, with its collocation residual attached;
+    ``newton_residual`` is the norm of the full Newton residual there and
+    ``correction`` the largest component of its Gauss-Newton correction relative
+    to ``1 + |x|`` - ``inf`` where none could be computed. They are for diagnosis:
+    the iterate is not an orbit.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        solution: OrbitSolution,
+        *,
+        newton_residual: float,
+        correction: float,
+    ) -> None:
+        super().__init__(message)
+        self.solution = solution
+        self.newton_residual = newton_residual
+        self.correction = correction
+
+
 class ConnectingOrbit(ABC):
     """Solve for an orbit connecting an equilibrium to itself or another.
 
@@ -230,24 +290,43 @@ class ConnectingOrbit(ABC):
     def solve(self, seed: np.ndarray) -> OrbitSolution:
         """Refine ``seed`` to the connecting orbit by Gauss-Newton iteration.
 
-        The iterate with the smallest residual is the one returned, not the last
-        one computed: past the least-squares minimum the finite-difference Jacobian
+        The iterate with the smallest residual is the candidate, not the last one
+        computed: past the least-squares minimum the finite-difference Jacobian
         is dominated by noise and a further step degrades an already-converged
         orbit. Iteration stops early once ``_STAGNATION_LIMIT`` successive steps
-        fail to improve on the best residual seen.
+        fail to improve on the best residual seen, or once a residual is not
+        finite.
+
+        The candidate is returned only if it is converged: its Newton residual is
+        below ``_DEFAULT_TOLERANCE``, or the Gauss-Newton correction computed
+        there is below ``_CORRECTION_TOLERANCE`` relative to ``1 + |x|`` in every
+        component - a stationary point of the least squares, which a system with
+        no exact solution stops at. This is the test of AUTO (EPSU) and COLNEW;
+        neither returns an iterate that fails it, and neither does this. Where
+        Gauss-Newton diverges the best iterate is often the seed itself, and
+        returning it unannounced was how a non-trajectory with an estimate of
+        0.0 came back on sheared Kirk-Silber (DEQ-120). Otherwise this raises
+        :class:`NotConvergedError`, which carries the candidate.
+
+        The returned orbit carries its :class:`CollocationResidual`. Converged is
+        not the same as a trajectory: the least-squares minimum of a connection
+        that does not exist is converged, and its residual is what says so.
         """
         nodes = self._mesh.intervals + 1
         times = np.linspace(-self._mesh.half_length, self._mesh.half_length, nodes)
         unknowns = seed.astype(float).flatten()
         shape = seed.shape
         best = unknowns.copy()
-        best_residual = float("inf")
+        best_residual = math.inf
+        best_correction = math.inf
         stagnant = 0
         analytic = True
         for _ in range(_DEFAULT_ITERATIONS):
-            residual = self._residual(unknowns, times, shape)
-            norm = float(np.linalg.norm(residual))
-            if norm < best_residual:
+            norm, residual = self._residual_norm(unknowns, times, shape)
+            if not math.isfinite(norm):
+                break
+            improved = norm < best_residual
+            if improved:
                 best, best_residual = unknowns.copy(), norm
                 stagnant = 0
             else:
@@ -265,17 +344,62 @@ class ConnectingOrbit(ABC):
                     shape,
                     residual.size,
                 )
-            unknowns = unknowns + self._least_squares(jacobian, residual)
-        return OrbitSolution(times, best.reshape(shape))
+            step = self._least_squares(jacobian, residual)
+            if improved:
+                best_correction = _relative_correction(
+                    jacobian,
+                    residual,
+                    step,
+                    unknowns,
+                )
+            unknowns = unknowns + step
+        states = best.reshape(shape)
+        measured = self.collocation_residual(OrbitSolution(times, states))
+        solution = OrbitSolution(times, states, measured)
+        if best_residual < _DEFAULT_TOLERANCE:
+            return solution
+        if best_correction <= _CORRECTION_TOLERANCE:
+            return solution
+        message = (
+            f"connecting-orbit solve did not converge: at its best iterate the "
+            f"Newton residual is {best_residual:.3g} and the Gauss-Newton "
+            f"correction {best_correction:.3g} of the state's scale (converged "
+            f"means below {_DEFAULT_TOLERANCE:g} or {_CORRECTION_TOLERANCE:g}); "
+            f"its collocation residual reaches {measured.worst:.3g} "
+            f"times what the mesh allows. A Newton matrix that is nearly singular "
+            f"there - a connection that is not isolated - is one cause"
+        )
+        raise NotConvergedError(
+            message,
+            solution,
+            newton_residual=best_residual,
+            correction=best_correction,
+        )
+
+    def _residual_norm(
+        self,
+        unknowns: np.ndarray,
+        times: np.ndarray,
+        shape: tuple[int, int],
+    ) -> tuple[float, np.ndarray]:
+        """The Newton residual and its norm, ``inf`` once an iterate overflows.
+
+        A diverging iterate overflows the field - Python raises on ``x**3`` past
+        the float range - or the norm; either ends the iteration, not the program.
+        """
+        try:
+            residual = self._residual(unknowns, times, shape)
+        except OverflowError:
+            return math.inf, np.empty(0)
+        with np.errstate(over="ignore", invalid="ignore"):
+            return float(np.linalg.norm(residual)), residual
 
     def estimate_orbit_error(self, solution: OrbitSolution) -> OrbitResolution:
         """Estimate the orbit's error in both resolution parameters by re-solving.
 
         A converged solve proves the *discrete* system was satisfied on *this* mesh
-        over *this* interval. It says nothing about whether either is adequate, and
-        :meth:`solve` cannot tell the caller: it returns its best iterate whatever
-        that is, and the least-squares minimum is nonzero by construction, so neither
-        a failure signal nor the residual size carries the information.
+        over *this* interval. It says nothing about whether either is adequate,
+        and neither convergence nor the residual's size carries that information.
 
         Two solves, compared against the orbit in hand:
 
@@ -294,8 +418,10 @@ class ConnectingOrbit(ABC):
         ``estimate`` is the larger; see :class:`OrbitResolution` for why reporting
         either alone certifies orbits that are badly wrong.
 
-        Neither component needs a failure signal. A refined solve that lands
-        somewhere useless shows up as a *large* shift, which is the correct verdict.
+        A refined solve that converges somewhere useless shows up as a *large*
+        shift, which is the correct verdict. One that does not converge has no
+        orbit to compare, and its component is ``inf``: the estimate is computed
+        only from converged refinements (see :attr:`OrbitResolution.valid`).
 
         Costs two solves, one at double the intervals and one slightly longer.
 
@@ -335,20 +461,7 @@ class ConnectingOrbit(ABC):
         """
         states, times = solution.states, solution.times
         rows = [self._collocation(states, times, i) for i in range(len(times) - 1)]
-        residuals = np.max(np.abs(np.array(rows)), axis=1)
-        third = np.max(np.abs(np.diff(states, 3, axis=0)), axis=1, initial=0.0)
-        covering = np.array(
-            [
-                np.max(third[max(0, i - 2) : i + 1], initial=0.0)
-                for i in range(len(residuals))
-            ],
-        )
-        allowance = _RESIDUAL_SAFETY * covering / 12.0 + _DEFAULT_TOLERANCE
-        return CollocationResidual(
-            float(np.max(residuals)),
-            float(np.max(allowance)),
-            float(np.max(residuals / allowance)),
-        )
+        return _measure_collocation(states, np.array(rows))
 
     def _shift(self, moved: np.ndarray, original: np.ndarray) -> float:
         """Largest component of the change between two paths at shared nodes.
@@ -388,15 +501,18 @@ class ConnectingOrbit(ABC):
                 for index in range(states.shape[1])
             ],
         )
-        refined = self._solve_on(
-            MeshSpec(
-                mesh.half_length,
-                2 * mesh.intervals,
-                mesh.phase_index,
-                mesh.phase_value,
-            ),
-            seed,
-        )
+        try:
+            refined = self._solve_on(
+                MeshSpec(
+                    mesh.half_length,
+                    2 * mesh.intervals,
+                    mesh.phase_index,
+                    mesh.phase_value,
+                ),
+                seed,
+            )
+        except NotConvergedError:
+            return math.inf
         return self._shift(refined.states[::2], states)
 
     def _truncation_shift(self, solution: OrbitSolution) -> float:
@@ -416,15 +532,18 @@ class ConnectingOrbit(ABC):
                 np.repeat(states[-1:], extra, axis=0),
             ],
         )
-        longer = self._solve_on(
-            MeshSpec(
-                mesh.half_length + extra * spacing,
-                mesh.intervals + 2 * extra,
-                mesh.phase_index,
-                mesh.phase_value,
-            ),
-            seed,
-        )
+        try:
+            longer = self._solve_on(
+                MeshSpec(
+                    mesh.half_length + extra * spacing,
+                    mesh.intervals + 2 * extra,
+                    mesh.phase_index,
+                    mesh.phase_value,
+                ),
+                seed,
+            )
+        except NotConvergedError:
+            return math.inf
         overlap = longer.states[extra : extra + states.shape[0]]
         return self._shift(overlap, states)
 
@@ -671,6 +790,56 @@ def _collocation_triplets(
         np.concatenate([columns.ravel(), (columns + dimension).ravel()]),
         np.concatenate([here.ravel(), ahead.ravel()]),
     )
+
+
+def _measure_collocation(states: np.ndarray, rows: np.ndarray) -> CollocationResidual:
+    """The :class:`CollocationResidual` of a path from its per-interval residuals.
+
+    ``rows[i]`` is interval ``i``'s trapezoidal residual vector. Shared with the
+    homoclinic curve, whose field depends on the point's parameters.
+    """
+    residuals = np.max(np.abs(rows), axis=1)
+    third = np.max(np.abs(np.diff(states, 3, axis=0)), axis=1, initial=0.0)
+    covering = np.array(
+        [
+            np.max(third[max(0, i - 2) : i + 1], initial=0.0)
+            for i in range(len(residuals))
+        ],
+    )
+    allowance = _RESIDUAL_SAFETY * covering / 12.0 + _DEFAULT_TOLERANCE
+    return CollocationResidual(
+        float(np.max(residuals)),
+        float(np.max(allowance)),
+        float(np.max(residuals / allowance)),
+    )
+
+
+def _relative_correction(
+    jacobian: csr_matrix,
+    residual: np.ndarray,
+    step: np.ndarray,
+    unknowns: np.ndarray,
+) -> float:
+    """Largest ``|step_i| / (1 + |x_i|)``, or ``inf`` if the step cannot be trusted.
+
+    COLNEW's convergence test, ``|dz_i| <= tol (|z_i| + 1)``, in one number. A
+    small correction proves convergence only if it is the least-squares step,
+    so the step must also satisfy the normal equations ``J^T (J dx + r) = 0`` to
+    within ``_NORMAL_EQUATIONS`` of ``|J|_F |r|``. A solver that returned a zero
+    step at an iterate that is not stationary would otherwise certify it: there
+    the defect is ``|J^T r|``, a fair fraction of the scale. Measured on every
+    step taken on the problems in the tests, the defect is 1e-15 of it or less.
+    """
+    if not np.all(np.isfinite(step)):
+        return math.inf
+    remainder = jacobian @ step + residual
+    scale = float(np.sqrt(jacobian.multiply(jacobian).sum())) * float(
+        np.linalg.norm(residual),
+    )
+    gradient = float(np.linalg.norm(jacobian.T @ remainder))
+    if not gradient <= _NORMAL_EQUATIONS * scale:
+        return math.inf
+    return float(np.max(np.abs(step) / (1.0 + np.abs(unknowns))))
 
 
 def _augmented(jacobian: csr_matrix, scale: float = 1.0) -> csc_matrix:

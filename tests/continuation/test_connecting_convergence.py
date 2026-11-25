@@ -120,7 +120,7 @@ class TestDivergedSolveIsRefused(TestCase):
 
     def test_both_edges_leaving_xi2_refuse(self):
         """Measured: Newton residual 0.59 and 0.57 at the best iterate, with a
-        correction 0.46 and 5.3 times the state's scale - far from converged.
+        correction 1.1 and 14 times the state's scale - far from converged.
         """
         _, network = _sheared_kirk_silber(_SHEAR4)
         for edge in _DIVERGING:
@@ -128,8 +128,8 @@ class TestDivergedSolveIsRefused(TestCase):
             with pytest.raises(NotConvergedError, match="did not converge") as caught:
                 solver.solve(seed)
             error = caught.value
-            assert error.newton_residual > connecting_orbit._DEFAULT_TOLERANCE
-            assert error.correction > 1.0e-2
+            assert error.newton_residual > 0.1
+            assert error.correction > 0.1
             # The best iterate travels with the refusal, measured, for diagnosis.
             best = error.solution
             assert isinstance(best.residual, CollocationResidual)
@@ -192,11 +192,11 @@ class TestNonFiniteIteratesAreRefused(TestCase):
     def test_an_overflowing_step_refuses(self):
         solver, seed, _, _ = _tanh_problem()
 
-        def overflow(_jacobian, residual):
+        def overflow(_self, _jacobian, residual):
             return np.full(seed.size, 1.0e300) * (1.0 + 0.0 * residual[0])
 
         with (
-            mock.patch.object(solver, "_least_squares", overflow),
+            mock.patch.object(HeteroclinicOrbit, "_least_squares", overflow),
             warnings.catch_warnings(),
         ):
             warnings.simplefilter("ignore", RuntimeWarning)
@@ -255,7 +255,7 @@ class TestConvergedSolveCarriesItsResidual(TestCase):
         assert solution.residual is None
 
     def test_a_homoclinic_curve_point_carries_its_residual(self):
-        curve, times, unknowns, sweep = _bogdanov_takens_problem(100)
+        curve, _, unknowns, sweep = _bogdanov_takens_problem(100)
         orbit = unknowns[:-3].reshape(-1, 2)
         point = curve.solve_point(sweep, orbit, unknowns[-3:-1], unknowns[-1])
         assert point is not None
@@ -310,30 +310,45 @@ class TestFallbacksConvergeOrRefuse(TestCase):
         assert solution.residual.is_trajectory
         assert np.max(np.abs(solution.states - exact)) < 3.0e-3
 
-    def test_fallbacks_on_the_diverging_edge_refuse(self):
+    def test_lsmr_on_the_diverging_edges_converges_to_a_genuine_connection(self):
+        """With the sparse factorisation refused, lsmr's steps do converge here.
+
+        Not to the connection in the plane: to another member of the family
+        leaving xi2, off the plane (measured 0.025 and 0.16) and a trajectory to
+        rounding (trapezoidal residual 5e-16 and 5e-14). The connection is not
+        isolated in the full space, so this is a correct answer to the problem
+        posed - converged below tolerance - and the plane is the network's
+        business, which solves in it.
+        """
         _, network = _sheared_kirk_silber(_SHEAR4)
-        solver, seed, _ = _full_space(network, (2, 3), intervals=100)
 
         def singular(_matrix):
             message = "Factor is exactly singular"
             raise RuntimeError(message)
 
-        with (
-            mock.patch.object(connecting_orbit, "_factor", singular),
-            warnings.catch_warnings(),
-        ):
-            warnings.simplefilter("ignore", RuntimeWarning)
-            with pytest.raises(NotConvergedError):
-                solver.solve(seed)
+        for edge in _DIVERGING:
+            solver, seed, _ = _full_space(network, edge, intervals=100)
+            with (
+                mock.patch.object(connecting_orbit, "_factor", singular),
+                warnings.catch_warnings(),
+            ):
+                warnings.simplefilter("ignore", RuntimeWarning)
+                solution = solver.solve(seed)
+            direct = float(np.max(np.abs(_trapezoid(network.function, solution))))
+            assert direct < 1.0e-10
+            assert solution.residual.is_trajectory
+            basis = network.connections[_EDGES.index(edge)].basis
+            outside = solution.states - (solution.states @ basis) @ basis.T
+            assert float(np.max(np.linalg.norm(outside, axis=1))) > 1.0e-2
 
     def test_a_fallback_step_that_goes_nowhere_refuses(self):
         """A zero step stagnates on the seed; the seed is not converged."""
         solver, seed, _, _ = _tanh_problem()
         with (
             mock.patch.object(
-                solver,
+                HeteroclinicOrbit,
                 "_least_squares",
-                lambda _jacobian, residual: np.zeros(seed.size) * residual[0],
+                lambda _self, _jacobian, residual: np.zeros(seed.size) * residual[0],
             ),
             pytest.raises(NotConvergedError),
         ):
@@ -371,7 +386,7 @@ class TestResolutionValidity(TestCase):
 
         for failing in ("doubled", "longer"):
 
-            def refine(mesh, start, failing=failing):
+            def refine(_self, mesh, start, failing=failing):
                 doubled = mesh.intervals == 2 * solver._mesh.intervals  # noqa: SLF001
                 if (failing == "doubled") == doubled:
                     message = "refinement did not converge"
@@ -383,7 +398,7 @@ class TestResolutionValidity(TestCase):
                     )
                 return original(mesh, start)
 
-            with mock.patch.object(solver, "_solve_on", refine):
+            with mock.patch.object(HeteroclinicOrbit, "_solve_on", refine):
                 resolution = solver.estimate_orbit_error(solution)
             with self.subTest(failing=failing):
                 assert not resolution.valid
