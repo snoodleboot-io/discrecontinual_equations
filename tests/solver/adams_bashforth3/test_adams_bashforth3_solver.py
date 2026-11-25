@@ -38,8 +38,10 @@ class TestAdamsBashforth3Solver:
 
         # Assert
         assert solver.solution is not None
-        assert len(solver.solution.time.discretization) == 10  # 0 to 0.9 with step 0.1
-        # For dy/dt = -y, y(t) = e^{-t}, so y(0.9) ≈ 0.4066
+        # 0 to 1.0 with step 0.1; the grid stopped at 0.9 before DEQ-129
+        assert len(solver.solution.time.discretization) == 11
+        assert solver.solution.time.discretization[-1] == 1.0
+        # For dy/dt = -y, y(t) = e^{-t}, so y(1.0) ≈ 0.3679
         final_value = solver.solution.results[0].discretization[-1]
-        expected = np.exp(-0.9)
+        expected = np.exp(-1.0)
         assert abs(final_value - expected) < 0.005  # AB3 should be even more accurate
