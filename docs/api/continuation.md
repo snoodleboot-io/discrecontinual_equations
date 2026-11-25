@@ -875,6 +875,94 @@ page.
 
 ::: discrecontinual_equations.continuation.stochastic_threshold
 
+## One Jacobian per point
+
+### The problem
+
+An accepted continuation point needs the Jacobian at its converged state several
+times: for the tangent, the branch-point and Hopf test functions and the point's
+stability. Building it once per request would make the detectors cost more than
+the corrector.
+
+### The concept
+
+`ContinuerBuilder` wraps every Jacobian provider in a `MemoizedJacobian`. Inside
+`retained()`, which `Continuer.solve` opens around one continuation, the wrapper
+keys each request by the exact bytes of the state and the parameter. A repeat
+request gets a copy of the remembered array, so every value is bit-identical to
+recomputing it.
+
+How the wrapper remembers depends on the provider:
+
+- A **finite-difference** provider builds the state columns and the parameter
+  column separately. The wrapper remembers each part on its own, and builds the
+  extended Jacobian `[df/du | df/dlambda]` from the two remembered parts. A request
+  for the state part alone never pays for the parameter column.
+- A provider that **overrides `extended_jacobian`** solves all the columns at once.
+  `AnalyticJacobian` is one: it drives the minimally augmented cusp and
+  generalized-Hopf curves of three-parameter continuation. For such a provider the
+  wrapper remembers the extended Jacobian itself and slices the state and parameter
+  parts out of it. Each point then costs one solve rather than one per part.
+
+Outside a `retained()` scope the wrapper remembers nothing and passes each request
+straight to the provider, one provider call per request.
+
+```python
+import numpy as np
+
+from discrecontinual_equations.continuation.jacobian import (
+    AnalyticJacobian,
+    MemoizedJacobian,
+)
+from discrecontinual_equations.continuation.residual import DifferentiableResidual
+
+
+class Fold(DifferentiableResidual):
+    """f(u, lam) = lam - u^2, which supplies its own [df/du | df/dlam]."""
+
+    solves = 0
+
+    def evaluate(self, state, parameter):
+        return np.array([parameter - state[0] ** 2])
+
+    def extended_jacobian(self, state, parameter, epsilon):
+        Fold.solves += 1
+        return np.array([[-2.0 * state[0], 1.0]])
+
+
+jacobian = MemoizedJacobian(AnalyticJacobian(Fold(), 1.0e-7))
+state = np.array([0.5])
+with jacobian.retained():
+    extended = jacobian.extended_jacobian(state, 0.25)
+    state_part = jacobian.state_jacobian(state, 0.25)
+    parameter_part = jacobian.parameter_derivative(state, 0.25)
+
+print(extended, state_part, parameter_part, Fold.solves)
+# [[-1.  1.]] [[-1.]] [1.] 1
+```
+
+Before DEQ-122 the wrapper built the extended Jacobian from the two parts even for
+an analytic provider, so each codim-3 curve point was solved twice. Continuing a
+cusp curve for ten points now takes half the analytic solves, 21 instead of 42, and
+about half the field evaluations. The curve is unchanged.
+
+### Limits
+
+- The memory lasts for one `Continuer.solve`. The residual reads the equation's
+  other parameters live, so a Jacobian remembered across solves could be stale.
+- A scope remembers the four most recently used points (`capacity`).
+- Keys are exact bytes. A state that differs in the last bit is a new point.
+- A joint provider asked for only its state part, inside a scope, still pays for
+  the whole extended solve. For `AnalyticJacobian` that costs nothing extra,
+  because its state part is a slice of the same solve.
+
+### References
+
+No published algorithm is involved: this is a cache. The sources of the minimally
+augmented systems whose Jacobians it shares are cited in the
+`discrecontinual_equations.continuation.cusp_curve` and
+`discrecontinual_equations.continuation.generalized_hopf_curve` module docstrings.
+
 ## Continuation
 
 ::: discrecontinual_equations.continuation

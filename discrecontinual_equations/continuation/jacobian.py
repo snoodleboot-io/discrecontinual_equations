@@ -181,7 +181,22 @@ class MemoizedJacobian(JacobianProvider):
     remembers the extended Jacobian itself and slices the parts from it, so each
     point costs one solve rather than one per part. Other providers keep their
     parts separate, since differencing the state columns alone is cheaper than the
-    whole extended Jacobian.
+    whole extended Jacobian. Outside a scope every request goes straight to the
+    provider, one call per request.
+
+    Args:
+        provider: The provider whose derivatives are remembered.
+
+    Attributes:
+        capacity: How many points a scope remembers; the least recently used
+            point is forgotten first.
+
+    References:
+        No published algorithm: this is a cache, and every value it returns is
+        bit-identical to the provider's own. The analytic extended Jacobians it
+        shares are those of the minimally augmented cusp and generalized-Hopf
+        systems, whose sources are cited in :mod:`~.cusp_curve` and
+        :mod:`~.generalized_hopf_curve`.
     """
 
     __slots__ = ["_active", "_joint", "_memory", "_provider"]
