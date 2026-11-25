@@ -232,18 +232,19 @@ class NullSpaceBranchSwitcher(BranchSwitcher):
         centre = g(0.0, 0.0)
         alpha11 = (g(1.0, 0.0) - 2.0 * centre + g(-1.0, 0.0)) / step**2
         alpha22 = (g(0.0, 1.0) - 2.0 * centre + g(0.0, -1.0)) / step**2
-        alpha12 = (
-            g(1.0, 1.0) + g(-1.0, -1.0) - g(1.0, -1.0) - g(-1.0, 1.0)
-        ) / (4.0 * step**2)
+        alpha12 = (g(1.0, 1.0) + g(-1.0, -1.0) - g(1.0, -1.0) - g(-1.0, 1.0)) / (
+            4.0 * step**2
+        )
         return np.array([[alpha11, alpha12], [alpha12, alpha22]])
 
     def _secondary_root(self, alpha: np.ndarray) -> tuple[float, float]:
         alpha11, alpha12, alpha22 = alpha[0, 0], alpha[0, 1], alpha[1, 1]
         scale = float(np.max(np.abs(alpha)))
         discriminant = alpha12 * alpha12 - alpha11 * alpha22
-        if scale < self._singular_tolerance or discriminant <= (
-            self._singular_tolerance * scale
-        ) ** 2:
+        if (
+            scale < self._singular_tolerance
+            or discriminant <= (self._singular_tolerance * scale) ** 2
+        ):
             return 0.0, 1.0
         sign = 1.0 if alpha12 >= 0.0 else -1.0
         pivot = -(alpha12 + sign * np.sqrt(discriminant))

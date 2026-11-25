@@ -79,13 +79,73 @@ class SkewCrossing(DeterministicFunction):
         return [(x - mu) * (x - 2.0 * mu)]
 
 
-def _switcher(function_type, variables) -> NullSpaceBranchSwitcher:
+class TripleCrossing(DeterministicFunction):
+    """x' = x^3 - x mu^2: three branches x = 0, x = mu, x = -mu cross at 0."""
+
+    def eval(
+        self,
+        point: list[float],
+        time: float | None = None,  # noqa: ARG002 (base signature)
+    ) -> list[float]:
+        mu = self.parameters[0].value
+        x = point[0]
+        return [x**3 - x * mu * mu]
+
+
+class SkewPlanar(DeterministicFunction):
+    """x' = (x - mu)(x - 2 mu), y' = -y + x^2: a planar skew crossing.
+
+    Primary branch x = mu, y = mu^2 (tangent (1, 0, 1)); secondary x = 2 mu,
+    y = 4 mu^2 (tangent (2, 0, 1)). The left null vector is the x row only.
+    """
+
+    def eval(
+        self,
+        point: list[float],
+        time: float | None = None,  # noqa: ARG002 (base signature)
+    ) -> list[float]:
+        mu = self.parameters[0].value
+        x, y = point[0], point[1]
+        return [(x - mu) * (x - 2.0 * mu), -y + x * x]
+
+
+class OneSidedTranscritical(DeterministicFunction):
+    """x' = x (mu - 30 mu^2 - x): the secondary branch folds back at mu = 1/60.
+
+    On the side mu > 0 the hyperplane normal to the secondary tangent through
+    the default kick misses the branch, so only the other side can be reached.
+    """
+
+    def eval(
+        self,
+        point: list[float],
+        time: float | None = None,  # noqa: ARG002 (base signature)
+    ) -> list[float]:
+        mu = self.parameters[0].value
+        x = point[0]
+        return [x * (mu - 30.0 * mu * mu - x)]
+
+
+def _point(state, parameter, tangent) -> ContinuationPoint:
+    return ContinuationPoint(
+        arclength=0.0,
+        state=list(state),
+        parameter=parameter,
+        tangent=list(tangent),
+        eigenvalues=[(0.0, 0.0)] * len(state),
+        unstable_dimension=0,
+        stability="stable",
+        measure=0.0,
+    )
+
+
+def _switcher(function_type, variables, kick=0.05) -> NullSpaceBranchSwitcher:
     residual = EquationResidual(build_equation(function_type, variables), 0, 0.0)
     return NullSpaceBranchSwitcher(
         residual=residual,
         jacobian=FiniteDifferenceJacobian(residual, 1.0e-7),
         linear_solver=LeastSquaresFallbackSolver(),
-        kick=0.05,
+        kick=kick,
         singular_tolerance=1.0e-6,
         settings=NewtonSettings(1.0e-10, 12),
         direction=1,
@@ -258,7 +318,7 @@ class TestNoSilentReturn(TestCase):
             assert abs(parameter - state[0] ** 2) < CURVE_TOLERANCE, step
 
     def test_switching_at_a_regular_point_refuses(self):
-        equation, continuer, _ = _branch_point(
+        _equation, continuer, _ = _branch_point(
             Pitchfork,
             [X()],
             ("pitchfork", "branch_point"),
@@ -361,3 +421,82 @@ class TestSecondaryDirection(TestCase):
         )
         assert abs(state[0] - 2.0 * parameter) < CURVE_TOLERANCE
         assert abs(parameter) > 0.01
+
+    def test_degenerate_crossing_refuses_rather_than_returning_x_zero(self):
+        # All second derivatives vanish at the origin, so the branching equation
+        # is degenerate (not a simple branch point). The kernel complement is
+        # tried; whatever happens, the trivial branch x = 0 is never returned.
+        switcher = _switcher(TripleCrossing, [X()])
+        assert np.allclose(
+            switcher.secondary_direction(np.zeros(2), np.array([0.0, 1.0])),
+            [1.0, 0.0],
+        ) or np.allclose(
+            switcher.secondary_direction(np.zeros(2), np.array([0.0, 1.0])),
+            [-1.0, 0.0],
+        )
+        try:
+            state, parameter = switcher.secondary_seed(
+                ContinuationPoint(
+                    arclength=0.0,
+                    state=[0.0],
+                    parameter=0.0,
+                    tangent=[0.0, 1.0],
+                    eigenvalues=[(0.0, 0.0)],
+                    unstable_dimension=0,
+                    stability="stable",
+                    measure=0.0,
+                ),
+            )
+        except BranchSwitchError:
+            return
+        assert abs(abs(state[0]) - abs(parameter)) < CURVE_TOLERANCE
+        assert abs(state[0]) > 0.01
+
+    def test_planar_skew_crossing_projects_on_the_left_null_vector(self):
+        direction = _switcher(SkewPlanar, [X(), Y()]).secondary_direction(
+            np.zeros(3),
+            _unit([1.0, 0.0, 1.0]),
+        )
+        self._assert_parallel(direction, [2.0, 0.0, 1.0])
+
+    def test_inaccurate_primary_tangent_still_gives_the_exact_secondary(self):
+        # In one dimension the kernel is the whole plane, so both roots of the
+        # branching equation are exact even when q1 is 0.2 rad off the primary
+        # tangent; the root farther from q1 is still the other branch.
+        angle = math.atan2(1.0, 1.0) + 0.2
+        tangent = np.array([math.cos(angle), math.sin(angle)])
+        direction = _switcher(SkewCrossing, [X()]).secondary_direction(
+            np.zeros(2),
+            tangent,
+        )
+        self._assert_parallel(direction, [2.0, 1.0])
+
+
+class TestRetries(TestCase):
+    """The switch retries the other side and larger kicks before refusing."""
+
+    def test_other_side_is_tried_when_the_first_misses_the_branch(self):
+        state, parameter = _switcher(OneSidedTranscritical, [X()]).secondary_seed(
+            _point([0.0], 0.0, [0.0, 1.0]),
+        )
+        assert parameter < 0.0
+        assert abs(state[0] - (parameter - 30.0 * parameter**2)) < CURVE_TOLERANCE
+
+    def test_larger_kicks_are_tried_from_an_inaccurately_located_point(self):
+        # The point is 0.02 past the pitchfork; with a 0.005 kick the corrected
+        # point (h, h^2) is farther than the kick from the prediction until the
+        # kick reaches 0.02.
+        state, parameter = _switcher(Pitchfork, [X()], kick=0.005).secondary_seed(
+            _point([0.0], 0.02, [0.0, 1.0]),
+        )
+        assert abs(parameter - state[0] ** 2) < CURVE_TOLERANCE
+        assert abs(state[0]) >= 0.02 - 1.0e-12
+
+    def test_a_branch_far_from_the_point_is_not_accepted(self):
+        # (0, -0.3) is a regular point; correcting along x = h reaches the
+        # secondary branch at mu = h^2, farther than the kick from the
+        # prediction, so it is not certified as the branch crossing here.
+        with pytest.raises(BranchSwitchError):
+            _switcher(Pitchfork, [X()]).secondary_seed(
+                _point([0.0], -0.3, [0.0, 1.0]),
+            )
