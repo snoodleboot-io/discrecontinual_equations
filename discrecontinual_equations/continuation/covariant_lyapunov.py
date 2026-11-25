@@ -53,6 +53,36 @@ The stochastic finite-time exponents call
 :func:`~.lyapunov.matrix_noise_lyapunov` over one window per seed rather than
 integrating a noisy tangent flow a second time here, so they inherit every
 correction that estimator carries and cannot drift away from it.
+
+Limits. The vectors need a non-degenerate spectrum: inside a covariant subspace of
+dimension above one the algorithm returns *some* basis, fixed by the starting ``C``
+and carrying no meaning (Ginelli et al. 2013, Sec. 4.2, "Degenerate Lyapunov
+spectra"). Every recorded basis and factor is held in memory, ``samples +
+backward_transient`` of them, so memory grows with ``(samples + backward_transient)
+* N * count`` (ibid., Eq. 41). The Jacobian is a finite difference of the field
+(:func:`~.noise.jacobian_at`), so the vectors are no better than it is.
+
+References:
+    - [Benettin1980] Benettin, G., Galgani, L., Giorgilli, A. and Strelcyn, J.-M.
+      "Lyapunov Characteristic Exponents for smooth dynamical systems and for
+      hamiltonian systems; a method for computing all of them. Part 1: Theory"
+      and "Part 2: Numerical application". Meccanica 15, 9-20 and 21-30 (1980).
+      doi:10.1007/BF02128236, doi:10.1007/BF02128237. The forward QR pass.
+    - [Ginelli2007] Ginelli, F., Poggi, P., Turchi, A., Chate, H., Livi, R. and
+      Politi, A. "Characterizing dynamics with covariant Lyapunov vectors".
+      Phys. Rev. Lett. 99, 130601 (2007). arXiv:0706.0510,
+      doi:10.1103/PhysRevLett.99.130601. The angle, Eq. (4); the growth rate of
+      the ``i``-th vector is the ``i``-th exponent; Henon and Lozi, Fig. 1a.
+    - [Ginelli2013] Ginelli, F., Chate, H., Livi, R. and Politi, A. "Covariant
+      Lyapunov vectors". J. Phys. A 46, 254005 (2013). arXiv:1212.3961,
+      doi:10.1088/1751-8113/46/25/254005. Expansion in the Gram-Schmidt basis,
+      Eq. (27); backward recursion, Eqs. (28), (31)-(32); convergence from a
+      generic triangular start, Eqs. (33)-(40); finite-time exponents, Eq. (29);
+      the four stages, Sec. 4.2; angles between subspaces, Sec. 7.
+    - [KuptsovParlitz2012] Kuptsov, P. V. and Parlitz, U. "Theory and Computation
+      of Covariant Lyapunov Vectors". J. Nonlinear Sci. 22, 727-762 (2012).
+      arXiv:1105.5228, doi:10.1007/s00332-012-9126-5. Column-by-column triangular
+      solve, Eq. (66); constant-Jacobian test system, Eq. (69).
 """
 
 from abc import ABC, abstractmethod
@@ -103,6 +133,18 @@ class FlowTangent(TangentDynamics):
     The steps are those of :func:`~.lyapunov.lyapunov_spectrum`, and the default
     interval is its renormalisation interval, so the forward pass here is the
     Benettin pass that estimator runs.
+
+    Args:
+        function: The vector field ``f``.
+        dt: The RK4 step.
+        steps: RK4 steps per sampling interval, so ``interval = dt * steps``.
+
+    Raises:
+        ValueError: If ``steps`` is below one.
+
+    References:
+        - [Benettin1980] Meccanica 15, 9-20 and 21-30 (1980): the tangent frame
+          carried along the orbit and re-orthonormalised once per interval.
     """
 
     __slots__ = ["_dt", "_function", "_steps"]
@@ -135,7 +177,14 @@ class FlowTangent(TangentDynamics):
 
 
 class MapTangent(TangentDynamics):
-    """An iterated map ``x -> F(x)``, one iterate per interval of unit time."""
+    """An iterated map ``x -> F(x)``, one iterate per interval of unit time.
+
+    The frame is multiplied by the map's Jacobian at the current state, so the
+    exponents come out per iterate.
+
+    Args:
+        function: The map ``F``; its ``eval`` returns the image point.
+    """
 
     __slots__ = ["_function"]
 
@@ -171,6 +220,18 @@ class CovariantLyapunovSettings:
     ``exp(-gap * time)``, with ``gap`` the smallest difference between
     neighbouring exponents, and needs ``gap * time`` of twenty or more for
     vectors good to ``1e-9``.
+
+    Args:
+        transient: Intervals run before recording starts.
+        samples: Intervals at which vectors are returned.
+        backward_transient: Intervals recorded past the last sample, used only to
+            converge the backward iteration.
+
+    Raises:
+        ValueError: If ``samples`` is below one or a transient is negative.
+
+    References:
+        - [Ginelli2013] J. Phys. A 46, 254005 (2013), Sec. 4.2, stages (i)-(iv).
     """
 
     __slots__ = ["backward_transient", "samples", "transient"]
@@ -280,6 +341,19 @@ class CovariantLyapunov:
     sampled stretch; ``growth`` holds the logarithm of each vector's growth
     factor over each sampling interval, from which the covariant growth rates
     and the finite-time exponents are formed.
+
+    Args:
+        states: Reference states, ``(samples, dimension)``.
+        vectors: Unit covariant vectors, ``(samples, dimension, count)``.
+        exponents: Benettin's exponents over the sampled stretch.
+        growth: ``log`` growth factor of each vector per interval,
+            ``(samples, count)``.
+        interval: Time between samples.
+
+    References:
+        - [Ginelli2013] J. Phys. A 46, 254005 (2013): the growth factors are the
+          diagonal of ``D_{k,n}`` in Eq. (28), their logarithms the finite-time
+          exponents of Eq. (29).
     """
 
     __slots__ = ["_exponents", "_growth", "_interval", "_states", "_vectors"]
@@ -339,6 +413,18 @@ class CovariantLyapunov:
         The windows tile the sampled stretch from its start and any remainder is
         dropped, so their mean is the covariant exponent over the stretch they
         cover.
+
+        Args:
+            window: Window length in sampling intervals.
+
+        Returns:
+            One row of rates per window, with the window's length in time.
+
+        Raises:
+            ValueError: If not even one window fits in the samples.
+
+        References:
+            - [Ginelli2013] J. Phys. A 46, 254005 (2013), Eq. (29).
         """
         count = self._growth.shape[0] // window if window > 0 else 0
         if count < 1:
@@ -354,7 +440,18 @@ class CovariantLyapunov:
         )
 
     def angles(self, first: int, second: int) -> AngleDistribution:
-        """``arccos |v_first . v_second|`` at every sample (Ginelli et al., Eq. 4)."""
+        """``arccos |v_first . v_second|`` at every sample (Ginelli et al., Eq. 4).
+
+        Args:
+            first: Index of one vector, in exponent order.
+            second: Index of the other.
+
+        Returns:
+            The angle at every sample, in ``[0, pi/2]``.
+
+        References:
+            - [Ginelli2007] Phys. Rev. Lett. 99, 130601 (2007), Eq. (4).
+        """
         cosines = np.abs(
             np.einsum(
                 "ni,ni->n", self._vectors[:, :, first], self._vectors[:, :, second]
@@ -369,6 +466,18 @@ class CovariantLyapunov:
         With ``leading`` the number of non-negative exponents this is the angle
         between the centre-unstable and the stable subspace, the quantity whose
         distribution decides hyperbolicity.
+
+        Args:
+            leading: Number of vectors in the first span.
+
+        Returns:
+            The smallest principal angle at every sample, in ``[0, pi/2]``.
+
+        Raises:
+            ValueError: If the split leaves no vector on one side.
+
+        References:
+            - [Ginelli2013] J. Phys. A 46, 254005 (2013), Sec. 7.
         """
         count = self._vectors.shape[2]
         if not 0 < leading < count:
@@ -438,6 +547,23 @@ def covariant_lyapunov_vectors(
     keeps the vectors once it reaches the samples. ``count`` defaults to the
     full dimension; fewer vectors need only the leading block of every factor,
     so they cost proportionally less (Ginelli et al. 2013, Sec. 4.2).
+
+    Args:
+        dynamics: The flow or map and its tangent, one interval per call.
+        start: Initial state; the forward transient carries it onto the attractor.
+        count: How many leading vectors to compute.
+        settings: Stage lengths; the defaults when omitted.
+
+    Returns:
+        The vectors, states, Benettin exponents and per-interval growth.
+
+    Raises:
+        ValueError: If ``count`` is outside ``[1, dimension]``.
+
+    References:
+        - [Ginelli2007] Phys. Rev. Lett. 99, 130601 (2007).
+        - [Ginelli2013] J. Phys. A 46, 254005 (2013), Eqs. (27)-(40), Sec. 4.2.
+        - [KuptsovParlitz2012] J. Nonlinear Sci. 22, 727-762 (2012), Eq. (66).
     """
     control = settings if settings is not None else CovariantLyapunovSettings()
     dimension = np.asarray(start).size
@@ -486,6 +612,30 @@ def stochastic_finite_time_exponents(
     parameter (see :mod:`.stochastic_threshold`). ``window`` must be a whole
     number of the estimator's renormalisation intervals, or the last partial
     interval would be timed but not measured.
+
+    For the linear multiplicative flow ``dx = a x dt + s x dW`` (Ito) each window
+    is exactly ``a - s^2 / 2 + s W(T) / T`` with ``T`` the window, so the spread
+    is ``s / sqrt(T)``; that is the oracle the tests use.
+
+    Args:
+        system: The noisy flow.
+        start: Initial state, before each window's transient.
+        window: Window length in steps of ``settings.dt``.
+        windows: Number of windows, one seed each.
+        settings: Step, transient and first seed; ``horizon`` is ignored.
+
+    Returns:
+        One row of exponents per window, with the window's length in time.
+
+    Raises:
+        ValueError: If ``window`` is not a positive multiple of the
+            renormalisation interval, or ``windows`` is below one.
+
+    References:
+        - [Ginelli2013] J. Phys. A 46, 254005 (2013), Eq. (29): finite-time
+          exponents as a distribution.
+        - [Arnold1998] Random Dynamical Systems, Springer (1998), Ch. 9: the
+          dynamical bifurcation as a sign change of the top exponent.
     """
     control = settings if settings is not None else StochasticLyapunovSettings()
     if window < _RENORMALISE_EVERY or window % _RENORMALISE_EVERY != 0:

@@ -6,9 +6,9 @@ this module treats them as different objects:
 * **Phenomenological (P) bifurcation** - a qualitative change in the stationary
   probability density ``p_s(x)`` (for example a mode moving off the origin). The
   stationary Fokker-Planck density in one dimension is known in closed form,
-  ``p_s(x) = (C / g^2) exp(integral 2 f_ito / g^2 dx)`` on a grid via
-  :class:`StationaryDensity`,
-  evaluates it on a grid and :class:`DensityModes` reports its shape.
+  ``p_s(x) = (C / g^2) exp(integral 2 f_ito / g^2 dx)``;
+  :class:`StationaryDensity` evaluates it on a grid and :class:`DensityModes`
+  reports its shape.
 * **Dynamical (D) bifurcation** - a sign change of the top Lyapunov exponent of
   the linearised flow about a reference state. In one dimension that exponent is
   ``f'(x0) - (1/2) g'(x0)^2`` (Ito); :class:`LyapunovExponent` returns it.
@@ -24,6 +24,35 @@ one-dimensional case of a spectrum, which above one dimension has to be accumula
 along an orbit; :mod:`.lyapunov` does that. Locating either threshold in the parameter
 is :mod:`.stochastic_threshold`. :class:`NoiseConvention` is reused unchanged by all
 three, because the shift it describes is the same shift in any dimension.
+
+Example: the pitchfork with multiplicative noise, ``f = a x - x^3``, ``g = s x``.
+Under Stratonovich the exponent at the origin is ``a`` and the density
+``p_s ~ x^(2a/s^2 - 1) exp(-x^2/s^2)`` leaves the origin at ``a = s^2 / 2``; under
+Ito the exponent is ``a - s^2 / 2`` and the density leaves the origin at
+``a = s^2``. In both conventions D comes first and P a distance ``s^2 / 2`` later,
+so the two notions genuinely differ. (A linear SDE ``dx = a x dt + s x dW`` is
+geometric Brownian motion, ``x(t) = x(0) exp((a - s^2/2) t + s W(t))`` under Ito,
+which is where ``a - s^2 / 2`` comes from.)
+
+Limits. Derivatives are central differences with a fixed absolute step of
+``1e-6``, so a drift or noise that varies on a much smaller scale, or a reference
+state of very large magnitude, is out of reach. The density is integrated by the
+trapezoid rule on the caller's grid and normalised over that grid only: mass
+outside it is lost, and a grid that ends where ``g = 0`` makes the density
+singular, which is why the examples start the grid just off the origin. The
+exponent is the linearisation about a *fixed* reference state, which must be an
+equilibrium of the noisy flow (``f(x0) = g(x0) = 0``) for it to be the top
+Lyapunov exponent of the invariant measure there.
+
+References:
+    - [Arnold1998] Arnold, L. "Random Dynamical Systems". Springer Monographs in
+      Mathematics, Springer, 1998. doi:10.1007/978-3-662-12878-7. Ch. 9,
+      "Bifurcation Theory" (pp. 465-531): phenomenological (P) and dynamical (D)
+      bifurcation, and the explicitly solvable one-dimensional pitchfork.
+    - [KloedenPlaten1992] Kloeden, P. E. and Platen, E. "Numerical Solution of
+      Stochastic Differential Equations". Springer, 1992.
+      doi:10.1007/978-3-662-12616-5. Ch. 4 (pp. 103-160): the Ito and
+      Stratonovich calculi and the drift correction ``(1/2) g g'`` between them.
 """
 
 from abc import ABC, abstractmethod
@@ -47,11 +76,27 @@ def _slope(function: Function, x: float) -> float:
 
 
 class NoiseConvention(ABC):
-    """Map a stochastic differential equation to its Ito drift."""
+    """Map a stochastic differential equation to its Ito drift.
+
+    The Ito and Stratonovich readings of ``dx = f dt + g dW`` are different
+    processes; the Stratonovich one equals the Ito one with drift
+    ``f + (1/2) g g'``. Every threshold in this package moves with that shift.
+
+    References:
+        - [KloedenPlaten1992] Springer, 1992, Ch. 4.
+    """
 
     @abstractmethod
     def drift_correction(self, diffusion: float, diffusion_slope: float) -> float:
-        """Amount added to the drift to obtain the equivalent Ito drift."""
+        """Amount added to the drift to obtain the equivalent Ito drift.
+
+        Args:
+            diffusion: ``g(x)``.
+            diffusion_slope: ``g'(x)``.
+
+        Returns:
+            The drift correction at ``x``.
+        """
         raise NotImplementedError
 
 
@@ -72,7 +117,23 @@ class Stratonovich(NoiseConvention):
 
 
 class StationaryDensity:
-    """The stationary Fokker-Planck density of a one-dimensional system."""
+    """The stationary Fokker-Planck density of a one-dimensional system.
+
+    In one dimension the zero-flux stationary density is
+    ``p_s(x) = (C / g^2) exp(integral 2 f_ito / g^2 dx)``, with ``f_ito`` the drift
+    after the convention's correction. The integral is a cumulative trapezoid sum
+    over ``grid`` and ``C`` normalises the density over the grid.
+
+    Args:
+        drift: ``f``.
+        diffusion: ``g``; must not vanish on the grid.
+        convention: How to read ``g dW``.
+        grid: Increasing points on which to evaluate the density.
+
+    References:
+        - [Arnold1998] Springer, 1998, Ch. 9: the stationary density whose change
+          of shape is the P-bifurcation.
+    """
 
     __slots__ = ["_convention", "_diffusion", "_drift", "_grid"]
 
@@ -89,7 +150,11 @@ class StationaryDensity:
         self._grid = grid
 
     def evaluate(self) -> tuple[np.ndarray, np.ndarray]:
-        """Return the grid and the normalised stationary density on it."""
+        """Return the grid and the normalised stationary density on it.
+
+        Returns:
+            The grid and the density on it, normalised to unit trapezoid mass.
+        """
         integrand = np.array([self._integrand(x) for x in self._grid])
         potential = np.concatenate(
             [[0.0], np.cumsum(_trapezoid(self._grid, integrand))],
@@ -137,7 +202,21 @@ class DensityModes:
 
 
 class LyapunovExponent:
-    """The top Lyapunov exponent of the linearised one-dimensional flow."""
+    """The top Lyapunov exponent of the linearised one-dimensional flow.
+
+    About an equilibrium ``x0`` the linearisation is ``dv = f_ito'(x0) v dt +
+    g'(x0) v dW``, geometric Brownian motion, whose exponent is
+    ``f_ito'(x0) - g'(x0)^2 / 2``. A sign change of it in a parameter is the
+    D-bifurcation.
+
+    Args:
+        drift: ``f``.
+        diffusion: ``g``.
+        convention: How to read ``g dW``.
+
+    References:
+        - [Arnold1998] Springer, 1998, Ch. 9: the D-bifurcation.
+    """
 
     __slots__ = ["_convention", "_diffusion", "_drift"]
 
@@ -152,7 +231,14 @@ class LyapunovExponent:
         self._convention = convention
 
     def at(self, reference: float) -> float:
-        """Return ``f'(x0) - g'(x0)^2 / 2`` (Ito) about the reference state."""
+        """Return ``f'(x0) - g'(x0)^2 / 2`` (Ito) about the reference state.
+
+        Args:
+            reference: The state ``x0``.
+
+        Returns:
+            The exponent, with ``f'`` the Ito drift's slope.
+        """
         diffusion_slope = _slope(self._diffusion, reference)
         ito_drift_slope = _slope(self._drift, reference) + self._correction_slope(
             reference,

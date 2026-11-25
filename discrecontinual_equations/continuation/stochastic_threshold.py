@@ -33,6 +33,37 @@ displaced by it. That makes *differences* of located thresholds - between the tw
 conventions, or along a curve - far more accurate than their absolute level, and it is
 why :class:`MeanTopExponent` averages over several seeds: the offset shrinks like
 ``s / sqrt(paths * T)``, and nothing else about the answer changes.
+
+The noisy Hopf normal form is the example that motivates keeping both. With
+additive noise its density has a P-bifurcation at ``mu = 0`` (Baxendale 2024,
+Sec. 1), while the top exponent - measured by this library at ``sigma = 0.7``
+without shear - stays negative for every ``mu`` in ``[-0.5, 1.5]``, so there is no
+D-bifurcation to locate. With the conformal noise ``sigma z dB`` the origin is
+invariant, its exponent is exactly ``mu`` and the density craters at
+``mu = sigma^2``: D and P at two different parameters, both located by this module.
+
+Limits. The phenomenological threshold is only as accurate as the grid: on the
+noisy Hopf above, ``RadialCrater`` four cells out locates ``0.562``, ``0.526``
+and ``0.513`` on ``80``, ``120`` and ``160`` cells over ``[-2.5, 2.5]^2``, against
+``sigma^2 = 0.49``. The dynamical threshold carries the shared Monte-Carlo offset
+described above. Neither notion is located where its test function does not
+change sign inside the bracket: ``locate`` returns ``None`` instead.
+
+References:
+    - [Arnold1998] Arnold, L. "Random Dynamical Systems". Springer, 1998.
+      doi:10.1007/978-3-662-12878-7. Ch. 9, "Bifurcation Theory": the P- and
+      D-bifurcations located here.
+    - [Baxendale1994] Baxendale, P. H. "A stochastic Hopf bifurcation". Probab.
+      Theory Relat. Fields 99, 581-616 (1994). doi:10.1007/BF01206233.
+    - [Baxendale2024] Baxendale, P. H. "Lyapunov exponents and shear-induced chaos
+      for a Hopf bifurcation with additive noise". Probab. Theory Relat. Fields
+      193, 375-425 (2024). arXiv:2312.03962, doi:10.1007/s00440-024-01301-4.
+      Sec. 1: the system (1), its invariant density and the P-bifurcation at
+      ``mu = 0``; the top exponent (3).
+    - [ArnoldNamachchivayaSchenkHoppe1996] Arnold, L., Sri Namachchivaya, N. and
+      Schenk-Hoppe, K. R. "Toward an understanding of stochastic Hopf
+      bifurcation: a case study". Int. J. Bifurc. Chaos 6, 1947-1975 (1996).
+      doi:10.1142/S0218127496001272.
 """
 
 import math
@@ -60,7 +91,14 @@ class DensityProbe(ABC):
 
     @abstractmethod
     def value(self, density: GridDensity) -> float:
-        """Evaluate the probe on a solved density."""
+        """Evaluate the probe on a solved density.
+
+        Args:
+            density: The stationary density on its grid.
+
+        Returns:
+            A scalar whose sign tells the shape.
+        """
         raise NotImplementedError
 
 
@@ -86,6 +124,11 @@ class RadialCrater(DensityProbe):
     so a probe within them carries a bias no refinement removes, while a probe
     several cells out trades it for the ``O(h^2)`` one above, which refinement
     does remove. The default keeps the cell nearest the centre, as before.
+
+    Args:
+        centre: The reference state.
+        axis: The grid axis along which to step out.
+        offset: Cells to step out before taking the difference.
     """
 
     __slots__ = ["_axis", "_centre", "_offset"]
@@ -101,7 +144,17 @@ class RadialCrater(DensityProbe):
         self._offset = offset
 
     def value(self, density: GridDensity) -> float:
-        """Difference of ``log p`` between the neighbour cell and the reference cell."""
+        """Difference of ``log p`` between the neighbour cell and the reference cell.
+
+        Args:
+            density: The stationary density on its grid.
+
+        Returns:
+            ``log p`` one cell further out, minus ``log p`` at the reference cell.
+
+        Raises:
+            ValueError: If the density is not positive at either cell.
+        """
         index = list(density.grid.nearest(self._centre))
         index[self._axis] += self._offset
         here = density.at(index)
@@ -117,7 +170,11 @@ class RadialCrater(DensityProbe):
 
 
 class ParameterThreshold(ABC):
-    """Locate the parameter at which a stochastic diagnostic crosses zero."""
+    """Locate the parameter at which a stochastic diagnostic crosses zero.
+
+    Args:
+        root_finder: Refines a bracket once its ends differ in sign.
+    """
 
     __slots__ = ["_root_finder"]
 
@@ -126,7 +183,14 @@ class ParameterThreshold(ABC):
 
     @abstractmethod
     def test_value(self, parameter: float) -> float:
-        """Scalar whose sign change in the parameter brackets the threshold."""
+        """Scalar whose sign change in the parameter brackets the threshold.
+
+        Args:
+            parameter: The parameter value.
+
+        Returns:
+            The test function there.
+        """
         raise NotImplementedError
 
     def locate(self, low: float, high: float) -> float | None:
@@ -138,6 +202,14 @@ class ParameterThreshold(ABC):
         expensively obtained fiction; refusing is the only honest answer. Evaluations
         are memoised because the bracket check and the root finder ask about the same
         endpoints.
+
+        Args:
+            low: One end of the bracket.
+            high: The other end.
+
+        Returns:
+            The located parameter, or ``None`` when the test function has the same
+            sign at both ends.
         """
         cache: dict[float, float] = {}
 
@@ -152,7 +224,16 @@ class ParameterThreshold(ABC):
 
 
 class PhenomenologicalThreshold(ParameterThreshold):
-    """Where the stationary density changes shape: the P-bifurcation parameter."""
+    """Where the stationary density changes shape: the P-bifurcation parameter.
+
+    Args:
+        density_at: Builds the stationary problem at a parameter value.
+        probe: Reads the density's shape as a signed scalar.
+        root_finder: Refines the bracket.
+
+    References:
+        - [Arnold1998] Springer, 1998, Ch. 9: the P-bifurcation.
+    """
 
     __slots__ = ["_density_at", "_probe"]
 
@@ -167,7 +248,14 @@ class PhenomenologicalThreshold(ParameterThreshold):
         self._probe = probe
 
     def test_value(self, parameter: float) -> float:
-        """Solve the stationary equation at this parameter and probe the shape."""
+        """Solve the stationary equation at this parameter and probe the shape.
+
+        Args:
+            parameter: The parameter value.
+
+        Returns:
+            The probe's value on the solved density.
+        """
         return self._probe.value(self._density_at(parameter).solve())
 
 
@@ -177,6 +265,16 @@ class MeanTopExponent:
     The seeds are fixed and shared across parameter values on purpose; see this
     module's docstring for why that is what makes the exponent usable as a test
     function at all, and for what it does and does not buy.
+
+    Args:
+        family: Builds the noisy system at a parameter value.
+        start: Initial state of every estimate.
+        settings: Step, horizon and transient; its seed is replaced by each of
+            ``seeds`` in turn.
+        seeds: The fixed seed set.
+
+    Raises:
+        ValueError: If ``seeds`` is empty.
     """
 
     __slots__ = ["_family", "_seeds", "_settings", "_start"]
@@ -199,7 +297,14 @@ class MeanTopExponent:
         self._seeds = list(seeds)
 
     def at(self, parameter: float) -> float:
-        """Mean top exponent of the system at this parameter value."""
+        """Mean top exponent of the system at this parameter value.
+
+        Args:
+            parameter: The parameter value.
+
+        Returns:
+            The top exponent averaged over the seeds.
+        """
         system = self._family(parameter)
         total = 0.0
         for seed in self._seeds:
@@ -218,7 +323,16 @@ class MeanTopExponent:
 
 
 class DynamicalThreshold(ParameterThreshold):
-    """Where the top Lyapunov exponent crosses zero: the D-bifurcation parameter."""
+    """Where the top Lyapunov exponent crosses zero: the D-bifurcation parameter.
+
+    Args:
+        exponent_at: The top exponent as a function of the parameter, usually
+            :meth:`MeanTopExponent.at`.
+        root_finder: Refines the bracket.
+
+    References:
+        - [Arnold1998] Springer, 1998, Ch. 9: the D-bifurcation.
+    """
 
     __slots__ = ["_exponent_at"]
 
@@ -231,12 +345,24 @@ class DynamicalThreshold(ParameterThreshold):
         self._exponent_at = exponent_at
 
     def test_value(self, parameter: float) -> float:
-        """The top exponent, whose own zero is the threshold."""
+        """The top exponent, whose own zero is the threshold.
+
+        Args:
+            parameter: The parameter value.
+
+        Returns:
+            The top exponent there.
+        """
         return self._exponent_at(parameter)
 
 
 class ThresholdPoint:
-    """One located threshold: the second parameter, and where the threshold sat."""
+    """One located threshold: the second parameter, and where the threshold sat.
+
+    Args:
+        control: The second parameter's value.
+        parameter: The threshold located there.
+    """
 
     __slots__ = ["_control", "_parameter"]
 
@@ -268,6 +394,12 @@ class ThresholdCurve:
     Tracing stops where even the full bracket fails, because the curve has then left
     the range the caller said to look in, and inventing further points would be worse
     than returning a short curve.
+
+    Args:
+        threshold_at: Builds the threshold problem at a value of the second
+            parameter.
+        bracket: The full bracket, used first and as the fallback.
+        window: Half-width of the window about the previous threshold.
     """
 
     __slots__ = ["_bracket", "_threshold_at", "_window"]
@@ -283,7 +415,14 @@ class ThresholdCurve:
         self._window = window
 
     def trace(self, controls: Sequence[float]) -> list[ThresholdPoint]:
-        """Locate the threshold at each control value, predicting from the last."""
+        """Locate the threshold at each control value, predicting from the last.
+
+        Args:
+            controls: Values of the second parameter, in tracing order.
+
+        Returns:
+            The located points, stopping at the first value where none is found.
+        """
         points: list[ThresholdPoint] = []
         previous: float | None = None
         for control in controls:
@@ -304,7 +443,13 @@ class ThresholdCurve:
 
 
 class StochasticSample:
-    """Both stochastic bifurcation diagnostics at one parameter value."""
+    """Both stochastic bifurcation diagnostics at one parameter value.
+
+    Args:
+        parameter: The parameter value.
+        density: The stationary density there.
+        exponent: The top Lyapunov exponent there.
+    """
 
     __slots__ = ["_density", "_exponent", "_parameter"]
 
@@ -343,6 +488,15 @@ class StochasticScan:
     given system undergoes, and in which order, requires seeing both along the same
     range - which is the whole content of the statement that the noisy Hopf system has
     a density that craters at one parameter and an origin that destabilises at another.
+
+    Args:
+        density_at: Builds the stationary problem at a parameter value.
+        exponent_at: The top exponent as a function of the parameter.
+
+    References:
+        - [Arnold1998] Springer, 1998, Ch. 9.
+        - [ArnoldNamachchivayaSchenkHoppe1996] Int. J. Bifurc. Chaos 6,
+          1947-1975 (1996): the stochastic Hopf as a case study.
     """
 
     __slots__ = ["_density_at", "_exponent_at"]
@@ -356,7 +510,14 @@ class StochasticScan:
         self._exponent_at = exponent_at
 
     def run(self, values: Sequence[float]) -> list[StochasticSample]:
-        """Solve for the density and estimate the exponent at every value."""
+        """Solve for the density and estimate the exponent at every value.
+
+        Args:
+            values: Parameter values.
+
+        Returns:
+            One sample per value, in order.
+        """
         return [
             StochasticSample(
                 value,
