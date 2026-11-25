@@ -226,6 +226,19 @@ def _scalar_state_drift(
     return drift + half * (slope @ diffusion)
 
 
+def _unchanged(state: np.ndarray, anchor: np.ndarray | None) -> bool:
+    """Whether ``state`` is ``anchor`` bit for bit, so its coefficients still hold.
+
+    The fields are evaluated with no time argument and parameters that do not change
+    during an estimate, so every coefficient is a function of the state's bits alone.
+    A reference state that never moves - an equilibrium whose noise vanishes there,
+    the case every D-bifurcation estimate is about - then needs them only once.
+    Comparing bytes rather than values keeps ``-0.0`` and ``0.0`` apart, so reuse
+    cannot change a single bit of the estimate.
+    """
+    return anchor is not None and state.tobytes() == anchor.tobytes()
+
+
 class _Coefficients:
     """Everything one horizon step needs at a state, each field evaluated once.
 
@@ -285,8 +298,12 @@ def stochastic_lyapunov(
     frame = np.eye(dimension)[:, :directions]
     totals = np.zeros(directions)
     elapsed = 0.0
+    coefficients: _Coefficients | None = None
+    anchor: np.ndarray | None = None
     for i in range(control.horizon):
-        coefficients = _Coefficients(system, state)
+        if coefficients is None or not _unchanged(state, anchor):
+            coefficients = _Coefficients(system, state)
+            anchor = state
         increment = root_dt * generator.standard_normal()
         variation = coefficients.diffusion_jacobian @ frame
         frame = frame + coefficients.variational @ frame * dt + variation * increment
@@ -406,8 +423,12 @@ def matrix_noise_lyapunov(
     frame = np.eye(dimension)[:, :directions]
     totals = np.zeros(directions)
     elapsed = 0.0
+    coefficients: _MatrixCoefficients | None = None
+    anchor: np.ndarray | None = None
     for i in range(control.horizon):
-        coefficients = _MatrixCoefficients(system, state, factor)
+        if coefficients is None or not _unchanged(state, anchor):
+            coefficients = _MatrixCoefficients(system, state, factor)
+            anchor = state
         increments = root_dt * generator.standard_normal(drivers)
         # sum_k dW_k (dG_k/dx) Y, increments first: an O(K n^2) sum and one BLAS
         # product. A three-operand einsum without a contraction path runs as one
