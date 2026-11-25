@@ -1,3 +1,16 @@
+"""srk2: Platen's explicit strong order 1.0 scheme, Kloeden and Platen (11.1.7).
+
+The Milstein scheme with the derivative ``b'`` replaced by a difference between
+two stages, so that only ``a`` and ``b`` are evaluated. Strong and weak order
+1.0 for scalar noise and for diagonal noise that commutes. The "2" counts
+stages.
+
+References:
+    Kloeden, P. E. and Platen, E. Numerical Solution of Stochastic Differential
+    Equations. Springer, 1992. DOI 10.1007/978-3-662-12616-5.
+    Eq. (11.1.7).
+"""
+
 import numpy as np
 
 from discrecontinual_equations.solver.stochastic.coefficients import ItoCoefficients
@@ -80,6 +93,15 @@ class SRK2Solver(StochasticRungeKuttaSolver):
     """
 
     def __init__(self, solver_config: SRK2Config, wiener: WienerSource | None = None):
+        """Set up the step and its Wiener source.
+
+        Args:
+            solver_config: The time grid, the seed and the calculus.
+            wiener: Where the increments come from. ``None``, the default,
+                draws them from a :class:`~.wiener.GaussianWienerSource`
+                seeded with ``random_seed``. A :class:`~.wiener.BrownianPath`
+                drives the solver along a path fixed in advance.
+        """
         super().__init__(solver_config=solver_config, wiener=wiener)
 
     @staticmethod

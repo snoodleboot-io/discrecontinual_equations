@@ -1,3 +1,23 @@
+"""srk5: a solver that refuses to run.
+
+Its earlier version claimed strong order 2.5 and weak order 5.0, and integrated
+an ODE. No five-stage scheme of that order exists for a general SDE through this
+interface. The class docstring says why, and what a real higher-order scheme
+would need.
+
+References:
+    Kloeden, P. E. and Platen, E. Numerical Solution of Stochastic Differential
+    Equations. Springer, 1992. DOI 10.1007/978-3-662-12616-5.
+
+    Burrage, K. and Burrage, P. M. High strong order explicit Runge-Kutta
+    methods for stochastic ordinary differential equations. Applied Numerical
+    Mathematics 22(1-3), 81-101, 1996. DOI 10.1016/S0168-9274(96)00027-X.
+
+    Rossler, A. Runge-Kutta methods for the strong approximation of solutions of
+    stochastic differential equations. SIAM J. Numer. Anal. 48(3), 922-952,
+    2010. DOI 10.1137/09076636X.
+"""
+
 from discrecontinual_equations.differential_equation import DifferentialEquation
 from discrecontinual_equations.solver.solver import Solver
 from discrecontinual_equations.solver.stochastic.srk5.srk5_config import SRK5Config
@@ -52,13 +72,28 @@ class SRK5Solver(Solver):
       for stochastic ordinary differential equations", Applied Numerical Mathematics
       22, 1996.
     - Roessler, A. "Runge-Kutta methods for the strong approximation of solutions of
-      stochastic differential equations", SIAM Journal on Numerical Analysis 48, 2010.
+      stochastic differential equations", SIAM Journal on Numerical Analysis
+      48(3), 922-952, 2010. DOI 10.1137/09076636X.
     """
 
     def __init__(self, solver_config: SRK5Config):
+        """Accept a configuration, so that existing code still constructs one.
+
+        Args:
+            solver_config: Any srk5 configuration; it is never used.
+        """
         super().__init__(solver_config=solver_config)
 
     def solve(self, equation: DifferentialEquation, initial_values: list[float]):
+        """Refuse to integrate.
+
+        Args:
+            equation: Ignored.
+            initial_values: Ignored.
+
+        Raises:
+            NotImplementedError: Always, naming the solvers to use instead.
+        """
         message = (
             "SRK5Solver has no implementation: a stochastic Runge-Kutta scheme of "
             "strong order 2.5 or weak order 5.0 for general multiplicative noise does "
