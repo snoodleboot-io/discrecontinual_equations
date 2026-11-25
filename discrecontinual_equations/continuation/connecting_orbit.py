@@ -170,6 +170,11 @@ class OrbitResolution:
     refinements once returned their seeds unchanged and the estimate read 0.0.
     So ``estimate`` is 0.0 only when both refinements converged and moved
     nothing, and ``valid`` says whether both converged.
+
+    References:
+        Bader and Ascher 1987 (docs/references.md, ``Bader1987``): COLNEW
+        reports no solution, not its last iterate, when the Newton iteration on
+        a mesh fails; a refinement here does the same.
     """
 
     __slots__ = ["discretisation", "truncation"]
@@ -259,7 +264,19 @@ class NotConvergedError(RuntimeError):
     ``newton_residual`` is the norm of the full Newton residual there and
     ``correction`` the largest component of its Gauss-Newton correction relative
     to ``1 + |x|`` - ``inf`` where none could be computed. They are for diagnosis:
-    the iterate is not an orbit.
+    the iterate is not an orbit. AUTO ends such a step with ``MX`` (no
+    convergence) and COLNEW with ``IFLAG = -2``; neither returns the iterate as
+    a solution, and neither does :meth:`ConnectingOrbit.solve`.
+
+    References:
+        Doedel et al., *AUTO-07P: Continuation and Bifurcation Software for
+        Ordinary Differential Equations*, Concordia University, 2007 (rev. 2012),
+        "Tolerances": ``EPSU``, the relative convergence criterion of the
+        Newton/Chord iteration, and ``ITNW``.
+        G. Bader and U. Ascher, "A new basis implementation for a mixed order
+        boundary value ODE solver", SIAM J. Sci. Stat. Comput. 8(4), 483-500,
+        1987, DOI 10.1137/0908047; COLNEW subroutine ``CONTRL``: convergence is
+        ``|dz_i| <= tol (|z_i| + 1)``, failure returns ``IFLAG = -2``.
     """
 
     def __init__(
@@ -311,6 +328,26 @@ class ConnectingOrbit(ABC):
         The returned orbit carries its :class:`CollocationResidual`. Converged is
         not the same as a trajectory: the least-squares minimum of a connection
         that does not exist is converged, and its residual is what says so.
+
+        Args:
+            seed: Initial path, shape ``(intervals + 1, dimension)``.
+
+        Returns:
+            The converged path, with ``residual`` attached.
+
+        Raises:
+            NotConvergedError: The best iterate passes neither test.
+
+        References:
+            Doedel et al., *AUTO-07P: Continuation and Bifurcation Software for
+            Ordinary Differential Equations*, Concordia University, 2007 (rev. 2012),
+            "Tolerances": ``EPSU``, the relative convergence criterion of the
+            Newton/Chord iteration, and ``ITNW``.
+            G. Bader and U. Ascher, "A new basis implementation for a mixed order
+            boundary value ODE solver", SIAM J. Sci. Stat. Comput. 8(4), 483-500,
+            1987, DOI 10.1137/0908047; COLNEW subroutine ``CONTRL``: convergence is
+            ``|dz_i| <= tol (|z_i| + 1)``, failure returns ``IFLAG = -2``.
+            See docs/references.md, ``Doedel2007`` and ``Bader1987``.
         """
         nodes = self._mesh.intervals + 1
         times = np.linspace(-self._mesh.half_length, self._mesh.half_length, nodes)

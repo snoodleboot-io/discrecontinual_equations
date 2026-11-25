@@ -676,9 +676,10 @@ can be the inadequate one:
 - `MeshSpec.half_length` — where the infinite orbit is cut off, which sets the
   truncation error, `O(exp(-2 * lambda * T))`
 
-`ConnectingOrbit.solve` cannot tell you about either. It returns its best iterate
-whatever that is, and the least-squares minimum is nonzero by construction, so
-neither a failure signal nor the residual size carries the information.
+`ConnectingOrbit.solve` cannot tell you about either: a converged solve proves only
+that the discrete system was satisfied on *this* mesh over *this* interval. What it
+does tell you is whether it converged at all, and whether the path it returns is a
+trajectory — see [Convergence and refusal](#convergence-and-refusal) below.
 
 `estimate_orbit_error` measures both:
 
@@ -722,6 +723,96 @@ usable bound rather than the screen the cycle estimator turned out to be.
 `intervals` must be even. The phase condition pins the centre node, and an odd mesh
 has no matching centre when doubled, so the comparison would measure a translation
 of `O(h)` rather than the error.
+
+### Convergence and refusal
+
+**The problem.** Gauss-Newton on the projection boundary-value problem can diverge.
+When it did, `solve` used to return its best iterate anyway, and that iterate was
+often the seed. On Kirk-Silber in sheared coordinates, solved in the full space on
+the edges leaving `xi2`, the result was a path with trapezoidal residual 0.09 and
+no warning. The connections leaving `xi2` form a family there, so the Newton matrix
+is nearly singular. The refinement solves returned their seeds as well, so the
+resolution estimate read 0.0.
+
+**The concept.** A solve is converged only if its best iterate passes one of two
+tests:
+
+- its Newton residual is below `1e-9`, or
+- its Gauss-Newton correction is below `1e-7 * (1 + |x_i|)` in every component.
+
+This is the convergence test AUTO uses (`EPSU`) and COLNEW uses (`CONTRL`); neither
+program returns an iterate that fails it. The second test certifies a stationary
+point of the least squares. A system with no exact solution, such as a homoclinic
+orbit with one boundary condition too many, stops at such a point. The correction
+must also satisfy the normal equations `J^T (J dx + r) = 0`, so a broken linear
+solve cannot certify an iterate by returning a zero step. Any other outcome raises
+`NotConvergedError`, which carries the best iterate for diagnosis.
+
+Converged is not the same as *a trajectory*. Every returned `OrbitSolution`
+carries its `CollocationResidual` as `solution.residual`, and that residual is
+what says whether the path satisfies the trapezoidal rule. A refinement solve that
+does not converge makes its component of the estimate `inf`, not a shift, and
+`OrbitResolution.valid` reports it. So `estimate == 0.0` means that both
+refinements converged and moved nothing.
+
+```python
+import numpy as np
+from discrecontinual_equations.continuation import (
+    HeteroclinicOrbit, MeshSpec, NotConvergedError, Terminus,
+)
+from discrecontinual_equations.function.deterministic import DeterministicFunction
+from discrecontinual_equations.variable import Variable
+
+
+class DoubleWell(DeterministicFunction):
+    def eval(self, point, time=None):
+        x, y = point
+        return [y, -x + x**3]
+
+
+field = DoubleWell(variables=[Variable(), Variable()], parameters=[],
+                   results=[Variable(), Variable()], time=None)
+def jacobian(x):
+    return np.array([[0.0, 1.0], [-1.0 + 3.0 * x * x, 0.0]])
+orbit = HeteroclinicOrbit(
+    field,
+    Terminus(np.array([-1.0, 0.0]), jacobian(-1.0)),
+    Terminus(np.array([1.0, 0.0]), jacobian(1.0)),
+    MeshSpec(half_length=8.0, intervals=200),
+)
+times = np.linspace(-8.0, 8.0, 201)
+try:
+    solution = orbit.solve(np.column_stack([np.tanh(times / 2), 0 * times]))
+except NotConvergedError as refused:
+    print("refused:", refused, refused.solution.residual.worst)
+else:
+    assert solution.residual.is_trajectory
+    resolution = orbit.estimate_orbit_error(solution)
+    assert resolution.valid
+```
+
+**Limits.**
+
+- A connection that is not isolated, such as one in a family, is refused rather
+  than solved. The full-space solve on those Kirk-Silber edges is refused in this
+  way. `HeteroclinicNetwork.solve` solves the connection inside its invariant
+  subspace instead, and records the full-space refusal on
+  `ConnectionOrbit.full_space.converged`.
+- Measured but not adopted: lsmr steps, and Levenberg-Marquardt, do converge on
+  those edges. They converge to a *different* member of the family, 0.025 to 0.16
+  off the plane. A damped Gauss-Newton step (Armijo backtracking, smallest step
+  `1e-3` as in COLNEW) stalls without converging.
+- A phase condition placed where the pinned coordinate is stationary fixes the time
+  shift only to second order. An example is pinning `x` at its peak. Gauss-Newton
+  then wanders along the shift and is refused, so pin a coordinate where it is
+  changing.
+- `HomoclinicCurve.solve_point` solves a square system and has always required its
+  residual to be below `1e-10`. It returns `None` otherwise, including for an
+  iterate that overflows, and `trace` stops at the first `None`. Its points carry
+  their collocation residual as `point.residual`.
+
+References: [AUTO-07p manual](../references.md#doedel2007) (`EPSU`, `ITNW`);
+[COLNEW](../references.md#bader1987) (subroutine `CONTRL`).
 
 ## Covariant Lyapunov vectors and finite-time exponents
 

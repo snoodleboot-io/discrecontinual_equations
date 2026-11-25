@@ -434,6 +434,20 @@ class HomoclinicCurve:
         system below ``_TOLERANCE``, whichever step - sparse LU or the dense
         least-squares fallback - got it there; a diverging iterate that overflows
         is a ``None`` too. The orbit carries its collocation residual.
+
+        Args:
+            sweep: Value of the swept parameter.
+            orbit_seed: Initial path, shape ``(intervals + 1, dimension)``.
+            equilibrium_seed: Initial saddle position.
+            continuation_seed: Initial value of the continuation parameter.
+
+        Returns:
+            The converged point, or ``None``.
+
+        References:
+            Bader and Ascher 1987 (docs/references.md, ``Bader1987``), COLNEW
+            subroutine ``CONTRL``: a Newton iteration that fails returns no
+            solution (``IFLAG = -2``), as this returns ``None``.
         """
         nodes = self._mesh.intervals + 1
         dimension = orbit_seed.shape[1]
