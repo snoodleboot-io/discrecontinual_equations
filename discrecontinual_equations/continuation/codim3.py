@@ -18,6 +18,7 @@ from discrecontinual_equations.continuation.normal_form import (
     bogdanov_takens_coefficient,
     bogdanov_takens_second_coefficient,
     cubic_fold_coefficient,
+    oriented_null_vector,
 )
 from discrecontinual_equations.continuation.residual import ResidualFunction
 from discrecontinual_equations.continuation.two_parameter_problem import (
@@ -53,6 +54,9 @@ class Codim3TestFunction(ABC):
         """Evaluate the test function at a decoded cusp-curve point."""
         raise NotImplementedError
 
+    def reset(self) -> None:
+        """Forget anything carried from point to point, before a new curve."""
+
 
 class Swallowtail(Codim3TestFunction):
     """On the cusp curve, the cubic coefficient ``b`` vanishes at a swallowtail."""
@@ -86,8 +90,52 @@ class DegenerateBautin(Codim3TestFunction):
         return second
 
 
-class DegenerateBogdanovTakens(Codim3TestFunction):
-    """On the Bogdanov-Takens curve, the quadratic coefficient ``a`` vanishes."""
+class _OrientedBogdanovTakens(Codim3TestFunction, ABC):
+    """A BT-curve test function that is odd in the null vector ``q0``.
+
+    The SVD returns ``q0`` with either sign, and fixing it by its largest
+    component flips it wherever that component changes index along the curve,
+    which the scan would read as a sign change of the test function. ``q0`` is
+    therefore oriented by continuity: by the BT curve's own ``q`` (normalised by
+    ``c . q = 1``) when the decoded point carries one, and otherwise towards the
+    previous point's ``q0``, as the codim-2 cusp test does.
+    """
+
+    __slots__ = ["_previous"]
+
+    def __init__(self) -> None:
+        self._previous: np.ndarray | None = None
+
+    def reset(self) -> None:
+        self._previous = None
+
+    def _orientation(
+        self,
+        problem: TwoParameterProblem,
+        decoded: Codim3Decoded,
+    ) -> np.ndarray:
+        orientation = (
+            self._previous if decoded.null_vector is None else decoded.null_vector
+        )
+        jacobian = problem.state_jacobian(
+            decoded.state.real,
+            decoded.parameter_a,
+            decoded.parameter_b,
+        )
+        self._previous = oriented_null_vector(jacobian, orientation)
+        return self._previous
+
+
+class DegenerateBogdanovTakens(_OrientedBogdanovTakens):
+    """On the Bogdanov-Takens curve, the quadratic coefficient ``a`` vanishes.
+
+    ``a = (1/2) <p1, B(q0, q0)>`` is odd in ``q0``, which is oriented by
+    continuity along the curve (see :class:`_OrientedBogdanovTakens`).
+
+    References:
+        [BosschaertKuznetsov2021] section 2.2.2 (``a`` and ``b``), and
+        section 2.2.1: the chains are fixed "up to a plus or minus sign".
+    """
 
     @property
     def kind(self) -> str:
@@ -99,15 +147,21 @@ class DegenerateBogdanovTakens(Codim3TestFunction):
             decoded.state.real,
             decoded.parameter_a,
             decoded.parameter_b,
+            orientation=self._orientation(problem, decoded),
         )
 
 
-class DegenerateBogdanovTakensB(Codim3TestFunction):
+class DegenerateBogdanovTakensB(_OrientedBogdanovTakens):
     """On the BT curve, the quadratic cross-coefficient ``b`` vanishes.
 
     Distinct from the ``a = 0`` degeneracy: here ``a != 0`` but the ``x y`` term of
     the Bogdanov-Takens normal form passes through zero, the codim-3 point at which
-    the two topological types of the Bogdanov-Takens meet.
+    the two topological types of the Bogdanov-Takens meet. ``b`` is odd in ``q0``,
+    which is oriented by continuity (see :class:`_OrientedBogdanovTakens`).
+
+    References:
+        [BosschaertKuznetsov2021] section 2.2.2 (``a`` and ``b``), and
+        section 2.2.1: the chains are fixed "up to a plus or minus sign".
     """
 
     @property
@@ -120,6 +174,7 @@ class DegenerateBogdanovTakensB(Codim3TestFunction):
             decoded.state.real,
             decoded.parameter_a,
             decoded.parameter_b,
+            orientation=self._orientation(problem, decoded),
         )
 
 
@@ -161,6 +216,7 @@ class Codim3Analyzer:
         found: list[Codim3Point] = []
         previous_value = None
         previous_point = None
+        test_function.reset()
         for current in decoded:
             self._third.value = current.parameter_c
             value = test_function.value(problem, current)

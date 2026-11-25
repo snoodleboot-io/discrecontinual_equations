@@ -16,7 +16,9 @@ with unknowns ``(u, q, q1, p_a, p_b)`` and continuation coordinate ``p_c``. The
 chain ``A q = 0``, ``A q1 = q`` exists precisely when the zero eigenvalue is
 non-semisimple, which is the defining property of the Bogdanov-Takens point; every
 condition is smooth in the unknowns, so the ordinary pseudo-arclength engine
-continues it without special handling.
+continues it without special handling. ``c . q = 1`` also fixes the sign of
+``q``, so it turns continuously along the whole curve and orients the
+degenerate-BT test functions, which are odd in it.
 """
 
 import numpy as np
@@ -82,4 +84,5 @@ class BogdanovTakensCurveResidual(ResidualFunction):
             parameter_a=float(state[3 * n]),
             parameter_b=float(state[3 * n + 1]),
             parameter_c=float(parameter),
+            null_vector=state[n : 2 * n],
         )
