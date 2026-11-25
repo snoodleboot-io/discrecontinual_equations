@@ -310,7 +310,7 @@ The page scripts draw branches and cycle curves as centripetal Catmull-Rom splin
 are spaced by the chord length raised to a power, $t_{i+1} - t_i = |P_{i+1}-P_i|^{\alpha}$,
 which is how the bundled D3 computes them. $\alpha = 0$ is the uniform spline,
 $\alpha = 1$ the chordal one, and $\alpha = \tfrac12$ the centripetal one. It is the only member of the
-family that forms no cusp or self-intersection within a segment
+family guaranteed to form no cusp or self-intersection within a segment
 [[Yuksel2009](../references.md#pages-films-and-numerics-infrastructure)]. A spline
 still interpolates, so between widely spaced points it shows a smooth curve that
 was never computed.
