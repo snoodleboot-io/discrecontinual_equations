@@ -20,12 +20,9 @@ mistyped: ``b8[7]`` read ``561292735/797845732`` where RKSUITE has
 stalled near ``1e-7`` whatever the step (``y' = -y^2`` to ``t = 2``: 7.1e-8 at
 ``h = 1/32``); it now falls as ``h^8`` to 4.4e-16 at ``h = 1/16``.
 
-Known defects, found while documenting and not yet fixed:
-
-* The step-size controller and the endless retry at ``min_step_size`` are as
-  in the Dormand-Prince 5(4) solver: an integral controller
-  ``h S err^(-(1 + beta)/8)`` with no previous error, a max-norm error, and a
-  ``RuntimeError("Step size became too small")`` that cannot be reached.
+Steps are taken, measured in the RMS norm and sized by the PI controller of
+:mod:`~discrecontinual_equations.solver.deterministic.embedded_runge_kutta`; a
+step rejected at ``min_step_size`` raises ``StepSizeTooSmallError`` (DEQ-140).
 
 References:
     Prince, P. J. and Dormand, J. R. (1981). High order embedded Runge-Kutta
@@ -47,16 +44,16 @@ References:
 
 import numpy as np
 
-from discrecontinual_equations.curve import Curve
-from discrecontinual_equations.differential_equation import DifferentialEquation
 from discrecontinual_equations.solver.deterministic.butcher_tableau import (
     ButcherTableau,
     row,
 )
+from discrecontinual_equations.solver.deterministic.embedded_runge_kutta import (
+    EmbeddedRungeKuttaSolver,
+)
 from discrecontinual_equations.solver.deterministic.prince_dormand87.prince_dormand87_config import (
     PrinceDormand87Config,
 )
-from discrecontinual_equations.solver.solver import Solver
 
 # Prince and Dormand's thirteen-stage 8(7) pair, as RKSUITE carries it: b is the
 # eighth-order row the step advances with, b_hat the seventh-order one.
@@ -124,7 +121,7 @@ PRINCE_DORMAND_87 = ButcherTableau(
 )
 
 
-class PrinceDormand87Solver(Solver):
+class PrinceDormand87Solver(EmbeddedRungeKuttaSolver):
     """Prince-Dormand 8(7): thirteen stages, eighth order to advance.
 
     ``a`` and ``c`` hold the tableau, ``b8`` the eighth-order weights that
@@ -138,7 +135,9 @@ class PrinceDormand87Solver(Solver):
         BrankinGladwellShampine1991).
     """
 
-    def __init__(self, solver_config: PrinceDormand87Config):
+    tableau = PRINCE_DORMAND_87
+
+    def __init__(self, solver_config: PrinceDormand87Config) -> None:
         """Store the configuration and build the tableau.
 
         Args:
@@ -147,154 +146,12 @@ class PrinceDormand87Solver(Solver):
         """
         super().__init__(solver_config=solver_config)
 
-        self.a, self.c, self.b8, self.b7 = PRINCE_DORMAND_87.arrays()
+    @property
+    def b8(self) -> np.ndarray:
+        """The eighth-order weights the step advances with: ``b``."""
+        return self.b
 
-    def solve(
-        self,
-        equation: DifferentialEquation,
-        initial_values: list[float],
-    ) -> Curve:
-        """Integrate from ``start_time`` to ``end_time`` with adaptive steps.
-
-        Starting from ``initial_step_size``, each step is tried, accepted when
-        the scaled error estimate is at most 1, and the next step size is set
-        from that estimate; a rejected step is retried with the smaller size.
-        The last step is shortened to land on ``end_time``. The accepted
-        points are recorded, so their spacing varies.
-
-        Args:
-            equation: The equation; its ``derivative.eval(point, time)`` is the
-                field ``f(t, y)``.
-            initial_values: The state at ``start_time``.
-
-        Returns:
-            The curve of accepted points: ``time`` holds ``t_n``, ``results``
-            the state ``y_n`` and ``variables`` zeros (this solver records no
-            derivative). It is also kept as ``solution``.
-
-        Raises:
-            RuntimeError: Declared for a step below ``min_step_size``, but not
-                reached: a step rejected at ``min_step_size`` is retried there
-                indefinitely (see the module docstring).
-        """
-        self.solution = self._new_solution(equation)
-
-        # Initialize
-        t = self.solver_config.start_time
-        y = np.array(initial_values)
-        h = self.solver_config.initial_step_size
-
-        # Append initial point
-        self.solution.append([t, [0] * len(initial_values), initial_values])
-
-        # Adaptive integration loop
-        while t < self.solver_config.end_time:
-            if t + h > self.solver_config.end_time:
-                h = self.solver_config.end_time - t
-
-            # Perform one step
-            y_new, error, h_new = self._step(equation, t, y, h)
-
-            # Check if step is accepted
-            if self._accept_step(error, y, y_new, h):
-                # Accept step
-                t += h
-                y = y_new
-                self.solution.append([t, [0] * len(initial_values), y.tolist()])
-                h = h_new
-            else:
-                # Reject step, try smaller step
-                h = max(h_new, self.solver_config.min_step_size)
-                if h < self.solver_config.min_step_size:
-                    raise RuntimeError("Step size became too small")
-        return self.solution
-
-    def _step(self, equation: DifferentialEquation, t: float, y: np.ndarray, h: float):
-        """Take one trial step of size ``h`` from ``(t, y)``.
-
-        Evaluates the thirteen stages, forms both weight rows and returns the
-        advancing solution ``y8``, the componentwise estimate ``|y8 - y7|``
-        and the proposed next step from :meth:`_compute_new_step_size`.
-        """
-        k = np.zeros((13, len(y)))
-
-        # Compute stages
-        for i in range(13):
-            t_stage = t + self.c[i] * h
-            y_stage = y + h * np.dot(self.a[i, : i + 1], k[: i + 1])
-            k[i] = np.array(
-                equation.derivative.eval(point=y_stage.tolist(), time=t_stage),
-            )
-
-        # Compute solutions
-        y8 = y + h * np.dot(self.b8, k)  # 8th order solution
-        y7 = y + h * np.dot(self.b7, k)  # 7th order solution
-
-        # Error estimate
-        error = np.abs(y8 - y7)
-
-        # Step size control
-        h_new = self._compute_new_step_size(error, y, h)
-
-        return y8, error, h_new
-
-    def _accept_step(
-        self,
-        error: np.ndarray,
-        y: np.ndarray,
-        y_new: np.ndarray,
-        h: float,
-    ) -> bool:
-        """Accept the step when ``max_i err_i / (atol + rtol max(|y_i|, |y_new_i|))``
-        is at most 1 (a max norm; Hairer and Wanner's ``DOPRI5`` uses the RMS
-        norm of the same ratios)."""
-        # Compute scaled error
-        tol = (
-            self.solver_config.absolute_tolerance
-            + self.solver_config.relative_tolerance
-            * np.maximum(np.abs(y), np.abs(y_new))
-        )
-        scaled_error = np.max(error / tol)
-
-        return scaled_error <= 1.0
-
-    def _compute_new_step_size(
-        self,
-        error: np.ndarray,
-        y: np.ndarray,
-        h: float,
-    ) -> float:
-        """Propose the next step: ``h S r^(-1/8) r^(-beta/8)``, clipped to the bounds.
-
-        ``r`` is the max-norm error ratio, scaled by ``atol + rtol |y|`` (the old
-        state only), and ``S`` is ``safety_factor``; ``r = 0`` gives
-        ``max_step_size``. This is an integral controller with exponent
-        ``(1 + beta)/8``: although the name says PI, no earlier error enters,
-        unlike the Lund-stabilized ``err^(-(0.2 - 0.75 beta)) err_old^beta``
-        of Hairer and Wanner's ``DOPRI5`` for its 5(4) pair.
-        """
-        tol = (
-            self.solver_config.absolute_tolerance
-            + self.solver_config.relative_tolerance * np.abs(y)
-        )
-        scaled_error = np.max(error / tol)
-
-        if scaled_error == 0:
-            return self.solver_config.max_step_size
-
-        # PI controller
-        h_new = (
-            h
-            * self.solver_config.safety_factor
-            * (1 / scaled_error) ** (1 / 8)
-            * (1 / scaled_error) ** (self.solver_config.beta / 8)
-        )
-
-        # Limit step size
-        h_new = np.clip(
-            h_new,
-            self.solver_config.min_step_size,
-            self.solver_config.max_step_size,
-        )
-
-        return h_new
+    @property
+    def b7(self) -> np.ndarray:
+        """The embedded seventh-order weights: ``b_hat``."""
+        return self.b_hat

@@ -69,11 +69,7 @@ ignore_missing_imports = true
 module = [
     "discrecontinual_equations.solver.deterministic.adams_bashforth2.adams_bashforth2_solver",
     "discrecontinual_equations.solver.deterministic.adams_bashforth3.adams_bashforth3_solver",
-    "discrecontinual_equations.solver.deterministic.cash_karp.cash_karp_solver",
-    "discrecontinual_equations.solver.deterministic.dormand_prince.dormand_prince_solver",
-    "discrecontinual_equations.solver.deterministic.dormand_prince89.dormand_prince89_solver",
     "discrecontinual_equations.solver.deterministic.euler.euler_solver",
-    "discrecontinual_equations.solver.deterministic.fehlberg.fehlberg_solver",
     "discrecontinual_equations.solver.stochastic.coefficients",
     "discrecontinual_equations.solver.stochastic.ensemble",
     "discrecontinual_equations.solver.stochastic.euler_maruyama.euler_maruyama_solver",
@@ -319,7 +315,7 @@ ignore = [
 # newer code marks each one with `# noqa: E501` instead
 "discrecontinual_equations/{curve,parameter}.py" = ["E501"]
 "discrecontinual_equations/solver/stochastic/{euler_maruyama,gottwald_melbourne,zhan_duan_li_li}/*_{solver,config}.py" = ["E501"]
-"tests/solver/{adams_bashforth2,adams_bashforth3,dormand_prince,dormand_prince89,euler_maruyama,gottwald_melbourne,milstein,zhan_duan_li_li}/test_*_solver.py" = ["E501"]
+"tests/solver/{adams_bashforth2,adams_bashforth3,dormand_prince,prince_dormand87,euler_maruyama,gottwald_melbourne,milstein,zhan_duan_li_li}/test_*_solver.py" = ["E501"]
 "tests/solver/test_ensemble.py" = ["E501"]
 # Standalone scripts from the first release, not library code: unused `time` in Function
 # implementations, os.path, dict() kwargs, long main()s, no __init__.py, shebangs without +x

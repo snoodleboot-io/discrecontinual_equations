@@ -41,10 +41,10 @@ from discrecontinual_equations.solver.deterministic.cash_karp.cash_karp_solver i
     CASH_KARP_54,
     CashKarpSolver,
 )
-from discrecontinual_equations.solver.deterministic.dormand_prince.dormand_prince_config import (
+from discrecontinual_equations.solver.deterministic.dormand_prince.dormand_prince_config import (  # noqa: E501
     DormandPrinceConfig,
 )
-from discrecontinual_equations.solver.deterministic.dormand_prince.dormand_prince_solver import (
+from discrecontinual_equations.solver.deterministic.dormand_prince.dormand_prince_solver import (  # noqa: E501
     DORMAND_PRINCE_54,
     DormandPrinceSolver,
 )
@@ -55,10 +55,10 @@ from discrecontinual_equations.solver.deterministic.fehlberg.fehlberg_solver imp
     FEHLBERG_45,
     FehlbergSolver,
 )
-from discrecontinual_equations.solver.deterministic.prince_dormand87.prince_dormand87_config import (
+from discrecontinual_equations.solver.deterministic.prince_dormand87.prince_dormand87_config import (  # noqa: E501
     PrinceDormand87Config,
 )
-from discrecontinual_equations.solver.deterministic.prince_dormand87.prince_dormand87_solver import (
+from discrecontinual_equations.solver.deterministic.prince_dormand87.prince_dormand87_solver import (  # noqa: E501
     PRINCE_DORMAND_87,
     PrinceDormand87Solver,
 )
@@ -139,7 +139,7 @@ def residuals(a, weights, top: int) -> dict[int, Fraction]:
 
 
 def order_of(a, weights, tolerance: Fraction, top: int) -> int:
-    """The largest ``p <= top`` with every condition through ``p`` within ``tolerance``."""
+    """The largest ``p <= top`` whose conditions all hold within ``tolerance``."""
     found = 0
     for order, residual in residuals(a, weights, top).items():
         if residual > tolerance:
