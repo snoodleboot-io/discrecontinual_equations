@@ -34,12 +34,26 @@ plugins:
             show_symbol_type_heading: true
             show_symbol_type_toc: true
 
+exclude_docs: |
+  references/
+
 nav:
   - Home: index.md
   - User Guide:
       - Getting Started: user-guide/getting-started.md
       - Basic Usage: user-guide/basic-usage.md
       - Advanced Features: user-guide/advanced-features.md
+  - Concepts:
+      - Deterministic solvers: user-guide/deterministic-solvers.md
+      - Stochastic solvers and iterated integrals: user-guide/stochastic-solvers.md
+      - Numerical continuation: user-guide/continuation-core.md
+      - Bifurcations, normal forms and centre manifolds: user-guide/normal-forms-detection.md
+      - Periodic orbits and Floquet multipliers: user-guide/periodic-orbits.md
+      - Connecting orbits and heteroclinic networks: user-guide/connecting-orbits.md
+      - Lyapunov exponents and noise: user-guide/lyapunov-noise.md
+      - Quasipotential, Fokker-Planck and first passage: user-guide/quasipotential-first-passage.md
+      - Invariant manifolds: user-guide/manifolds.md
+      - Atlas pages and films: user-guide/pages-and-films.md
   - API Reference:
       - Core: api/core.md
       - Functions: api/functions.md
@@ -48,6 +62,7 @@ nav:
       - Plotting: api/plotting.md
       - Continuation: api/continuation.md
       - Center Manifolds and Normal Forms: api/center-manifold.md
+  - References: references.md
   - Development:
       - Contributing: development/contributing.md
       - Testing: development/testing.md
