@@ -220,23 +220,49 @@ class TestResolvedCoefficient(TestCase):
 class _Expansions:
     """A stand-in for ``_branch_expansion`` that returns given ``(a, c)`` per step."""
 
-    def __init__(self, values: dict[float, tuple[float, float]]) -> None:
+    def __init__(
+        self,
+        values: dict[float, tuple[float, float]],
+        sizes: tuple[float, float] = (1.0, 1.0),
+    ) -> None:
         self._values = values
+        self._sizes = sizes
 
     def __call__(self, context, null_pair, step: float):
         _ = context, null_pair
         quadratic, cubic = self._values[step]
-        return quadratic, cubic, 1.0, 1.0
+        return quadratic, cubic, *self._sizes
 
 
 class TestNoiseEstimate(TestCase):
     """The error of ``a`` and ``c`` is read from both neighbouring steps."""
 
     @staticmethod
-    def _label(values: dict[float, tuple[float, float]]) -> str:
+    def _label(
+        values: dict[float, tuple[float, float]],
+        sizes: tuple[float, float] = (1.0, 1.0),
+    ) -> str:
         context = _context(CASES["cancelled"][0], 1.0, exact=True)
-        with mock.patch.object(detection, "_branch_expansion", _Expansions(values)):
+        expansion = _Expansions(values, sizes)
+        with mock.patch.object(detection, "_branch_expansion", expansion):
             return _branch_label(context)
+
+    def test_each_coefficient_is_measured_against_its_own_terms(self):
+        step = _BRANCH_STEP
+        steady = {
+            0.5 * step: (1.0e-3, 0.0),
+            step: (1.0e-3, 0.0),
+            2.0 * step: (1.0e-3, 0.0),
+        }
+        assert self._label(steady, sizes=(1.0, 1.0e3)) == "transcritical"
+        assert self._label(steady, sizes=(1.0e3, 1.0)) == "branch_point"
+        steady = {
+            0.5 * step: (0.0, 1.0e-3),
+            step: (0.0, 1.0e-3),
+            2.0 * step: (0.0, 1.0e-3),
+        }
+        assert self._label(steady, sizes=(1.0e3, 1.0)) == "pitchfork"
+        assert self._label(steady, sizes=(1.0, 1.0e3)) == "branch_point"
 
     def test_steady_coefficients_are_resolved(self):
         step = _BRANCH_STEP
