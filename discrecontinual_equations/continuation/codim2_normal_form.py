@@ -27,12 +27,16 @@ section 2.2.3 (through the ``beta2^2`` term of the parameter map).
 Errata and decisions carried here:
 
 - Lorenz-84 ``G300``: Kuznetsov (1999), section 10, prints
-  ``G300 = 25602814720/36130026241 = 0.7086`` for the "new" Lorenz model. Under the
-  paper's own normal form (3.4), whose ``w0^3`` term is ``G300/6``, the coefficient
-  is three times that, ``2.1259``; this module, an independent Poincare-Dulac
-  reference and exact arithmetic agree. The printed ``e(0) = 0.2106514716`` is the
-  formula at the printed ``G300``; at the consistent value it is ``1.6503``. The
-  sign, and the paper's conclusion, are unchanged.
+  ``G300 = 25602814720/36130026241 = 0.7086`` for the "new" Lorenz model. The
+  paper's own section 8 formula ``G300 = <p0, C(q0, q0, q0) + 3 B(q0, h200)>``,
+  which matches the ``G300/6`` of its normal form (3.4), gives exactly three times
+  that, ``2.1259``, on the paper's printed ``q0``, ``p0`` (the model has no cubic
+  terms, so the printed value is ``<p0, B(q0, h200)>``: the factor 3 is dropped).
+  The same computation reproduces every other printed coefficient exactly, and
+  this module and an independent Poincare-Dulac reference agree. The printed
+  ``e(0) = 0.2106514716`` is the formula at the printed ``G300``; at the
+  consistent value it is ``1.6503``. The sign of ``e(0)``, and the paper's
+  conclusion (``s = sign(b c) = 1``, ``theta < 0``), are unchanged.
 - The cubic cusp coefficient includes the center manifold's ``3 B(q, h2)``
   (Kuznetsov 1999, section 5); dropping it is right only in one dimension (DEQ-83).
 - Orientation: ``c`` here is independent of the sign of ``q``, because ``p`` is

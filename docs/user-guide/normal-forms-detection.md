@@ -202,8 +202,9 @@ c^\top q_R - 1 &= 0, \qquad c^\top q_I = 0,
 $$
 
 in the unknowns $(u, q_R, q_I, \omega, p_a)$ with $p_b$ the curve coordinate. This is the
-eigenproblem written out with a normalisation row, as in Govaerts, Kuznetsov and
-Sijnave (2000), section 7.2. The fold curve appends $f_u q = 0$, $c^\top q = 1$ instead.
+eigenproblem written out with a normalisation row; the first rows of Govaerts,
+Kuznetsov and Sijnave's maximally extended generalized-Hopf system (2000, section 7.2,
+eq. (7.6)) have the same form. The fold curve appends $f_u q = 0$, $c^\top q = 1$ instead.
 Pseudo-arclength continuation follows either. Test functions evaluated at every
 accepted point change sign at the codim-2 points, which are then located and
 classified by their normal form (next section). The detectors are those MatCont runs on
@@ -341,12 +342,16 @@ fixed so the largest component is real and positive. The classifying quantities
 **Errata and decisions.**
 
 - *Lorenz-84 $G_{300}$.* Kuznetsov (1999), section 10, prints
-  $G_{300} = 25602814720/36130026241 = 0.7086$ for the "new" Lorenz model. Under the
-  paper's own normal form (3.4), whose $w_0^3$ term is $G_{300}/6$, the coefficient is
-  three times that, $2.1259$: the library, an independent Poincaré-Dulac computation and
-  exact arithmetic agree. The printed $e(0) = 0.2106514716$ is the formula at the
-  printed $G_{300}$; the consistent value is $1.6503$. The sign, and the paper's
-  conclusion, are unchanged.
+  $G_{300} = 25602814720/36130026241 = 0.7086$ for the "new" Lorenz model. The paper's
+  own section 8 formula $G_{300} = \langle p_0, C(q_0,q_0,q_0) + 3B(q_0, h_{200})\rangle$,
+  which matches the $G_{300}/6$ of its normal form (3.4), gives exactly three times
+  that, $2.1259$, on the paper's printed $q_0$ and $p_0$. The model has no cubic terms,
+  so the printed value is $\langle p_0, B(q_0, h_{200})\rangle$: the factor 3 was dropped.
+  The same computation reproduces every other printed coefficient exactly, and the
+  library and an independent Poincaré-Dulac computation agree. The printed
+  $e(0) = 0.2106514716$ is the formula at the printed $G_{300}$; the consistent value is
+  $1.6503$. The sign of $e(0)$, and the paper's conclusion ($s = \operatorname{sign}(bc) = 1$,
+  $\theta < 0$), are unchanged.
 - *The cusp coefficient carries $3B(q, h_2)$* (DEQ-83). That term is the centre
   manifold's curvature (Kuznetsov 1999, section 5). Leaving it out is right only in one
   dimension; with it, a swallowtail of a system with a slaved stable mode lands where the
@@ -535,7 +540,7 @@ for point in result.points:
 A degenerate Bautin point is found the same way, with `codim3_curve="generalized_hopf"`,
 `codim3_detectors=["degenerate_bautin"]` and a `Codim3Seed` that carries the Hopf
 `frequency`. On $\dot z = (b_1 + i) z + b_2 z|z|^2 + b_3 z|z|^4 - z|z|^6$, seeded at
-$b_1 = b_2 = 0$, $b_3 = 0.6$ and continued in $b_3$, it lands at $b_3 = 5 \times 10^{-20}$.
+$b_1 = b_2 = 0$, $b_3 = 0.6$ and continued in $b_3$, it lands at $b_3 = 0$ to round-off.
 
 **Limits.**
 
