@@ -9,6 +9,13 @@ class ContinuationState:
     Distinct from :class:`~.continuation_point.ContinuationPoint`, which is the
     finished, serializable record. This carries only what the driver needs to
     take the next step: the augmented coordinate and its tangent.
+
+    Args:
+        state: The state ``u``.
+        parameter: The parameter ``lambda``.
+        tangent: The unit tangent in ``(u, lambda)``, length ``n + 1``.
+        arclength: Arclength from the seed, as the sum of accepted steps (the
+            pseudo-arclength, not the exact length of the curve).
     """
 
     __slots__ = ["_arclength", "_parameter", "_state", "_tangent"]

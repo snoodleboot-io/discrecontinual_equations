@@ -1,4 +1,14 @@
-"""Ordered collection of continuation points forming a solution branch."""
+"""Ordered collection of continuation points forming a solution branch.
+
+A branch is the discrete approximation ``y_1, y_2, ...`` of one solution curve of
+``F(y) = 0`` that continuation computes (Kuznetsov (1998), Section 10.2.1), with
+the located bifurcations kept apart from the regular points so a diagram can mark
+them.
+
+References:
+- Kuznetsov, Yu. A. "Elements of Applied Bifurcation Theory", 2nd ed., Applied
+  Mathematical Sciences 112, Springer, 1998, doi:10.1007/b98848, Section 10.2.1.
+"""
 
 from discrecontinual_equations.continuation.continuation_point import ContinuationPoint
 
@@ -29,11 +39,19 @@ class Branch:
         return self._special_points
 
     def append_point(self, point: ContinuationPoint) -> None:
-        """Append a regular continuation point."""
+        """Append a regular continuation point.
+
+        Args:
+            point: The point, appended after the last one.
+        """
         self._points.append(point)
 
     def append_special_point(self, point: ContinuationPoint) -> None:
-        """Append a detected bifurcation point."""
+        """Append a detected bifurcation point.
+
+        Args:
+            point: The located bifurcation.
+        """
         self._special_points.append(point)
 
     def __getitem__(self, index: int) -> ContinuationPoint:

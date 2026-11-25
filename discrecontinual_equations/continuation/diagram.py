@@ -42,7 +42,11 @@ class StabilitySegment:
 
 
 class BifurcationDiagram:
-    """Render-agnostic view of a branch as segments plus bifurcation markers."""
+    """Render-agnostic view of a branch as segments plus bifurcation markers.
+
+    Args:
+        branch: The branch to shape.
+    """
 
     __slots__ = ["_branch"]
 
@@ -50,7 +54,11 @@ class BifurcationDiagram:
         self._branch = branch
 
     def special_points(self) -> list[ContinuationPoint]:
-        """Detected bifurcations, to be drawn as markers."""
+        """Detected bifurcations, to be drawn as markers.
+
+        Returns:
+            The branch's special points.
+        """
         return self._branch.special_points
 
     def segments(self) -> list[StabilitySegment]:
@@ -58,6 +66,9 @@ class BifurcationDiagram:
 
         Adjacent segments share the transition point so a renderer draws an
         unbroken curve while still switching style at each stability change.
+
+        Returns:
+            The segments in branch order.
         """
         segments: list[StabilitySegment] = []
         label: str | None = None
