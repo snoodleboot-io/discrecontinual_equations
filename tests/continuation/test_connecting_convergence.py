@@ -269,6 +269,37 @@ class TestConvergedSolveCarriesItsResidual(TestCase):
         assert point.orbit.residual is point.residual
 
 
+class TestTheCertificateBelongsToTheReturnedIterate(TestCase):
+    """A small correction certifies the iterate it was computed at, no other."""
+
+    def test_later_small_corrections_do_not_certify_the_best_iterate(self):
+        """The seed sits 1e-3 off the orbit and every later iterate's residual
+        is reported one larger, so the seed stays the best iterate while
+        Gauss-Newton converges behind it. Its own correction is about 1e-3: it
+        is refused, whatever the later iterates' corrections are.
+        """
+        solver, seed, _, _ = _tanh_problem()
+        orbit = solver.solve(seed).states
+        start = orbit + 1.0e-3 * np.cos(np.arange(orbit.size)).reshape(orbit.shape)
+        real = HeteroclinicOrbit._residual_norm  # noqa: SLF001
+        calls = []
+
+        def inflated(self, unknowns, times, shape):
+            norm, residual = real(self, unknowns, times, shape)
+            calls.append(norm)
+            return (norm if len(calls) == 1 else norm + 1.0), residual
+
+        with (
+            mock.patch.object(HeteroclinicOrbit, "_residual_norm", inflated),
+            pytest.raises(NotConvergedError) as caught,
+        ):
+            solver.solve(start)
+        assert np.array_equal(caught.value.solution.states, start)
+        assert caught.value.correction > 1.0e-4
+        # Behind it, Gauss-Newton did converge.
+        assert min(calls[1:]) < 1.0e-9
+
+
 class TestFallbacksConvergeOrRefuse(TestCase):
     """Each DEQ-50 fallback either converges below tolerance or refuses."""
 
