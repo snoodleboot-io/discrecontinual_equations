@@ -13,6 +13,11 @@ from unittest.mock import patch
 import numpy as np
 
 from discrecontinual_equations.continuation.builder import ContinuerBuilder
+from discrecontinual_equations.continuation.codim3_builder import (
+    Codim3Driver,
+    Codim3Seed,
+)
+from discrecontinual_equations.continuation.codim3_config import Codim3Config
 from discrecontinual_equations.continuation.continuation_config import (
     ContinuationConfig,
 )
@@ -20,11 +25,6 @@ from discrecontinual_equations.continuation.corrector import (
     CorrectionResult,
     Corrector,
 )
-from discrecontinual_equations.continuation.codim3_builder import (
-    Codim3Driver,
-    Codim3Seed,
-)
-from discrecontinual_equations.continuation.codim3_config import Codim3Config
 from discrecontinual_equations.continuation.cusp_curve import CuspCurveResidual
 from discrecontinual_equations.continuation.jacobian import (
     AnalyticJacobian,
@@ -355,7 +355,9 @@ class TestMemoizedAnalyticJacobian(TestCase):
             extended = self.memo.extended_jacobian(self.state, 0.5)
 
         assert self.residual.solves == 1
-        np.testing.assert_array_equal(state_part, self.inner.state_jacobian(self.state, 0.5))
+        np.testing.assert_array_equal(
+            state_part, self.inner.state_jacobian(self.state, 0.5)
+        )
         np.testing.assert_array_equal(
             parameter_part,
             self.inner.parameter_derivative(self.state, 0.5),
