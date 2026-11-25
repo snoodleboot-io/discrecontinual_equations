@@ -31,8 +31,9 @@ References:
 - Govaerts, W., Kuznetsov, Yu. A. and Sijnave, B. "Continuation of codimension-2
   equilibrium bifurcations in CONTENT", in *Numerical Methods for Bifurcation
   Problems and Large-Scale Dynamical Systems*, IMA Vol. Math. Appl., Springer
-  (2000) 163-184, section 7.2, eq. (7.6): the
-  eigenproblem ``A q - i omega q = 0`` with a normalisation row, written out as here.
+  (2000) 163-184, doi:10.1007/978-1-4612-1208-9_7, section 7.2, eq. (7.6): the
+  maximally extended generalized-Hopf system, whose first rows are the eigenproblem
+  ``A q - i omega q = 0`` with a normalisation row, written out as here.
 - Govaerts, W., Kuznetsov, Yu. A., Meijer, H. G. E. et al. "MATCONT: Continuation
   toolbox for ODEs in Matlab", manual for MatCont 7.1 (August 2019), section 8.2: the
   minimally augmented alternative and the codim-2 test functions on a Hopf curve.
