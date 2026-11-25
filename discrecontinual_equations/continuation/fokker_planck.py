@@ -368,6 +368,53 @@ class GridDensity:
         )
 
 
+class GridDiffusion:
+    """The diffusion ``D = G G^T`` of one noise on one grid, kept for reuse.
+
+    :class:`StationaryFokkerPlanck` needs ``D`` at every cell centre and its diagonal
+    on every face, and computes both from the noise columns on each solve. When a
+    family of problems shares the noise and only the drift varies - a density
+    scrubbed through a drift parameter at fixed noise, as the noisy Hopf film does -
+    those evaluations are the same on every solve, and for fields evaluated point by
+    point they are most of its cost. Build this once and pass it to each problem;
+    the arrays are the ones a solve would have formed, so the density is unchanged
+    bit for bit.
+
+    Nothing can check that the noise a problem is given is the noise this was built
+    from - the columns are opaque functions - so sharing it is the caller's
+    statement that ``D`` does not depend on what varies. The grid is checked.
+    """
+
+    __slots__ = ["_cells", "_faces", "_grid"]
+
+    def __init__(self, noise: NoiseMatrix, grid: DensityGrid) -> None:
+        points = grid.points()
+        self._grid = grid
+        self._cells = _products(noise.columns_along(points))
+        self._faces = tuple(
+            _products(noise.columns_along(_face_centres(grid, points, axis)))[
+                :,
+                axis,
+                axis,
+            ]
+            for axis in range(grid.dimension)
+        )
+
+    @property
+    def grid(self) -> DensityGrid:
+        """The grid the diffusion was evaluated on."""
+        return self._grid
+
+    @property
+    def cells(self) -> np.ndarray:
+        """``D`` at every cell centre, ``(size, N, N)``."""
+        return self._cells
+
+    def faces(self, axis: int) -> np.ndarray:
+        """``D[axis, axis]`` at the centre of every face normal to ``axis``."""
+        return self._faces[axis]
+
+
 class StationaryFokkerPlanck:
     """The stationary density of ``dx = f dt + G dW`` on a grid, in any dimension.
 
@@ -383,6 +430,8 @@ class StationaryFokkerPlanck:
             a Stratonovich drift is shifted to its Ito form before discretising.
         grid: The grid to solve on. Its box should hold essentially all the mass,
             since the boundary reflects.
+        diffusion: ``G G^T`` already evaluated on ``grid`` (:class:`GridDiffusion`),
+            used instead of evaluating the noise for it. Optional.
 
     References:
     - Scharfetter, D. L. and Gummel, H. K. "Large-signal analysis of a silicon Read
@@ -390,7 +439,7 @@ class StationaryFokkerPlanck:
       doi:10.1109/T-ED.1969.16566 - the exponentially fitted flux.
     """
 
-    __slots__ = ["_convention", "_drift", "_grid", "_noise"]
+    __slots__ = ["_convention", "_drift", "_grid", "_known", "_noise"]
 
     def __init__(
         self,
@@ -398,11 +447,16 @@ class StationaryFokkerPlanck:
         noise: NoiseMatrix,
         convention: NoiseConvention,
         grid: DensityGrid,
+        diffusion: GridDiffusion | None = None,
     ) -> None:
+        if diffusion is not None and not _same_grid(diffusion.grid, grid):
+            message = "the precomputed diffusion was evaluated on a different grid"
+            raise ValueError(message)
         self._drift = drift
         self._noise = noise
         self._convention = convention
         self._grid = grid
+        self._known = diffusion
 
     def solve(self) -> GridDensity:
         """Solve ``div J = 0`` with reflecting boundaries and unit mass.
@@ -418,24 +472,29 @@ class StationaryFokkerPlanck:
         """
         grid = self._grid
         points = grid.points()
-        cells = self._diffusion(points)
+        known = self._known
+        cells = self._diffusion(points) if known is None else known.cells
         _check_elliptic(cells)
         builder = _Discretisation(grid, cells)
         for axis in range(grid.dimension):
             low, high = _face_cells(grid, axis)
-            faces = _HALF * (points[low.ravel()] + points[high.ravel()])
-            drift, diffusion = self._face_coefficients(faces, axis)
+            faces = _face_centres(grid, points, axis)
+            drift, diffusion = self._face_coefficients(
+                faces,
+                axis,
+                None if known is None else known.faces(axis),
+            )
             builder.add_axis(axis, low, high, drift, diffusion)
         return GridDensity(grid, _stationary_solution(builder.triplets(), grid))
 
     def _diffusion(self, points: np.ndarray) -> np.ndarray:
-        columns = self._noise.columns_along(points)
-        return np.matmul(np.swapaxes(columns, 1, 2), columns)
+        return _products(self._noise.columns_along(points))
 
     def _face_coefficients(
         self,
         faces: np.ndarray,
         axis: int,
+        known: np.ndarray | None = None,
     ) -> tuple[np.ndarray, np.ndarray]:
         """Ito drift component and ``D_dd`` at the face centres, in one pass.
 
@@ -445,16 +504,41 @@ class StationaryFokkerPlanck:
         between a solve of a second and a solve of several. Every field is evaluated
         on all the faces of the family at once (:meth:`Function.eval_batch`), and the
         algebra after it is array arithmetic, so no Python runs per face beyond what
-        a field's own ``eval_batch`` does.
+        a field's own ``eval_batch`` does. With ``D_dd`` ``known`` the columns are
+        evaluated only if the Stratonovich shift needs them.
         """
         factor = stratonovich_factor(self._convention)
-        columns = self._noise.columns_along(faces)
         drift = fields_at(self._drift, faces)[:, axis]
+        if known is not None and factor == 0.0:
+            return drift, known
+        columns = self._noise.columns_along(faces)
         if factor != 0.0:
             jacobians = self._noise.jacobians_along(faces, columns)
             drift = drift + _drift_shifts(jacobians, columns, factor)[:, axis]
-        diffusion = np.matmul(np.swapaxes(columns, 1, 2), columns)[:, axis, axis]
-        return drift, diffusion
+        if known is not None:
+            return drift, known
+        return drift, _products(columns)[:, axis, axis]
+
+
+def _products(columns: np.ndarray) -> np.ndarray:
+    """``G G^T`` at every point from columns ``(count, K, N)``: ``(count, N, N)``."""
+    return np.matmul(np.swapaxes(columns, 1, 2), columns)
+
+
+def _face_centres(grid: DensityGrid, points: np.ndarray, axis: int) -> np.ndarray:
+    """The centre of every face normal to ``axis``, in :func:`_face_cells` order."""
+    low, high = _face_cells(grid, axis)
+    return _HALF * (points[low.ravel()] + points[high.ravel()])
+
+
+def _same_grid(first: DensityGrid, second: DensityGrid) -> bool:
+    return first is second or (
+        first.dimension == second.dimension
+        and all(
+            np.array_equal(first.axis(index), second.axis(index))
+            for index in range(first.dimension)
+        )
+    )
 
 
 def _drift_shifts(

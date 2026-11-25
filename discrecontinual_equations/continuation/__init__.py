@@ -135,6 +135,7 @@ from discrecontinual_equations.continuation.first_passage import (
 from discrecontinual_equations.continuation.fokker_planck import (
     DensityGrid,
     GridDensity,
+    GridDiffusion,
     StationaryFokkerPlanck,
 )
 from discrecontinual_equations.continuation.geodesic_level_sets import (
@@ -359,6 +360,7 @@ __all__ = [
     "GeodesicSettings",
     "GeometricMinimumAction",
     "GridDensity",
+    "GridDiffusion",
     "GridFirstPassage",
     "GridQuasipotential",
     "HalfSpace",
