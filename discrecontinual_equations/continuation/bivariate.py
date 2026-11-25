@@ -8,6 +8,21 @@ directional contractions - which the Lyapunov focal-value recursion needs.
 
 Only arithmetic is provided (``+ - * **``), which covers polynomial and rational
 planar fields; that is the setting for the classical focal-value computation.
+
+This is Taylor-mode algorithmic differentiation in two variables: each arithmetic
+operation is applied to truncated series, products by the Cauchy convolution of
+coefficients with every term above the total degree ``order`` dropped, which is
+the propagation of Taylor coefficients of Griewank and Walther (2008, Chapter 13),
+here carried as a full multivariate polynomial rather than through univariate
+directional propagation. A product costs ``O(order^4)`` coefficient multiplications.
+Division is not implemented, even by a number: ``x / 2`` raises ``TypeError``
+and must be written ``0.5 * x``. So, despite the sentence above, only polynomial
+fields evaluate; a rational one needs a division rule first.
+
+References:
+- Griewank, A. and Walther, A. "Evaluating Derivatives: Principles and
+  Techniques of Algorithmic Differentiation", 2nd ed., SIAM, 2008,
+  doi:10.1137/1.9780898717761, Chapter 13 ("Taylor and Tensor Coefficients").
 """
 
 from numbers import Number
@@ -16,7 +31,16 @@ _Scalar = complex | float | int
 
 
 class Bivariate:
-    """A truncated power series in two variables to a fixed total degree."""
+    """A truncated power series in two variables to a fixed total degree.
+
+    Args:
+        coefficients: Map from exponent pair ``(a, b)`` to the coefficient of
+            ``s^a t^b``; terms above ``order`` and zero terms are dropped.
+        order: Maximum retained total degree.
+
+    References:
+    - Griewank and Walther (2008), Chapter 13.
+    """
 
     __slots__ = ["_coefficients", "_order"]
 
@@ -53,7 +77,16 @@ class Bivariate:
 
     @classmethod
     def seed(cls, value: _Scalar, axis: int, order: int) -> "Bivariate":
-        """A series ``value + s`` (axis 0) or ``value + t`` (axis 1)."""
+        """A series ``value + s`` (axis 0) or ``value + t`` (axis 1).
+
+        Args:
+            value: The constant term (the point's coordinate).
+            axis: 0 for ``s``, 1 for ``t``.
+            order: Maximum retained total degree.
+
+        Returns:
+            The seeded independent variable.
+        """
         key = (1, 0) if axis == 0 else (0, 1)
         return cls({(0, 0): value, key: 1.0}, order)
 
