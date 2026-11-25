@@ -51,8 +51,10 @@ References:
       bifurcation, and the explicitly solvable one-dimensional pitchfork.
     - [KloedenPlaten1992] Kloeden, P. E. and Platen, E. "Numerical Solution of
       Stochastic Differential Equations". Springer, 1992.
-      doi:10.1007/978-3-662-12616-5. Ch. 4 (pp. 103-160): the Ito and
-      Stratonovich calculi and the drift correction ``(1/2) g g'`` between them.
+      doi:10.1007/978-3-662-12616-5. Ch. 4, "Stochastic Differential
+      Equations" (pp. 103-160): Stratonovich equations and the drift correction
+      ``(1/2) g g'`` to their Ito form. Chapter checked against the publisher's
+      record only; no section or equation number is cited.
 """
 
 from abc import ABC, abstractmethod

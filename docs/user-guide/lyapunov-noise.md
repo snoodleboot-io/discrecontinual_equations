@@ -139,8 +139,10 @@ tangencies; one bounded away from zero is the numerical signature of
 hyperbolicity. `splitting_angles(k)` gives the smallest principal angle between
 the span of the first $k$ vectors and the rest (Ginelli et al. 2013, Sec. 7).
 
-The example reproduces Fig. 1a of the 2007 letter. The Hénon map has tangencies
-and the Lozi map does not:
+The example reproduces the finding of Fig. 1a of the 2007 letter: the Hénon map
+has tangencies and the Lozi map does not. The figure shows the two angle
+distributions, not their minima; the minima printed below are the library's own,
+over 2000 samples:
 
 ```python
 import numpy as np
@@ -445,7 +447,7 @@ This example takes about half a minute, because every exponent evaluation
 integrates 4000 noisy steps in Python.
 
 The P threshold of the noisy Hopf normal form with conformal noise
-$\sigma z\, dB$ has the closed form $\mu = \sigma^2$. The density is
+$\sigma z\, dB$ has the closed form $\mu = \sigma^2$. For $\mu > 0$ the density is
 $C\, r^{2\mu/\sigma^2 - 2} e^{-r^2/\sigma^2}$, so its peak leaves the origin
 there. The D threshold of the same system is at $\mu = 0$: its origin's exponent
 is exactly $\mu$.
@@ -514,8 +516,10 @@ print(round(threshold.locate(0.2, 0.9), 3))  # 0.526; the closed form is 0.49
 
 With additive noise the noisy Hopf has a P-bifurcation at $\mu = 0$ (Baxendale
 2024, Sec. 1). Without shear, the library measures a top exponent that stays
-negative across $\mu \in [-0.5, 1.5]$ at $\sigma = 0.7$, so there is no D event to
-locate. The conformal noise above is the isotropic noise that vanishes at the
+negative across $\mu \in [-0.5, 1.5]$ at $\sigma = 0.7$ (from $-1.23$ to $-0.30$),
+so there is no D event to locate. That measurement is the library's own; it agrees
+with Baxendale's result that the exponent is negative whenever the shear ratio
+$b/a$ is small enough, whatever the other parameters. The conformal noise above is the isotropic noise that vanishes at the
 origin and so keeps it invariant, and with it P and D fall at different
 parameters. `StochasticScan` records both diagnostics along a range, and
 `ThresholdCurve` follows a located threshold as a second parameter varies.
@@ -523,7 +527,8 @@ parameters. `StochasticScan` records both diagnostics along a range, and
 **Limits.**
 
 - P is only as good as the grid. The example locates $0.562$, $0.526$ and
-  $0.513$ on 80, 120 and 160 cells per axis, converging on $0.49$. A probe within
+  $0.513$ on 80, 120 and 160 cells per axis. A second-order extrapolation of
+  these gives $0.497$, against the exact $0.49$. A probe within
   a few cells of a singular centre carries a finite-volume overshoot that
   refinement does not remove. Step out with `offset`.
 - D carries the shared Monte-Carlo offset, of order $s/\sqrt{\text{paths}\cdot T}$.
