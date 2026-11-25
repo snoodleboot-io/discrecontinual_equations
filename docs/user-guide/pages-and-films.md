@@ -347,8 +347,8 @@ The `plot` package writes Plotly figures (PNG through kaleido, or HTML):
   draws phase portraits.
 - [`DelayPlot`](../api/plotting.md#discrecontinual_equations.plot.delay_plot.DelayPlot)
   draws delay embeddings $(x_i, x_{i+k})$ and $(x_i, x_{i+k_1}, x_{i+k_2})$. By
-  Takens' theorem, $2d+1$ delays of a generic observable embed a $d$-dimensional
-  attractor [[Takens1981](../references.md#pages-films-and-numerics-infrastructure),
+  Takens' theorem, $2d+1$ delays of a generic observable embed dynamics on a
+  compact $d$-dimensional manifold [[Takens1981](../references.md#pages-films-and-numerics-infrastructure),
   Theorems 1 and 2]. Two or three delays are a picture, not a guaranteed
   embedding, and the delay is counted in samples.
 - [`SpectrumPlot`](../api/plotting.md#discrecontinual_equations.plot.spectrum_plot.SpectrumPlot)
