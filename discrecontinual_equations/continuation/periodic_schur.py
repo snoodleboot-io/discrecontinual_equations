@@ -23,6 +23,47 @@ backward stable factor by factor. The arithmetic is complex with a single
 Wilkinson shift, so a conjugate pair needs no double-shift bulge; Givens
 rotations replace Householder reflections, which for a single shift is the same
 transformation.
+
+Lust (2001) is the reason the cycle continuation uses it: codes that form the
+monodromy matrix explicitly, AUTO97's among them, lose the very large and very
+small multipliers, while the periodic Schur decomposition of the factors the
+discretisation already produces recovers them, so that the time discretisation
+of the orbit, not the eigenvalue solver, limits their accuracy.
+
+Limits:
+
+- Only Kressner's criterion (5), a negligible subdiagonal entry of the
+  Hessenberg factor, deflates. His criterion (6), a negligible *diagonal* entry
+  of a triangular factor, is not tested for, and his Algorithm 4 assumes the
+  triangular factors nonsingular. A singular factor can therefore defeat the
+  iteration: five random ``4 x 4`` factors, one with a zero column, overflowed
+  in the rotations and raised :class:`PeriodicSchurError` after 240 steps,
+  where the same test at ``2 x 2`` returned the zero eigenvalue. The cycle
+  continuation's transfer matrices are products of inverses of collocation
+  blocks and nonsingular wherever those blocks solve, and on this error it
+  falls back to the explicit product with a :class:`RuntimeWarning`.
+- Each eigenvalue is accurate relative to its own size only as far as the
+  factors themselves determine it. The multipliers of a discretised cycle carry
+  the discretisation's error whatever the eigensolver does.
+- The cost is ``O(p n^3)`` per QR sweep with no blocking or aggressive early
+  deflation, which is fine for the small ``n`` of an ODE cycle and slow for a
+  large one.
+
+References:
+    - [Bojanczyk1992] Bojanczyk, A. W., Golub, G. H. and Van Dooren, P.
+      "Periodic Schur decomposition: algorithms and applications", Proc. SPIE
+      1770 (Advanced Signal Processing Algorithms, Architectures, and
+      Implementations III), p. 31, 1992. DOI 10.1117/12.130915. The periodic
+      Schur form and the periodic QR algorithm.
+    - [Kressner2006] Kressner, D. "The periodic QR algorithm is a disguised QR
+      algorithm", Linear Algebra Appl. 417(2-3), 423-433, 2006.
+      DOI 10.1016/j.laa.2003.06.014. Algorithm 2 (periodic Hessenberg
+      reduction), Algorithm 4 (the implicit single-shift QR step), deflation
+      criterion (5).
+    - [Lust2001] Lust, K. "Improved numerical Floquet multipliers", Int. J.
+      Bifurcation Chaos 11(9), 2389-2410, 2001. DOI 10.1142/S0218127401003486.
+      Floquet multipliers from the periodic Schur decomposition of the
+      discretisation's transfer matrices.
 """
 
 import numpy as np
@@ -36,7 +77,17 @@ _EXCEPTIONAL_FACTOR = 0.75
 
 
 class PeriodicSchurError(ArithmeticError):
-    """The periodic QR iteration did not converge."""
+    """The periodic QR iteration did not converge.
+
+    Raised once the iteration has taken more than ``60 n`` QR steps for a
+    product of ``n x n`` factors; the standard algorithm needs two or three an
+    eigenvalue, so the cap guards only against a cycle or a singular factor.
+
+    References:
+        - [Kressner2006] Kressner, D. "The periodic QR algorithm is a disguised
+          QR algorithm", Linear Algebra Appl. 417(2-3), 423-433, 2006.
+          DOI 10.1016/j.laa.2003.06.014. Section 5, deflation.
+    """
 
 
 def _householder(vector: np.ndarray) -> np.ndarray | None:
@@ -202,11 +253,36 @@ def _diagonal_products(factors: np.ndarray) -> np.ndarray:
 def periodic_eigenvalues(factors: np.ndarray) -> np.ndarray:
     """Eigenvalues of ``factors[-1] @ ... @ factors[0]``, without forming the product.
 
-    ``factors`` has shape ``(p, n, n)``; ``factors[0]`` acts first. The result is
-    complex, in no particular order, and each eigenvalue is accurate relative to
-    its own size wherever the factors determine it so - which a strongly
-    contracting direction of a cycle's flow does and the explicit product does not.
-    Raises :class:`PeriodicSchurError` if the iteration does not converge.
+    The result is complex, in no particular order, and each eigenvalue is
+    accurate relative to its own size wherever the factors determine it so -
+    which a strongly contracting direction of a cycle's flow does and the
+    explicit product does not. The factors are reduced to periodic Hessenberg
+    form, then iterated by single-shift periodic QR steps on the unreduced
+    window until every subdiagonal entry of the Hessenberg factor deflates;
+    each eigenvalue is the product of the factors' diagonal entries in one
+    position, summed in logarithms so that no partial product overflows.
+
+    Args:
+        factors: The factors, shape ``(p, n, n)``, real or complex;
+            ``factors[0]`` acts first. Not modified.
+
+    Returns:
+        The ``n`` eigenvalues of the product, complex.
+
+    Raises:
+        ValueError: If ``factors`` is not a stack of square matrices.
+        PeriodicSchurError: If the iteration does not converge.
+
+    References:
+        - [Kressner2006] Kressner, D. "The periodic QR algorithm is a disguised
+          QR algorithm", Linear Algebra Appl. 417(2-3), 423-433, 2006.
+          DOI 10.1016/j.laa.2003.06.014. Algorithms 2 and 4, criterion (5).
+        - [Bojanczyk1992] Bojanczyk, A. W., Golub, G. H. and Van Dooren, P.
+          "Periodic Schur decomposition: algorithms and applications", Proc.
+          SPIE 1770, p. 31, 1992. DOI 10.1117/12.130915.
+        - [Lust2001] Lust, K. "Improved numerical Floquet multipliers", Int. J.
+          Bifurcation Chaos 11(9), 2389-2410, 2001.
+          DOI 10.1142/S0218127401003486.
     """
     work = np.array(factors, dtype=complex)
     if work.ndim != 3 or work.shape[1] != work.shape[2]:  # noqa: PLR2004 (a stack)
