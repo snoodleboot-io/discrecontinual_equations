@@ -277,6 +277,22 @@ non-normal linear system, the anisotropic gradient, SDE (24) and Maier-Stein,
 every estimate is above the true error or within a factor of three of it
 wherever that exceeds ``1e-4``.
 
+*Where the reference has no bound.* That estimate rests on an assumption: that
+what changes as the surface shrinks is the surface's own error. Where the path
+winds round the attractor faster than a chain of nodes follows, the chain
+resolves less of the winding the closer it starts, and the value gets worse
+going in, not better - inside the verification's fast elliptic cycle the
+reference at (0.3, 0) was 1.66 off with an estimate of 1.47 (DEQ-117). The
+reference therefore also relaxes from a surface at half the distance, and
+reports no bound (an estimate of ``inf``) where that moves the value by more
+than the estimate, or where the first two surfaces' values differ by more than
+half of ``U`` on the outer one. A check never stops at a point: one without a
+bound is marked :data:`UNBOUNDED`, one where no reference could be computed
+:data:`FAILED`; neither is refined, :attr:`GridQuasipotential.unbounded` lists
+them and a warning names them. Across the verification's systems every finite
+estimate measured bounds its reference's error (see
+:meth:`OrderedLineIntegral.reference`).
+
 The traced path's action was the first candidate, being cheap, and was measured
 and rejected: its own error, from a path that follows the grid's gradient, is
 the size of the grid's (at 81 points the median 3.6e-4 against a largest grid
@@ -304,6 +320,7 @@ path to ``x`` stays inside ``{U <= U(x)}``.
 """
 
 import heapq
+import warnings
 from collections.abc import Sequence
 
 import numpy as np
@@ -364,7 +381,7 @@ _JUMP_SHARE = 0.25
 # value squared; 1e-10, the default, costs twice the steps for nothing visible.
 _REFERENCE_SETTLED = 1.0e-8
 _BAND_SAMPLES_PER_CELL = 16
-GRID, CHECKED, REFINED = 0, 1, 2
+GRID, CHECKED, REFINED, FAILED, UNBOUNDED = 0, 1, 2, 3, 4
 
 
 def default_radius(grid: DensityGrid) -> int:
@@ -851,6 +868,22 @@ def _geometric(step: np.ndarray, velocity: np.ndarray, metric: np.ndarray) -> fl
     )
 
 
+def _warn_unchecked(failed: list[int], unbounded: list[int], *, refining: bool) -> None:
+    """Say which points :meth:`OrderedLineIntegral.check` could not bound."""
+    parts = []
+    if failed:
+        parts.append(f"no reference could be computed at {len(failed)} ({failed})")
+    if unbounded:
+        parts.append(
+            f"the reference's own error is not a bound at {len(unbounded)} "
+            f"({unbounded})",
+        )
+    message = "; ".join(parts) + " of the points checked"
+    if refining:
+        message += ", and they were not refined"
+    warnings.warn(message, UserWarning, stacklevel=3)
+
+
 def _check_inside(grid: DensityGrid, state: np.ndarray) -> None:
     for axis, value in enumerate(state):
         coordinates = grid.axis(axis)
@@ -875,6 +908,10 @@ class GridQuasipotential:
     :meth:`OrderedLineIntegral.check` a checked point has status :data:`CHECKED`
     and an estimated error, and a point whose value was replaced by the grid-free
     one has status :data:`REFINED` and the estimated error of the new value.
+    A point the check could not bound keeps the grid's value: status
+    :data:`FAILED` (no grid-free value could be computed; error ``nan``) or
+    :data:`UNBOUNDED` (one was, but its own error estimate is not a bound
+    there; error ``inf``). :attr:`unbounded` lists both.
     """
 
     __slots__ = [
@@ -946,8 +983,20 @@ class GridQuasipotential:
 
     @property
     def status(self) -> np.ndarray:
-        """:data:`GRID`, :data:`CHECKED` or :data:`REFINED` per value."""
+        """:data:`GRID`, :data:`CHECKED`, :data:`REFINED`, :data:`FAILED` or
+        :data:`UNBOUNDED` per value."""
         return self._status
+
+    @property
+    def unbounded(self) -> np.ndarray:
+        """Flat indices of the points a check could not bound, in order.
+
+        Those of status :data:`FAILED` - no grid-free value could be computed -
+        and :data:`UNBOUNDED` - one was, but its own error estimate is not a
+        bound there. Their values are the grid's, unrefined.
+        """
+        flat = self._status.ravel()
+        return np.flatnonzero((flat == FAILED) | (flat == UNBOUNDED))
 
     def at(self, state: Sequence[float] | np.ndarray) -> float:
         """``U`` at a state, bilinearly interpolated; ``inf`` off the grid."""
@@ -1261,9 +1310,33 @@ class OrderedLineIntegral:
         error is within the tolerance; otherwise it is only flagged, by its
         error. The field returned is a new one; ``field`` is not changed.
 
+        A point is never the end of the check. Where no reference can be
+        computed - a chain that will not stay finite at any step - the point
+        gets status :data:`FAILED` and keeps an error of ``nan``; where the
+        reference's own estimate is not a bound (see :meth:`reference`), it
+        gets status :data:`UNBOUNDED` and an error of ``inf``. Neither is
+        refined, whatever the tolerance; both are listed by
+        :attr:`GridQuasipotential.unbounded`, and a ``UserWarning`` names them
+        once the check is done.
+
         This costs a few relaxations of a chain of ``nodes`` states per point -
         of the order of a second each - against well under a millisecond per
         point for the march, which is why it is a separate step.
+
+        Args:
+            field: A field from :meth:`solve`, which knows its attractor.
+            indices: Flat grid indices to check; by default every
+                ``stride``-th point along each axis.
+            stride: The spacing of the default points.
+            tolerance: Refine where the estimated error exceeds this, if the
+                reference is good to it.
+            nodes: The number of states in each relaxed chain.
+
+        Returns:
+            A new field with the errors and statuses of the points checked.
+
+        Raises:
+            ValueError: If ``field`` does not know its attractor.
         """
         attractor = field.attractor
         if attractor is None:
@@ -1277,16 +1350,28 @@ class OrderedLineIntegral:
         values = field.values.copy().ravel()
         errors = field.errors.copy().ravel()
         status = field.status.copy().ravel()
+        failed, unbounded = [], []
         for index in np.asarray(indices, dtype=int).tolist():
             target = points[index]
             if not np.isfinite(values[index]) or attractor.reached(target, grid):
                 continue
-            reference, own = self.reference(field, target, nodes)
+            try:
+                reference, own = self.reference(field, target, nodes)
+            except ValueError:
+                status[index] = FAILED
+                failed.append(index)
+                continue
+            if not np.isfinite(own):
+                errors[index], status[index] = np.inf, UNBOUNDED
+                unbounded.append(index)
+                continue
             estimate = abs(float(field.values.ravel()[index]) - reference) + own
             if tolerance is not None and estimate > tolerance and own <= tolerance:
                 values[index], errors[index], status[index] = reference, own, REFINED
             else:
                 errors[index], status[index] = estimate, CHECKED
+        if failed or unbounded:
+            _warn_unchecked(failed, unbounded, refining=tolerance is not None)
         return GridQuasipotential(
             grid,
             values,
@@ -1319,6 +1404,43 @@ class OrderedLineIntegral:
         from a surface at twice the distance, which measures the expansion's
         error, and from the value on a chain of half the nodes, which measures
         the chain's.
+
+        That sum is a bound only while it is the surface's error that changes
+        as the surface shrinks - an assumption, not a theorem - and it fails
+        where the path winds round the attractor faster than the chain can
+        follow: the chain then resolves less of the winding the closer it
+        starts, and gets worse, not better. Inside the fast elliptic cycle of
+        the tests the reference at (0.3, 0) was 1.66 off with an estimate of
+        1.47: the chain wound 0.14 times, the surface at twice the distance
+        was 0.19 off, and one at half the distance 1.84 off. So the value is
+        also relaxed from a third surface, at half the distance, and the
+        estimate is returned as ``inf`` - no bound - where going in again
+        moves the value by more than the estimate, or where the first two
+        surfaces' values differ by more than half of ``U`` on the outer one,
+        more than the expansion could be wrong by. Measured (DEQ-117) on 73
+        references at 81 points on ten systems - the non-normal,
+        anisotropic-gradient and SDE (24) reference problems, the rotating
+        Ornstein-Uhlenbeck process, SDE (21), and the verification's strongly
+        rotating linear, gradient, rotating, multiplicative and elliptic-cycle
+        systems, 16 of the references beside or inside the elliptic cycle -
+        every finite estimate bounds the reference's error. 24 are labelled: all
+        16 of the cycle's and 8 elsewhere whose estimate did hold, the price of
+        the test. Two more points inside the cycle had no reference at all (the
+        chain would not stay finite). The third relaxation, run only when the
+        first two pass, costs up to a third more per point.
+
+        Args:
+            field: A field from :meth:`solve`, which knows its attractor.
+            state: The point to evaluate ``U`` at.
+            nodes: The number of states in the relaxed chain.
+
+        Returns:
+            ``(value, error)``: ``U`` at ``state`` and the estimate of its
+            error, ``inf`` where no bound could be established.
+
+        Raises:
+            ValueError: If ``field`` does not know its attractor, or a chain
+                does not stay finite at any step.
         """
         attractor = field.attractor
         if attractor is None:
@@ -1333,7 +1455,8 @@ class OrderedLineIntegral:
         )
         outer = attractor.start(field.grid, self._drift, self._noise, target)
         inner = outer.shrunk()
-        far, _, _ = _relax_from(gmam, outer, _guide(outer, trace, nodes))
+        inmost = inner.shrunk()
+        far, _, place = _relax_from(gmam, outer, _guide(outer, trace, nodes))
         near, chain, parameter = _relax_from(gmam, inner, _guide(inner, trace, nodes))
         start = inner.point(parameter)
         coarse = _equal_arc_length(_resample(chain, nodes // 2 + 1))
@@ -1344,7 +1467,25 @@ class OrderedLineIntegral:
         # systems (1.04e-3, 8.4e-5, 5.9e-6 at 41, 81, 161 nodes, non-normal)
         # but at second order on the anisotropic gradient (-4.9e-5, -1.3e-5 at
         # 81, 161 at (-1.5, -0.8)), and the whole difference bounds both.
-        return near, abs(far - near) + abs(rough - near)
+        own = abs(far - near) + abs(rough - near)
+        # The estimate is a bound only while the surface's error is what
+        # changes as the surface shrinks. Where the path winds round the
+        # attractor faster than the chain resolves, the value moves further
+        # on going in again than the estimate allows, or the two chains are
+        # different paths altogether - further apart than U on the outer
+        # surface, all the expansion could be wrong by (DEQ-117).
+        level = abs(outer.value(outer.point(place)))
+        if abs(far - near) > _HALF * level:
+            return near, np.inf
+        try:
+            nearest, _, _ = _relax_from(gmam, inmost, _guide(inmost, trace, nodes))
+        except ValueError:
+            # A chain that will not stay finite that close in is the winding
+            # the label is for.
+            return near, np.inf
+        if abs(near - nearest) > own:
+            return near, np.inf
+        return near, own
 
     def _backward(self, state: np.ndarray, gradient) -> np.ndarray:
         slope = np.array([component(state[None, :])[0] for component in gradient])

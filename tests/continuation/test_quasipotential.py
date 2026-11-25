@@ -23,6 +23,9 @@ import numpy as np
 import pytest
 from scipy.spatial import cKDTree
 
+from discrecontinual_equations.continuation import (
+    quasipotential as quasipotential_module,
+)
 from discrecontinual_equations.continuation.fokker_planck import (
     DensityGrid,
     StationaryFokkerPlanck,
@@ -31,10 +34,12 @@ from discrecontinual_equations.continuation.noise import NoiseMatrix, fields_at
 from discrecontinual_equations.continuation.quasipotential import (
     _ACCEPTED,
     CHECKED,
+    FAILED,
     GRID,
     MIDPOINT,
     QUADRATIC,
     REFINED,
+    UNBOUNDED,
     CycleAttractor,
     EquilibriumAttractor,
     GeometricMinimumAction,
@@ -64,6 +69,7 @@ from tests.continuation.fields import (
 from tests.continuation.quasipotential_systems import (
     ANISOTROPIC_AMPLITUDE,
     CUBIC_TERMS,
+    ELLIPSE_AMPLITUDE,
     MAIER_STEIN_BARRIER,
     MAIER_STEIN_VALUES,
     NON_NORMAL_AMPLITUDE,
@@ -73,6 +79,7 @@ from tests.continuation.quasipotential_systems import (
     WELL,
     AnisotropicGradientField,
     DoubleWellField,
+    EllipticCycleField,
     MaierSteinField,
     MultiplicativeField,
     NonNormalField,
@@ -81,6 +88,8 @@ from tests.continuation.quasipotential_systems import (
     RotatingCubicField,
     constant_noise,
     double_well,
+    ellipse_quasipotential,
+    ellipse_states,
     kronecker_covariance,
     multiplicative_noise,
     potential,
@@ -939,15 +948,17 @@ class TestErrorEstimate:
         field = solver.solve(EquilibriumAttractor([0.0, 0.0]))
         index = np.ravel_multi_index(grid.nearest([0.5, 0.3]), grid.shape)
         target = grid.points()[index]
-        exact = 2.0 * target[0] ** 2 + target[1] ** 2
         value, own = solver.reference(field, target)
-        checked = solver.check(field, [index])
+        with pytest.warns(UserWarning, match="not a bound"):
+            checked = solver.check(field, [index])
         # The chain from the surface is no better than the grid here - the
-        # path spirals out of the origin ten times faster than it climbs -
-        # but its own estimate says so, and the grid's estimate stays a bound.
-        assert abs(value - exact) <= own
-        grid_error = abs(field.values.ravel()[index] - exact)
-        assert checked.errors.ravel()[index] >= grid_error
+        # path spirals out of the origin ten times faster than it climbs - and
+        # since DEQ-117 the reference says it has no bound rather than offer
+        # one that holds only because it is large.
+        assert np.isinf(own)
+        assert np.isfinite(value)
+        assert checked.status.ravel()[index] == UNBOUNDED
+        assert np.array_equal(checked.values, field.values)
 
     @pytest.mark.slow
     def test_the_references_own_estimate_bounds_its_error(self):
@@ -1039,6 +1050,141 @@ class TestRefinement(TestCase):
         flagged = solver.check(field, indices[:2], tolerance=1.0e-7)
         assert np.all(flagged.status.ravel()[indices[:2]] == CHECKED)
         assert np.array_equal(flagged.values, field.values)
+
+
+# Inside and beside the elliptic cycle, and beside SDE (24)'s round one.
+_ELLIPSE_TARGETS = ((0.3, 0.0), (0.0, 0.3), (1.4, 0.3))
+
+
+@functools.cache
+def _ellipse_checked():
+    """The fast elliptic cycle at 81 points, checked with a tolerance."""
+    grid = DensityGrid.box([-2.0, -1.6], [2.0, 1.6], [81, 81])
+    solver = OrderedLineIntegral(
+        system(EllipticCycleField),
+        constant_noise(ELLIPSE_AMPLITUDE),
+        grid,
+    )
+    field = solver.solve(CycleAttractor(ellipse_states()))
+    indices = [
+        np.ravel_multi_index(grid.nearest(t), grid.shape) for t in _ELLIPSE_TARGETS
+    ]
+    with pytest.warns(UserWarning, match="of the points checked") as caught:
+        checked = solver.check(field, indices, tolerance=1.0e-3)
+    return solver, field, checked, indices, [str(w.message) for w in caught]
+
+
+class TestUnboundedPoints(TestCase):
+    """DEQ-117: a point the reference cannot bound is labelled, not fatal."""
+
+    def test_a_failed_reference_marks_its_point_and_the_rest_are_checked(self):
+        solver, field, _checked_field, indices, _true = _checked("gradient")
+        broken = field.grid.points()[indices[1]]
+        genuine = OrderedLineIntegral.reference
+
+        def reference(self, field, state, nodes=81):
+            if np.allclose(state, broken):
+                message = "the minimum action path did not stay finite"
+                raise ValueError(message)
+            return genuine(self, field, state, nodes)
+
+        with (
+            mock.patch.object(OrderedLineIntegral, "reference", reference),
+            pytest.warns(UserWarning, match="no reference could be computed at 1"),
+        ):
+            checked = solver.check(field, indices[:3])
+        status = checked.status.ravel()[indices[:3]]
+        assert status.tolist() == [CHECKED, FAILED, CHECKED]
+        assert np.isnan(checked.errors.ravel()[indices[1]])
+        assert checked.unbounded.tolist() == [indices[1]]
+        assert np.array_equal(checked.values, field.values)
+
+    def test_inside_a_fast_cycle_the_reference_is_labelled_not_bounded(self):
+        # Measured at (0.3, 0): the reference was 1.66 off with an estimate of
+        # 1.47; the chain from the band winds 0.14 times where the path winds
+        # several, and the surface at twice the distance came out closer.
+        # At (0, 0.3) the chain does not even stay finite: no reference.
+        _solver, field, checked, indices, _messages = _ellipse_checked()
+        inside = indices[:2]
+        status = checked.status.ravel()[inside]
+        assert status[0] == UNBOUNDED
+        assert np.isinf(checked.errors.ravel()[inside[0]])
+        assert status[1] in (UNBOUNDED, FAILED)
+        assert set(inside) <= set(checked.unbounded.tolist())
+        assert np.array_equal(
+            checked.values.ravel()[inside], field.values.ravel()[inside]
+        )
+
+    def test_outside_the_fast_cycle_the_reference_is_labelled_too(self):
+        # (1.4, 0.32): the reference was 0.054 off, with an estimate of 0.011.
+        _solver, _field, checked, indices, _messages = _ellipse_checked()
+        assert checked.status.ravel()[indices[2]] == UNBOUNDED
+
+    def test_a_value_that_moves_going_in_again_has_no_bound(self):
+        # The third surface, at half the inner distance: shift its value by
+        # more than the estimate and the reference must stop claiming one.
+        # (On the verification's gradient system at (-0.49, -0.9) it moved by
+        # 4.1e-5 against an estimate of 3.3e-5, and the error was 5.4e-5.)
+        solver, field, _checked_field, _indices, _true = _checked("gradient")
+        genuine = _relax_from
+        target = np.array([-1.5, -0.8])
+
+        def shifted(shift):
+            calls = []
+
+            def relax(gmam, surface, guide):
+                value, chain, place = genuine(gmam, surface, guide)
+                calls.append(value)
+                return value + (shift if len(calls) == 3 else 0.0), chain, place
+
+            return relax
+
+        with mock.patch.object(quasipotential_module, "_relax_from", shifted(0.0)):
+            _value, own = solver.reference(field, target)
+        assert np.isfinite(own)
+        with mock.patch.object(
+            quasipotential_module,
+            "_relax_from",
+            shifted(2.0 * own),
+        ):
+            _value, moved = solver.reference(field, target)
+        assert np.isinf(moved)
+
+    def test_refinement_skips_the_points_it_cannot_bound_and_says_so(self):
+        _solver, field, checked, _indices, messages = _ellipse_checked()
+        assert any("not a bound" in m and "not refined" in m for m in messages)
+        skipped = checked.unbounded
+        assert skipped.size > 0
+        assert np.all(checked.status.ravel()[skipped] != REFINED)
+        assert np.array_equal(
+            checked.values.ravel()[skipped], field.values.ravel()[skipped]
+        )
+
+    def test_the_estimate_bounds_the_error_wherever_it_is_claimed(self):
+        # Inside and outside the fast cycle, and beside SDE (24)'s: every
+        # reference either says it has no bound or has one.
+        ellipse_solver, ellipse_field, *_ = _ellipse_checked()
+        cycle_solver, cycle_field, *_ = _checked("cycle")
+        cases = [
+            (ellipse_solver, ellipse_field, target, ellipse_quasipotential)
+            for target in _ELLIPSE_TARGETS
+        ] + [
+            (cycle_solver, cycle_field, target, _cycle_exact)
+            for target in ((1.0, 1.0), (0.5, 0.0))
+        ]
+        claimed = 0
+        for solver, field, target, exact in cases:
+            point = field.grid.points()[
+                np.ravel_multi_index(field.grid.nearest(target), field.grid.shape)
+            ]
+            try:
+                value, own = solver.reference(field, point)
+            except ValueError:
+                continue  # no reference, so no bound claimed
+            error = abs(value - float(exact(point[None, :])[0]))
+            assert own >= error, (target, value, own, error)
+            claimed += bool(np.isfinite(own))
+        assert claimed >= 2
 
 
 class TestCubicTerm(TestCase):
