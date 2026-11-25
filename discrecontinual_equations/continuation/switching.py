@@ -24,6 +24,13 @@ back to kicking state component 0 and the parameter by ``kick``. That suits the
 pitchfork of a ``Z_2``-symmetric system whose symmetric branch is ``u = 0``; for any
 other geometry it is a guess, and the user should check which branch was found.
 
+The seed is then polished by Newton at its fixed parameter before continuation
+starts, which can undo the switch. For ``x' = mu x - x^3`` the extended Jacobian at
+the origin is zero, the SVD returns the primary tangent, and the fallback seed
+``(kick, kick)`` is used: with ``kick = 0.05`` the polish returns to ``x = 0`` and
+the "secondary" branch is the trivial one again; with ``kick = 0.2`` it lands on
+``x = sqrt(mu)`` (measured). The kick is the configuration's ``initial_step``.
+
 Limits: the SVD is of the extended Jacobian at the recorded point, which is only
 as close to the branch point as the localizer put it; at an imperfectly located
 branch point the kernel is one-dimensional and the smallest singular direction is
