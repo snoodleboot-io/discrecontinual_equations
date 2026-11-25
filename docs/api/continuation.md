@@ -1038,6 +1038,16 @@ depends on units:
 - **It is not noise.** It must exceed `100` times its finite-difference error. The
   error is estimated by repeating the differences with half and with twice the step.
 
+`a` must pass a third test before it names a transcritical point, because the point
+is only located to within the localizer's tolerance. Off its vertex, a pitchfork has
+a quadratic coefficient of its own. In the normal form
+`w' = mu w + (a/2) w^2 + (c/6) w^3` with `a = 0`, the nontrivial branch at `w0` has
+critical eigenvalue `lambda = (c/3) w0^2` and quadratic coefficient `c w0`, so
+`a^2 = 3 |c lambda|` there. At a transcritical point the same ratio is
+`2 |a| / |c w0|`, which grows as the location improves. So `a` must also satisfy
+`a^2 > 30 |c lambda|`, with `lambda = <p, A q>`. Like the other two tests, this one
+is unchanged by rescaling time or the state.
+
 ```python
 from pathlib import Path
 
@@ -1105,7 +1115,9 @@ Checked against the four three-dimensional reference cases of the DEQ-102 verifi
 (`tests/continuation/test_branch_label_scale.py`): every label is now the same for
 every `s` in `1e-6 ... 1e6`, with exact and with finite-difference Jacobians, 0 of
 104 wrong against 17 before. In 2000 random mixings, offsets and time scales, plus a
-reflection-symmetric case where `B(q, q) = 0`, every label is right. Structurally
+reflection-symmetric case where `B(q, q) = 0`, every label is right. A pitchfork evaluated up to `1e-2` off its vertex, on its
+nontrivial branch, stays a `pitchfork`, and a transcritical point stays
+`transcritical`. Structurally
 zero coefficients reach at most `2.6e-7` of their terms' size, and genuine ones at least `1.3e-2`. Noise in `c`
 stays within `7.3` times its error estimate, and genuine `c` exceeds it at least
 `5e4` times. Noise in `a` can exceed its estimate (by up to `1.8e4` with

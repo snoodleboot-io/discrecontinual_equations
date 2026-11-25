@@ -248,7 +248,10 @@ class BranchPoint(BifurcationDetector):
     3 |B(q, h2)|)`` for ``c``), and ``100`` times its finite-difference error,
     estimated by repeating the differences with half and twice the step. A
     coefficient that cannot be resolved is treated as zero, so a point whose ``c``
-    is lost in noise stays ``branch_point``.
+    is lost in noise stays ``branch_point``. Since a located point sits a little
+    off the bifurcation, where a pitchfork's own ``a`` is ``c w0``, ``a`` must
+    also satisfy ``a^2 > 30 |c lambda|`` with ``lambda = <p, A q>`` (see
+    :func:`_branch_label`).
 
     References:
         The coefficients are Kuznetsov's center-manifold reduction (see
