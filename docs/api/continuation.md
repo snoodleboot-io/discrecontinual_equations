@@ -811,8 +811,8 @@ else:
   iterate that overflows, and `trace` stops at the first `None`. Its points carry
   their collocation residual as `point.residual`.
 
-References: [AUTO-07p manual](../references.md#doedel2007) (`EPSU`, `ITNW`);
-[COLNEW](../references.md#bader1987) (subroutine `CONTRL`).
+References: [Doedel2007](../references.md) (AUTO-07p manual, `EPSU`, `ITNW`);
+[Bader1987](../references.md) (COLNEW, subroutine `CONTRL`).
 
 ## Covariant Lyapunov vectors and finite-time exponents
 
