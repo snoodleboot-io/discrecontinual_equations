@@ -1,0 +1,43 @@
+name: Slow tests
+
+# The integration studies kept out of the PR gate (DEQ-144): convergence-order slopes over
+# many sizes, film and atlas builds, long manifold growth. They are marked `slow`. This
+# workflow runs the whole suite, slow set included, every night and on demand, and reports
+# coverage on the terminal; coverage is measured here only, so the PR gate does not pay for it.
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+jobs:
+  slow:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.13", "3.14"]
+    env:
+      UV_PYTHON: ${{ matrix.python-version }}
+      OPENBLAS_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+      OMP_NUM_THREADS: "1"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: "pyproject.toml"
+
+      - name: Set up Python ${{ matrix.python-version }}
+        run: uv python install ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: uv sync --dev
+
+      - name: Run every test, slow ones included, with coverage
+        run: >-
+          uv run pytest tests/ -n auto -m "not timing" --durations=30
+          --cov=discrecontinual_equations --cov-report=term-missing

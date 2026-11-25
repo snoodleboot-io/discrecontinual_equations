@@ -24,11 +24,15 @@ dev = ["pytest-cov"]
 
 
 [tool.pytest.ini_options]
-# Timing tests measure the clock, which other work on the machine moves; they run
-# only when asked for, with "pytest -m timing" (DEQ-47, DEQ-87).
-addopts = "--cov=discrecontinual_equations --cov-report=term-missing -m 'not timing'"
+# A plain "pytest" runs the PR gate. Timing tests measure the clock, which other work on
+# the machine moves; they run only with "pytest -m timing" (DEQ-47, DEQ-87). Slow tests are
+# integration studies (order slopes over many sizes, film builds, long manifold growth);
+# the nightly workflow runs them, and "pytest -m slow" runs them locally (DEQ-144).
+# Coverage runs only in the nightly workflow; add --cov to measure it locally.
+addopts = "-m 'not slow and not timing'"
 markers = [
     "timing: measures wall or CPU time; deselected unless run with -m timing",
+    "slow: integration study kept out of the PR gate; run nightly and with -m slow",
 ]
 
 [build-system]
