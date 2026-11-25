@@ -18,6 +18,7 @@ from itertools import pairwise
 import numpy as np
 
 from discrecontinual_equations.continuation.branch import Branch
+from discrecontinual_equations.continuation.branch_point_kinds import is_branch_point
 from discrecontinual_equations.continuation.continuation_point import ContinuationPoint
 from discrecontinual_equations.continuation.cycle_continuation import CyclePoint
 from discrecontinual_equations.continuation.derivative_provider import (
@@ -69,7 +70,6 @@ _DISTINCT_ORBIT = 0.05
 # Two branches detecting one bifurcation land on it to detector accuracy, not to
 # machine precision.
 _SAME_EVENT = 1.0e-3
-_BRANCH_POINTS = ("branch_point", "pitchfork", "transcritical")
 # How many random states a view's polynomial field is checked at, and how
 # closely it must agree with the system it claims to be.
 _FIELD_CHECKS = 8
@@ -219,7 +219,7 @@ def _specials(branches: Sequence[Branch], view: View | None) -> list[SpecialPoin
                 found.append(special)
     # A branch that folds through a pitchfork's vertex trips the fold detector
     # at the pitchfork itself; that fold is the pitchfork, not a second event.
-    crossings = [s for s in found if s.kind in _BRANCH_POINTS]
+    crossings = [s for s in found if is_branch_point(s.kind)]
     return [
         s
         for s in found

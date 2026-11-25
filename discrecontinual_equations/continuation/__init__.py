@@ -15,6 +15,10 @@
 """Numerical continuation and codim-1 bifurcation detection for equilibria."""
 
 from discrecontinual_equations.continuation.branch import Branch
+from discrecontinual_equations.continuation.branch_point_kinds import (
+    BRANCH_POINT_KINDS,
+    is_branch_point,
+)
 from discrecontinual_equations.continuation.builder import ContinuerBuilder
 from discrecontinual_equations.continuation.center_manifold import (
     CenterManifold,
@@ -281,6 +285,7 @@ from discrecontinual_equations.continuation.topological_modes import (
 )
 
 __all__ = [
+    "BRANCH_POINT_KINDS",
     "AdaptivePeriodicOrbit",
     "AnalyticPeriodicOrbit",
     "AngleDistribution",
@@ -460,6 +465,7 @@ __all__ = [
     "fourier_reduce",
     "hopf_hopf_normal_form",
     "hopf_normal_form",
+    "is_branch_point",
     "jacobian_at",
     "locate_doubling",
     "lyapunov_spectrum",

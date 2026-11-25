@@ -7,6 +7,7 @@ import math
 
 import numpy as np
 
+from discrecontinual_equations.continuation.branch_point_kinds import is_branch_point
 from discrecontinual_equations.continuation.exploration import (
     BifurcationExplorer,
     ExplorationConfig,
@@ -179,7 +180,7 @@ def _efield_thresholds(
             # The detector is asked for "branch_point" and reports the kind it
             # classified, "pitchfork" here; matching the request left this line
             # empty on every published map until DEQ-14.
-            if point.kind in ("branch_point", "pitchfork"):
+            if is_branch_point(point.kind):
                 breaking.append((point.parameter, item.value))
             elif point.kind == "hopf":
                 crossing.append((point.parameter, item.value))
@@ -385,7 +386,7 @@ def _sevencell_ring_map() -> Scene:
                 # The detector reports "pitchfork" for what was requested as
                 # "branch_point"; matched literally, every pitchfork fell through
                 # to the Hopf branch and was filed under a mode (DEQ-14).
-                if point.kind in ("branch_point", "pitchfork"):
+                if is_branch_point(point.kind):
                     branch.append((point.parameter, item.value))
                 elif point.kind == "hopf":
                     mode = _ring_mode(point.parameter / item.value, count)

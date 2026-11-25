@@ -21,6 +21,7 @@ import sys
 import numpy as np
 from scipy.integrate import solve_ivp
 
+from discrecontinual_equations.continuation.branch_point_kinds import is_branch_point
 from discrecontinual_equations.continuation.cycle_continuation import (
     CycleContinuation,
     CyclePoint,
@@ -302,7 +303,10 @@ def ferroelectric_ring_stage() -> StageScene:
         Film(np.linspace(P_LO, P_HI, FRAMES), lattice, system, describe),
     )
     for point in scene.timeline.special:
-        if point.kind == "branch_point":
+        # The detector reports the kind it classified, "pitchfork" here, not the
+        # "branch_point" it was asked for; matched by that name, this label never
+        # reached the film (DEQ-123).
+        if is_branch_point(point.kind):
             point.label = "symmetry breaking (λ = a)"
     return scene
 
