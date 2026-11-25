@@ -200,9 +200,10 @@ backwards along ``-(f + D grad U)`` with ``grad U`` interpolated from the grid. 
 gradient case that is steepest descent of ``V`` run in reverse. Between two chosen
 points, :class:`GeometricMinimumAction` relaxes a whole path by the geometric
 minimum action method of Heymann and Vanden-Eijnden (Comm. Pure Appl. Math. 2008),
-in its semi-implicit form for additive noise - the descent flow as Grafke, Schafer
-and Vanden-Eijnden restate it (arXiv 1604.03818, Eq. (19)); the letter usually
-cited for that form is Vanden-Eijnden and Heymann, J. Chem. Phys. 128, 061103
+in its semi-implicit form - the descent flow as Grafke, Schafer and
+Vanden-Eijnden restate it (arXiv 1604.03818, Eq. (19) for additive noise, Eqs.
+(38) to (42) for a state-dependent ``D``); the letter usually cited for the
+semi-implicit form is Vanden-Eijnden and Heymann, J. Chem. Phys. 128, 061103
 (2008). It needs no grid and crosses saddles, which a descent on ``U`` cannot.
 
 *Errors.* The march is a single pass: a value is final once accepted, and nothing
@@ -244,9 +245,8 @@ subset of the components, is refused, as it is by the density solve); a point
 *between* grid points where ``D`` vanishes - the origin of the conformal noise
 ``sigma z dB`` - is treated as impassable, which is the quasipotential's own limit
 there (it diverges logarithmically), but the values in the cells around it are not
-claimed to the order above. The geometric minimum action method here assumes a
-constant ``D``. ``U`` near the boundary of the box is wrong wherever the true
-minimum action path would leave the box, so the box should contain the sublevel set
+claimed to the order above. ``U`` near the boundary of the box is wrong wherever the
+true minimum action path would leave the box, so the box should contain the sublevel set
 of ``U`` being asked about: ``U`` increases along every minimum action path, so the
 path to ``x`` stays inside ``{U <= U(x)}``.
 """
@@ -287,6 +287,7 @@ _HALF = 0.5
 _NEIGHBOURS = ((-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1))
 _UNKNOWN, _ACCEPTED = 0, 2
 _CONSTANT_TOLERANCE = 1.0e-9
+_CONSTANT_PROBE = 1.0e-3
 _DESCENT_STEP = 0.5
 _DESCENT_MAX_STEPS = 20000
 _ARRIVAL_CELLS = 2.0
@@ -1588,8 +1589,16 @@ class GeometricMinimumAction:
     solve per component - so the step is not limited by the node spacing. The
     action reported is ``integral |b| |z'| - <b, z'> d alpha`` by the midpoint rule.
 
-    ``D`` must be constant; a state-dependent ``D`` needs the metric's own
-    derivatives in the flow and is refused rather than silently ignored.
+    A ``D`` that depends on the state takes the general form of the method,
+    in ``x`` itself (see :meth:`_varying_relax`): the momentum has the closed
+    form ``theta = D^{-1} (lambda x' - f)`` of a quadratic Hamiltonian, the
+    flow gains the derivatives of ``D``, and it is preconditioned by ``D`` so
+    that its stiff part is again ``lambda^2 x''``, taken implicitly. On
+    ``f = -D grad V + R grad V`` with ``D`` varying by a factor of two (the
+    tests' multiplicative system, ``U = 2 V``) the action at ``(-0.6, 0.5)``
+    is off by 1.36e-4, 3.11e-5 and 1.04e-5 with 41, 81 and 161
+    nodes. A ``D`` that is the same at every state of the chain and at the
+    states moved a little along each axis is taken as constant.
     """
 
     __slots__ = ["_drift", "_iterations", "_noise", "_step", "_tolerance"]
@@ -1633,39 +1642,34 @@ class GeometricMinimumAction:
         times the gradient, a chain of 41 nodes blew up at a step of 0.05 - so
         a chain that stops being finite, or jumps, is started again from
         ``initial`` at half the step, a few times over, and the step that held
-        is kept for later paths. The step decides only how fast the chain settles, not
-        where.
+        is kept for later paths. The step decides only how fast the chain
+        settles, not where.
         """
         states = np.asarray(initial, dtype=float)
         factor = self._constant_factor(states)
-        inverse = np.linalg.inv(factor)
         step = self._step
         for _ in range(_STEP_HALVINGS):
             # A chain that blows up overflows on its way to nan; that is
-            # caught below, not warned about.
+            # caught in _relax_all, not warned about.
             with np.errstate(over="ignore", invalid="ignore"):
-                relaxed = self._relax_all(states @ inverse.T, factor, inverse, step)
+                relaxed = self._relax_all(states, factor, step)
             if relaxed is not None:
                 self._step = step
-                break
+                return relaxed
             step *= _HALF
-        else:
-            message = (
-                f"the minimum action path did not stay finite at any step down to "
-                f"{step / _HALF:g}"
-            )
-            raise ValueError(message)
-        chain, converged, taken = relaxed
-        result = chain @ factor.T
-        return MinimumActionPath(
-            result,
-            self._action(chain, factor, inverse),
-            converged=converged,
-            iterations=taken,
+        message = (
+            f"the minimum action path did not stay finite at any step down to "
+            f"{step / _HALF:g}"
         )
+        raise ValueError(message)
 
-    def _relax_all(self, chain, factor, inverse, step):
-        """Relax at one step: the chain, whether it settled, the steps taken.
+    def _relax_all(
+        self,
+        states: np.ndarray,
+        factor: np.ndarray | None,
+        step: float,
+    ) -> MinimumActionPath | None:
+        """Relax at one step, in ``z = L^{-1} x`` for a constant ``D``.
 
         ``None`` if the chain stopped being finite, or if one step moved a node
         by more than a quarter of the distance between its ends: no relaxation
@@ -1673,12 +1677,20 @@ class GeometricMinimumAction:
         step of 0.0125 the nodes jumped by twice that distance every step,
         and the chain neither blew up nor settled.
         """
+        if factor is None:
+            chain = states
+        else:
+            inverse = np.linalg.inv(factor)
+            chain = states @ inverse.T
         spacing = 1.0 / (chain.shape[0] - 1)
         reach = _JUMP_SHARE * float(np.linalg.norm(chain[-1] - chain[0]))
         converged = False
         taken = 0
         for taken in range(1, self._iterations + 1):
-            following = self._relax(chain, factor, inverse, spacing, step)
+            if factor is None:
+                following = self._varying_relax(chain, spacing, step)
+            else:
+                following = self._relax(chain, factor, inverse, spacing, step)
             if not np.all(np.isfinite(following)):
                 return None
             following = _equal_arc_length(following)
@@ -1691,22 +1703,112 @@ class GeometricMinimumAction:
             if change < self._tolerance:
                 converged = True
                 break
-        return chain, converged, taken
-
-    def _constant_factor(self, states: np.ndarray) -> np.ndarray:
-        cells = np.array(
-            [diffusion_matrix(self._noise.columns_at(state)) for state in states],
+        if factor is None:
+            action = self._varying_action(chain)
+        else:
+            action = self._action(chain, factor, inverse)
+            chain = chain @ factor.T
+        return MinimumActionPath(
+            chain,
+            action,
+            converged=converged,
+            iterations=taken,
         )
+
+    def _constant_factor(self, states: np.ndarray) -> np.ndarray | None:
+        """The Cholesky factor of a constant ``D``, or ``None`` where it varies.
+
+        ``D`` is compared at the chain's states and at the same states moved a
+        little along each axis, so that a chain lying where a varying ``D``
+        happens to agree with itself is not taken for a constant one.
+        """
+        nudge = _CONSTANT_PROBE * max(float(np.max(np.abs(states))), 1.0)
+        probes = np.vstack(
+            [states, states + np.array([nudge, 0.0]), states + np.array([0.0, nudge])],
+        )
+        cells = np.array(
+            [diffusion_matrix(self._noise.columns_at(state)) for state in probes],
+        )
+        _check_nodes(cells)
         deviation = float(np.max(np.abs(cells - cells[0])))
         if deviation > _CONSTANT_TOLERANCE * max(float(np.max(np.abs(cells[0]))), 1.0):
-            message = (
-                "the geometric minimum action method here needs a constant "
-                "diffusion matrix G G^T"
-            )
-            raise ValueError(message)
-        _check_nodes(cells[:1])
+            return None
         lower, _ = cho_factor(cells[0], lower=True)
         return np.tril(lower)
+
+    def _varying_relax(
+        self,
+        chain: np.ndarray,
+        spacing: float,
+        step: float,
+    ) -> np.ndarray:
+        """One step of the general descent, preconditioned by ``D``.
+
+        With ``A = D^{-1}``, ``lambda = |f|_A / |x'|_A`` and the momentum
+        ``theta = A (lambda x' - f)`` (Grafke, Schafer and Vanden-Eijnden,
+        Eqs. (40), (41)), the descent direction of their Eq. (42) is
+        ``lambda theta' + f_x^T theta + (1/2) theta^T D_x theta``. Multiplied by
+        ``D`` - a positive definite preconditioner - and with
+        ``theta' = A' (lambda x' - f) + A (lambda' x' + lambda x'' - f_x x')``
+        expanded, it is
+
+            ``lambda^2 x'' - lambda D' theta - lambda f_x x'
+              + D (f_x^T theta + (1/2) theta^T D_x theta)``
+
+        up to a part along ``x'``, which is dropped as in :meth:`_relax`. The
+        ``lambda^2 x''`` term is taken implicitly. ``D'`` is ``D``'s derivative
+        along the chain, ``sum_k (dD / dx_k) x'_k``, and ``theta^T D_x theta``
+        is the vector of ``theta^T (dD / dx_k) theta``. With a constant ``D``
+        this is the flow of :meth:`_relax` in the coordinates ``x = L z``.
+        """
+        fields = [field_at(self._drift, state) for state in chain]
+        velocity = np.array(fields)
+        jacobians = np.array(
+            [
+                jacobian_at(self._drift, state, base)
+                for state, base in zip(chain, fields, strict=True)
+            ],
+        )
+        cells, slopes = _diffusion_and_slopes(self._noise, chain)
+        metric = np.linalg.inv(cells)
+        tangent = np.gradient(chain, spacing, axis=0)
+        speed = np.sqrt(np.einsum("ki,kij,kj->k", tangent, metric, tangent))
+        size = np.sqrt(np.einsum("ki,kij,kj->k", velocity, metric, velocity))
+        scale = size / np.where(speed > 0.0, speed, 1.0)
+        momentum = np.einsum(
+            "kij,kj->ki",
+            metric,
+            scale[:, None] * tangent - velocity,
+        )
+        change = np.einsum("kmij,km->kij", slopes, tangent)
+        force = -scale[:, None] * (
+            np.einsum("kij,kj->ki", change, momentum)
+            + np.einsum("kij,kj->ki", jacobians, tangent)
+        )
+        pulled = np.einsum("kji,kj->ki", jacobians, momentum) + _HALF * np.einsum(
+            "ki,kmij,kj->km",
+            momentum,
+            slopes,
+            momentum,
+        )
+        force += np.einsum("kij,kj->ki", cells, pulled)
+        length = np.linalg.norm(tangent, axis=1)
+        unit = tangent / np.where(length > 0.0, length, 1.0)[:, None]
+        force -= np.sum(force * unit, axis=1)[:, None] * unit
+        return _implicit_step(chain, step * force, step * scale * scale, spacing)
+
+    def _varying_action(self, chain: np.ndarray) -> float:
+        """``sum |f|_A |dx|_A - <f, dx>_A`` with ``f`` and ``A`` at each midpoint."""
+        middle = _HALF * (chain[1:] + chain[:-1])
+        steps = np.diff(chain, axis=0)
+        total = 0.0
+        for state, step in zip(middle, steps, strict=True):
+            total += _geometric(
+                step,
+                field_at(self._drift, state),
+                np.linalg.inv(diffusion_matrix(self._noise.columns_at(state))),
+            )
+        return total
 
     def _drift_at(self, chain, factor, inverse):
         states = chain @ factor.T
@@ -1740,22 +1842,7 @@ class GeometricMinimumAction:
         # converges as nodes are added.
         unit = tangent / np.where(speed > 0.0, speed, 1.0)[:, None]
         force -= np.sum(force * unit, axis=1)[:, None] * unit
-        explicit = chain + step * force
-        weight = step * scale * scale / (spacing * spacing)
-        if not (np.all(np.isfinite(explicit)) and np.all(np.isfinite(weight))):
-            return np.full_like(chain, np.nan)
-        nodes = chain.shape[0]
-        bands = np.zeros((3, nodes))
-        bands[1] = 1.0 + 2.0 * weight
-        bands[0, 1:] = -weight[:-1]
-        bands[2, :-1] = -weight[1:]
-        bands[1, 0] = bands[1, -1] = 1.0
-        bands[0, 1] = 0.0
-        bands[2, -2] = 0.0
-        explicit[0], explicit[-1] = chain[0], chain[-1]
-        return np.column_stack(
-            [solve_banded((1, 1), bands, explicit[:, axis]) for axis in range(_PLANE)],
-        )
+        return _implicit_step(chain, step * force, step * scale * scale, spacing)
 
     def _action(self, chain, factor, inverse) -> float:
         middle = _HALF * (chain[1:] + chain[:-1])
@@ -1769,6 +1856,47 @@ class GeometricMinimumAction:
                 - np.sum(velocity * steps, axis=1),
             ),
         )
+
+
+def _implicit_step(chain, push, stiffness, spacing):
+    """``x + push`` with ``stiffness x''`` taken implicitly, the ends held.
+
+    ``nan`` throughout if either is not finite, which the caller takes for a
+    step too large.
+    """
+    explicit = chain + push
+    weight = stiffness / (spacing * spacing)
+    if not (np.all(np.isfinite(explicit)) and np.all(np.isfinite(weight))):
+        return np.full_like(chain, np.nan)
+    nodes = chain.shape[0]
+    bands = np.zeros((3, nodes))
+    bands[1] = 1.0 + 2.0 * weight
+    bands[0, 1:] = -weight[:-1]
+    bands[2, :-1] = -weight[1:]
+    bands[1, 0] = bands[1, -1] = 1.0
+    bands[0, 1] = 0.0
+    bands[2, -2] = 0.0
+    explicit[0], explicit[-1] = chain[0], chain[-1]
+    return np.column_stack(
+        [solve_banded((1, 1), bands, explicit[:, axis]) for axis in range(_PLANE)],
+    )
+
+
+def _diffusion_and_slopes(noise: NoiseMatrix, chain: np.ndarray):
+    """``D`` at each state, and ``dD / dx_k`` by central differences."""
+    cells = np.array([diffusion_matrix(noise.columns_at(state)) for state in chain])
+    slopes = np.empty((chain.shape[0], _PLANE, _PLANE, _PLANE))
+    for axis in range(_PLANE):
+        shift = np.zeros(_PLANE)
+        shift[axis] = _TAYLOR_STEP
+        ahead = np.array(
+            [diffusion_matrix(noise.columns_at(state + shift)) for state in chain],
+        )
+        behind = np.array(
+            [diffusion_matrix(noise.columns_at(state - shift)) for state in chain],
+        )
+        slopes[:, axis] = (ahead - behind) / (2.0 * _TAYLOR_STEP)
+    return cells, slopes
 
 
 def _guide(surface, trace: np.ndarray, nodes: int) -> tuple[np.ndarray, float]:

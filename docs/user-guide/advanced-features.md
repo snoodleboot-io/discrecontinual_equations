@@ -139,7 +139,7 @@ radius is 8 cells on every grid unless `update_radius` is given;
 `default_radius(grid)` in `continuation.quasipotential` is the authors' rule
 of thumb, growing with the grid, which pays on a strongly rotating drift and
 costs three to four times the error on one that is nearly a gradient.
-`GeometricMinimumAction` needs a constant `D`. The module
+`GeometricMinimumAction` takes a constant or a state-dependent `D`. The module
 docstring of `continuation/quasipotential.py` has the measured errors.
 
 ## Custom Solvers

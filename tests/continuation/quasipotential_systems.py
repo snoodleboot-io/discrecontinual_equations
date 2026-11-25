@@ -324,3 +324,62 @@ class RotatingCubicField(DeterministicFunction):
             -0.5 * slope_x - CUBIC_ROTATION * slope_y,
             -0.5 * slope_y + CUBIC_ROTATION * slope_x,
         ]
+
+
+# --- State-dependent noise (DEQ-59) --------------------------------------------
+#
+# f = -D(x) grad V + c R grad V, with R the rotation by a right angle and D(x) =
+# G(x) G(x)^T varying with the state. U = 2 (V - V_min) solves the
+# Hamilton-Jacobi equation for any D(x) and any c: with grad U = 2 grad V,
+# grad U . f = -2 grad V^T D grad V + 2 c grad V . R grad V and the second term
+# vanishes, while (1/2) grad U^T D grad U = 2 grad V^T D grad V. The ticket's
+# candidate f = -D grad V + (1/2) div D is the drift whose stationary density
+# is exactly exp(-2 V) at unit noise; the (1/2) div D is the order-eps
+# correction that the quasipotential does not see, and with it in the drift
+# grad U . (1/2) div D is left over and U = 2 V no longer solves the equation.
+# G is lower triangular with a positive diagonal, so D is never singular; it
+# varies by a factor of about two across the box and is anisotropic
+# everywhere. The rotation c = 1 makes the drift non-gradient.
+MULTIPLICATIVE_ROTATION = 1.0
+
+
+def multiplicative_amplitude(x, y):
+    """``G = [[1 + y^2 / 5, 0], [3 x / 10, 4 / 5 + x^2 / 10]]``."""
+    return np.array([[1.0 + 0.2 * y * y, 0.0], [0.3 * x, 0.8 + 0.1 * x * x]])
+
+
+class MultiplicativeField(DeterministicFunction):
+    """``f = -D(x) grad V + c R grad V`` for the double well's ``V``."""
+
+    def eval(
+        self,
+        point: list[float],
+        time: float | None = None,  # noqa: ARG002 (base signature)
+    ) -> list[float]:
+        x, y = float(point[0]), float(point[1])
+        amplitude = multiplicative_amplitude(x, y)
+        slope = np.array([x**3 - x, y])
+        turned = np.array([-slope[1], slope[0]])
+        return list(
+            -(amplitude @ amplitude.T @ slope) + MULTIPLICATIVE_ROTATION * turned,
+        )
+
+
+class MultiplicativeColumn(DeterministicFunction):
+    """Column ``index`` of ``G(x)`` above."""
+
+    def __init__(self, index: int) -> None:
+        super().__init__(_states(), [], _states(), None)
+        self._index = index
+
+    def eval(
+        self,
+        point: list[float],
+        time: float | None = None,  # noqa: ARG002 (base signature)
+    ) -> list[float]:
+        amplitude = multiplicative_amplitude(float(point[0]), float(point[1]))
+        return list(amplitude[:, self._index])
+
+
+def multiplicative_noise() -> NoiseMatrix:
+    return NoiseMatrix([MultiplicativeColumn(index) for index in range(2)])
