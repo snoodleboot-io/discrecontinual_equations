@@ -289,6 +289,20 @@ def locate_thresholds(diagnostics: Diagnostics) -> Located:
     Each is refused rather than guessed when its bracket holds no sign change:
     a film that claims a threshold it did not find would be worse than one
     that fails to build.
+
+    The dynamical (D) threshold is where the top Lyapunov exponent changes sign;
+    the phenomenological (P) threshold is where the stationary density changes
+    shape at the probe. Both are root-found with the thresholds' root finder.
+
+    Args:
+        diagnostics: The measurements and the brackets to search.
+
+    Returns:
+        Both thresholds, and the exponent at every sample value.
+
+    Raises:
+        ValueError: If either bracket holds no sign change, or the density does
+            not exist somewhere in the phenomenological bracket.
     """
     measurements, thresholds = diagnostics.measurements, diagnostics.thresholds
     exponent = _Memo(measurements.exponent_at)
@@ -336,6 +350,16 @@ def density_window(grid: DensityGrid, window: Box) -> tuple[slice, slice, Box]:
     is where the density is negligible, and drawn on the stage's own box,
     which is smaller. The extent returned is the cell edges, since the panel
     paints each value over its whole cell.
+
+    Args:
+        grid: The density grid.
+        window: ``((x_low, x_high), (y_low, y_high))``.
+
+    Returns:
+        The ``x`` and ``y`` index slices, and the window's cell-edge extent.
+
+    Raises:
+        ValueError: If the window holds no cell centre along an axis.
     """
     slices = []
     extent = []
@@ -367,6 +391,18 @@ def frame_density(
     soon as it is a ring, even while the centre is still higher: the grid
     overstates the centre cells of a singular diffusion, and gating the crest
     on the global maximum would hide the ring for a while after it exists.
+
+    Args:
+        density: The solved stationary density.
+        window: The stage's box.
+        centre: The reference state the peak starts on.
+
+    Returns:
+        The density scaled to a peak of one, its interior maxima in the window,
+        its dominant mode, its crest radius (or ``None``), and the peak value.
+
+    Raises:
+        ValueError: If ``window`` holds no cell of the grid.
     """
     grid = density.grid
     xs, ys, _extent = density_window(grid, window)
@@ -405,6 +441,17 @@ def check_noise(noise: NoiseModel, view: View, drift: Function, parameter, value
     which is the drift the Euler-Maruyama step must use. A Stratonovich
     equation whose correction does not vanish therefore needs its corrected
     drift in the view, and this is where that omission is caught.
+
+    Args:
+        noise: The noise model, as terms and as a matrix.
+        view: The stage's view, carrying the drift terms and the bounds.
+        drift: The library's drift function.
+        parameter (Parameter): The continuation parameter; its value is restored.
+        value (float): The parameter value to check at.
+
+    Raises:
+        ValueError: If a noise driver's terms or the view's drift disagree with
+            the library's by more than ``1e-9`` relative to ``1 + max|value|``.
     """
     generator = np.random.default_rng(0)
     factor = stratonovich_factor(noise.convention)
@@ -458,6 +505,22 @@ def stochastic_stage(
     terms; a sampled field cannot be combined with a noise term. ``describe``
     runs after the densities are in place, so a regime can be named by what
     the density does.
+
+    Args:
+        scene: A stage built by :func:`~.stage_builder.stage_scene` through a
+            view; it is changed in place and returned.
+        continued: What the scene was staged from.
+        noise: The noise amplitude as terms and as a matrix.
+        diagnostics: The density and exponent families and the brackets.
+        describe: Optional namer of each frame's regime.
+
+    Returns:
+        ``scene``, with paths, a density per frame, the exponent curve, and the
+        P and D thresholds on the timeline.
+
+    Raises:
+        ValueError: If the scene has no view, the noise or drift terms disagree
+            with the library, or a threshold cannot be located.
     """
     view = scene.lattice.view
     if view is None:
@@ -527,6 +590,16 @@ def finite_time_band(measurements: Measurements) -> FiniteTimeBand | None:
 
     The top exponent is the first column; every sample value must report the
     same window, or the band would mix distributions of different widths.
+
+    Args:
+        measurements: The exponent samples and their finite-time family.
+
+    Returns:
+        The 10, 25, 50, 75 and 90 percent quantiles per sample value, or
+        ``None`` if there is no finite-time family or no sample.
+
+    Raises:
+        ValueError: If the sample values report different windows.
     """
     if measurements.finite_time_at is None:
         return None

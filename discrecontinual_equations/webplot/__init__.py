@@ -12,7 +12,33 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Self-contained D3.js plotting for continuation and bifurcation results."""
+"""Self-contained D3.js pages for continuation and bifurcation results.
+
+Every page is one HTML file with D3 inlined, so it opens from disk with no
+server and no network. A page is built in two steps that never mix: a *builder*
+turns the library's results into a render-agnostic value object, and a
+*renderer* turns that object into HTML. The value objects hold no drawing code,
+so they are built and unit-tested without a browser.
+
+There are three kinds of page:
+
+* a **still**, a :class:`Scene` built by the functions of
+  :mod:`~discrecontinual_equations.webplot.scene_builder` (a bifurcation
+  diagram, a two- or three-parameter curve, a family surface, an exploration
+  tree) and drawn by :class:`D3Renderer`;
+* a **stage** (a *film*), a :class:`StageScene` built by :func:`stage_scene`
+  from a continued branch and its cycles: one :class:`Frame` per parameter value,
+  with the equilibria, their eigenvalues, saddle manifolds and cycles, which the
+  page plays as motion with particles flowing through the field. It is drawn by
+  :class:`StageRenderer`, and a stochastic stage (paths, densities, the top
+  Lyapunov exponent) by the stochastic renderer;
+* a **manifold film**, a :class:`ManifoldFilm` of growing invariant-manifold
+  rings, drawn by :class:`ManifoldFilmRenderer`.
+
+:class:`PlotReport` writes pages into a directory and an ``index.html`` atlas
+of :class:`AtlasEntry` cards linking them. ``examples/build_sites.py`` builds
+the full atlas from every example; see the "Atlas pages and films" guide.
+"""
 
 from discrecontinual_equations.webplot.manifold_film import (
     FilmCurve,

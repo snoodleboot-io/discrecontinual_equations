@@ -5,6 +5,16 @@ result) into a :class:`~.scene.Scene` the D3 renderer can draw. Axis labels and 
 pretty names of the bifurcations are supplied by the caller (or defaulted), so the
 plots read in the system's own notation. They depend only on the render-agnostic
 diagram view and the result value objects, never on a drawing library.
+
+Two pieces of numerics are done here, both linear interpolation. A family's
+slices are coloured by mixing the two end colours channel by channel in RGB, in
+proportion to the slice's place on the family scale. And for a surface, each
+slice branch is resampled to the same number of nodes so the slices form a quad
+mesh: at evenly spaced measures when the branch's measure is monotone, and
+otherwise at evenly spaced arclengths in the ``(parameter, measure)`` plane, in
+both cases by linear interpolation between neighbouring computed points. A fold
+in a slice is therefore cut by a chord between its two computed neighbours, and
+arclength mixes the units of the parameter and the measure.
 """
 
 from itertools import pairwise
@@ -49,7 +59,15 @@ _MONOTONE_TOLERANCE = 1.0e-12
 
 
 def with_equation(scene: Scene, equation: str) -> Scene:
-    """Return a copy of ``scene`` carrying a LaTeX equation for display."""
+    """Return a copy of ``scene`` carrying a LaTeX equation for display.
+
+    Args:
+        scene: The scene to copy.
+        equation: LaTeX source, typeset to SVG by the renderer.
+
+    Returns:
+        A new scene, otherwise identical.
+    """
     return Scene(
         scene.title,
         scene.subtitle,
@@ -66,7 +84,15 @@ def with_equation(scene: Scene, equation: str) -> Scene:
 
 
 def with_regions(scene: Scene, regions: list[tuple[str, float, float]]) -> Scene:
-    """Return a copy of ``scene`` annotated with labelled parameter-plane regions."""
+    """Return a copy of ``scene`` annotated with labelled parameter-plane regions.
+
+    Args:
+        scene: The scene to copy.
+        regions: ``(label, x, y)`` per region: the label and where it is placed.
+
+    Returns:
+        A new scene, otherwise identical.
+    """
     return Scene(
         scene.title,
         scene.subtitle,
@@ -89,7 +115,21 @@ def bifurcation_scene(
     x_label: str = "parameter",
     y_label: str = "state measure",
 ) -> Scene:
-    """A codim-1 bifurcation diagram: measure versus continuation parameter."""
+    """A codim-1 bifurcation diagram: measure versus continuation parameter.
+
+    Each stability segment of the branch is one line series, and the detected
+    bifurcations are markers grouped by kind.
+
+    Args:
+        branch: A continued equilibrium branch.
+        title: The page title.
+        subtitle: The line under the title.
+        x_label: The horizontal axis label.
+        y_label: The vertical axis label.
+
+    Returns:
+        The still scene.
+    """
     diagram = BifurcationDiagram(branch)
     series: list[Series] = []
     seen: set[str] = set()
@@ -114,7 +154,21 @@ def codim2_scene(
     x_label: str,
     y_label: str,
 ) -> Scene:
-    """A codim-2 curve in the parameter plane with detected points."""
+    """A codim-2 curve in the parameter plane with detected points.
+
+    The horizontal axis is the result's second parameter and the vertical its
+    first.
+
+    Args:
+        result: A two-parameter continuation result.
+        title: The page title.
+        subtitle: The line under the title.
+        x_label: The horizontal (second parameter) axis label.
+        y_label: The vertical (first parameter) axis label.
+
+    Returns:
+        The still scene.
+    """
     curve = [(b, a) for a, b, _omega in result.curve_parameters]
     grouped: dict[str, list[tuple[float, float]]] = {}
     for point in result.points:
@@ -135,7 +189,18 @@ def codim3_scene(
     subtitle: str,
     labels: tuple[str, str, str],
 ) -> Scene:
-    """A codim-3 curve projected onto two parameters, with detected points."""
+    """A codim-3 curve projected onto two parameters, with detected points.
+
+    Args:
+        result: A three-parameter continuation result.
+        projection: The indices of the two parameters drawn, horizontal first.
+        title: The page title.
+        subtitle: The line under the title.
+        labels: The names of all three parameters, in order.
+
+    Returns:
+        The still scene.
+    """
     horizontal, vertical = projection
     curve = [
         (triple[horizontal], triple[vertical]) for triple in result.curve_parameters
@@ -185,6 +250,15 @@ def family_scene(
     names. Each slice is drawn in a colour interpolated along the family scale, and
     the bifurcations detected across all slices are overlaid as markers so their
     locus - the codim-2 curve - is visible as the diagram evolves.
+
+    Args:
+        family: The slices, one continued branch per family value.
+        labels: ``(diagram parameter, state measure, family parameter)``.
+        title: The page title.
+        subtitle: The line under the title.
+
+    Returns:
+        The still scene, with a colour bar for the family scale.
     """
     values = family.values
     low, high = min(values), max(values)
@@ -243,10 +317,21 @@ def surface_scene(
     """Assemble the family into a surface in (diagram, family, measure) space.
 
     ``labels`` are the diagram-parameter, family-parameter, and measure names, and
-    ``captions`` is ``(title, subtitle)``. Each slice branch is resampled by
-    arclength to ``samples`` nodes so the slices align into a quad mesh; the
-    bifurcations detected across the slices are joined, per kind, into loci - the
-    continued bifurcation curves running over the surface.
+    ``captions`` is ``(title, subtitle)``. Each slice branch is resampled to
+    ``samples`` nodes so the slices align into a quad mesh - at evenly spaced
+    measures where the measure is monotone along the branch, at evenly spaced
+    arclengths otherwise (see the module docstring); the bifurcations detected
+    across the slices are joined, per kind, into loci - the continued bifurcation
+    curves running over the surface.
+
+    Args:
+        family: The slices, one continued branch per family value.
+        labels: ``(diagram parameter, family parameter, measure)``.
+        captions: ``(title, subtitle)``.
+        samples: Nodes per slice in the mesh.
+
+    Returns:
+        The still scene, carrying the surface.
     """
     grid: list[list[tuple[float, float, float]]] = []
     for item in family.slices:
@@ -395,6 +480,14 @@ def exploration_diagram(
     The codimension-2 curves (fold, Hopf) are drawn in the first two parameters,
     and every codimension-2 and codimension-3 point discovered is marked where the
     curves meet. Codimension-3 points are projected onto the plane.
+
+    Args:
+        root: The root of the exploration tree.
+        axes: The two parameter axis labels.
+        captions: ``(title, subtitle)``.
+
+    Returns:
+        The still scene.
     """
     lines: list[tuple[str, str, list[tuple[float, float]], str | None]] = []
     markers_by_kind: dict[str, list[tuple[float, float]]] = {}
@@ -424,6 +517,14 @@ def exploration_skeleton(
     Codimension-2 curves are lifted into the third parameter at the value they were
     continued at, codimension-3 curves are drawn with their full depth, and the
     codimension-3 organizing points are marked where a curve collapses.
+
+    Args:
+        root: The root of the exploration tree.
+        labels: The three parameter names.
+        captions: ``(title, subtitle)``.
+
+    Returns:
+        The still scene, carrying the skeleton as surface loci.
     """
     loci: list[Locus] = []
     for node in _codim_two_nodes(root):
@@ -479,6 +580,13 @@ def exploration_tree(
 
     Each continuation is a node placed in a column by codimension, annotated with
     the bifurcations it detected; edges join a curve to the continuations it seeded.
+
+    Args:
+        root: The root of the exploration tree.
+        captions: ``(title, subtitle)``.
+
+    Returns:
+        The still scene, carrying the tree.
     """
     nodes: list[TreeNode] = []
     edges: list[tuple[int, int]] = []
@@ -552,6 +660,16 @@ def curve_scene(
     ``lines`` and ``markers`` are ``(kind, label, points, colour)`` tuples; used for
     phase portraits, invariant-manifold charts, and connecting orbits, which live in
     state space rather than a parameter-versus-measure diagram.
+
+    Args:
+        lines: ``(kind, label, points, colour)`` per polyline.
+        markers: ``(kind, label, points, colour)`` per marker set.
+        axes: The horizontal and vertical axis labels.
+        title: The page title.
+        subtitle: The line under the title.
+
+    Returns:
+        The still scene.
     """
     series = [
         Series("line", kind, label, points, colour=colour)
@@ -575,6 +693,19 @@ def curve_family_scene(
 
     Each curve corresponds to one ``value``; ``captions`` is ``(title, subtitle)``.
     Used for stationary-density families as a phenomenological parameter varies.
+
+    Args:
+        curves: The curves, each a list of points.
+        values: The family value of each curve.
+        axes: The horizontal and vertical axis labels.
+        gradient_label: The colour bar's label.
+        captions: ``(title, subtitle)``.
+
+    Returns:
+        The still scene, with a colour bar for the family scale.
+
+    Raises:
+        ValueError: If ``curves`` and ``values`` differ in length.
     """
     low, high = min(values), max(values)
     series = [

@@ -6,6 +6,11 @@ a continuous :class:`Gradient` colour scale, or a three-dimensional
 :class:`Surface`. Each series is a polyline (``role="line"``) or a marker set
 (``role="marker"``), coloured by kind or by an explicit colour. Keeping this free
 of any drawing library lets the scene be built and unit-tested on its own.
+
+A scene is a *still*: a single picture, with no parameter to play. The renderer
+draws every line series as a centripetal Catmull-Rom spline through its points
+(see the "Atlas pages and films" guide), so a series should be sampled finely
+enough that the spline does not invent structure between computed points.
 """
 
 

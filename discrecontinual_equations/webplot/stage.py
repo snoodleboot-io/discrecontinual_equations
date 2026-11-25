@@ -131,6 +131,7 @@ class View:
 
     @property
     def dimension(self) -> int:
+        """The dimension ``N`` of the state the view projects."""
         return len(self.matrix[0])
 
     def project(self, state: Sequence[float]) -> tuple[float, float]:
@@ -145,7 +146,16 @@ def evaluate_terms(
     state: Sequence[float],
     parameter: float,
 ) -> list[float]:
-    """Evaluate a polynomial field the way the page does, for checking it."""
+    """Evaluate a polynomial field the way the page does, for checking it.
+
+    Args:
+        field: One :class:`Term` list per component.
+        state: The state to evaluate at.
+        parameter: The continuation parameter's value.
+
+    Returns:
+        One value per component: the sum of its terms.
+    """
     values = []
     for component in field:
         total = 0.0
@@ -763,6 +773,13 @@ def stage_payload(scene: StageScene) -> dict:
     A stochastic stage adds one ``stochastic`` block, and a density to each
     frame that has one; a deterministic stage's payload has neither key, not
     even a null, so it is byte for byte what it was.
+
+    Args:
+        scene: The stage to serialise.
+
+    Returns:
+        A dictionary of lists, numbers, strings and ``None``, ready for
+        ``json.dumps``.
     """
     system, lattice = scene.system, scene.lattice
     payload = {
