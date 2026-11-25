@@ -26,15 +26,35 @@ radius to 1e-11, stable-rate ratios up to 20, near-parallel eigenvectors),
 second order on the tilted homoclinic cylinder, and the Lorenz manifold to
 geodesic distance 100 in 1.5 s with no point lost.
 
+Step control is the paper's (DEQ-61): Delta halves where any point turns by
+alpha_max or Delta * alpha_max, doubles where every point is below both lower
+bounds, and a ring is accepted at the smallest step with a warning
+(`GeodesicMesh.warnings`). A landing Newton misses is retried alone by the
+paper's continuation in the flight time, so a ring is recomputed only when
+retries fail. At the SIADS / IJBC settings the band distances are the papers'
+exactly (25, 40, 55 bands at 62.75, 92.75, 122.75) and the last circle has
+2,330 points against the published 2,300.
+
 Remaining: complex (spiral) manifolds need the conjugate-coordinate variant (the
 level-set grower seeds a spiral manifold on its tangent plane meanwhile). The
-strict Lorenz growth stops at distance 157.2 (step 1.5, spacing 1.5 to 4.5) and
-says so in `GeodesicMesh.stopped`: there the flow runs along the level set and
-the front is 0.04 to 0.05 off W^s(0) (measured independently), so the radial
-steps turn by 0.38 rad at every Delta and four landings fail. With `loss` it
-goes on, with holes. Krauskopf and Osinga reached 151.75 (SIADS 2003, Sec. 4.5)
-and 154.75 (IJBC 2005 survey, Sec. 2.3). Their step control also bounds
-Delta * alpha, which this grower does not.
+strict Lorenz growth stops at distance 165.25 (step 1.5, spacing 1.5 to 4.5) and
+says so in `GeodesicMesh.stopped`: 1 of 1,248 landings fails at the smallest
+step, 0.094, and seven rings from 157.09 on were accepted there turning by up
+to 0.95. It stopped at 157.4 while the continuation in the flight time gave a
+landing up after 200 steps: where the flow runs along the level set the
+landings go 18.7 inside before coming round to the outward one. A landing
+lost at 200 steps is now continued again with 4,000, once per front (a row
+the larger budget failed is not escalated again at a smaller Delta), and a
+final Newton solve outside its bracket counts as lost. The growth to 157.4
+costs what it did (the same mesh); the rings beyond it take 824 s against
+64 s for the 200-step growth to 157.4, side by side. At the papers' settings,
+where a few rows never land, the same stops cost 1.7 (SIADS) to 2.2 (IJBC)
+times as long, and the lossy growth to 170 2.8 times, losing 1 point not 57. With `loss` it goes on, with holes. At the papers' settings it stops
+short of their distances: 150.75 at the SIADS spacing (0.25 to 1.0; published
+151.75) and 152.75 at the survey's (0.67 to 2.0; published 154.75), on 7 and 4
+landings at the smallest step 0.01.
+Krauskopf and Osinga reached 151.75 (SIADS 2003, Sec. 4.5) and 154.75 (IJBC
+2005 survey, Sec. 2.3).
 
 ## 2. Connecting orbits - ORBIT SOLVER IMPLEMENTED, continuation pending
 

@@ -142,6 +142,9 @@ def film_payload(film: ManifoldFilm) -> dict:
         ],
         "seed": mesh.seed,
         "residual": float(mesh.residual),
+        "stopped": mesh.stopped,
+        "lost": int(mesh.lost),
+        "warnings": list(mesh.warnings),
     }
 
 

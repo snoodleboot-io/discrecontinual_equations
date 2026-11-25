@@ -34,7 +34,11 @@ from discrecontinual_equations.continuation.geodesic_level_sets import (
     GeodesicLevelSets,
     GeodesicSettings,
     _advance,
+    _first_guess,
+    _first_landing,
     _Front,
+    _land,
+    _ring_tangents,
     _thin,
     _trace_back,
 )
@@ -85,7 +89,7 @@ def _jacobian(function, point):
     return AutomaticDifferentiation().jacobian(function, np.asarray(point), 0.0)
 
 
-def _linear_mesh(step: float = 0.1):
+def _linear_mesh(step: float = 0.1, distance: float = 2.0):
     function = _field(LinearSaddle)
     settings = GeodesicSettings(
         initial_radius=0.1,
@@ -97,7 +101,7 @@ def _linear_mesh(step: float = 0.1):
         np.zeros(3),
         _jacobian(function, np.zeros(3)),
         StableManifold(),
-        distance=2.0,
+        distance=distance,
     )
 
 
@@ -308,6 +312,132 @@ def test_the_plane_oracle_holds_for_every_saddle(name):
 
 
 _ADVANCE = "discrecontinual_equations.continuation.geodesic_level_sets._advance"
+_FIRST_GUESS = "discrecontinual_equations.continuation.geodesic_level_sets._first_guess"
+
+
+def _swirl(states: np.ndarray) -> np.ndarray:
+    """A rotation in z = 0 whose radial part changes sign around the circle.
+
+    ``rho = -0.3 + 0.5 sin(theta)`` is positive for theta in (0.64, 2.50):
+    there the field points out of the unit circle, so flowing towards the
+    ring (forward, for a stable manifold) a point just outside it moves
+    further out first and comes back to the ring only after turning round.
+    """
+    x, y, z = states.T
+    rho = -0.3 + 0.5 * np.sin(np.arctan2(y, x))
+    return np.column_stack([-y + rho * x, x + rho * y, -z])
+
+
+class TestFirstLanding(TestCase):
+    """The continuation in the flight time from zero, the paper's own BVP solve.
+
+    The plane z = 0 is invariant under :func:`_swirl` and the unit circle is
+    its front, so the landing Delta beyond each ring point is exactly
+    ``(1 + Delta) r`` - whatever the orbit does on its way to the ring.
+    """
+
+    def setUp(self):
+        angles = np.linspace(0.0, 2.0 * math.pi, 40, endpoint=False)
+        self.ring = np.column_stack([np.cos(angles), np.sin(angles), np.zeros(40)])
+        self.settings = GeodesicSettings(0.1, 0.1, (0.05, 0.3))
+
+    def _land(self, delta):
+        return _first_landing(
+            _swirl,
+            -1.0,
+            self.ring,
+            np.arange(40, dtype=float),
+            (self.ring, _ring_tangents(self.ring), self.ring, delta),
+            self.settings,
+        )
+
+    def test_every_landing_is_delta_straight_out(self):
+        landing = self._land(0.1)
+        assert np.all(landing.valid)
+        assert np.max(np.abs(landing.points - 1.1 * self.ring)) < 1.0e-12
+
+    def test_an_inward_first_crossing_is_passed_over(self):
+        # Where the field points out of the ring, the landings of small tau
+        # are inside it, and the paper's first crossing at 0.9 r with them.
+        # The outward one is reached after the orbit has gone round (tau
+        # 0.8 to 2.9 there).
+        outward = np.einsum("ij,ij->i", _swirl(self.ring), self.ring) > 0.0
+        landing = self._land(0.1)
+        assert np.count_nonzero(outward) == 11
+        assert np.max(np.abs(landing.points[outward] - 1.1 * self.ring[outward])) < (
+            1.0e-12
+        )
+
+    def test_a_newton_solve_that_leaves_its_bracket_is_not_a_landing(self):
+        # At Delta = 0.2 one row's final Newton solve, started inside its
+        # bracket, converged to the inward solution 0.8 r at another flight
+        # time: a solution of the equations, but not this branch's landing.
+        landing = self._land(0.2)
+        side = np.einsum("ij,ij->i", landing.points - self.ring, self.ring)
+        assert not np.any(landing.valid & (side < 0.0))
+        good = landing.valid
+        assert np.max(np.abs(landing.points[good] - 1.2 * self.ring[good])) < 1.0e-12
+
+    def test_a_small_delta_still_reaches_the_outward_crossing(self):
+        # At Delta = 0.005 the continuation goes inward for up to 0.4 before
+        # it comes round, 4 x 0.4 / 0.005 = 320 steps of Delta / 4: more than
+        # its first 200, which give 6 of the 40 rows up (5 of them among the
+        # 11 where the flow points out), though each has its landing at
+        # exactly 1.005 r. Those 6 alone are continued again with the larger
+        # budget, and land.
+        ring, delta = self.ring, 0.005
+        budgets = []
+
+        def no_guess(_field, _sense, _front, _centres, keys, *_rest):
+            return keys.astype(float).copy(), np.full(len(keys), np.nan)
+
+        def spy(*args):
+            budgets.append((args[-1], len(args[3])))
+            return _first_landing(*args)
+
+        front = _Front(ring, ring.copy(), np.arange(len(ring)))
+        with patch(_FIRST_GUESS, no_guess), patch(_FIRST_LANDING, spy):
+            landing = _land(
+                _swirl,
+                -1.0,
+                front,
+                ring,
+                _ring_tangents(ring),
+                np.arange(len(ring), dtype=float),
+                ring,
+                delta,
+                self.settings,
+            )
+        assert np.all(landing.valid)
+        assert np.max(np.abs(landing.points - (1.0 + delta) * ring)) < 1.0e-12
+        assert budgets == [(200, 40), (4000, 6)]
+
+    def test_a_landing_the_first_guess_misses_is_retried_alone(self):
+        # Two first guesses in seven are spoiled - half the ring away, which
+        # Newton, a ring segment a step, cannot cross - or not a number. The
+        # continuation lands those points at the same Delta, and the ring is
+        # not recomputed: one ring solve per ring, and the same mesh.
+        real = _first_guess
+
+        def spoiled(field, sense, front, *rest):
+            places, times = real(field, sense, front, *rest)
+            places[::7] += 0.5 * len(front.points)
+            times[3::7] = np.nan
+            return places, times
+
+        solves = []
+
+        def counted(*args):
+            solves.append(args[3])
+            return _advance(*args)
+
+        clean = _linear_mesh(distance=0.6)
+        with patch(_FIRST_GUESS, spoiled), patch(_ADVANCE, counted):
+            mesh = _linear_mesh(distance=0.6)
+        assert mesh.lost == 0
+        assert len(solves) == len(mesh.rings) - 1
+        assert mesh.ring_distances == clean.ring_distances
+        assert np.max(np.abs(mesh.vertices - clean.vertices)) < 1.0e-8
 
 
 class TestTraceBack(TestCase):
@@ -807,7 +937,7 @@ class TestStepControl(TestCase):
         # on the mean turn rather than the largest, gives 0.342.
         function = _field(TiltedHomoclinicField)
         mesh = GeodesicLevelSets(
-            GeodesicSettings(0.05, 0.6, (0.05, 0.15)),
+            GeodesicSettings(0.05, 0.6, (0.05, 0.15), angles=(0.1, 0.3)),
         ).compute(
             function,
             np.zeros(3),
@@ -824,7 +954,13 @@ class TestStepControl(TestCase):
         # grows it after turns of up to 0.199 and 0.157.
         function = _field(GraphSaddle)
         mesh = GeodesicLevelSets(
-            GeodesicSettings(0.1, 0.05, (0.05, 0.15), step_range=(0.01, 1.0)),
+            GeodesicSettings(
+                0.1,
+                0.05,
+                (0.05, 0.15),
+                step_range=(0.01, 1.0),
+                angles=(0.1, 0.3),
+            ),
         ).compute(
             function,
             np.zeros(3),
@@ -843,6 +979,104 @@ class TestStepControl(TestCase):
         assert max(grown) < 0.1
 
 
+def _graph_steps(**options):
+    function = _field(GraphSaddle)
+    options.setdefault("step_range", (0.01, 1.0))
+    return GeodesicLevelSets(
+        GeodesicSettings(0.1, 0.2, (0.05, 0.15), **options),
+    ).compute(
+        function,
+        np.zeros(3),
+        _jacobian(function, np.zeros(3)),
+        StableManifold(),
+        distance=2.0,
+    )
+
+
+_FIRST_LANDING = (
+    "discrecontinual_equations.continuation.geodesic_level_sets._first_landing"
+)
+
+
+def test_newton_walks_along_a_finely_spaced_ring_in_lengths_not_segments():
+    # At spacing 3e-4 the first guess is up to 23 segments (7e-3) along the
+    # ring from the start Newton converges to. One segment a step, rows
+    # that needed more than 25 failed - 51 of 2,011 on the first ring - and
+    # went to the continuation; half of Delta a step, none does.
+    function = _field(LinearSaddle)
+    retried = []
+
+    def spy(*args):
+        retried.append(len(args[3]))
+        return _first_landing(*args)
+
+    with patch(_FIRST_LANDING, spy):
+        mesh = GeodesicLevelSets(
+            GeodesicSettings(0.1, 0.1, (1.0 / 6400.0, 1.5 / 3200.0)),
+        ).compute(
+            function,
+            np.zeros(3),
+            _jacobian(function, np.zeros(3)),
+            StableManifold(),
+            distance=0.2,
+        )
+    assert len(mesh.rings[1]) > 2000
+    assert mesh.lost == 0
+    assert retried == []
+
+
+class TestPaperStepControl(TestCase):
+    """The rest of SIADS 2003, Sec. 3.2: the bound on Delta times alpha,
+    doubling, and the warning at the smallest step."""
+
+    def test_delta_times_the_turn_is_bounded_too(self):
+        # Measured: the angles alone (0.3, 0.4) accept Delta = 0.2 throughout,
+        # where Delta alpha is 0.02 to 0.03; bounding it by 0.01 halves Delta
+        # at the first ring and keeps it at 0.1 (Delta alpha 0.005 to 0.008).
+        solves = []
+
+        def counted(*args):
+            solves.append(args[3])
+            return _advance(*args)
+
+        free = _graph_steps()
+        with patch(_ADVANCE, counted):
+            bounded = _graph_steps(step_angles=(0.002, 0.01))
+        assert min(np.diff(free.ring_distances)) == pytest.approx(0.2)
+        steps = np.diff(bounded.ring_distances)
+        assert max(steps) == pytest.approx(0.1)
+        products = np.array(_turns(bounded)) * steps[1 : len(_turns(bounded)) + 1]
+        assert max(products) < 0.01
+        assert bounded.warnings == []
+        # Delta alpha never fell below 0.002, so Delta was never doubled:
+        # the one ring solve thrown away is the first, at 0.2.
+        assert len(solves) == len(bounded.rings)
+
+    def test_delta_doubles_after_a_straight_ring(self):
+        # The plane never turns: from 0.025 Delta doubles every ring up to
+        # its bound, 0.025, 0.05, 0.1, 0.2, 0.4.
+        function = _field(LinearSaddle)
+        mesh = GeodesicLevelSets(
+            GeodesicSettings(0.1, 0.025, (0.05, 0.15), step_range=(0.01, 0.4)),
+        ).compute(
+            function,
+            np.zeros(3),
+            _jacobian(function, np.zeros(3)),
+            StableManifold(),
+            distance=1.5,
+        )
+        steps = np.diff(mesh.ring_distances)
+        assert np.allclose(steps[:5], [0.025, 0.05, 0.1, 0.2, 0.4])
+
+    def test_a_sharp_ring_at_the_smallest_step_is_accepted_with_a_warning(self):
+        # No step may shrink (the smallest is the step), and every ring of
+        # the graph turns by more than 0.02: each is accepted, and said so.
+        mesh = _graph_steps(angles=(0.01, 0.02), step_range=(0.2, 0.2))
+        assert mesh.stopped is None
+        assert len(mesh.warnings) == len(mesh.rings) - 1
+        assert "accepted at the smallest step 0.2" in mesh.warnings[0]
+
+
 def test_thinning_never_opens_a_gap_wider_than_the_spacing():
     # Removing the middle point would leave 0.18 between its neighbours,
     # wider than the 0.15 allowed, so it stays though it is 0.04 from one.
@@ -852,3 +1086,57 @@ def test_thinning_never_opens_a_gap_wider_than_the_spacing():
     )
     keep = _thin(points, 0.05, 0.15)
     assert keep[1]
+
+
+class TestEscalationMemo(TestCase):
+    """A landing escalated to the larger budget and lost there is not
+    escalated again while the same front is retried at a smaller Delta."""
+
+    def test_a_row_is_escalated_at_most_once_per_ring(self):
+        # Every seventh first guess is spoiled and no continuation ever
+        # lands, so those rows are lost at every Delta down to the smallest
+        # and the growth stops; each is given the larger budget once.
+        real = _first_guess
+
+        def spoiled(field, sense, front, *rest):
+            places, times = real(field, sense, front, *rest)
+            times[::7] = np.nan
+            return places, times
+
+        escalated = []
+
+        def never(*args):
+            ring, keys = args[2], args[3]
+            if len(args) > 6 and args[6] > 200:
+                escalated.extend((id(ring), float(key)) for key in keys)
+            landing = _first_landing(*args[:6], 1)
+            landing.valid[:] = False
+            return landing
+
+        with patch(_FIRST_GUESS, spoiled), patch(_FIRST_LANDING, never):
+            mesh = _linear_mesh(distance=0.6)
+        assert mesh.stopped is not None
+        assert escalated
+        assert len(escalated) == len(set(escalated))
+
+    def test_the_memo_changes_nothing_where_nothing_fails(self):
+        # Spoiled first guesses that the continuation does land: with the
+        # memo cleared before every ring solve the mesh is the same.
+        real = _first_guess
+
+        def spoiled(field, sense, front, *rest):
+            places, times = real(field, sense, front, *rest)
+            places[::7] += 0.5 * len(front.points)
+            times[3::7] = np.nan
+            return places, times
+
+        def forgetful(*args):
+            args[2].exhausted.clear()
+            return _advance(*args)
+
+        with patch(_FIRST_GUESS, spoiled):
+            kept = _linear_mesh(distance=0.6)
+            with patch(_ADVANCE, forgetful):
+                forgot = _linear_mesh(distance=0.6)
+        assert kept.ring_distances == forgot.ring_distances
+        assert np.array_equal(kept.vertices, forgot.vertices)

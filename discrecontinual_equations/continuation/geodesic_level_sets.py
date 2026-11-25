@@ -63,8 +63,13 @@ _NEWTON_ITERATIONS = 25
 # Finite-difference step along the ring for the shooting map's s-derivative,
 # in units of one ring segment.
 _RING_STEP = 1.0e-6
-# Cap on one Newton step along the ring, in segments: a step that wants to
-# jump further than this is crossing to a different orbit, not converging.
+# Cap on one Newton step along the ring: a ring segment, or half of delta
+# where segments are shorter than that. A step that wants to jump further is
+# crossing to a different orbit, not converging. Counted in segments alone,
+# the cap made the cost per vertex grow as the spacing shrank: the first
+# guess is off by a fixed length along the ring (up to 7e-3 on the linear
+# saddle at Delta 0.1), which at spacing 3e-4 is 23 segments, and rows
+# needing more than 25 iterations to walk it failed.
 _RING_JUMP = 1.0
 # A Newton step may shrink the flight time to no less than this fraction of
 # itself, and grow it to no more than its inverse.
@@ -82,8 +87,9 @@ _DIFFERENCE = 1.0e-6
 # How many times one ring may be re-filled where its spacing is too wide.
 _INSERT_PASSES = 6
 # How much Delta grows by where the rings are straight, and shrinks by where
-# they turn too sharply or a landing fails.
-_GROW = 1.5
+# they turn too sharply or a landing fails: doubled and halved, as Krauskopf
+# and Osinga do (SIADS 2003, Sec. 3.2).
+_GROW = 2.0
 _SHRINK = 0.5
 
 
@@ -97,13 +103,21 @@ class GeodesicSettings:
     exactly ``step``). ``spacing`` bounds the distance between neighbouring
     points on a ring: wider gaps get a point inserted, tighter ones lose one.
     ``angles`` bounds, in radians, how sharply consecutive radial steps may
-    turn: above the upper bound ``Delta`` is halved and the ring recomputed,
-    below the lower it grows. ``tolerance`` is the BVP's: both endpoint
-    conditions are met to it. ``integration_steps`` is the number of RK4 steps
-    per orbit segment, and ``max_vertices`` stops a growth that has become
-    larger than anyone will draw.
+    turn, and ``step_angles`` bounds ``Delta`` times that angle - the
+    paper's ``(alpha_min, alpha_max)`` and ``((Delta alpha)_min,
+    (Delta alpha)_max)``, by default its ``(0.3, 0.4)`` and no bound on the
+    product, which has the units of the manifold's own lengths. A ring any
+    point of which turns by more than either upper bound is discarded,
+    ``Delta`` halved and the ring recomputed; one on which every point turns
+    by less than both lower bounds doubles ``Delta`` for the next (SIADS
+    2003, Sec. 3.2). At the smallest step a ring is accepted anyway, and the
+    mesh lists it in :attr:`GeodesicMesh.warnings`. ``tolerance`` is the
+    BVP's: both endpoint conditions are met to it. ``integration_steps`` is
+    the number of RK4 steps per orbit segment, and ``max_vertices`` stops a
+    growth that has become larger than anyone will draw.
 
-    ``loss`` is the fraction of a ring's points whose BVP may fail. More
+    ``loss`` is the fraction of a ring's points whose BVP may fail - each
+    failure having already been retried alone, by continuation. More
     than that and ``Delta`` is shrunk and the ring recomputed; if it still
     fails at ``step_range[0]`` the growth stops there, and the mesh it
     returns says so in :attr:`GeodesicMesh.stopped` - a manifold traced as
@@ -122,6 +136,7 @@ class GeodesicSettings:
         "max_vertices",
         "spacing",
         "step",
+        "step_angles",
         "step_range",
         "tolerance",
     ]
@@ -132,12 +147,13 @@ class GeodesicSettings:
         step: float,
         spacing: tuple[float, float],
         step_range: tuple[float, float] | None = None,
-        angles: tuple[float, float] = (0.1, 0.3),
+        angles: tuple[float, float] = (0.3, 0.4),
         tolerance: float = 1.0e-10,
         integration_steps: int = 24,
         max_vertices: int = 250_000,
         initial_points: int | None = None,
         loss: float = 0.0,
+        step_angles: tuple[float, float] = (math.inf, math.inf),
     ) -> None:
         self.initial_radius = initial_radius
         self.step = step
@@ -149,6 +165,7 @@ class GeodesicSettings:
         self.max_vertices = max_vertices
         self.initial_points = initial_points
         self.loss = loss
+        self.step_angles = step_angles
 
 
 class CrochetRound:
@@ -193,7 +210,9 @@ class GeodesicMesh:
     for the tangent plane where the chart does not exist (a complex pair, or a
     resonance). ``stopped`` is ``None`` when the growth reached the distance
     asked for, and otherwise says why it stopped where it did; the last of
-    ``ring_distances`` is how far it got.
+    ``ring_distances`` is how far it got. ``warnings`` lists the rings that
+    were accepted at the smallest step although they turned more sharply than
+    :class:`GeodesicSettings` allows - the paper's warning message.
     """
 
     __slots__ = [
@@ -208,6 +227,7 @@ class GeodesicMesh:
         "stopped",
         "triangles",
         "vertices",
+        "warnings",
     ]
 
     def __init__(  # noqa: PLR0913 (the mesh and what it is made of)
@@ -230,6 +250,7 @@ class GeodesicMesh:
         self.residual = 0.0
         self.lost = 0
         self.stopped: str | None = None
+        self.warnings: list[str] = []
 
     def crochet_pattern(self) -> list[CrochetRound]:
         """One round per level set, with its stitches, increases and decreases."""
@@ -291,7 +312,12 @@ class GeodesicLevelSets:
         radius = settings.initial_radius
         step = settings.step
         low, high = settings.step_range
+        (straight, sharp), (straight_step, sharp_step) = (
+            settings.angles,
+            settings.step_angles,
+        )
         stopped = None
+        warnings: list[str] = []
         while radius < distance - 1.0e-12:
             if len(growth.vertices) >= settings.max_vertices:
                 stopped = f"max_vertices ({settings.max_vertices}) reached"
@@ -300,7 +326,8 @@ class GeodesicLevelSets:
             ring = _advance(field, sense, growth.front, delta, settings)
             lost = ring.lost > settings.loss * len(growth.front.points)
             floor = delta <= low * (1 + 1e-9)
-            if (lost or ring.turn > settings.angles[1]) and not floor:
+            turned = ring.turn >= sharp or delta * ring.turn >= sharp_step
+            if (lost or turned) and not floor:
                 step = max(low, _SHRINK * delta)
                 continue
             if lost:
@@ -315,12 +342,19 @@ class GeodesicLevelSets:
                     f"{len(ring.points)} points, fewer than {_MINIMUM_RING}"
                 )
                 break
+            if turned:
+                warnings.append(
+                    f"ring {len(growth.rings)} at distance {radius + delta:.6g} "
+                    f"accepted at the smallest step {delta:.3g}, turning by "
+                    f"{ring.turn:.3g}",
+                )
             radius += delta
             growth.add(ring, radius)
-            if ring.turn < settings.angles[0]:
-                step = min(high, _GROW * step)
+            if ring.turn < straight and delta * ring.turn < straight_step:
+                step = min(high, _GROW * delta)
         mesh = growth.mesh(seed)
         mesh.stopped = stopped
+        mesh.warnings = warnings
         return mesh
 
     def _seed(
@@ -501,6 +535,10 @@ def _circle_centres(
     return centre, valid
 
 
+def _finite(values: np.ndarray) -> np.ndarray:
+    return np.where(np.isfinite(values), values, 0.0)
+
+
 def _unit(vectors: np.ndarray) -> np.ndarray:
     return vectors / np.linalg.norm(vectors, axis=1, keepdims=True)
 
@@ -582,6 +620,22 @@ _STEP_RATE = 0.5
 _MAXIMUM_STEPS = 4000
 # Relative finite-difference step for the flow's Jacobian in the landing point.
 _SHIFT = 1.0e-7
+# The continuation in the flight time that finds a landing the first guess
+# missed: each step aims to move the landing by delta over this many, is
+# corrected in this many Newton iterations, and may halve to this fraction of
+# its first size before the row is given up after this many steps.
+_SPLITS = 4
+_CORRECTIONS = 8
+_STEP_FLOOR = 1.0e-3
+_CONTINUATION_STEPS = 200
+# A landing the continuation has not reached in that many steps is continued
+# again, alone, with each of these larger budgets in turn before it is lost:
+# the detour to an outward landing can be long (see :func:`_first_landing`),
+# and only the rows that need it pay for it.
+_ESCALATED_STEPS = (4000,)
+# Ring parameters are matched to this many decimals in the memo of landings
+# the larger budgets have failed (:class:`_Front`).
+_MEMO_DIGITS = 9
 
 
 def _first_guess(  # noqa: PLR0913 (the BVP's data)
@@ -787,9 +841,16 @@ def _land(  # noqa: PLR0913 (the BVP's data)
     A converged landing that is not outward of its centre is a solution of
     the equations on the wrong side - an orbit that crossed back inside the
     ring - and is counted lost.
+
+    A landing Newton does not find from the traced guess is retried on its
+    own, at the same ``delta``, by the paper's continuation in the flight
+    time (:func:`_first_landing`); only if that fails too is it lost, and
+    only then may the whole ring be recomputed at a smaller step. Where both
+    find a landing they find the same one: on the Lorenz manifold at distance
+    159, all 1,158 landings of a ring agreed to 1e-10 at ``delta`` = 1.5, so
+    the traced guess does lead Newton to the smallest outward flight time.
     """
     ring = front.points
-    rows, size = centres.shape
     s, times = _first_guess(
         field,
         sense,
@@ -801,6 +862,63 @@ def _land(  # noqa: PLR0913 (the BVP's data)
         settings,
     )
     points = centres + delta * outward
+    target = (centres, tangents, delta)
+    residual, valid = _newton(field, sense, ring, (points, times, s), target, settings)
+    valid &= np.einsum("ij,ij->i", points - centres, outward) > 0.0
+    for budget in (_CONTINUATION_STEPS, *_ESCALATED_STEPS):
+        failed = np.flatnonzero(~valid)
+        escalating = budget > _CONTINUATION_STEPS
+        if escalating:
+            rounded = np.round(keys[failed], _MEMO_DIGITS)
+            failed = failed[[key not in front.exhausted for key in rounded]]
+        if failed.size == 0:
+            continue
+        retried = _first_landing(
+            field,
+            sense,
+            ring,
+            keys[failed],
+            (centres[failed], tangents[failed], outward[failed], delta),
+            settings,
+            budget,
+        )
+        good = retried.valid & (
+            np.einsum(
+                "ij,ij->i",
+                retried.points - centres[failed],
+                outward[failed],
+            )
+            > 0.0
+        )
+        mended = failed[good]
+        points[mended] = retried.points[good]
+        times[mended] = retried.times[good]
+        residual[mended] = retried.residual[good]
+        valid[mended] = True
+        if escalating:
+            front.exhausted.update(
+                np.round(keys[failed[~good]], _MEMO_DIGITS).tolist(),
+            )
+    outward_side = np.einsum("ij,ij->i", points - centres, outward) > 0.0
+    return _Landing(points, times, residual, valid & outward_side)
+
+
+def _newton(  # noqa: PLR0913 (the BVP's data)
+    field: Callable[[np.ndarray], np.ndarray],
+    sense: float,
+    ring: np.ndarray,
+    unknowns: tuple[np.ndarray, np.ndarray, np.ndarray],
+    target: tuple[np.ndarray, np.ndarray, float],
+    settings: GeodesicSettings,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Newton's method on every row's BVP at once, in place on ``unknowns``.
+
+    ``unknowns`` are the landing points, flight times and ring parameters;
+    returns each row's last residual and whether it converged.
+    """
+    points, times, s = unknowns
+    centres, tangents, delta = target
+    rows, size = centres.shape
     residual = np.full(rows, np.inf)
     valid = np.zeros(rows, dtype=bool)
     active = np.arange(rows)
@@ -827,9 +945,11 @@ def _land(  # noqa: PLR0913 (the BVP's data)
             dy, dt, ds = update[:, :size], update[:, size], update[:, size + 1]
             current = times[active]
             # One damping factor for every unknown, so the step stays a
-            # Newton direction: no more than a ring segment along the ring,
-            # half of delta for the point, and a bounded change of time.
-            damping = np.minimum(1.0, _RING_JUMP / np.maximum(np.abs(ds), 1e-300))
+            # Newton direction: no more than a ring segment (or half of
+            # delta) along the ring, half of delta for the point, and a
+            # bounded change of time.
+            jump = _ring_jump(ring, s[active], delta)
+            damping = np.minimum(1.0, jump / np.maximum(np.abs(ds), 1e-300))
             damping = np.minimum(
                 damping,
                 0.5 * delta / np.maximum(np.linalg.norm(dy, axis=1), 1e-300),
@@ -843,8 +963,187 @@ def _land(  # noqa: PLR0913 (the BVP's data)
             times[rows_kept] = current[keep] - damping[keep] * dt[keep]
             s[rows_kept] -= damping[keep] * ds[keep]
             active = rows_kept
-    outward_side = np.einsum("ij,ij->i", points - centres, outward) > 0.0
-    return _Landing(points, times, residual, valid & outward_side)
+    return residual, valid
+
+
+def _ring_jump(ring: np.ndarray, s: np.ndarray, delta: float) -> np.ndarray:
+    """How many segments one Newton step may move along the ring from ``s``."""
+    count = len(ring)
+    index = np.floor(np.nan_to_num(s)).astype(int) % count
+    segment = np.linalg.norm(ring[(index + 1) % count] - ring[index], axis=1)
+    return np.maximum(_RING_JUMP, 0.5 * delta / np.maximum(segment, 1e-300))
+
+
+def _first_landing(  # noqa: PLR0913 (the BVP's data)
+    field: Callable[[np.ndarray], np.ndarray],
+    sense: float,
+    ring: np.ndarray,
+    keys: np.ndarray,
+    target: tuple[np.ndarray, np.ndarray, np.ndarray, float],
+    settings: GeodesicSettings,
+    budget: int = _CONTINUATION_STEPS,
+) -> _Landing:
+    """Each row's BVP continued in the flight time from zero, as the paper does.
+
+    At ``tau = 0`` the orbit of the centre itself is the solution: it starts
+    and lands at the centre. For a fixed ``tau`` the unknowns are the landing
+    point, in the centre's normal plane, and where on the ring its orbit
+    starts; ``tau`` is stepped up from there, each step predicted along the
+    secant of the last two and corrected by Newton's method, while the
+    distance from the centre is watched. The first ``tau`` at which it reaches
+    ``delta`` on the outward side brackets the landing, which the full BVP
+    then solves from the point interpolated in the bracket (Krauskopf and
+    Osinga, SIADS 2003, Sec. 3.1: ``b_r`` is the landing of the *smallest*
+    such ``tau``).
+
+    The paper's rule takes the first crossing on either side. Where the flow
+    at the centre points back inside the ring, the landings of small ``tau``
+    are inside it, and the first crossing is too: on the Lorenz manifold at
+    distance 159, 92 of a ring's 1,158 first crossings at Delta = 1.5 were
+    inside, 72 of them where the flow points inward - the outward landing
+    there belongs to an orbit that reaches the ring only after a detour. So
+    an inward crossing does not stop the continuation; it goes on to the
+    first outward one, or gives the row up.
+
+    Each step aims to move the landing by ``delta / _SPLITS``, halving a step
+    whose correction fails; a row that has not reached ``delta`` after
+    ``budget`` steps, or whose step has halved to nothing, is lost, and so is
+    one whose final Newton solve lands at a flight time outside the bracket
+    it started from - a solution on another branch, never this one's.
+    :func:`_land` gives the rows lost at the first budget the larger ones of
+    ``_ESCALATED_STEPS``: on the Lorenz manifold at distance 157.4 the
+    landings of a point where the flow runs along the level set go 18.7
+    inside before they come round to the outward one at ``tau`` = 0.263,
+    some 400 steps of ``delta / 4`` at ``delta`` = 0.094.
+    """
+    centres, tangents, outward, delta = target
+    rows = len(centres)
+    points, s, times = centres.copy(), keys.astype(float).copy(), np.zeros(rows)
+    last = (points.copy(), s.copy(), times.copy())
+    reached = np.zeros(rows)
+    speed = np.linalg.norm(field(centres), axis=1)
+    step = delta / (_SPLITS * np.maximum(speed, 1.0e-300))
+    floor = step * _STEP_FLOOR
+    bracketed = np.zeros(rows, dtype=bool)
+    alive = np.ones(rows, dtype=bool)
+    for _ in range(budget):
+        going = np.flatnonzero(alive & ~bracketed)
+        if going.size == 0:
+            break
+        span = times[going] - last[2][going]
+        slope = np.where(span > 0.0, step[going] / np.maximum(span, 1e-300), 0.0)
+        guess = (
+            points[going] + slope[:, None] * (points[going] - last[0][going]),
+            s[going] + slope * (s[going] - last[1][going]),
+            times[going] + step[going],
+        )
+        moved, start, converged = _correct(
+            field,
+            sense,
+            ring,
+            guess,
+            (centres[going], tangents[going]),
+            settings,
+        )
+        failed = going[~converged]
+        step[failed] *= _SHRINK
+        alive[failed] = step[failed] > floor[failed]
+        ok = going[converged]
+        for old, new in zip(last, (points, s, times), strict=True):
+            old[ok] = new[ok]
+        points[ok], s[ok], times[ok] = (
+            moved[converged],
+            start[converged],
+            guess[2][converged],
+        )
+        offset = points[ok] - centres[ok]
+        reached[ok] = np.linalg.norm(offset, axis=1)
+        side = np.einsum("ij,ij->i", offset, outward[ok])
+        bracketed[ok] = (reached[ok] >= delta) & (side > 0.0)
+        gain = np.linalg.norm(points[ok] - last[0][ok], axis=1)
+        aim = delta / _SPLITS
+        step[ok] *= np.clip(aim / np.maximum(gain, 1e-300), _SHRINK, _GROW)
+    hit = np.flatnonzero(bracketed)
+    start_reach = np.linalg.norm(last[0][hit] - centres[hit], axis=1)
+    fraction = np.where(
+        start_reach < delta,
+        (delta - start_reach) / np.maximum(reached[hit] - start_reach, 1e-300),
+        1.0,
+    )
+    land = last[0][hit] + fraction[:, None] * (points[hit] - last[0][hit])
+    # Coming round from inside, the bracket's end is put on the circle.
+    land = centres[hit] + delta * _unit(land - centres[hit])
+    flight = last[2][hit] + fraction * (times[hit] - last[2][hit])
+    place = last[1][hit] + fraction * (s[hit] - last[1][hit])
+    residual = np.full(rows, np.inf)
+    valid = np.zeros(rows, dtype=bool)
+    if hit.size:
+        low = np.minimum(last[2][hit], times[hit])
+        high = np.maximum(last[2][hit], times[hit])
+        residual[hit], valid[hit] = _newton(
+            field,
+            sense,
+            ring,
+            (land, flight, place),
+            (centres[hit], tangents[hit], delta),
+            settings,
+        )
+        # Newton started inside the bracket; ending outside it, it has
+        # found a landing on another branch, not this one's.
+        valid[hit] &= (flight >= low) & (flight <= high)
+        points[hit], times[hit] = land, flight
+    return _Landing(points, times, residual, valid)
+
+
+def _correct(  # noqa: PLR0913 (the BVP's data)
+    field: Callable[[np.ndarray], np.ndarray],
+    sense: float,
+    ring: np.ndarray,
+    guess: tuple[np.ndarray, np.ndarray, np.ndarray],
+    plane: tuple[np.ndarray, np.ndarray],
+    settings: GeodesicSettings,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Newton's method for the landing at each row's fixed flight time.
+
+    The BVP without its distance condition, and with ``tau`` held: the
+    landing in the centre's normal plane whose orbit, flowed back for
+    ``tau``, starts on the ring. Returns the landings, ring parameters and
+    which rows converged.
+    """
+    points, s, times = (array.copy() for array in guess)
+    centres, tangents = plane
+    rows, size = points.shape
+    equations = [0, *range(2, size + 2)]
+    unknowns = [*range(size), size + 1]
+    converged = np.zeros(rows, dtype=bool)
+    active = np.arange(rows)
+    with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
+        for _ in range(_CORRECTIONS):
+            if active.size == 0:
+                break
+            values, jacobian, usable = _shooting_system(
+                field,
+                sense,
+                ring,
+                points[active],
+                s[active],
+                times[active],
+                (centres[active], tangents[active], 0.0),
+                settings.integration_steps,
+            )
+            values = values[:, equations]
+            jacobian = jacobian[:, equations][:, :, unknowns]
+            done = usable & (np.max(np.abs(values), axis=1) < settings.tolerance)
+            converged[active[done]] = True
+            update = _newton_update(jacobian, values, usable)
+            dy, ds = update[:, :size], update[:, size]
+            damping = np.minimum(1.0, _RING_JUMP / np.maximum(np.abs(ds), 1e-300))
+            keep = ~done & usable & np.all(np.isfinite(update), axis=1)
+            rows_kept = active[keep]
+            points[rows_kept] -= damping[keep, None] * dy[keep]
+            s[rows_kept] -= damping[keep] * ds[keep]
+            active = rows_kept
+    return points, s, converged
 
 
 def _shooting_system(  # noqa: PLR0913 (the BVP's data)
@@ -873,7 +1172,9 @@ def _shooting_system(  # noqa: PLR0913 (the BVP's data)
     stack = np.vstack([y, *(y + h[:, None] * identity[k] for k in range(size))])
     steps = int(
         np.clip(
-            np.ceil(np.max(times * _local_rate(field, y)) / _STEP_RATE),
+            # A row whose time is not finite cannot be integrated, and must
+            # not decide how finely the others are.
+            np.ceil(np.max(_finite(times * _local_rate(field, y))) / _STEP_RATE),
             least_steps,
             _MAXIMUM_STEPS,
         ),
@@ -943,9 +1244,18 @@ class _Ring:
 
 
 class _Front:
-    """The outermost ring: its points and the radial directions they arrived along."""
+    """The outermost ring: its points and the radial directions they arrived along.
 
-    __slots__ = ["directions", "indices", "points"]
+    ``exhausted`` holds the ring parameters, rounded to ``_MEMO_DIGITS``, of
+    the landings that the larger continuation budgets have already failed
+    from this front. A ring parameter fixes the centre and its outward
+    direction on a given front, so a row met again when the ring is retried
+    at a smaller Delta is the same row; it is not escalated again. Losing it
+    without the second escalation is what happened before there was one, so
+    the memo can only save time, never a landing that would have been kept.
+    """
+
+    __slots__ = ["directions", "exhausted", "indices", "points"]
 
     def __init__(
         self,
@@ -956,6 +1266,7 @@ class _Front:
         self.points = points
         self.directions = directions
         self.indices = indices
+        self.exhausted: set[float] = set()
 
 
 def _solve(  # noqa: PLR0913 (the BVP's data)
