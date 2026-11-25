@@ -1,3 +1,12 @@
+"""The base class for a right-hand side: variables, parameters and ``eval``.
+
+A ``Function`` holds the state variables, the parameters, the result variables
+and an optional time variable, and evaluates the field at a point with
+``eval(point, time)``: the derivative ``f(t, y)`` of an ODE or the drift of an
+SDE. ``eval_batch`` evaluates many points at once, by default one ``eval`` per
+row.
+"""
+
 import numpy as np
 
 from discrecontinual_equations.curve import Curve
@@ -10,14 +19,17 @@ class Function:
 
     @property
     def variables(self) -> list[Variable]:
+        """The state variables."""
         return self._variables
 
     @property
     def parameters(self) -> list[Parameter]:
+        """The parameters."""
         return self._parameters
 
     @property
     def time(self) -> Variable | None:
+        """The time variable, or ``None``."""
         return self._time
 
     __slots__ = ["_curve", "_parameters", "_time", "_variables"]
@@ -29,6 +41,14 @@ class Function:
         results: list[Variable],
         time: Variable | None = None,
     ):
+        """Hold the variables, parameters, results and time.
+
+        Args:
+            variables: The state variables.
+            parameters: The parameters.
+            results: The result variables.
+            time: The time variable, if any.
+        """
         self._variables: list[Variable] = variables
         self._parameters: list[Parameter] = parameters
         self._time: Variable | None = time
@@ -40,6 +60,7 @@ class Function:
 
     @property
     def curve(self) -> Curve:
+        """A curve over this function's own variables; the solvers return their own."""
         return self._curve
 
     def eval(self, point: list[float], time: float | None = None) -> list[float]:
@@ -65,6 +86,13 @@ class Function:
         callers that evaluate it on a whole grid at once (the stationary
         Fokker-Planck assembly) cost a few array operations instead of a Python call
         per point.
+
+        Args:
+            points: The points, one per row.
+            time: The time, shared by all rows.
+
+        Returns:
+            The values, one row per point.
         """
         return np.array(
             [self.eval(point=list(point), time=time) for point in points],

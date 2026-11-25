@@ -1,3 +1,18 @@
+"""The solver interface: an equation and initial values in, a curve out.
+
+Every solver, deterministic or stochastic, is built from a configuration
+(``SolverConfig``: interval, step or tolerances) and has one entry point,
+``solve(equation, initial_values)``, which integrates ``y' = f(t, y)`` (or an
+SDE) from the configuration's start time and returns the solution as a
+:class:`~discrecontinual_equations.curve.Curve`. Each solve writes into a fresh
+curve, so an equation can be solved repeatedly and by several solvers.
+
+The deterministic solvers are explicit: Euler and the Adams-Bashforth methods
+on a fixed grid, and the embedded Runge-Kutta pairs (Cash-Karp, Fehlberg,
+Dormand-Prince 5(4) and 8(7)) with adaptive steps. Their sources are cited in
+their own modules and collected in ``docs/references.md``.
+"""
+
 from discrecontinual_equations.curve import Curve
 from discrecontinual_equations.differential_equation import DifferentialEquation
 from discrecontinual_equations.solver.solver_config import SolverConfig
@@ -56,6 +71,10 @@ class Solver:
             equation: The differential equation to solve, containing
                      variables, parameters, and derivative function.
             initial_values: Initial values for all variables at start time.
+
+        Returns:
+            In subclasses, the solution curve: ``time`` holds the nodes and
+            ``results`` the state at each node.
 
         Raises:
             NotImplementedError: This is an abstract method.
