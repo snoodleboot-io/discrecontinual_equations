@@ -8,6 +8,8 @@ Where we found an error in a published formula, or deliberately depart from the 
 
 --8<-- "docs/references/stochastic-solvers.md"
 
+--8<-- "docs/references/continuation-core.md"
+
 --8<-- "docs/references/lyapunov-noise.md"
 
 --8<-- "docs/references/normal-forms-detection.md"
