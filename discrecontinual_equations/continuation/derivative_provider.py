@@ -18,6 +18,7 @@ import numpy as np
 
 from discrecontinual_equations.continuation.jet import Jet
 from discrecontinual_equations.continuation.sparsity import SparsityPattern
+from discrecontinual_equations.finite_difference import step_scales
 from discrecontinual_equations.function.function import Function
 
 _DEFAULT_EPSILON = 1e-6
@@ -98,12 +99,41 @@ class AutomaticDifferentiation(DerivativeProvider):
 
 
 class FiniteDifferenceDerivatives(DerivativeProvider):
-    """Central-difference derivatives; a fallback for non-analytic fields."""
+    """Central-difference derivatives; a fallback for non-analytic fields.
 
-    __slots__ = ["_epsilon"]
+    Coefficient ``m`` along a direction ``d`` is the central difference of order
+    ``m`` of ``s -> f(x + s d)`` at ``s = 0``, over the stencil ``s = k t``.
+    ``epsilon`` is a *relative* step (DEQ-118): with ``s_j = max(|x_j|,
+    typical_j)``, ``t = epsilon max_j |d_j| / max_j(|d_j| / s_j)``, so the
+    component that moves most for its size moves ``epsilon s_j`` times the
+    direction's largest entry. Along a unit direction ``e_j`` that is Dennis and
+    Schnabel's per-component step ``epsilon s_j``, so the Jacobian is
+    differenced column by column at each component's scale; when every
+    component the direction moves is no larger than its typical size (one by
+    default) it is ``epsilon`` itself, bit for bit, as it was when the step was
+    absolute. A component of
+    size ``1e12`` would round an absolute ``1e-6`` away and return zero; one of
+    size ``1e-12`` needs ``typical`` - one per component, or one for all - or a
+    step floored at one swamps it. Exact only to first order in practice, and
+    the stencil is not divided by the width actually stepped, which along a
+    general direction differs per component; the rounding that leaves is the
+    same order as the field's own.
 
-    def __init__(self, epsilon: float = _DEFAULT_EPSILON) -> None:
+    References:
+        Dennis and Schnabel (1983), Sec. 5.4 and Algorithm A5.4.1: the step
+        scaled per component by ``max(|x_j|, typx_j)``. See
+        ``docs/references.md``.
+    """
+
+    __slots__ = ["_epsilon", "_typical"]
+
+    def __init__(
+        self,
+        epsilon: float = _DEFAULT_EPSILON,
+        typical: float | np.ndarray | None = None,
+    ) -> None:
         self._epsilon = epsilon
+        self._typical = typical
 
     def taylor(
         self,
@@ -114,10 +144,56 @@ class FiniteDifferenceDerivatives(DerivativeProvider):
         time: float,
     ) -> list[np.ndarray]:
         coefficients = [self._evaluate(function, point, time).astype(complex)]
+        step = self.step(point, direction)
         for degree in range(1, order + 1):
-            derivative = self._derivative(function, point, direction, degree, time)
+            derivative = self._derivative(
+                function,
+                point,
+                step * direction,
+                (degree, step),
+                time,
+            )
             coefficients.append(derivative / factorial(degree))
         return coefficients
+
+    def jacobian(
+        self,
+        function: Function,
+        point: np.ndarray,
+        time: float,
+        sparsity: SparsityPattern | None = None,
+    ) -> np.ndarray:
+        """The state Jacobian, each column at its own component's step.
+
+        Column by column this is the base class's. With a ``sparsity`` pattern a
+        group's columns are moved together, but each by the step its own unit
+        direction would take, ``epsilon max(|x_j|, typical_j)``, and divided by
+        it: one shared step along the group's 0/1 direction would move a column
+        of size ``1e12`` by the step of one of size one, which rounds away. Every
+        entry then equals the column-by-column one as long as the pattern covers
+        the field's.
+        """
+        if sparsity is None:
+            return super().jacobian(function, point, time)
+        units = np.eye(point.size)
+        steps = np.array([self.step(point, unit) for unit in units])
+        compressed = []
+        for direction in sparsity.directions():
+            offset = steps * direction
+            compressed.append(
+                self._evaluate(function, point + offset, time)
+                - self._evaluate(function, point - offset, time),
+            )
+        return sparsity.expand(np.column_stack(compressed)) / (_CENTRAL_PAIR * steps)
+
+    def step(self, point: np.ndarray, direction: np.ndarray) -> float:
+        """The stencil spacing ``t`` along ``direction``, relative to ``point``."""
+        size = np.abs(direction)
+        scales = step_scales(np.asarray(point, dtype=float), self._typical)
+        weight = float(np.max(size / scales))
+        if weight == 0.0:
+            return self._epsilon
+        return self._epsilon * (float(np.max(size)) / weight)
 
     def _evaluate(
         self,
@@ -134,21 +210,26 @@ class FiniteDifferenceDerivatives(DerivativeProvider):
         self,
         function: Function,
         point: np.ndarray,
-        direction: np.ndarray,
+        offset: np.ndarray,
         steps: int,
         time: float,
     ) -> np.ndarray:
-        return self._evaluate(function, point + steps * self._epsilon * direction, time)
+        return self._evaluate(function, point + steps * offset, time)
 
     def _derivative(
         self,
         function: Function,
         point: np.ndarray,
         direction: np.ndarray,
-        degree: int,
+        order: tuple[int, float],
         time: float,
     ) -> np.ndarray:
-        step = self._epsilon
+        """Derivative of order ``degree`` along ``direction``, one ``step`` apart.
+
+        ``direction`` is the stencil's offset, already ``step`` times the
+        caller's direction.
+        """
+        degree, step = order
         sample = self._sample
         if degree == 1:
             return (

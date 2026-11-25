@@ -13,8 +13,7 @@ from discrecontinual_equations.continuation.residual import (
     ResidualFunction,
 )
 from discrecontinual_equations.continuation.sparsity import SparsityPattern
-
-_CENTRAL_DIFFERENCE_POINTS = 2.0
+from discrecontinual_equations.finite_difference import step_scales, typical_sizes
 
 
 class JacobianProvider(ABC):
@@ -50,22 +49,53 @@ class JacobianProvider(ABC):
 class FiniteDifferenceJacobian(JacobianProvider):
     """Central finite-difference Jacobian; needs no analytic derivatives.
 
+    Column ``j`` is the central difference of the residual at step
+    ``h_j = epsilon * max(|u_j|, typical_j)``, divided by the width the machine
+    actually stepped, ``(u_j + h_j) - (u_j - h_j)``; the parameter column steps
+    ``epsilon * max(|lambda|, parameter_typical)``. ``epsilon`` is therefore a
+    *relative* step (DEQ-118). On a component no larger than its typical size -
+    one by default, so every state and parameter of size one or less - the step
+    is ``epsilon`` itself, which is what ``finite_difference_epsilon`` has
+    always meant there; above it the step grows with the component, where an
+    absolute step would round away (an ulp of ``1e12`` is ``1.2e-4``) and
+    return a zero column. ``typical`` - one per state component, or one for all
+    - is the size of a component that lives far below one, which a step floored
+    at one would swamp. ``eps^(1/3)``, about ``6e-6``, balances truncation
+    against rounding; the default configuration's ``1e-7`` trades some rounding
+    for less truncation.
+
     Dense by default: ``2n`` residual evaluations, one pair per column. Given a
     ``sparsity`` - a :class:`~.sparsity.SparsityPattern`, for each equation the
     list of state indices it depends on, or ``"detect"`` to find the pattern from
     dense Jacobians at the first point it is asked about - it differences each
     group of structurally orthogonal columns in one pair instead (Curtis, Powell
-    and Reid), ``2g`` evaluations for ``g`` groups, and every entry is
+    and Reid), each column of the group moved by its own step and divided by its
+    own width, ``2g`` evaluations for ``g`` groups, and every entry is
     bit-identical to the dense one as long as the pattern covers the field's.
+
+    References:
+        Dennis and Schnabel (1983), Sec. 5.4 and Algorithm A5.4.1: the step
+        scaled per component by ``max(|x_j|, typx_j)``. SciPy 1.14.1,
+        ``scipy/optimize/_numdiff.py``: the central relative step and the
+        division by the width actually stepped. See ``docs/references.md``.
     """
 
-    __slots__ = ["_epsilon", "_pattern", "_residual", "_sparsity"]
+    __slots__ = [
+        "_epsilon",
+        "_parameter_typical",
+        "_pattern",
+        "_residual",
+        "_sparsity",
+        "_typical",
+    ]
 
-    def __init__(
+    def __init__(  # noqa: PLR0913 (each is a documented, independent knob)
         self,
         residual: ResidualFunction,
         epsilon: float,
         sparsity: SparsityPattern | list[list[int]] | Literal["detect"] | None = None,
+        typical: float | np.ndarray | None = None,
+        parameter_typical: float = 1.0,
     ) -> None:
         self._residual = residual
         self._epsilon = epsilon
@@ -73,6 +103,9 @@ class FiniteDifferenceJacobian(JacobianProvider):
         self._pattern: SparsityPattern | None = (
             sparsity if isinstance(sparsity, SparsityPattern) else None
         )
+        self._typical = typical
+        typical_sizes(parameter_typical, 1)
+        self._parameter_typical = parameter_typical
 
     def state_jacobian(self, state: np.ndarray, parameter: float) -> np.ndarray:
         pattern = self._resolved_pattern(state, parameter)
@@ -96,40 +129,57 @@ class FiniteDifferenceJacobian(JacobianProvider):
             self._pattern = SparsityPattern.from_rows(self._sparsity, state.size)
         return self._pattern
 
+    def _steps(self, point: np.ndarray) -> np.ndarray:
+        """``epsilon * max(|u_j|, typical_j)`` for every state component."""
+        return self._epsilon * step_scales(point, self._typical)
+
     def _grouped(
         self,
         state: np.ndarray,
         parameter: float,
         pattern: SparsityPattern,
     ) -> np.ndarray:
+        point = np.asarray(state, dtype=float)
+        steps = self._steps(point)
         directions = pattern.directions()
         compressed = np.zeros((pattern.mask.shape[0], directions.shape[0]))
+        width = np.empty(point.size)
         for group, direction in enumerate(directions):
-            step = self._epsilon * direction
-            forward = self._residual.evaluate(state + step, parameter)
-            backward = self._residual.evaluate(state - step, parameter)
-            compressed[:, group] = (forward - backward) / (
-                _CENTRAL_DIFFERENCE_POINTS * self._epsilon
-            )
-        return pattern.expand(compressed)
+            moved = direction != 0.0
+            forward = point.copy()
+            backward = point.copy()
+            forward[moved] += steps[moved]
+            backward[moved] -= steps[moved]
+            width[moved] = forward[moved] - backward[moved]
+            compressed[:, group] = self._residual.evaluate(
+                forward,
+                parameter,
+            ) - self._residual.evaluate(backward, parameter)
+        return pattern.expand(compressed) / width
 
     def _dense(self, state: np.ndarray, parameter: float) -> np.ndarray:
-        dimension = state.size
+        point = np.asarray(state, dtype=float)
+        dimension = point.size
+        steps = self._steps(point)
         jacobian = np.zeros((dimension, dimension))
         for column in range(dimension):
-            step = np.zeros(dimension)
-            step[column] = self._epsilon
-            forward = self._residual.evaluate(state + step, parameter)
-            backward = self._residual.evaluate(state - step, parameter)
-            jacobian[:, column] = (forward - backward) / (
-                _CENTRAL_DIFFERENCE_POINTS * self._epsilon
-            )
+            forward = point.copy()
+            backward = point.copy()
+            forward[column] += steps[column]
+            backward[column] -= steps[column]
+            jacobian[:, column] = (
+                self._residual.evaluate(forward, parameter)
+                - self._residual.evaluate(backward, parameter)
+            ) / (forward[column] - backward[column])
         return jacobian
 
     def parameter_derivative(self, state: np.ndarray, parameter: float) -> np.ndarray:
-        forward = self._residual.evaluate(state, parameter + self._epsilon)
-        backward = self._residual.evaluate(state, parameter - self._epsilon)
-        return (forward - backward) / (_CENTRAL_DIFFERENCE_POINTS * self._epsilon)
+        step = self._epsilon * max(abs(parameter), self._parameter_typical)
+        up = parameter + step
+        down = parameter - step
+        forward = self._residual.evaluate(state, up)
+        backward = self._residual.evaluate(state, down)
+        return (forward - backward) / (up - down)
 
 
 class AnalyticJacobian(JacobianProvider):
