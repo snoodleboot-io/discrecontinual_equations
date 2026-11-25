@@ -281,6 +281,26 @@ def stochastic_lyapunov(
     multiplicative system ``f = a x``, ``g = s x`` the top exponent is ``a - s**2 / 2``
     (Ito) or ``a`` (Stratonovich), so noise shifts the stability boundary by
     ``s**2 / 2`` - the stochastic (D) bifurcation.
+
+    The estimate is of the Euler-Maruyama map, not of the flow: for that linear
+    system it converges to ``E log|1 + a dt + s sqrt(dt) Z| / dt`` (``Z`` standard
+    normal), which is ``a - s**2 / 2`` only up to ``O(dt)``; without noise it is
+    ``log(1 + a dt) / dt``, below ``a`` by about ``a**2 dt / 2``.
+
+    The coefficients - both fields and both Jacobians - are a function of the state
+    alone, so while the state has not moved they are reused rather than evaluated
+    again (DEQ-76). At an equilibrium whose noise vanishes there, the reference
+    state of every D-bifurcation estimate, the step leaves the state exactly where it
+    was and the fields are evaluated once per estimate instead of once per step; the
+    exponents are the same bit for bit.
+
+    References:
+        [HigMaoYuan2007] D. J. Higham, X. Mao and C. Yuan, "Almost sure and moment
+        exponential stability in the numerical simulation of stochastic
+        differential equations", SIAM J. Numer. Anal. 45(2), 592-609 (2007),
+        doi:10.1137/060658138: Theorem 4.1 (the sample exponent ``a - s**2 / 2``
+        of ``dx = a x dt + s x dB``), eqs. (4.3)-(4.4) (the Euler-Maruyama
+        recurrence and its almost-sure growth rate).
     """
     control = settings if settings is not None else StochasticLyapunovSettings()
     dt = control.dt
@@ -405,6 +425,15 @@ def matrix_noise_lyapunov(
     linear system is exactly the real parts of its eigenvalues, with no Monte-Carlo
     error. With noise ``G = diag(s_i x_i)`` the components decouple into geometric
     Brownian motions and the spectrum is ``{a_i - s_i^2 / 2}`` (Ito) exactly.
+
+    As in :func:`stochastic_lyapunov`, the coefficients are reused while the state's
+    bytes are unchanged, so an estimate at an invariant state - the noisy Hopf
+    film's origin under conformal noise - evaluates its fields once (DEQ-76).
+
+    References:
+        [HigMaoYuan2007] D. J. Higham, X. Mao and C. Yuan, SIAM J. Numer. Anal.
+        45(2), 592-609 (2007), doi:10.1137/060658138: Theorem 4.1, the scalar
+        exponent each decoupled component above attains.
     """
     control = settings if settings is not None else StochasticLyapunovSettings()
     dt = control.dt

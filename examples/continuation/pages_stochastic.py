@@ -86,6 +86,12 @@ def bifurcation_exponent(
     simulation could only return ``log(1 + alpha dt) / dt``, which differs from
     it by the Euler step's bias of about ``alpha^2 dt / 2`` (DEQ-76). With noise
     the curve is the stochastic Benettin estimate the page is about.
+
+    References:
+        [HigMaoYuan2007] D. J. Higham, X. Mao and C. Yuan, SIAM J. Numer. Anal.
+        45(2), 592-609 (2007), doi:10.1137/060658138: Theorem 4.1 (the exponent
+        ``alpha - sigma^2 / 2``, ``alpha`` at ``sigma = 0``) and eq. (4.4) (what
+        Euler-Maruyama converges to instead).
     """
     system = StochasticSystem(
         _stochastic_drift(alpha),

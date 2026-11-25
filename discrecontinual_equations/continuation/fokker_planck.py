@@ -382,7 +382,22 @@ class GridDiffusion:
 
     Nothing can check that the noise a problem is given is the noise this was built
     from - the columns are opaque functions - so sharing it is the caller's
-    statement that ``D`` does not depend on what varies. The grid is checked.
+    statement that ``D`` does not depend on what varies. The grid is checked. The
+    saving is in evaluations: under Stratonovich the drift shift still needs the
+    columns and their Jacobians at the faces, so only the cell and face products
+    are skipped.
+
+    Example:
+        >>> diffusion = GridDiffusion(noise, grid)  # doctest: +SKIP
+        >>> densities = [  # doctest: +SKIP
+        ...     StationaryFokkerPlanck(drift_at(mu), noise, Ito(), grid, diffusion)
+        ...     .solve()
+        ...     for mu in values
+        ... ]
+
+    References:
+        None new: this stores the inputs of the finite-volume discretisation in
+        the module docstring and changes none of it.
     """
 
     __slots__ = ["_cells", "_faces", "_grid"]
