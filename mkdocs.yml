@@ -84,6 +84,8 @@ markdown_extensions:
       pygments_lang_class: true
   - pymdownx.inlinehilite
   - pymdownx.snippets
+  - pymdownx.arithmatex:
+      generic: true
   - pymdownx.superfences
   - pymdownx.tabbed:
       alternate_style: true
@@ -93,3 +95,7 @@ markdown_extensions:
   - admonition
   - pymdownx.details
   - pymdownx.superfences
+
+extra_javascript:
+  - javascripts/mathjax.js
+  - https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5/tex-mml-chtml.js
