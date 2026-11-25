@@ -490,7 +490,7 @@ print(GottwaldMelbourneSolver(config).solve(stable, [0.0])[-1][2][0])
     - §4.1 prints the sign as the running product $\chi^{(n)} = \chi_{n-1}\cdots\chi_0$. Read literally, that gives
       the symmetric law for every $\beta < 1$. The proof of Theorem 4.1 (§5.3) needs one independent sign per
       excursion into $(x^*, 1]$, and that is what PR #75 implements.
-    - Theorem 5.2 prints $\eta = (c_1+c_2)\,g_\alpha^{-1/\alpha}$. The stable law's tail
+    - Theorem 5.2 prints $\eta = ((c_1+c_2)\,g_\alpha)^{-1/\alpha}$. The stable law's tail
       $P(|X| > x) \sim \eta^\alpha x^{-\alpha}/g_\alpha$ gives $\eta = ((c_1+c_2)\,g_\alpha)^{1/\alpha}$, so the
       exponent's sign is an erratum.
 
