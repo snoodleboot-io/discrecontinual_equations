@@ -34,6 +34,9 @@ plugins:
             show_symbol_type_heading: true
             show_symbol_type_toc: true
 
+exclude_docs: |
+  references/
+
 nav:
   - Home: index.md
   - User Guide:
@@ -48,6 +51,7 @@ nav:
       - Plotting: api/plotting.md
       - Continuation: api/continuation.md
       - Center Manifolds and Normal Forms: api/center-manifold.md
+  - References: references.md
   - Development:
       - Contributing: development/contributing.md
       - Testing: development/testing.md
