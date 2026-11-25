@@ -17,6 +17,7 @@ from discrecontinual_equations.continuation.jacobian import JacobianProvider
 _BRANCH_STEP = 1.0e-4
 _RELATIVE_FLOOR = 1.0e-5
 _NOISE_FACTOR = 100.0
+_OFFSET_FACTOR = 30.0
 _NORMALIZATION_FLOOR = 1.0e-9
 
 
@@ -122,6 +123,16 @@ def _branch_label(context: "DetectionContext") -> str:
     :data:`_NOISE_FACTOR` times its finite-difference error, estimated by
     repeating the differences with half and twice the step. Both tests are
     unchanged when ``f`` is multiplied by a constant.
+
+    The point is located only to within the localizer's tolerance, and off the
+    bifurcation a pitchfork has a quadratic coefficient of its own. In the normal
+    form ``w' = mu w + (a/2) w^2 + (c/6) w^3`` with ``a = 0``, the nontrivial
+    branch at ``w0`` has critical eigenvalue ``lambda = (c/3) w0^2`` and quadratic
+    coefficient ``c w0``, so ``a^2 = 3 |c lambda|``; a transcritical point gives
+    ``a^2 / |c lambda| = 2 |a| / |c w0|``, which grows as the point is located
+    better. ``a`` therefore names a transcritical point only when also
+    ``a^2 > 30 |c lambda|`` (:data:`_OFFSET_FACTOR`), with ``lambda = <p, A q>``.
+    This test, too, is unchanged by rescaling time or the state.
     """
     null_pair = _null_pair(context)
     if null_pair is None:
@@ -141,7 +152,12 @@ def _branch_label(context: "DetectionContext") -> str:
         )
         quadratic_error = max(quadratic_error, abs(quadratic - other_quadratic))
         cubic_error = max(cubic_error, abs(cubic - other_cubic))
-    if _resolved(quadratic, quadratic_size, quadratic_error):
+    jacobian, right, left = null_pair
+    eigenvalue = abs(float((left @ jacobian @ right).real))
+    offset = _OFFSET_FACTOR * abs(cubic) * eigenvalue
+    if _resolved(quadratic, quadratic_size, quadratic_error) and (
+        quadratic * quadratic > offset
+    ):
         return "transcritical"
     if _resolved(cubic, cubic_size, cubic_error):
         return "pitchfork"

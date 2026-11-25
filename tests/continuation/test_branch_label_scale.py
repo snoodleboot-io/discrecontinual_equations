@@ -130,6 +130,56 @@ class TestBranchLabelUnderTimeRescaling(TestCase):
                 assert not wrong, (name, exact, wrong)
 
 
+class TestBranchLabelOffTheBifurcation(TestCase):
+    """A located point sits a little off the bifurcation, on a nontrivial branch.
+
+    With ``d = 0`` the critical mode is ``u' = mu u + r u^2 + k u^3``, whose
+    nontrivial branch through ``u = u0`` has ``mu = -r u0 - k u0^2``. There a
+    pitchfork (``r = 0``) has a quadratic coefficient ``6 k u0`` of its own; the
+    label must still be ``pitchfork``, and a transcritical point must stay one.
+    """
+
+    @staticmethod
+    def _label(coefficients, offset: float, scale: float, *, exact: bool) -> str:
+        r, _al, _be, k, _d = coefficients
+        parameter = -r * offset - k * offset * offset
+        state = M @ np.array([offset, 0.0, 0.0])
+        provider: JacobianProvider = (
+            _Exact(coefficients, scale)
+            if exact
+            else FiniteDifferenceJacobian(
+                _Field(coefficients, scale),
+                FINITE_DIFFERENCE_EPSILON,
+            )
+        )
+        point = ContinuationState(state, parameter, np.array([0.0, 0.0, 0.0, 1.0]), 0.0)
+        return BranchPoint().refine_kind(DetectionContext(point, provider))
+
+    def test_a_pitchfork_located_off_its_vertex_is_a_pitchfork(self):
+        for exact in (True, False):
+            for offset in (1.0e-6, 1.0e-4, 1.0e-2, -1.0e-2):
+                for scale in (1.0e-6, 1.0, 1.0e6):
+                    label = self._label(
+                        (0.0, 0.0, 0.0, 0.4, 0.0),
+                        offset,
+                        scale,
+                        exact=exact,
+                    )
+                    assert label == "pitchfork", (offset, scale, exact)
+
+    def test_a_transcritical_point_located_off_it_is_transcritical(self):
+        for exact in (True, False):
+            for offset in (1.0e-6, 1.0e-4, 1.0e-2, -1.0e-2):
+                for scale in (1.0e-6, 1.0, 1.0e6):
+                    label = self._label(
+                        (1.0, 0.0, 0.0, 0.4, 0.0),
+                        offset,
+                        scale,
+                        exact=exact,
+                    )
+                    assert label == "transcritical", (offset, scale, exact)
+
+
 class TestBranchExpansionSizes(TestCase):
     """The sizes the floors are relative to, against a hand computation."""
 
