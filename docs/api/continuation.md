@@ -1634,3 +1634,58 @@ action paths, with examples and limits.
 ::: discrecontinual_equations.continuation.fokker_planck
 
 ::: discrecontinual_equations.continuation.quasipotential
+
+### The continuation Jacobian and the derivative fallback (DEQ-118)
+
+`jacobian_at` is not the only finite difference. The default continuation
+Jacobian, `FiniteDifferenceJacobian` (registry key `finite_difference_jacobian`),
+and the derivative fallback, `FiniteDifferenceDerivatives`, used to step by an
+absolute `epsilon`. On a state of size `2e12`, where an ulp is `2.4e-4`, the
+default `finite_difference_epsilon = 1e-7` rounds away, the column comes back as
+zero and Newton is handed a singular Jacobian.
+
+Both now take the same per-component step as `jacobian_at`, centrally:
+`h_j = epsilon * max(|u_j|, typical_j)`, and `FiniteDifferenceJacobian` divides by
+the width the machine actually stepped; the parameter column steps
+`epsilon * max(|lambda|, parameter_typical)`. `epsilon` is therefore a relative
+step. **A configured `finite_difference_epsilon` keeps its meaning on every
+component of size one or less** (with the default typical size of one, the step
+there is `epsilon` exactly) and grows with a component above that.
+`FiniteDifferenceDerivatives` steps a general direction `d` by
+`t = epsilon max_j |d_j| / max_j(|d_j| / max(|x_j|, typical_j))`: `epsilon` itself
+when every component it moves is of size one or less, Dennis and Schnabel's
+`epsilon max(|x_j|, typical_j)` along a unit direction.
+
+```python
+import numpy as np
+
+from discrecontinual_equations.continuation.jacobian import FiniteDifferenceJacobian
+from discrecontinual_equations.continuation.residual import ResidualFunction
+
+
+class Scaled(ResidualFunction):
+    """f(u, p) = (u0^2 - p, u1^2 / 1e24 - p): u1 lives near 1e12."""
+
+    def evaluate(self, state, parameter):
+        return np.array([state[0] ** 2 - parameter, state[1] ** 2 / 1.0e24 - parameter])
+
+
+jacobian = FiniteDifferenceJacobian(Scaled(), epsilon=1.0e-7)
+print(jacobian.extended_jacobian(np.array([2.0, 2.0e12]), 4.0))
+# [[4, 0, -1], [0, 4e-12, -1]], exact; an absolute step gave 0 for the 4e-12
+```
+
+**Limits.** A component that lives far below one needs `typical` (one per
+component, or one for all) or its step is floored at one; the builder passes
+only `epsilon`, so `typical` is reachable by constructing the provider yourself.
+Continuation states and parameters of size above one now take larger steps than
+before, so their converged points move by the change in the difference error,
+which is below the Newton tolerance. The residuals that difference their own
+columns (`AnalyticJacobian` over a `DifferentiableResidual`, the cusp and
+generalised-Hopf curves) still take `epsilon` as an absolute step.
+
+References: [Dennis and Schnabel 1983, SciPy `_numdiff`](../references.md#lyapunov-exponents-covariant-vectors-and-noise).
+
+::: discrecontinual_equations.continuation.jacobian
+
+::: discrecontinual_equations.continuation.derivative_provider
