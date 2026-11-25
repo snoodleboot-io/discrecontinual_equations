@@ -49,6 +49,13 @@ Gauss-Legendre quadrature with ``(3 q + 4) / 2 + 2`` nodes evaluates exactly. It
 reproduces Kuznetsov's quoted error for pairwise different channels at ``q = 6``,
 ``0.01956 h^3`` (his (63)).
 
+**Erratum in the source.** Kuznetsov's (65), the fourfold analogue of (63) at
+``q = 2``, prints ``0.0236084 h^4``. The exact value from (49) with the exact
+coefficients is ``1/24 - sum C^2 = 234761/10245312 = 0.0229140 h^4``, so the
+printed constant is a summation slip (DEQ-66 verification, DEQ-114). Nothing
+here uses (65): the fourfold integrals are not drawn, since order 1.5 does not
+need them.
+
 **Truncation.** Order 1.5 needs a mean-square error of at most ``C h^4`` per
 integral (Kuznetsov (8) with ``r = 4``, (66), (67); Kastner and Rossler,
 arXiv:2201.08424, (64) with ``gamma = 3/2``). With ``C = 1``, the constant
@@ -69,10 +76,14 @@ convergence study sees one path at every step size.
 References:
 - Kuznetsov, D. F. "To numerical modeling with strong orders 1.0, 1.5, and 2.0 of
   convergence for multidimensional dynamical systems with random disturbances",
-  arXiv:1802.00888v6 (2022), Sections 2, 3, 5 and 6.
+  arXiv:1802.00888v6 (2022), Sections 2, 3, 5 and 6; Automation and Remote
+  Control 79(7), 1240-1254, 2018, DOI 10.1134/S0005117918070056. Theorem 1;
+  eqs. (5), (42)-(44), (49), (52), (55)-(61), (63), (66), (67). The printed
+  constant of (65) is a slip (see above).
 - Kastner, F. and Rossler, A. "An analysis of approximation algorithms for iterated
   stochastic integrals and a Julia and Matlab simulation toolbox",
-  arXiv:2201.08424 (2022), (64)-(67).
+  arXiv:2201.08424 (2022), (64)-(67); Numerical Algorithms (2022),
+  DOI 10.1007/s11075-022-01401-z.
 - Kloeden, P. E. and Platen, E. "Numerical Solution of Stochastic Differential
   Equations", Springer, 1992, Sections 5.2, 5.8 and 10.4.
 """
@@ -93,7 +104,13 @@ from discrecontinual_equations.solver.stochastic.wiener import (
 
 @dataclass(frozen=True)
 class IteratedIntegrals:
-    """The multiple Ito integrals of one step over ``m`` channels, inner index first."""
+    """The multiple Ito integrals of one step over ``m`` channels, inner index first.
+
+    References:
+        Kuznetsov, D. F. To numerical modeling with strong orders 1.0, 1.5, and
+        2.0 of convergence for multidimensional dynamical systems with random
+        disturbances. arXiv:1802.00888v6 (2022), eq. (5) and its notation.
+    """
 
     delta_w: np.ndarray
     """``I_(j) = W_j(t + h) - W_j(t)``, ``(m,)``."""
@@ -138,11 +155,27 @@ class IteratedIntegralSampler:
     path: ``zeta_0`` and ``zeta_1`` are recovered from them, the higher
     coefficients drawn here. Every method takes leading batch axes, so a fine
     path's cells can be drawn at once.
+
+    References:
+        Kuznetsov, D. F. To numerical modeling with strong orders 1.0, 1.5, and
+        2.0 of convergence for multidimensional dynamical systems with random
+        disturbances. arXiv:1802.00888v6 (2022), Theorem 1 and eqs. (42)-(44), (49),
+        (52), (55)-(61).
+
+        Kastner, F. and Rossler, A. An analysis of approximation algorithms for
+        iterated stochastic integrals and a Julia and MATLAB simulation toolbox.
+        Numerical Algorithms, 2022; arXiv:2201.08424, eq. (64).
     """
 
     __slots__ = ["_generator"]
 
     def __init__(self, generator: np.random.Generator) -> None:
+        """Set up the sampler on a generator of the caller's.
+
+        Args:
+            generator: The stream the coefficients ``zeta_2, zeta_3, ...`` are
+                drawn from.
+        """
         self._generator = generator
 
     @staticmethod
@@ -150,12 +183,28 @@ class IteratedIntegralSampler:
         """``C_(p3,p2,p1)`` for ``h = 1`` and ``p <= terms``, indexed ``[p3, p2, p1]``.
 
         For a step ``h`` multiply by ``h^(3/2)``. Read-only and cached.
+
+        Args:
+            terms: The largest degree ``q``.
+
+        Returns:
+            The ``(q + 1, q + 1, q + 1)`` array of coefficients.
+
+        References:
+            Kuznetsov (2022), eqs. (56) and (57).
         """
         return _legendre_triple(terms)
 
     @staticmethod
     def double_error(terms: int) -> float:
-        """Kuznetsov's (52) for ``h = 1``: ``E (I_(j,k) - I^q_(j,k))^2``, ``j != k``."""
+        """Kuznetsov's (52) for ``h = 1``: ``E (I_(j,k) - I^q_(j,k))^2``, ``j != k``.
+
+        Args:
+            terms: The truncation ``q``.
+
+        Returns:
+            ``1 / (4 (2 q + 1))``; multiply by ``h^2`` for a step ``h``.
+        """
         return 0.25 / (2 * terms + 1)
 
     @staticmethod
@@ -165,6 +214,13 @@ class IteratedIntegralSampler:
 
         Keys ``"distinct"``, ``"inner"`` (``j = k != l``), ``"outer"`` (``j != k =
         l``) and ``"ends"`` (``j = l != k``); ``j = k = l`` is exact.
+
+        Args:
+            terms: The truncation ``q``.
+
+        Returns:
+            The mean-square error by pattern; multiply by ``h^3`` for a step
+            ``h``.
         """
         c = _legendre_triple(terms)
         rest = 1.0 / 6.0 - float(np.sum(c**2))
@@ -177,14 +233,34 @@ class IteratedIntegralSampler:
 
     @staticmethod
     def double_terms(step: float) -> int:
-        """The least ``q >= 1`` with ``h^2 / (4 (2 q + 1)) <= h^4``: order 1.5."""
+        """The least ``q >= 1`` with ``h^2 / (4 (2 q + 1)) <= h^4``: order 1.5.
+
+        Args:
+            step: The step ``h``.
+
+        Returns:
+            The truncation ``q_1`` of the twofold series.
+
+        References:
+            Kuznetsov (2022), eqs. (52) and (66).
+        """
         bound = (0.25 / step**2 - 1.0) / 2.0
         return max(1, int(np.ceil(bound)))
 
     @staticmethod
     @lru_cache(maxsize=64)
     def triple_terms(step: float) -> int:
-        """The least ``q`` whose worst exact error (49), (59)-(61) is ``<= h^4``."""
+        """The least ``q`` whose worst exact error (49), (59)-(61) is ``<= h^4``.
+
+        Args:
+            step: The step ``h``.
+
+        Returns:
+            The truncation ``q_3`` of the threefold series.
+
+        References:
+            Kuznetsov (2022), eqs. (49), (59)-(61) and (67).
+        """
 
         def worst(terms: int) -> float:
             return max(IteratedIntegralSampler.triple_errors(terms).values())
@@ -200,7 +276,19 @@ class IteratedIntegralSampler:
 
     @staticmethod
     def leading(delta_w: np.ndarray, delta_z: np.ndarray, step: float) -> np.ndarray:
-        """``zeta_0`` and ``zeta_1`` from the increments, as ``(..., 2, m)``."""
+        """``zeta_0`` and ``zeta_1`` from the increments, as ``(..., 2, m)``.
+
+        Args:
+            delta_w: The increments ``I_(j)``, ``(..., m)``.
+            delta_z: The time integrals ``I_(j,0)``, ``(..., m)``.
+            step: The step ``h``.
+
+        Returns:
+            The first two Legendre coefficients of each channel.
+
+        References:
+            Kuznetsov (2022), eqs. (42) and (43).
+        """
         zeta0 = delta_w / np.sqrt(step)
         zeta1 = np.sqrt(3.0) * (zeta0 - 2.0 * delta_z / step**1.5)
         return np.stack([zeta0, zeta1], axis=-2)
@@ -216,6 +304,18 @@ class IteratedIntegralSampler:
 
         Needs ``p > max(double_terms, triple_terms, 1)``. Public so that a pathwise
         error can be measured against a reference built from the same ``zeta``.
+
+        Args:
+            zeta: The Legendre coefficients, ``(..., p, m)``.
+            step: The step ``h``.
+            double_terms: The truncation ``q_1`` of the twofold series.
+            triple_terms: The truncation ``q_3`` of the threefold series.
+
+        Returns:
+            The integrals of the step.
+
+        References:
+            Kuznetsov (2022), eqs. (44), (55) and (58).
         """
         dimension = zeta.shape[-1]
         eye = np.eye(dimension)
@@ -283,6 +383,15 @@ class IteratedIntegralSampler:
         ``terms = (q_1, q_3)`` defaults to :meth:`double_terms` and
         :meth:`triple_terms` for the step; ``max(q_1, q_3, 1) - 1`` new normals are
         drawn per channel. ``delta_w`` and ``delta_z`` come back unchanged.
+
+        Args:
+            delta_w: The increments, ``(..., m)``.
+            delta_z: The time integrals ``I_(j,0)``, ``(..., m)``.
+            step: The step ``h``.
+            terms: ``(q_1, q_3)``, or ``None`` for the order 1.5 truncation.
+
+        Returns:
+            The integrals of the path those increments belong to.
         """
         q1, q3 = (
             (self.double_terms(step), self.triple_terms(step))
@@ -312,7 +421,16 @@ class IteratedIntegralSource(ABC):
         step: float,
         dimension: int,
     ) -> IteratedIntegrals:
-        """The integrals over ``[time, time + step]`` for ``dimension`` channels."""
+        """The integrals over ``[time, time + step]`` for ``dimension`` channels.
+
+        Args:
+            time: The start of the step.
+            step: The step ``h``.
+            dimension: The number of channels.
+
+        Returns:
+            The step's integrals.
+        """
         raise NotImplementedError
 
 
@@ -327,11 +445,21 @@ class GaussianIteratedIntegralSource(WienerSource, IteratedIntegralSource):
     the seed; the Levy areas of the Gaussian source use the first). The Levy
     areas :meth:`increments` gives on request are the Gaussian source's, drawn
     independently of :meth:`iterated_integrals`; a scheme uses one or the other.
+
+    References:
+        Kuznetsov, D. F. To numerical modeling with strong orders 1.0, 1.5, and
+        2.0 of convergence for multidimensional dynamical systems with random
+        disturbances. arXiv:1802.00888v6 (2022), Section 5 and Algorithm 1 (Section 6).
     """
 
     __slots__ = ["_increments", "_sampler"]
 
     def __init__(self, seed: int | None = None) -> None:
+        """Set up the increment stream and the sampler's stream.
+
+        Args:
+            seed: The seed of both; ``None`` for fresh entropy.
+        """
         self._increments = GaussianWienerSource(seed)
         child = np.random.SeedSequence(seed).spawn(2)[1]
         self._sampler = IteratedIntegralSampler(np.random.default_rng(child))
@@ -376,6 +504,16 @@ class IteratedIntegralPath(WienerSource, IteratedIntegralSource):
     resolution / (4 (2 q + 1))`` in a twofold integral and at most ``h resolution^2
     / (8 q)`` in a threefold one, which is within the ``h^4`` that order 1.5 asks
     at step ``h`` while ``resolution <= 4 (2 q + 1) h^3``.
+
+    References:
+        Kloeden, P. E. and Platen, E. Numerical Solution of Stochastic
+        Differential Equations. Springer, 1992, Section 5.2 (Chen's relation,
+        as cited since DEQ-66).
+
+        Kuznetsov, D. F. To numerical modeling with strong orders 1.0, 1.5, and
+        2.0 of convergence for multidimensional dynamical systems with random
+        disturbances. arXiv:1802.00888v6 (2022), eqs. (52) and (59)-(61) (the cells'
+        truncation errors).
     """
 
     __slots__ = ["_delta_w", "_delta_z", "_double", "_resolution", "_start", "_triple"]
@@ -389,6 +527,19 @@ class IteratedIntegralPath(WienerSource, IteratedIntegralSource):
         double: np.ndarray,
         triple: np.ndarray,
     ) -> None:
+        """Hold a path given by its cells' integrals.
+
+        Args:
+            start: The time of the first node.
+            resolution: The cell width.
+            delta_w: ``I_(j)`` of each cell, ``(cells, m)``.
+            delta_z: ``I_(j,0)`` of each cell, ``(cells, m)``.
+            double: ``I_(j,k)`` of each cell, ``(cells, m, m)``.
+            triple: ``I_(j,k,l)`` of each cell, ``(cells, m, m, m)``.
+
+        Raises:
+            ValueError: When the shapes do not agree.
+        """
         cells, dimension = delta_w.shape
         m = dimension
         if (
@@ -418,7 +569,22 @@ class IteratedIntegralPath(WienerSource, IteratedIntegralSource):
         seed: int | None = None,
         cell_terms: int = 4,
     ) -> "IteratedIntegralPath":
-        """Draw a path on ``[start, end]`` with ``cell_terms`` Legendre terms a cell."""
+        """Draw a path on ``[start, end]`` with ``cell_terms`` Legendre terms a cell.
+
+        Args:
+            start: The start of the horizon.
+            end: The end of the horizon.
+            resolution: The cell width, which must divide the horizon.
+            dimension: The number of channels.
+            seed: The seed; ``None`` for fresh entropy.
+            cell_terms: The truncation of both series in each cell.
+
+        Returns:
+            The path.
+
+        Raises:
+            ValueError: When the horizon is not a whole number of cells.
+        """
         cells = round((end - start) / resolution)
         if cells < 1 or not np.isclose(start + cells * resolution, end):
             message = "the horizon must be a whole number of resolution cells"
