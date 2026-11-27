@@ -234,33 +234,116 @@ docstring of `continuation/quasipotential.py` has the measured errors.
 The quasipotential says how hard an escape is; `MeanFirstPassage` says how
 long it takes. It solves the backward Kolmogorov problem `L tau = -1` off a
 target set on a `DensityGrid` of any dimension, with the density solve's own
-stencil, and an ensemble gives the same time with an error bar:
+stencil, and an ensemble gives the same time with an error bar. This block
+stands alone: the planar double well $V = x^4/4 - x^2/2 + y^2/2$ with
+$G = \sigma I$, $\sigma^2 = 1/2$, escaping from the left well to a ball about
+the right one, on a small problem that runs in about a second:
 
 ```python
+import math
+
+import numpy as np
+
 from discrecontinual_equations.continuation import (
     Ball, DensityGrid, EnsembleFirstPassage, EnsembleResidence, MeanFirstPassage,
     eyring_kramers_time,
 )
+from discrecontinual_equations.continuation.noise import NoiseMatrix
+from discrecontinual_equations.continuation.stochastic import Ito
+from discrecontinual_equations.differential_equation import DifferentialEquation
+from discrecontinual_equations.function.deterministic import DeterministicFunction
+from discrecontinual_equations.function.stochastic import StochasticFunction
+from discrecontinual_equations.solver.solver_config import StochasticConfig
+from discrecontinual_equations.variable import Variable
 
-grid = DensityGrid.box([-2.2, -1.8], [2.2, 1.8], [161, 161])
-times = MeanFirstPassage(drift, noise, Ito(), grid).solve(Ball([1.0, 0.0], 0.3).on(grid))
-times.at([-1.0, 0.0])                          # mean time from the left well
+sigma, tilt = math.sqrt(0.5), 0.05            # G = sigma I; tilt h for the sensor
 
-sample = EnsembleFirstPassage(StochasticConfig(step_size=0.0025, random_seed=1)).solve(
-    equation, [-1.0, 0.0], 2000, Ball([1.0, 0.0], 0.3), horizon=1e5,
+
+def well_drift(x, y, h=0.0):                  # f = -grad V, V = x^4/4 - x^2/2 + y^2/2 - h x
+    return x - x**3 + h, -y
+
+
+class WellField(DeterministicFunction):       # the drift, for the grid
+    def eval(self, point, time=None):
+        return list(well_drift(*point))
+
+
+class Column(DeterministicFunction):          # one constant column of G
+    def eval(self, point, time=None):
+        return list(self.column)
+
+
+class WellSDE(StochasticFunction):            # dx = f dt + sigma dW, for the ensembles
+    h = 0.0
+
+    def eval(self, point, time=None):
+        return list(well_drift(*point, self.h))
+
+    def diffusion(self, point, time=None):
+        return [sigma, sigma]
+
+    def eval_batch(self, points, time=None):     # all paths at once
+        return np.stack(well_drift(points[:, 0], points[:, 1], self.h), axis=1)
+
+    def diffusion_batch(self, points, time=None):
+        return np.full_like(points, sigma)
+
+
+def planar(function_type, h=0.0):
+    t, states = Variable(name="t"), [Variable(name="x"), Variable(name="y")]
+    function = function_type(states, [], [Variable() for _ in states], t)
+    function.h = h
+    return DifferentialEquation(variables=states, time=t, parameters=[], derivative=function)
+
+
+def column(values):
+    states = [Variable(), Variable()]
+    function = Column(states, [], [Variable(), Variable()], None)
+    function.column = values
+    return function
+
+
+drift = WellField([Variable(), Variable()], [], [Variable(), Variable()], None)
+noise = NoiseMatrix([column((sigma, 0.0)), column((0.0, sigma))])
+grid = DensityGrid.box([-2.2, -1.8], [2.2, 1.8], [41, 41])
+target = Ball([1.0, 0.0], 0.3)
+times = MeanFirstPassage(drift, noise, Ito(), grid).solve(target.on(grid))
+print(f"grid {times.at([-1.0, 0.0]):.2f}")    # mean time from the left well
+
+passage_config = StochasticConfig(step_size=0.01, random_seed=1)
+sample = EnsembleFirstPassage(passage_config).solve(planar(WellSDE), [-1.0, 0.0], 300, target, horizon=200.0)
+low, high = sample.confidence_interval()
+print(f"ensemble {sample.mean:.2f} in [{low:.2f}, {high:.2f}]")
+
+# Eyring-Kramers: U barrier 2 dV / sigma^2, unstable rate 1, Hessians at saddle and well.
+limit = eyring_kramers_time(0.5 / sigma**2, 1.0, [[-1.0, 0.0], [0.0, 1.0]], [[2.0, 0.0], [0.0, 1.0]])
+print(f"small-noise limit {limit:.2f}")
+
+left, right = (-1.0, 0.0), (1.0, 0.0)
+residences = EnsembleResidence(passage_config).solve(
+    planar(WellSDE, tilt), (left, right), 200, (Ball(left, 0.3), Ball(right, 0.3)), horizon=300.0,
 )
-sample.mean, sample.confidence_interval()      # the same time, by simulation
-
-residences = EnsembleResidence(config).solve(
-    equation, (left, right), 400, (Ball(left, 0.3), Ball(right, 0.3)), horizon=2000.0,
-)
-residences.asymmetry_interval()                # a residence-time sensor's reading
+low, high = residences.asymmetry_interval()  # a residence-time sensor's reading
+print(f"left minus right residence in [{low:.2f}, {high:.2f}]")
 ```
+
+prints `grid 13.87`, `ensemble 13.03 in [11.89, 14.18]`, `small-noise limit
+12.08` and `left minus right residence in [-6.52, -4.91]`. The grid's time lies
+inside the ensemble's 95% interval. With the tilt `h = 0.05` the right well is
+the deeper one, so a path stays there longer, and the interval for the
+difference of mean residences excludes zero: that sign is what a residence-time
+sensor reads off. These are a 41 x 41 grid and a few hundred paths, enough to
+show the point but not to pin the numbers down. The full-size comparison - a
+161 x 161 grid against the exact one-dimensional integral, the closed forms and
+seeded ensembles - is `tests/continuation/test_first_passage.py`, and the ring's
+residence-time response is the atlas page built by
+`examples/continuation/pages_residence.py`.
 
 `eyring_kramers_time` is the small-noise limit (Eyring-Kramers, and Bouchet
 and Reygner's non-gradient form) for overdamped dynamics with one
 non-degenerate saddle between two point attractors; it is a limit, and the
-grid shows where it starts to hold. The module docstring of
+grid shows where it starts to hold. At $\sigma^2 = 1/2$ the barrier in $U$ is
+only 1, and the limit is 13% below the grid's time. The module docstring of
 `continuation/first_passage.py` has the measured errors and the limits of
 both routes.
 
