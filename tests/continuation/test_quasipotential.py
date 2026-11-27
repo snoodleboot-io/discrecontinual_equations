@@ -1150,6 +1150,68 @@ class TestUnboundedPoints(TestCase):
             _value, moved = solver.reference(field, target)
         assert np.isinf(moved)
 
+    def test_the_third_surface_is_half_the_second(self):
+        # The third relaxation starts closer in again; from the second surface
+        # it would measure nothing.
+        solver, field, _checked_field, _indices, _true = _checked("gradient")
+        genuine = _relax_from
+        surfaces = []
+
+        def relax(gmam, surface, guide):
+            surfaces.append(surface)
+            return genuine(gmam, surface, guide)
+
+        with mock.patch.object(quasipotential_module, "_relax_from", relax):
+            solver.reference(field, np.array([-1.5, -0.8]))
+        assert len(surfaces) == 3
+        for angle in (0.0, 1.0, 2.5):
+            second, third = surfaces[1].point(angle), surfaces[2].point(angle)
+            assert not np.allclose(third, second)
+            assert np.allclose(third, surfaces[1].shrunk().point(angle))
+
+    def test_a_third_chain_that_will_not_stay_finite_has_no_bound(self):
+        solver, field, _checked_field, _indices, _true = _checked("gradient")
+        genuine = _relax_from
+        calls = []
+
+        def relax(gmam, surface, guide):
+            calls.append(surface)
+            if len(calls) == 3:
+                message = "the minimum action path did not stay finite"
+                raise ValueError(message)
+            return genuine(gmam, surface, guide)
+
+        with mock.patch.object(quasipotential_module, "_relax_from", relax):
+            _value, own = solver.reference(field, np.array([-1.5, -0.8]))
+        assert np.isinf(own)
+
+    def test_outer_surfaces_apart_by_half_of_u_there_have_no_bound(self):
+        # Shift the outer surface's value by a share of U on that surface:
+        # a quarter is an estimate, three quarters is no bound.
+        solver, field, _checked_field, _indices, _true = _checked("gradient")
+        genuine = _relax_from
+
+        def shifted(share):
+            calls = []
+
+            def relax(gmam, surface, guide):
+                value, chain, place = genuine(gmam, surface, guide)
+                calls.append(value)
+                if len(calls) == 1:
+                    value += share * abs(surface.value(surface.point(place)))
+                return value, chain, place
+
+            return relax
+
+        owns = []
+        for share in (0.25, 0.75):
+            with mock.patch.object(
+                quasipotential_module, "_relax_from", shifted(share)
+            ):
+                owns.append(solver.reference(field, np.array([-1.5, -0.8]))[1])
+        assert np.isfinite(owns[0])
+        assert np.isinf(owns[1])
+
     def test_refinement_skips_the_points_it_cannot_bound_and_says_so(self):
         _solver, field, checked, _indices, messages = _ellipse_checked()
         assert any("not a bound" in m and "not refined" in m for m in messages)
