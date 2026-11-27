@@ -58,9 +58,12 @@ def stratonovich_factor(convention: NoiseConvention) -> float:
 def field_at(function: Function, state: np.ndarray) -> np.ndarray:
     """Evaluate a vector field at a state.
 
-    The state is handed over as Python floats: arithmetic on NumPy scalars rounds
-    the same but costs several times as much, and a field is evaluated
-    ``O(n)`` times per Jacobian.
+    The state is handed over as Python floats: arithmetic on NumPy scalars costs
+    several times as much, and a field is evaluated ``O(n)`` times per Jacobian.
+    It rounds the same, except in the builtin ``sum``, which adds Python floats
+    with compensation (Python 3.12 on) and NumPy scalars without; the default
+    :meth:`Function.eval_batch` hands its rows over as Python floats too, so
+    :func:`fields_at` and this agree to the bit either way.
     """
     point = np.asarray(state, dtype=float).tolist()
     return np.array(function.eval(point=point, time=None), dtype=float)

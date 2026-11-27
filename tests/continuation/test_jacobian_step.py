@@ -23,7 +23,12 @@ from discrecontinual_equations.continuation.lyapunov import (
     LyapunovSettings,
     lyapunov_spectrum,
 )
-from discrecontinual_equations.continuation.noise import jacobian_at
+from discrecontinual_equations.continuation.noise import (
+    field_at,
+    fields_at,
+    jacobian_at,
+    jacobians_along,
+)
 from discrecontinual_equations.continuation.region_analysis import describe_region
 from discrecontinual_equations.function.deterministic import DeterministicFunction
 from tests.continuation.fields import LorenzField, State
@@ -421,6 +426,86 @@ class TestLorenzWithAnalyticJacobian(TestCase):
             settings=settings,
         )
         assert abs(differenced.top - analytic.top) < 1.0e-6
+
+
+def _batch(kind: type[_Scaled]) -> np.ndarray:
+    """Rows on both sides of zero, one with a component exactly at zero."""
+    state = _state(kind)
+    rows = [state * factor for factor in (1.0, -0.3, 2.5, 1.0e-3)]
+    rows.append(state * np.array([0.0, 1.0, -1.0]))
+    return np.array(rows)
+
+
+class _Summing(DeterministicFunction):
+    """``f_i = x_i * sum(x)``, summed by the builtin ``sum``."""
+
+    @classmethod
+    def make(cls) -> "_Summing":
+        return cls(
+            variables=[State(), State(), State()],
+            parameters=[],
+            results=[State(), State(), State()],
+            time=None,
+        )
+
+    def eval(self, point, time=None):  # noqa: ARG002 (base signature)
+        total = sum(value * value for value in point)
+        return [value * total for value in point]
+
+
+class TestBatchedJacobians(TestCase):
+    """``jacobians_along`` takes ``jacobian_at``'s steps, row by row, to the bit."""
+
+    def _check(self, kind: type[_Scaled], **options) -> None:
+        field = _field(kind)
+        states = _batch(kind)
+        batched = jacobians_along(field, states, **options)
+        for row, state in enumerate(states):
+            pointwise = jacobian_at(field, state, **options)
+            np.testing.assert_array_equal(batched[row], pointwise)
+
+    def test_forward_rows_equal_the_pointwise_jacobian(self):
+        self._check(_Large)
+
+    def test_forward_rows_with_typical_sizes(self):
+        self._check(_Small, typical=np.array([float(s) for s in _Small.scales]))
+
+    def test_central_rows_equal_the_pointwise_jacobian(self):
+        self._check(_Large, central=True)
+        self._check(_Small, typical=1.0e-9, central=True)
+
+    def test_a_base_in_hand_changes_nothing(self):
+        field = _field(_Large)
+        states = _batch(_Large)
+        base = fields_at(field, states)
+        np.testing.assert_array_equal(
+            jacobians_along(field, states, base),
+            jacobians_along(field, states),
+        )
+        for state in states:
+            # ``base`` is still the third positional argument, as callers pass it.
+            np.testing.assert_array_equal(
+                jacobian_at(field, state, field_at(field, state)),
+                jacobian_at(field, state),
+            )
+
+    def test_a_field_that_sums_agrees_batched_and_pointwise(self):
+        # The builtin sum compensates Python floats but not NumPy scalars, so the
+        # batched and single-state paths must hand a field the same kind of float.
+        field = _Summing.make()
+        states = np.array([[0.1, 0.2, 0.3], [-1.7, 2.9, 1.0e-3], [3.0, -0.7, 0.11]])
+        base = fields_at(field, states)
+        jacobians = jacobians_along(field, states, base)
+        for row, state in enumerate(states):
+            np.testing.assert_array_equal(base[row], field_at(field, state))
+            np.testing.assert_array_equal(jacobians[row], jacobian_at(field, state))
+
+    def test_a_jacobian_field_answers_every_row_itself(self):
+        wrapped = JacobianField(_field(_Large))
+        states = _batch(_Large)
+        batched = jacobians_along(wrapped, states)
+        for row, state in enumerate(states):
+            np.testing.assert_array_equal(batched[row], jacobian_at(wrapped, state))
 
 
 # An equilibrium far from the origin, at a power of two so every evaluation of
