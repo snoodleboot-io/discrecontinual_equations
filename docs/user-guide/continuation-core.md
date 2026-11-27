@@ -164,6 +164,46 @@ The fold is located at the origin; the branch is stable above it and unstable
 below. Natural continuation ends at the fold, $(\mu, x) = (0, 0)$; pseudo-arclength
 ends on the lower branch, $x = -\sqrt\mu$.
 
+The arclength adds the state's and the parameter's changes, so it depends on the
+units the state is measured in. $\dot x = \mu x - x^3 / L^2$ with $L = 10^3$ is a
+pitchfork whose nontrivial branch $\mu = x^2 / L^2$ spans hundreds of state units
+for a parameter change of $0.09$. With the plain arclength, eighty steps of at
+most $0.02$ move the state by less than 2 and never reach the vertex. With
+`arclength_state_scale=1e3` the state enters the arclength in units of $L$, as
+AUTO's weights `THU` do, and the vertex is found:
+
+```python
+class WidePitchfork(DeterministicFunction):
+    """x' = mu x - x^3 / L^2 with L = 1e3: the state is measured in milli-units."""
+
+    def eval(self, point, time=None):
+        return [self.parameters[0].value * point[0] - point[0] ** 3 / 1.0e6]
+
+
+equation = build(WidePitchfork)
+for scale in (1.0, 1.0e3):
+    config = ContinuationConfig(
+        initial_parameter=0.09,
+        direction=-1,
+        detectors=["branch_point"],
+        initial_step=0.01,
+        maximum_step=0.02,
+        maximum_points=80,
+        parameter_lower_bound=-0.5,
+        parameter_upper_bound=0.5,
+        arclength_state_scale=scale,
+    )
+    branch = ContinuerBuilder.build(config, equation).solve(equation, [300.0])
+    print(scale, [(point.kind, f"{point.parameter:.0e}") for point in branch.special_points])
+```
+
+prints
+
+```text
+1.0 []
+1000.0 [('pitchfork', '5e-09')]
+```
+
 ### Limits
 
 - **Bounds are checked after a step.** The last point can lie beyond
@@ -182,10 +222,21 @@ ends on the lower branch, $x = -\sqrt\mu$.
   Georg, §8.1); to follow the other one, switch branches (below).
 - **The arclength is pseudo-arclength**: the sum of accepted steps $h_j$, not the
   length of the curve.
+- **The arclength mixes the state's units with the parameter's.** Measure the
+  state in units a thousand times smaller and a step of `0.02` covers a thousandth
+  of the distance it did. Set `arclength_state_scale` to the size of the state
+  you care about: the state then enters the arclength divided by it, as AUTO's
+  weights `THU` do (Doedel and Oldeman 2021, "Continuation Step Size"). A system
+  rescaled by $\sigma$ with `arclength_state_scale` rescaled alike is continued
+  through the same points. The default, 1, is the plain Euclidean arclength (see
+  [Rescaled and stiff systems](../api/continuation.md#rescaled-stiff-and-turning-branches-deq-179-deq-178-deq-168)).
+- **The corrector's tolerance has the field's units.** `newton_tolerance` bounds
+  $|F|$, which scales with time and state; for a field scaled by $s\sigma$, scale it
+  alike, or a slow or small system accepts points off the curve.
 - **The seed polish returns its last iterate** even when it did not converge;
   check the first point's residual when the seed is a rough guess.
 
-Sources: [AllgowerGeorg1990, Keller1977, Kuznetsov1998](../references.md#numerical-continuation-predictor-corrector-jacobians-step-control).
+Sources: [AllgowerGeorg1990, Keller1977, Kuznetsov1998, DoedelOldeman2021](../references.md#numerical-continuation-predictor-corrector-jacobians-step-control).
 API: [`Continuer`](../api/continuation.md#discrecontinual_equations.continuation.continuer.Continuer),
 [`ContinuationConfig`](../api/continuation.md#discrecontinual_equations.continuation.continuation_config.ContinuationConfig),
 [`TangentPredictor`](../api/continuation.md#discrecontinual_equations.continuation.predictor.TangentPredictor),
@@ -210,10 +261,22 @@ Georg §9.2), not Newton on the augmented system $F = 0,\ \psi = 0$ (Kuznetsov's
 
 The fold above was found this way. Its location is accurate to the corrector and
 root-finder tolerances (`newton_tolerance`, `localization_tolerance`,
-`fraction_tolerance`). `localization_tolerance` is relative. The localizer stops
-once $|\psi|$ is below it times the larger $|\psi|$ at the two bracketing points,
-so the located point does not depend on the units of time or state (DEQ-146; see
-[Labels that do not depend on the units](../api/continuation.md#labels-that-do-not-depend-on-the-units-end-to-end-deq-146-deq-147)).
+`fraction_tolerance`). `localization_tolerance` is relative to the step: the
+localizer returns a point within `localization_tolerance` of the step's length
+from the sign change of $\psi$, whatever the units of $\psi$. Bisection meets
+that by halving its bracket; the value of $\psi$ is used only for its sign
+(DEQ-179). A stop on $|\psi|$ against its end values, which DEQ-146 used, is
+not sound: on a test function that grows like $\sinh$ it accepted a point 0.13
+of the step from the root. AUTO stops its location on the arclength correction
+for the same reason (`EPSS`, Doedel and Oldeman 2021). A test value that is
+infinite or undefined at either end is refused with a `ValueError`.
+
+Each trial point starts from the cubic through $y_k$ and $y_{k+1}$ with their
+tangents (cubic Hermite interpolation), not from the chord: the chord cuts
+inside a turning branch by its curvature times the step squared, and at a
+pitchfork's vertex the nearest solution to it was on the other branch (DEQ-168).
+The corrector then pulls the point onto the hyperplane normal to $y_k$'s tangent,
+as the continuation step itself does.
 
 ### Limits
 
@@ -222,9 +285,15 @@ so the located point does not depend on the units of time or state (DEQ-146; see
 - If the corrector fails at a trial point, the test value at $y_k$ is used
   instead. That keeps the bracket's sign, but bisection can then converge onto
   the failure rather than the zero.
-- `Secant` does not bracket: it can stop on the clamp at $\sigma = 0$ or $1$.
+- `Secant` does not bracket. With the continuation's relative settings it
+  accepts a converged iterate only after a sign change within the tolerance of
+  it, and hands the bracket to bisection when it cannot confirm one.
+- Near a branch point, $|F|$ is small over a whole neighbourhood, so the located
+  point is only as close as `newton_tolerance` lets the corrector get: from a
+  pitchfork's nontrivial branch, $|\mu^*| \approx 10^{-8}$ to $10^{-7}$ with the
+  defaults.
 
-Sources: [Kuznetsov1998, AllgowerGeorg1990](../references.md#numerical-continuation-predictor-corrector-jacobians-step-control).
+Sources: [Kuznetsov1998, AllgowerGeorg1990, DoedelOldeman2021](../references.md#numerical-continuation-predictor-corrector-jacobians-step-control).
 API: [`RefiningLocalizer`](../api/continuation.md#discrecontinual_equations.continuation.localizer.RefiningLocalizer),
 [`Bisection`](../api/continuation.md#discrecontinual_equations.continuation.root_finder.Bisection),
 [`Secant`](../api/continuation.md#discrecontinual_equations.continuation.root_finder.Secant).

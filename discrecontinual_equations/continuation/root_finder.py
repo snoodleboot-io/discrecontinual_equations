@@ -25,13 +25,28 @@ function whose values have a known scale (a Lyapunov exponent, a probability). A
 test function of a continuation has units instead: a bordered determinant of an
 ``n``-dimensional system scales as ``s^n`` when time is rescaled by ``s``, so an
 absolute tolerance of ``1e-8`` accepts the first midpoint of a slow system and
-cannot be met by a fast one. With ``relative=True`` the test reads
-``|f(x)| < value_tolerance * max(|f(low)|, |f(high)|)``, which is unchanged when
-``f`` is multiplied by any constant: near a simple root, where ``f`` is close to
-linear along the bracket, it locates the root to about ``value_tolerance`` of the
-bracket's width whatever the units. The secant's flat-chord test is scaled the
-same way. The relative stop is this library's own choice, justified only by that
-invariance; it is not taken from the references below.
+cannot be met by a fast one.
+
+With ``relative=True`` the stop is on the location, not on the value:
+``value_tolerance`` is read as a fraction of the initial bracket ``[low, high]``,
+and a finder returns ``x`` only once a sign change is known to lie within
+``value_tolerance (high - low)`` of it. That is unchanged when ``f`` is multiplied
+by any constant, and it holds for any continuous ``f``. A stop on the value
+measured against the end values, ``|f(x)| < value_tolerance max(|f(low)|,
+|f(high)|)`` (DEQ-146), is not sound: it is the location tolerance only where
+``f`` is close to linear across the whole bracket. On ``sinh(40 (x - 0.37))`` over
+``[0, 1]`` the ends are ``-1.3e6`` and ``4.4e10``, the first midpoint's value of 90
+passes, and bisection stopped 0.13 from the root (DEQ-179). AUTO stops its search
+for a special point on the arclength correction relative to the step
+(``EPSS``, Doedel and Oldeman 2021) for the same reason. Bisection meets the
+location stop by halving its bracket; the secant method, which keeps no bracket,
+confirms a converged iterate by a sign change across ``x -/+ value_tolerance
+(high - low)`` and falls back to bisection when it cannot.
+
+The ends the finder evaluates must be finite. An infinite or undefined end value
+has no sign to bracket with and no size to measure against (with the DEQ-146
+value stop a ``f(high)`` of ``inf`` passed every midpoint), so it is refused with
+a :class:`ValueError`.
 
 Limits: both assume one sign change in the bracket. A test function that touches
 zero without changing sign, or two crossings inside one continuation step, are not
@@ -44,12 +59,21 @@ References:
   eqs. (10.35)-(10.36).
 - Allgower, E. L. and Georg, K. "Numerical Continuation Methods: An Introduction",
   Springer, 1990, doi:10.1007/978-3-642-61257-2, Section 9.2, eq. (9.2.1).
+- Doedel, E. J. and Oldeman, B. E. "AUTO-07P: Continuation and Bifurcation
+  Software for Ordinary Differential Equations", manual, Concordia University,
+  August 2021 (https://github.com/auto-07p/auto-07p, ``doc/auto.tex``), section
+  "Tolerances", constants ``EPSS`` ("relative arclength convergence criterion for
+  the detection of special solutions") and ``ITMX``; the stop
+  ``|ds| / (1 + sqrt(|DS DSMAX|)) < EPSS`` is subroutine ``LCSPAE`` of
+  ``src/ae.f90``.
 """
 
+import math
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 
 _MIDPOINT = 0.5
+_TWO_SIDED = 2.0
 _DEGENERATE_SLOPE = 1e-14
 
 
@@ -61,9 +85,10 @@ class RootFinderSettings:
         fraction_tolerance: Stop once the bracket is narrower than this (used by
             bisection).
         max_iterations: Hard cap on iterations.
-        relative: Read ``value_tolerance`` as a fraction of the larger of
-            ``|function(low)|`` and ``|function(high)|``, so the stop does not
-            depend on the units of the function (see the module docstring).
+        relative: Stop on the location instead of the value: return ``x`` once a
+            sign change is known to lie within ``value_tolerance`` times the
+            initial bracket's width of it, so the stop does not depend on the
+            units of the function (see the module docstring).
     """
 
     __slots__ = [
@@ -103,11 +128,11 @@ class RootFinderSettings:
 
     @property
     def relative(self) -> bool:
-        """Whether ``value_tolerance`` is relative to the bracket's end values."""
+        """Whether ``value_tolerance`` is a fraction of the bracket's width."""
         return self._relative
 
     def value_scale(self, lower_value: float, upper_value: float) -> float:
-        """The size ``value_tolerance`` is measured against for this bracket.
+        """The size the secant's flat-chord test is measured against.
 
         Args:
             lower_value: ``function(low)``.
@@ -119,6 +144,29 @@ class RootFinderSettings:
         if not self._relative:
             return 1.0
         return max(abs(lower_value), abs(upper_value))
+
+    def location_tolerance(self, low: float, high: float) -> float:
+        """How close to a sign change a relative stop returns its point.
+
+        Args:
+            low: Left end of the initial bracket.
+            high: Right end of the initial bracket.
+
+        Returns:
+            ``value_tolerance (high - low)``.
+        """
+        return self._value_tolerance * (high - low)
+
+
+def _finite_end(value: float, end: float) -> float:
+    """Return ``value``, or refuse an end value that is infinite or undefined."""
+    if not math.isfinite(value):
+        message = (
+            f"the root-finder's end value at {end!r} is {value!r}: a bracket needs "
+            "finite end values (DEQ-179)"
+        )
+        raise ValueError(message)
+    return value
 
 
 class ScalarRootFinder(ABC):
@@ -148,14 +196,22 @@ class ScalarRootFinder(ABC):
 class Bisection(ScalarRootFinder):
     """Robust bracketing bisection.
 
-    Keeps the half whose ends differ in sign; returns the midpoint once its value
-    is below ``value_tolerance`` (times the larger end value when the settings
-    are relative) or the bracket is narrower than ``fraction_tolerance``. A
+    Keeps the half whose ends differ in sign. With absolute settings it returns
+    the midpoint once its value is below ``value_tolerance`` or the bracket is
+    narrower than ``fraction_tolerance``. With relative settings the value is
+    used only for its sign: the midpoint is returned once the bracket is narrower
+    than ``2 value_tolerance (high - low)``, so it lies within ``value_tolerance
+    (high - low)`` of the sign change, or when its value is exactly zero. A
     relative stop costs one more evaluation, at ``high``. If the ends do not
     differ in sign the bracket slides to ``high`` and the result is not a root.
 
+    Raises:
+        ValueError: If an evaluated end value is not finite.
+
     References:
     - Kuznetsov (1998), Section 10.2.2.
+    - Doedel and Oldeman (2021), AUTO-07P manual, ``EPSS`` (a relative stop on
+      the location rather than the value).
     """
 
     __slots__ = ["_settings"]
@@ -169,18 +225,24 @@ class Bisection(ScalarRootFinder):
         low: float,
         high: float,
     ) -> float | None:
-        lower_value = function(low)
-        upper_value = function(high) if self._settings.relative else 0.0
-        tolerance = self._settings.value_tolerance * self._settings.value_scale(
-            lower_value,
-            upper_value,
-        )
+        settings = self._settings
+        lower_value = _finite_end(function(low), low)
+        if settings.relative:
+            _finite_end(function(high), high)
+            width = _TWO_SIDED * settings.location_tolerance(low, high)
+            tolerance = 0.0
+        else:
+            width = 0.0
+            tolerance = settings.value_tolerance
         mid = _MIDPOINT * (low + high)
-        for _ in range(self._settings.max_iterations):
+        for _ in range(settings.max_iterations):
             mid = _MIDPOINT * (low + high)
             value = function(mid)
-            narrow = (high - low) < self._settings.fraction_tolerance
-            if abs(value) < tolerance or narrow:
+            narrow = (high - low) < settings.fraction_tolerance
+            # A relative stop waits for the bracket itself: a small value says
+            # nothing about the distance to the root unless f is linear (DEQ-179).
+            located = (high - low) <= width or value == 0.0
+            if abs(value) < tolerance or narrow or located:
                 return mid
             if lower_value * value < 0:
                 high = mid
@@ -193,14 +255,23 @@ class Bisection(ScalarRootFinder):
 class Secant(ScalarRootFinder):
     """Faster secant iteration, clamped to the initial bracket for safety.
 
-    ``x <- x_1 - f_1 (x_1 - x_0) / (f_1 - f_0)``, clamped to ``[low, high]``; stops
-    on ``|f| < value_tolerance`` or a chord flatter than ``1e-14`` (both times the
-    larger end value when the settings are relative). Not bracketing:
-    it can settle on the clamp instead of a root.
+    ``x <- x_1 - f_1 (x_1 - x_0) / (f_1 - f_0)``, clamped to ``[low, high]``. With
+    absolute settings it stops on ``|f| < value_tolerance`` or a chord flatter
+    than ``1e-14``, and, not bracketing, it can settle on the clamp instead of a
+    root. With relative settings a step shorter than ``value_tolerance (high -
+    low)`` only proposes a stop: it is accepted once ``f`` changes sign within
+    that distance of the iterate (one or two more evaluations), and if no
+    iterate is confirmed - the chord went flat, the iterate stuck on the clamp,
+    or the iterations ran out - the bracket is handed to :class:`Bisection`.
+
+    Raises:
+        ValueError: If an end value is not finite.
 
     References:
     - Kuznetsov (1998), Section 10.2.2 (secant location along the curve).
     - Allgower and Georg (1990), Section 9.2, eq. (9.2.1).
+    - Doedel and Oldeman (2021), AUTO-07P manual, ``EPSS`` (a relative stop on
+      the location rather than the value).
     """
 
     __slots__ = ["_settings"]
@@ -214,19 +285,46 @@ class Secant(ScalarRootFinder):
         low: float,
         high: float,
     ) -> float | None:
+        settings = self._settings
         left, right = low, high
-        value_left, value_right = function(left), function(right)
-        scale = self._settings.value_scale(value_left, value_right)
-        tolerance = self._settings.value_tolerance * scale
+        value_left = _finite_end(function(left), left)
+        value_right = _finite_end(function(right), right)
+        scale = settings.value_scale(value_left, value_right)
+        tolerance = 0.0 if settings.relative else settings.value_tolerance * scale
+        distance = settings.location_tolerance(low, high)
         current = right
-        for _ in range(self._settings.max_iterations):
+        for _ in range(settings.max_iterations):
             if abs(value_right - value_left) < _DEGENERATE_SLOPE * scale:
                 break
             current = right - value_right * (right - left) / (value_right - value_left)
             current = min(max(current, low), high)
             value = function(current)
-            if abs(value) < tolerance:
+            if abs(value) < tolerance or (settings.relative and value == 0.0):
+                return current
+            # A short step is not a root until f changes sign nearby (DEQ-179).
+            if (
+                settings.relative
+                and abs(current - right) <= distance
+                and _changes_sign_near(function, current, value, (low, high), distance)
+            ):
                 return current
             left, value_left = right, value_right
             right, value_right = current, value
+        if settings.relative:
+            return Bisection(settings).locate(function, low, high)
         return current
+
+
+def _changes_sign_near(
+    function: Callable[[float], float],
+    point: float,
+    value: float,
+    bracket: tuple[float, float],
+    distance: float,
+) -> bool:
+    """Whether ``function`` changes sign within ``distance`` of ``point``."""
+    low, high = bracket
+    for neighbour in (min(point + distance, high), max(point - distance, low)):
+        if neighbour != point and value * function(neighbour) <= 0.0:
+            return True
+    return False

@@ -4,23 +4,29 @@ The localizer owns the *geometry* - mapping a fraction along the segment to a
 corrected point and a test value - and delegates the *root-finding* on that
 fraction to an injected :class:`~.root_finder.ScalarRootFinder`.
 
-When a detector's test function ``psi`` changes sign between accepted points
-``y_k`` and ``y_(k+1)`` (Kuznetsov (1998), eq. (10.35)), :class:`RefiningLocalizer`
-parametrises the chord ``y(sigma) = y_k + sigma (y_(k+1) - y_k)``,
-``sigma in [0, 1]``, corrects each trial point back onto the curve with the
-continuation corrector (on the hyperplane through the trial point normal to
-``y_k``'s tangent, for the default pseudo-arclength constraint), and root-finds
-``psi`` of the corrected point in ``sigma``. This is the one-dimensional location
-along the curve of Kuznetsov (1998, Section 10.2.2) and Allgower and Georg (1990,
-Section 9.2), rather than Newton on the augmented system
-``F(y) = 0, psi(y) = 0`` (Kuznetsov's (10.36)), so it works for test functions
-that are not differentiable, or whose augmented Jacobian is singular at the zero.
+When a detector's test function ``psi`` changes sign between accepted points ``y_k``
+and ``y_(k+1)`` (Kuznetsov (1998), eq. (10.35)), :class:`RefiningLocalizer`
+parametrises the chord ``y(sigma) = y_k + sigma (y_(k+1) - y_k)``, ``sigma in [0,
+1]``, corrects each trial point back onto the curve with the continuation corrector
+(on the hyperplane through the trial point normal to ``y_k``'s tangent, for the
+default pseudo-arclength constraint), and root-finds ``psi`` of the corrected point
+in ``sigma``. Each trial point starts from the cubic Hermite interpolant through
+``y_k`` and ``y_(k+1)`` with their tangents rather than from the chord itself: the
+chord is off a turning branch by the curvature times the step squared, and from a
+pitchfork's nontrivial branch its midpoint was nearer the trivial branch, where the
+corrector took it (``mu* = 2.9e-3``, DEQ-168). The cubic is off the branch by the
+step to the fourth power. This is the one-dimensional location along the curve of
+Kuznetsov (1998, Section 10.2.2) and Allgower and Georg (1990, Section 9.2), rather
+than Newton on the augmented system ``F(y) = 0, psi(y) = 0`` (Kuznetsov's (10.36)),
+so it works for test functions that are not differentiable, or whose augmented
+Jacobian is singular at the zero.
 
 Limits: the located point is as accurate as the corrector tolerance and the
-root-finder's tolerances, not more. If the corrector fails at a trial point, the
-test value at ``y_k`` is used instead, which keeps the bracket's sign but can make
-bisection stop at the failure rather than the zero. Two zeros of ``psi`` within one
-step cancel and are not seen.
+root-finder's tolerances, not more; near a branch point ``|F|`` is small over a
+whole neighbourhood, so an absolute ``newton_tolerance`` bounds it loosely there. If
+the corrector fails at a trial point, the test value at ``y_k`` is used instead,
+which keeps the bracket's sign but can make bisection stop at the failure rather
+than the zero. Two zeros of ``psi`` within one step cancel and are not seen.
 
 References:
 - Kuznetsov, Yu. A. "Elements of Applied Bifurcation Theory", 2nd ed., Applied
@@ -41,6 +47,7 @@ from discrecontinual_equations.continuation.detection import (
     DetectionContext,
 )
 from discrecontinual_equations.continuation.jacobian import JacobianProvider
+from discrecontinual_equations.continuation.parameterization import weighted
 from discrecontinual_equations.continuation.root_finder import ScalarRootFinder
 from discrecontinual_equations.continuation.tangent import TangentComputer
 
@@ -108,13 +115,22 @@ class RefiningLocalizer(Localizer):
         tangent_computer: Recomputes the tangent at each corrected point.
         jacobian: Jacobian source handed to the detector.
         root_finder: Scalar root-finder on the chord fraction.
+        state_scale: The state size ``S`` of the weighted arclength (see
+            :class:`~.parameterization.PseudoArclength`); the chord's length,
+            which scales the tangents in the cubic, is measured with it.
 
     References:
     - Kuznetsov (1998), Section 10.2.2.
     - Allgower and Georg (1990), Section 9.2.
     """
 
-    __slots__ = ["_corrector", "_jacobian", "_root_finder", "_tangent_computer"]
+    __slots__ = [
+        "_corrector",
+        "_jacobian",
+        "_root_finder",
+        "_state_weight",
+        "_tangent_computer",
+    ]
 
     def __init__(
         self,
@@ -122,8 +138,10 @@ class RefiningLocalizer(Localizer):
         tangent_computer: TangentComputer,
         jacobian: JacobianProvider,
         root_finder: ScalarRootFinder,
+        state_scale: float = 1.0,
     ) -> None:
         self._corrector = corrector
+        self._state_weight = 1.0 / (state_scale * state_scale)
         self._tangent_computer = tangent_computer
         self._jacobian = jacobian
         self._root_finder = root_finder
@@ -134,17 +152,19 @@ class RefiningLocalizer(Localizer):
         upper: ContinuationState,
         detector: BifurcationDetector,
     ) -> LocatedBifurcation | None:
-        direction_vector = np.concatenate(
-            [upper.state - lower.state, [upper.parameter - lower.parameter]],
-        )
-        distance = float(np.linalg.norm(direction_vector))
+        chord = _augmented(upper) - _augmented(lower)
+        if self._state_weight == 1.0:
+            distance = float(np.linalg.norm(chord))
+        else:
+            distance = float(
+                np.linalg.norm(weighted(chord, np.sqrt(self._state_weight)))
+            )
         if distance == 0.0:
             return None
-        unit = direction_vector / distance
         fallback = detector.test_value(DetectionContext(lower, self._jacobian))
 
         def test_at(fraction: float) -> float:
-            state = self._corrected_state(lower, unit, distance, fraction)
+            state = self._corrected_state(lower, upper, distance, fraction)
             if state is None:
                 return fallback
             return detector.test_value(DetectionContext(state, self._jacobian))
@@ -152,7 +172,7 @@ class RefiningLocalizer(Localizer):
         fraction = self._root_finder.locate(test_at, 0.0, 1.0)
         if fraction is None:
             return None
-        found = self._corrected_state(lower, unit, distance, fraction)
+        found = self._corrected_state(lower, upper, distance, fraction)
         if found is None:
             return None
         context = DetectionContext(found, self._jacobian)
@@ -165,16 +185,14 @@ class RefiningLocalizer(Localizer):
     def _corrected_state(
         self,
         lower: ContinuationState,
-        unit: np.ndarray,
+        upper: ContinuationState,
         distance: float,
         fraction: float,
     ) -> ContinuationState | None:
-        offset = fraction * distance
-        predicted_state = lower.state + offset * unit[:-1]
-        predicted_parameter = lower.parameter + offset * float(unit[-1])
+        predicted = _hermite(lower, upper, distance, fraction)
         result = self._corrector.correct(
-            predicted_state,
-            predicted_parameter,
+            predicted[:-1],
+            float(predicted[-1]),
             lower.tangent,
         )
         if not result.converged:
@@ -190,3 +208,40 @@ class RefiningLocalizer(Localizer):
             tangent,
             lower.arclength,
         )
+
+
+def _augmented(point: ContinuationState) -> np.ndarray:
+    """``(u, lambda)`` as one vector, the parameter last."""
+    return np.concatenate([point.state, [point.parameter]])
+
+
+def _hermite(
+    lower: ContinuationState,
+    upper: ContinuationState,
+    distance: float,
+    fraction: float,
+) -> np.ndarray:
+    """The cubic through both points with both tangents, at ``fraction`` of the step.
+
+    ``y(s) = h00 y_k + h10 L t_k + h01 y_(k+1) + h11 L t_(k+1)`` with the cubic
+    Hermite basis ``h00 = 2s^3 - 3s^2 + 1``, ``h10 = s^3 - 2s^2 + s``,
+    ``h01 = -2s^3 + 3s^2``, ``h11 = s^3 - s^2`` and ``L`` the chord's length. It
+    follows the branch to third order in the step, where the chord is off it by
+    the curvature times the step squared, and is the accepted points at ``s = 0``
+    and ``s = 1``. The chord's length stands in for the arclength between the
+    points, which the tangents (unit in the continuation's arclength) are scaled
+    by.
+
+    References:
+        Wikipedia, "Cubic Hermite spline", section "Interpolation on an
+        arbitrary interval" (the basis ``h00 ... h11`` and the tangents scaled
+        by the interval's length), read 2026-11-27.
+    """
+    square = fraction * fraction
+    cube = square * fraction
+    return (
+        (2.0 * cube - 3.0 * square + 1.0) * _augmented(lower)
+        + (cube - 2.0 * square + fraction) * distance * lower.tangent
+        + (-2.0 * cube + 3.0 * square) * _augmented(upper)
+        + (cube - square) * distance * upper.tangent
+    )

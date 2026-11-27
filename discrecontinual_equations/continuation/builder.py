@@ -112,6 +112,11 @@ class ContinuerBuilder:
                 "linear_solver": linear_solver,
                 "parameterization": AbstractFactory[Parameterization].create(
                     config.parameterization,
+                    configuration=ContinuerBuilder._scaled(
+                        config,
+                        {},
+                        weighted=config.parameterization == "pseudo_arclength",
+                    ),
                 ),
                 "settings": Factory.create(
                     "newton_settings",
@@ -124,11 +129,14 @@ class ContinuerBuilder:
         )
         tangent_computer = AbstractFactory[TangentComputer].create(
             config.tangent_computer,
-            configuration={
-                "jacobian": jacobian,
-                "linear_solver": linear_solver,
-                "direction": config.direction,
-            },
+            configuration=ContinuerBuilder._scaled(
+                config,
+                {
+                    "jacobian": jacobian,
+                    "linear_solver": linear_solver,
+                    "direction": config.direction,
+                },
+            ),
         )
         components = ContinuationComponents(
             jacobian=jacobian,
@@ -149,12 +157,15 @@ class ContinuerBuilder:
             detectors=ContinuerBuilder._detectors(config),
             localizer=AbstractFactory[Localizer].create(
                 config.localizer,
-                configuration={
-                    "corrector": corrector,
-                    "tangent_computer": tangent_computer,
-                    "jacobian": jacobian,
-                    "root_finder": ContinuerBuilder._root_finder(config),
-                },
+                configuration=ContinuerBuilder._scaled(
+                    config,
+                    {
+                        "corrector": corrector,
+                        "tangent_computer": tangent_computer,
+                        "jacobian": jacobian,
+                        "root_finder": ContinuerBuilder._root_finder(config),
+                    },
+                ),
             ),
             point_builder=Factory.create(
                 config.point_builder,
@@ -207,6 +218,19 @@ class ContinuerBuilder:
             configuration["typical"] = np.asarray(config.typical, dtype=float)
         if config.parameter_typical is not None:
             configuration["parameter_typical"] = config.parameter_typical
+        return configuration
+
+    @staticmethod
+    def _scaled(
+        config: ContinuationConfig,
+        configuration: dict[str, Any],
+        *,
+        weighted: bool = True,
+    ) -> dict[str, Any]:
+        # The arclength's state scale is passed only when it is not 1, so a
+        # registered component that knows nothing of it is still built (DEQ-168).
+        if weighted and config.arclength_state_scale != 1.0:
+            return {**configuration, "state_scale": config.arclength_state_scale}
         return configuration
 
     @staticmethod

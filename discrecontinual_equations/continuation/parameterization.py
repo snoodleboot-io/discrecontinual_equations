@@ -150,14 +150,45 @@ class PseudoArclength(Parameterization):
     predictor's step ``x_p = x_0 + ds t`` folded in. The bordered matrix
     ``[f_x; t]`` is non-singular at every regular point of the branch.
 
+    The dot product mixes the state's units with the parameter's: once the state
+    is rescaled by ``sigma`` an arclength step of ``0.02`` moves it ``0.02 / sigma``
+    of its own size, and at ``sigma = 1e3`` eighty steps did not reach a branch
+    point ``0.3`` away, while at ``sigma = 1e-3`` the step jumped from a pitchfork's
+    nontrivial branch to the trivial one (DEQ-168). AUTO weights the state and
+    the parameter in the arclength (its constants ``THU`` and ``THL``). With
+    ``state_scale`` ``S``, every state component has the weight ``1 / S^2`` and
+    the parameter weight 1: ``g = <t, x - x_p>_W = t_u . (u - u_p) / S^2 +
+    t_lambda (lambda - lambda_p)``, which is the plain constraint in the
+    variables ``(u / S, lambda)``. A branch rescaled by ``sigma`` with ``S``
+    rescaled alike is then continued through the same points. The default
+    ``S = 1`` is the unweighted constraint.
+
+    Args:
+        state_scale: The state size ``S`` that one unit of arclength stands for.
+
     References:
     - Doedel (2006), Kyoto lecture notes, slides 22 and 25 (the constraint)
       and slide 27 (non-singularity at a regular point); see the module
       docstring.
+    - Doedel, E. J. and Oldeman, B. E. "AUTO-07P: Continuation and Bifurcation
+      Software for Ordinary Differential Equations", manual, Concordia
+      University, August 2021 (https://github.com/auto-07p/auto-07p,
+      ``doc/auto.tex``), section "Continuation Step Size", constants ``THL`` and
+      ``THU``; in ``src/ae.f90`` the weights multiply the squared components in
+      the step, ``SS = SS + THU(K) (U(K) - UOLD(K))^2`` (subroutine ``SOLVAE``),
+      and in the tangent's normalisation (subroutine ``STPRAE``).
     """
 
+    __slots__ = ["_state_weight"]
+
+    def __init__(self, state_scale: float = 1.0) -> None:
+        if not state_scale > 0.0 or not np.isfinite(state_scale):
+            message = f"state_scale must be positive and finite, got {state_scale!r}"
+            raise ValueError(message)
+        self._state_weight = 1.0 / (state_scale * state_scale)
+
     def constraint(self, step: CorrectionStep) -> float:
-        """Return ``t . (x - x_p)``, the iterate's offset along the tangent.
+        """Return ``<t, x - x_p>_W``, the iterate's offset along the tangent.
 
         Args:
             step: The current iterate, the prediction and the tangent.
@@ -168,18 +199,27 @@ class PseudoArclength(Parameterization):
         tangent = step.tangent
         state_part = tangent[:-1] @ (step.state - step.predicted_state)
         parameter_part = tangent[-1] * (step.parameter - step.predicted_parameter)
-        return float(state_part + parameter_part)
+        return float(self._state_weight * state_part + parameter_part)
 
     def border(self, step: CorrectionStep) -> np.ndarray:
-        """Return the tangent itself, the gradient of ``t . (x - x_p)``.
+        """Return ``W t``, the gradient of ``<t, x - x_p>_W``.
 
         Args:
             step: The current iterate, the prediction and the tangent.
 
         Returns:
-            The unit tangent ``t``.
+            The tangent with its state part weighted by ``1 / S^2``.
         """
-        return step.tangent
+        if self._state_weight == 1.0:
+            return step.tangent
+        return weighted(step.tangent, self._state_weight)
+
+
+def weighted(vector: np.ndarray, state_weight: float) -> np.ndarray:
+    """``W v``: the state part (all but the last entry) times ``state_weight``."""
+    out = np.array(vector, dtype=float)
+    out[:-1] *= state_weight
+    return out
 
 
 class Natural(Parameterization):

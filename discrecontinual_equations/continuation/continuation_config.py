@@ -234,6 +234,17 @@ class ContinuationConfig(SolverConfig):
         description="Real-part threshold for counting unstable eigenvalues",
     )
 
+    arclength_state_scale: float = Field(
+        default=1.0,
+        gt=0.0,
+        description=(
+            "State size that one unit of pseudo-arclength stands for: the state "
+            "enters the arclength divided by it, as AUTO's weights THU do, so a "
+            "system whose state is measured in other units is continued alike "
+            "once this is rescaled with it; 1 is the unweighted arclength"
+        ),
+    )
+
     newton_tolerance: float = Field(
         default=1e-9,
         description="Residual norm tolerance for the corrector",
@@ -250,9 +261,9 @@ class ContinuationConfig(SolverConfig):
     localization_tolerance: float = Field(
         default=1e-8,
         description=(
-            "Test-function tolerance when localizing a bifurcation, as a fraction "
-            "of the larger test value at the two bracketing points, so the "
-            "located point does not depend on the units of time or state"
+            "Location tolerance when localizing a bifurcation, as a fraction of "
+            "the step: the located point lies within it of the test function's "
+            "sign change, whatever the units of time or state"
         ),
     )
     maximum_localization_iterations: int = Field(

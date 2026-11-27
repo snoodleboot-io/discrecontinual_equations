@@ -32,6 +32,7 @@ from discrecontinual_equations.continuation.detection import (
     _branch_coefficients,
     _branch_label,
     _branch_step,
+    _jacobian_step,
     _null_pair,
     _relative_change,
     _vertex_offset,
@@ -537,5 +538,5 @@ class TestStopAndStepEdges(TestCase):
         pair = _null_pair(context)
         assert pair is not None
         field.jacobians = 0
-        _branch_step(context, pair)
+        _jacobian_step(context, pair)
         assert field.jacobians <= 8, field.jacobians

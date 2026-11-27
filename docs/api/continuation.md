@@ -1578,13 +1578,15 @@ absolute too: with the state rescaled by `sigma >= 1e3` the third difference beh
 `c` moves the Jacobian by `(1e-4 / sigma)^2` of itself, below rounding, and the
 pitchfork became `branch_point`.
 
-**A relative stop.** `RootFinderSettings(..., relative=True)` reads
+**A relative stop.** `RootFinderSettings(..., relative=True)` read
 `value_tolerance` as a fraction of the larger of `|psi|` at the bracket's two ends,
 and the continuation's localizer is built that way, so `localization_tolerance` is
-now relative. Multiplying `psi` by any constant leaves the stop unchanged, and near a
-simple root it places the point within about `1e-8` of the step. The secant's
-flat-chord test is scaled alike. Without `relative` the settings keep their absolute
-meaning, which the stochastic threshold finders rely on.
+now relative. Multiplying `psi` by any constant leaves the stop unchanged. Near a
+simple root it placed the point within about `1e-8` of the step, but not on a
+strongly nonlinear bracket; since DEQ-179 the relative stop is on the bracket
+instead (see [the next section](#rescaled-stiff-and-turning-branches-deq-179-deq-178-deq-168)).
+Without `relative` the settings keep their absolute meaning, which the stochastic
+threshold finders rely on.
 
 **A step that follows the state.** The step is chosen so the Jacobian moves by
 `1e-4` of itself along the null vector `q`: the larger of
@@ -1706,17 +1708,132 @@ exact Jacobians. At the vertex, all five reference cases are labelled correctly 
 finite-difference Jacobians 3 of 65 are wrong, against 14 before. All three are at
 `sigma <= 1e-5`, which is the same Jacobian limit.
 
-**Limits.** The step search normalises by the whole Jacobian. In a stiff system
-whose other eigenvalues are much larger than the critical dynamics, it takes a step
-that is too large. A pitchfork seen far from its vertex (`|lambda|` of order
+**Limits.** The step search normalised by the whole Jacobian, which in a stiff
+system gave too large a step; since DEQ-178 the step is checked on the critical
+block (next section). A pitchfork seen far from its vertex (`|lambda|` of order
 `0.05` or more, `u0 >= 0.1` in the verifier's sweep) is no longer guaranteed its
-name and may be `branch_point`, and so is a transcritical seen there. When the
-localizer lands off the curve, as it does when continuing the cubic pitchfork's
-nontrivial branch through its vertex (`mu* = 2.9e-3`), the point is
-`branch_point`. It was `pitchfork` before only by falling through. A
-finite-difference Jacobian whose step is not small against the state still sets
+name and may be `branch_point`, and so is a transcritical seen there. Until
+DEQ-168 the localizer could land off the curve, as it did when continuing the cubic
+pitchfork's nontrivial branch through its vertex (`mu* = 2.9e-3`, on the trivial
+branch), where the point was `branch_point`. A finite-difference Jacobian whose step is not small against the state still sets
 what can be resolved. See [References](../references.md) for the localization
 sources (Kuznetsov 1998, Section 10.2.2, and Allgower and Georg 1990, Section 9.2).
+
+## Rescaled, stiff and turning branches (DEQ-179, DEQ-178, DEQ-168)
+
+**The problem.** The DEQ-146/147 verifier found five ways a branch point could still
+be missed or misnamed:
+
+- The relative localization stop measured `|psi|` against the bracket's end values.
+  On `sinh(40 (x - 0.37))` over `[0, 1]` the ends are `-1.3e6` and `4.4e10`, the first
+  midpoint's value of 90 passed, and bisection returned 0.5, 0.13 from the root. An
+  end value of `inf` passed every midpoint (DEQ-179).
+- The difference step for `a` and `c` was scaled so the whole Jacobian moved by
+  `1e-4` of itself. With a fast mode `v' = -K v + u^2` beside
+  `u' = mu u + r tanh^2 u + k tanh^3 u`, `|J| = K`, and at `K = 1e8` the step was 0.41,
+  where `tanh` is far from its Taylor polynomial: both the transcritical and the
+  pitchfork became `branch_point` (DEQ-178).
+- A transcritical seen from its nontrivial branch at `u0 = 0.2` had
+  `|a - c w0| / |a| = 0.37`, inside the vertex test's band, and was named `pitchfork`
+  (DEQ-178).
+- Localizing from the cubic pitchfork's nontrivial branch, the chord between the two
+  bracketing points passes above the vertex, and the corrector pulled its midpoint
+  onto the trivial branch: `mu* = 2.86e-3`, `u = -3e-5`, labelled `branch_point`
+  (DEQ-168).
+- With the state rescaled by `1e3`, continuing that nontrivial branch detected
+  nothing: the arclength adds state and parameter changes, so eighty steps of `0.02`
+  moved the state by a thousandth of the way. At `1e-3` a step jumped to the
+  trivial branch instead (DEQ-168).
+
+**A stop on the location.** With `relative=True` a root-finder returns a point only
+once a sign change is known to lie within `value_tolerance (high - low)` of it.
+Bisection halves its bracket until it is `2 value_tolerance` of the initial width,
+using `psi` only for its sign; it returns at once on an exact zero. The secant
+method proposes a stop after a step shorter than that, confirms it by a sign change
+within that distance (one or two evaluations), and otherwise hands the bracket to
+bisection. AUTO likewise stops its location of special points on the arclength
+correction relative to the step (`EPSS`), not on the test value. Ends whose values
+are not finite are refused with a `ValueError`. Bisection takes 29
+evaluations for `1e-8`, one more than the value stop needed on a linear `psi`.
+
+**A step checked on the critical block.** The Jacobian's step is kept only if the
+coefficients it gives agree with those from half of it on the critical block
+`<p, J(x + h q) q>`, whose change over `x +- h q` is about `a h + (c/2) h^2`: the
+ratio `(|da| h + |dc| h^2 / 2) / (|a| h + |c| h^2 / 2)` must be below `1e-3`.
+Otherwise the step is divided by four until it is, for at most sixteen divisions.
+Only `p` and `q` enter, so a fast mode does not; `a h` and `c h^2` are unit-free.
+A block that never agrees (`a = c = 0`) keeps the Jacobian's step. Choosing a
+difference step from how the estimate converges as the step shrinks is the idea of
+Stepleman and Winarsky (1979).
+
+**The eigenvalue as a second witness.** On the nontrivial branch at `w0` of
+`w' = mu w + (a0 / 2) w^2 + (c / 6) w^3`, `a = a0 + c w0` and
+`lambda = (a0 / 2) w0 + (c / 3) w0^2`. So `3 lambda / (a w0)` is 1 for a pitchfork
+(`a0 = 0`) and 3/2 for a transcritical (`c = 0`). A point that passes the vertex
+test is a pitchfork only if also `|3 lambda - a w0| <= |a w0| / 8`; the far
+transcritical gives 1.26. The relation is checked only where `a^2 >= |c lambda| / 30`:
+a point located on the persisting branch, a corrector tolerance off it, has
+`lambda = mu` and a tiny `a = c w0`, and keeps its name from the cubic.
+
+**Trial points on the cubic.** The localizer starts each trial point from the cubic
+Hermite interpolant through the two points and their tangents, which is off the
+branch by the step to the fourth power, rather than from the chord, which is off by
+the curvature times the step squared. The hyperplane the corrector solves on is
+unchanged (normal to the lower point's tangent).
+
+**A weighted arclength.** `ContinuationConfig(arclength_state_scale=S)` divides the
+state by `S` in the arclength: the constraint becomes
+`t_u . (u - u_p) / S^2 + t_mu (mu - mu_p) = 0`, the tangent is a unit vector in the
+same weighted norm, and the localizer measures the chord with it. This is AUTO's
+weighting of the state against the parameter (`THU`, `THL`), with one weight for
+every state. A system whose state is rescaled by `sigma`, continued with `S`
+rescaled alike, passes through the same points. `S = 1`, the default, is the plain
+arclength, so nothing changes unless it is set.
+
+```python
+import numpy as np
+
+from discrecontinual_equations.continuation.root_finder import (
+    Bisection,
+    RootFinderSettings,
+)
+
+settings = RootFinderSettings(1e-8, 1e-12, 40, relative=True)
+root = Bisection(settings).locate(lambda x: np.sinh(40 * (x - 0.37)), 0.0, 1.0)
+print(f"{root:.8f}")  # 0.37000000; the value stop returned 0.5
+```
+
+**Checked** (`outputs/verification/deq-179/`, wrong labels before -> after):
+
+| Harness | Before | After |
+|---|---|---|
+| DEQ-146 end to end, `e2e.py` (time and state `1e-6 ... 1e6`) | 1/312 | 1/312, identical output |
+| DEQ-147 vertex labels, `state_scale.py` | 3/130 | 3/130, identical |
+| DEQ-126 label checks, `labels.py` | 15/56 far pitchforks, 0 elsewhere | identical |
+| Stiff probe, `stiff.py` (`K = 1 ... 1e10`, pure and mixed coordinates) | 24/56 | 0/56 |
+| Far transcritical named pitchfork, `offset_ratio.py` | 1 | 0 |
+| Root-finder probe, `root_finder_probe.py` (located `> 1e-8` off, or non-finite end accepted) | 18/28 | 0/28 |
+| Nontrivial branch, `nontrivial_scales.py`, `s, sigma = 1e-6 ... 1e6` | 38/60 | 26/60 unweighted; 6/60 with `S = sigma`; 0/60 also scaling the tolerances |
+
+The remaining failures of the nontrivial-branch sweep are at `s` or `sigma = 1e-6`
+and come from two tolerances with units, not from the arclength:
+`newton_tolerance` bounds `|F|`, which scales with `s sigma`, and the
+finite-difference Jacobian's step is `1e-7 max(1, |x_j|)`, a tenth of a state of
+size `1e-6`. With `newton_tolerance = 1e-9 s sigma` and
+`finite_difference_epsilon = 1e-7 min(sigma, 1)` all 60 runs give one `pitchfork`
+with `|mu*| <= 8.8e-8`. The atlas's 276 special points keep their labels.
+
+**Limits.** The state scale is one number for every state, chosen by the user, as
+in AUTO; it is not inferred from the problem. The corrector's residual tolerance
+is still absolute (AUTO's `EPSU` is relative to the solution). The critical-block
+check costs four more Jacobians per label, and up to 68 when the block never
+settles. Near a branch point `|F|` is small over a whole neighbourhood, so the
+located point is as close as `newton_tolerance` allows: `|mu*|` of `1e-8` to
+`9e-8` from a pitchfork's nontrivial branch. The eigenvalue test's band, a quarter
+of the gap between 1 and 3/2, separates the measured cases (pitchforks 0.96-1.08 out
+to `u0 = 0.1`, the far transcritical 1.26) but is this library's own choice. See
+[References](../references.md) (Doedel and Oldeman 2021; Stepleman and Winarsky
+1979; the cubic Hermite basis from Wikipedia's "Cubic Hermite spline").
 
 ## Scanning a stochastic system without repeating work (DEQ-76)
 
