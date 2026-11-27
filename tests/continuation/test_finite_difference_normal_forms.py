@@ -27,6 +27,7 @@ worst over every comparison below: see ``_AGREEMENT``.
 
 import dataclasses
 import warnings
+from fractions import Fraction
 
 import numpy as np
 import pytest
@@ -61,6 +62,7 @@ from discrecontinual_equations.continuation.two_parameter_problem import (
     TwoParameterProblem,
 )
 from discrecontinual_equations.differential_equation import DifferentialEquation
+from discrecontinual_equations.finite_difference import ORDER_STEPS, order_step
 from tests.continuation import test_codim2 as scenarios
 from tests.continuation.normal_form_systems import (
     EmbeddedBogdanovTakens,
@@ -463,3 +465,68 @@ def test_the_codim2_scenarios_through_the_config(name):
             _assert_agree(expected.coefficients, computed.coefficients)
         else:
             assert computed.coefficients == {}
+
+
+class TestOrderSteps:
+    """``eps^(1/(m+2))`` per order, correctly rounded, and its edges."""
+
+    @pytest.mark.parametrize("order", [1, 2, 3, 4])
+    def test_each_step_is_the_correctly_rounded_root_of_eps(self, order):
+        # Exact rational check, independent of any pow kernel: the halfway
+        # points either side of the literal bracket eps^(1/(m+2)).
+        step = Fraction(order_step(order))
+        below = Fraction(np.nextafter(order_step(order), 0.0))
+        above = Fraction(np.nextafter(order_step(order), 1.0))
+        eps = Fraction(float(np.finfo(float).eps))
+        power = order + 2
+        assert ((step + below) / 2) ** power <= eps < ((step + above) / 2) ** power
+
+    @pytest.mark.parametrize("order", [0, 5])
+    def test_orders_outside_one_to_four_are_refused(self, order):
+        with pytest.raises(ValueError, match="orders 1 to 4"):
+            order_step(order)
+
+    def test_the_provider_takes_them_by_default(self):
+        provider = FiniteDifferenceDerivatives()
+        assert [provider.relative_step(m) for m in range(1, 5)] == list(ORDER_STEPS)
+        # s = (2, 1): max |d_j| / s_j = 0.25, so t = r_m 0.5 / 0.25 = 2 r_m.
+        point = np.array([2.0, -0.5])
+        direction = np.array([0.5, 0.25])
+        for order in range(1, 5):
+            step = provider.step(point, direction, order)
+            assert step == pytest.approx(2.0 * ORDER_STEPS[order - 1], rel=1.0e-15)
+
+    def test_a_complex_point_is_refused(self):
+        provider = FiniteDifferenceDerivatives()
+        function = _scenario(scenarios.CuspNormalForm, 1, 0.0, 0.0).derivative
+        with pytest.raises(ValueError, match="real points"):
+            provider.taylor(function, np.array([1.0 + 1.0e-3j]), np.ones(1), 1, 0.0)
+        # A complex array with a zero imaginary part is a real point.
+        real = provider.taylor(function, np.array([0.5 + 0.0j]), np.ones(1), 1, 0.0)
+        assert real[1][0] == pytest.approx(-0.75, rel=1.0e-8)
+
+    def test_a_complex_direction_of_a_cubic_is_exact_to_rounding(self):
+        # f(x, y) = (x^3, x y^2): P_3 along d = u + i v is (d_x^3, d_x d_y^2),
+        # complex, written out; only the real stencils at real points are used.
+        class Cubic(scenarios.CuspNormalForm):
+            def eval(self, point, time=None):  # noqa: ARG002 (base signature)
+                x, y = point[0], point[1]
+                return [x * x * x, x * y * y]
+
+        function = _scenario(Cubic, 2, 0.0, 0.0).derivative
+        direction = np.array([0.6 + 0.3j, -0.2 + 0.7j])
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            computed = FiniteDifferenceDerivatives().taylor(
+                function,
+                np.zeros(2),
+                direction,
+                3,
+                0.0,
+            )
+        dx, dy = direction
+        expected = np.array([dx**3, dx * dy * dy])
+        assert np.max(np.abs(computed[3] - expected)) <= 1.0e-8 * np.max(
+            np.abs(expected),
+        )
+        assert np.max(np.abs(computed[1])) <= 1.0e-10
