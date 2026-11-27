@@ -13,15 +13,23 @@ A comprehensive Python library for solving differential equations with advanced 
 ## Quick Start
 
 ```python
-from discrecontinual_equations.solver.deterministic.euler import EulerConfig, EulerSolver
-from discrecontinual_equations.variable import Variable
 from discrecontinual_equations.differential_equation import DifferentialEquation
-from discrecontinual_equations.function.function import Function
+from discrecontinual_equations.function.deterministic import DeterministicFunction
+from discrecontinual_equations.solver.deterministic.euler.euler_config import EulerConfig
+from discrecontinual_equations.solver.deterministic.euler.euler_solver import EulerSolver
+from discrecontinual_equations.variable import Variable
 
-# Define your differential equation
-class MyODE(Function):
+
+# Define your differential equation: dx/dt = -x (exponential decay)
+class MyODE(DeterministicFunction):
     def eval(self, point, time=None):
-        return [-point[0]]  # dx/dt = -x (exponential decay)
+        return [-point[0]]
+
+
+x, t = Variable(name="x"), Variable(name="t")
+equation = DifferentialEquation(
+    variables=[x], time=t, parameters=[], derivative=MyODE([x], [], [Variable(name="x'")], t)
+)
 
 # Set up and solve
 config = EulerConfig(start_time=0, end_time=5, step_size=0.1)
@@ -29,7 +37,11 @@ solver = EulerSolver(config)
 
 # Get results
 solution = solver.solve(equation, [1.0])  # Initial condition x(0) = 1
+print(solution.results[0].discretization[-1])  # x(5), near exp(-5)
 ```
+
+Classes are imported from their modules; the package root holds only the
+version. [Getting Started](user-guide/getting-started.md) lists where each lives.
 
 ## Installation
 

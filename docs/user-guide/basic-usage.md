@@ -1,36 +1,55 @@
 # Basic Usage
 
+The examples on this page run in order, in one session.
+
 ## Defining Variables and Parameters
 
+A `Variable` is a quantity that changes along a solution; a `Parameter` is a
+constant fixed before the solve. Both carry a `name` and a plotting
+`abbreviation`.
+
 ```python
-from discrecontinual_equations import Variable, Parameter
+from discrecontinual_equations.parameter import Parameter
+from discrecontinual_equations.variable import Variable
 
 # Create variables
 x = Variable(name="position", abbreviation="x")
 t = Variable(name="time", abbreviation="t")
 
 # Create parameters
-k = Parameter(value=1.0, name="decay constant")
+k = Parameter(value=1.0, name="decay constant", abbreviation="k")
 ```
 
 ## Creating Functions
 
-```python
-from discrecontinual_equations.function.function import Function
+The right-hand side $f(t, x)$ is a `DeterministicFunction` (a `StochasticFunction`
+for an SDE). Its `eval(point, time)` returns the derivative as a list, and it reads
+its parameters from `self.parameters`.
 
-class MyFunction(Function):
+```python
+from discrecontinual_equations.function.deterministic import DeterministicFunction
+
+
+class MyFunction(DeterministicFunction):
     def eval(self, point, time=None):
         return [-self.parameters[0].value * point[0]]  # dx/dt = -k*x
+
+
+function = MyFunction(variables=[x], parameters=[k], results=[Variable(name="x'")], time=t)
 ```
 
 ## Solving Equations
 
+A `DifferentialEquation` bundles the function with its variables, time and
+parameters; a solver, configured with a time span and a step, returns a `Curve`.
+
 ```python
-from discrecontinual_equations import DifferentialEquation
-from discrecontinual_equations.solver.deterministic.euler import EulerConfig, EulerSolver
+from discrecontinual_equations.differential_equation import DifferentialEquation
+from discrecontinual_equations.solver.deterministic.euler.euler_config import EulerConfig
+from discrecontinual_equations.solver.deterministic.euler.euler_solver import EulerSolver
 
 # Create equation
-equation = DifferentialEquation(...)
+equation = DifferentialEquation(variables=[x], time=t, parameters=[k], derivative=function)
 
 # Configure solver
 config = EulerConfig(start_time=0, end_time=10, step_size=0.1)
@@ -38,6 +57,8 @@ solver = EulerSolver(config)
 
 # Solve
 solution = solver.solve(equation, initial_values=[1.0])
+print(len(solution.time.discretization), solution.results[0].discretization[-1])
+```
 
 ## Fixed-step time grids
 
@@ -92,3 +113,15 @@ Limits and history:
   `(0, 20, 0.01)` took one step past the end. `AdamsBashforth3Config` with a
   `step_size` used `np.arange(start, end, h)` and stopped a step short. Solves
   whose old grid had the right number of nodes are unchanged to rounding.
+
+## Plotting Results
+
+`LinePlot` writes one result against time. It writes PNG through `kaleido` by
+default; `output_format="html"` needs nothing extra.
+
+```python
+from discrecontinual_equations.plot.line_plot import LinePlot
+
+plot = LinePlot(output_dir="plots", output_format="html")
+plot.plot(x=solution.time, y=solution.results[0], title="Decay")
+```

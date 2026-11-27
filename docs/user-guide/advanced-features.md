@@ -1,16 +1,48 @@
 # Advanced Features
 
+The examples on this page run in order, in one session.
+
 ## Stochastic Differential Equations
 
+An SDE $dx = f(x, t)\,dt + g(x, t)\,dW$ is a `StochasticFunction`: `eval` is the
+drift $f$ and `diffusion` the noise amplitude $g$.
+
 ```python
+import numpy as np
+
+from discrecontinual_equations.differential_equation import DifferentialEquation
 from discrecontinual_equations.function.stochastic import StochasticFunction
+from discrecontinual_equations.solver.stochastic.euler_maruyama.euler_maruyama_config import (
+    EulerMaruyamaConfig,
+)
+from discrecontinual_equations.solver.stochastic.euler_maruyama.euler_maruyama_solver import (
+    EulerMaruyamaSolver,
+)
+from discrecontinual_equations.variable import Variable
+
 
 class MySDE(StochasticFunction):
+    alpha = 1.0
+    sigma = 0.3
+
     def eval(self, point, time=None):
         return [-self.alpha * point[0]]  # Drift term
 
     def diffusion(self, point, time=None):
         return [self.sigma]  # Diffusion term
+
+
+def sde_equation(function_type, dimension):
+    """Wrap a StochasticFunction class as an equation in ``dimension`` states."""
+    t = Variable(name="t")
+    states = [Variable(name=f"x{i}") for i in range(dimension)]
+    function = function_type(states, [], [Variable() for _ in states], t)
+    return DifferentialEquation(variables=states, time=t, parameters=[], derivative=function)
+
+
+config = EulerMaruyamaConfig(start_time=0, end_time=1, step_size=0.01, random_seed=3)
+path = EulerMaruyamaSolver(config).solve(sde_equation(MySDE, 1), [1.0])
+print(len(path.time.discretization))  # 101 nodes
 ```
 
 A vector from `diffusion()` is diagonal noise: one Wiener process per component.
@@ -26,6 +58,9 @@ keeps order 1.0); at moderate `dt` the default measures a slope nearer 0.75, and
 
 ```python
 class ConformalNoise(StochasticFunction):
+    a = -1.0
+    sigma = 0.3
+
     def eval(self, point, time=None):
         return [self.a * point[0], self.a * point[1]]
 
@@ -43,6 +78,10 @@ step at `n = 128` took 1.9 ms declared against 38 ms undeclared:
 ```python
 class IndependentNoise(StochasticFunction):
     diagonal_noise = True
+    sigma = 0.3
+
+    def eval(self, point, time=None):
+        return [-x for x in point]
 
     def diffusion(self, point, time=None):
         return [self.sigma * x for x in point]
@@ -64,19 +103,22 @@ looping over a per-path solver:
 ```python
 from discrecontinual_equations.solver.stochastic.ensemble import StochasticEnsemble
 
-config = EulerMaruyamaConfig(start_time=0, end_time=10, step_size=0.005, random_seed=3)
-result = StochasticEnsemble(config).solve(equation, [0.0, 0.0], paths=20000, keep_every=200)
-result.final      # (paths, n) at the end time
-result.samples    # (kept, paths, n) every 200 steps
+equation = sde_equation(ConformalNoise, 2)
+config = EulerMaruyamaConfig(start_time=0, end_time=1, step_size=0.01, random_seed=3)
+result = StochasticEnsemble(config).solve(equation, [1.0, 0.0], paths=200, keep_every=20)
+print(result.final.shape)    # (paths, n) at the end time
+print(result.samples.shape)  # (kept, paths, n) every 20 steps
 ```
+
+A study of a stationary law wants far more: `paths=20000` over `end_time=10` is
+typical, and that is where the batched methods below pay.
 
 Every `StochasticFunction` works in an ensemble; one that overrides `eval_batch`
 and `diffusion_batch` with array arithmetic over the `(paths, n)` argument runs
 about a hundred times faster than the per-point default.
 
 ```python
-class ConformalNoise(StochasticFunction):
-    ...
+class BatchedConformalNoise(ConformalNoise):
     def eval_batch(self, points, time=None):
         return self.a * points
 
@@ -84,6 +126,12 @@ class ConformalNoise(StochasticFunction):
         x, y = points[:, 0], points[:, 1]
         s = self.sigma
         return s * np.stack([np.stack([x, -y], 1), np.stack([y, x], 1)], 1)
+
+
+fast = StochasticEnsemble(config).solve(
+    sde_equation(BatchedConformalNoise, 2), [1.0, 0.0], paths=200, keep_every=20
+)
+print(fast.final.shape)
 ```
 
 `StochasticEnsemble(config, scheme="milstein")` takes the same noise as
@@ -100,23 +148,62 @@ integral method (OLIM-MID: midpoint quadrature, `U` linear along the accepted
 front), for a drift `Function` and a `NoiseMatrix`, from a
 stable equilibrium or a limit cycle:
 
+Here the drift is the double well $f = -\nabla V$, $V = x^4/4 - x^2/2 + y^2/2$,
+with $G = I$, so the exact answer is $U = 2V$ less its value at the well.
+
 ```python
 from discrecontinual_equations.continuation import (
     DensityGrid, EquilibriumAttractor, GeometricMinimumAction, OrderedLineIntegral,
 )
+from discrecontinual_equations.continuation.noise import NoiseMatrix
+from discrecontinual_equations.function.deterministic import DeterministicFunction
 
-grid = DensityGrid.box([-2.0, -1.5], [1.0, 1.5], [161, 161])
+
+class DoubleWell(DeterministicFunction):
+    def eval(self, point, time=None):
+        x, y = point
+        return [x - x**3, -y]
+
+
+class ConstantColumn(DeterministicFunction):
+    column = (1.0, 0.0)
+
+    def eval(self, point, time=None):
+        return list(self.column)
+
+
+class SecondColumn(ConstantColumn):
+    column = (0.0, 1.0)
+
+
+def planar(function_type):
+    return function_type([Variable(), Variable()], [], [Variable(), Variable()], None)
+
+
+drift = planar(DoubleWell)
+noise = NoiseMatrix([planar(ConstantColumn), planar(SecondColumn)])  # G = I
+
+grid = DensityGrid.box([-2.0, -1.5], [1.0, 1.5], [41, 41])
 solver = OrderedLineIntegral(drift, noise, grid)
 field = solver.solve(EquilibriumAttractor([-1.0, 0.0]))
 field.values                                   # U on the grid, shaped like it
 path = solver.minimum_action_path(field, [-0.3, 0.6], end=[-1.0, 0.0])
 path.states, path.action                       # back along -(f + D grad U)
 
-between = GeometricMinimumAction(drift, noise).path(initial_chain)  # across a saddle
+initial_chain = np.linspace([-1.0, 0.0], [0.0, 0.0], 21)  # well to saddle
+gmam = GeometricMinimumAction(drift, noise, tolerance=1e-6)
+between = gmam.path(initial_chain)             # across a saddle
+print(f"{between.action:.3f}")                 # 2 (V(0) - V(-1)) = 0.5
 
-checked = solver.check(field, stride=8, tolerance=1e-3)  # optional, seconds a point
+point = int(np.ravel_multi_index((13, 27), grid.shape))  # (-1.025, 0.525)
+checked = solver.check(field, indices=[point])  # optional, about a second a point
 checked.errors, checked.status                 # estimated error; GRID, CHECKED or REFINED
+print(f"{field.values.ravel()[point]:.4f} +- {checked.errors.ravel()[point]:.4f}")
 ```
+
+prints `0.501` for the saddle crossing and `0.2789 +- 0.0020` for the grid value,
+whose exact value is $2(V(-1.025, 0.525) - V(-1, 0)) = 0.2769$. The chain's
+default `tolerance=1e-10` asks for far more relaxation than an example needs.
 
 The march says nothing about how accurate a value is. `check` estimates it at
 chosen points against a value computed without the grid, by the geometric
@@ -186,5 +273,7 @@ Extend the base `Solver` class to implement custom numerical methods.
 ```python
 from discrecontinual_equations.plot.line_plot import LinePlot
 
-plot = LinePlot()
+solution = EulerMaruyamaSolver(config).solve(sde_equation(MySDE, 1), [1.0])
+plot = LinePlot(output_dir="plots", output_format="html")
 plot.plot(x=solution.time, y=solution.results[0])
+```
