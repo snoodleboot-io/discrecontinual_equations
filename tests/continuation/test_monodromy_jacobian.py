@@ -209,11 +209,11 @@ class TestFloquetErrorBoundsBelowTheOldFloor(TestCase):
 
 
 class _Cubic(DeterministicFunction):
-    """``(x^3, x y)`` through ``math.fsum``: differenced, never differentiated."""
+    """``(x^3, 1 + x y)`` through ``math.fsum``: differenced, never differentiated."""
 
     def eval(self, point, time=None):  # noqa: ARG002 (base signature)
         x, y = float(point[0]), float(point[1])
-        return [math.fsum([x * x * x]), math.fsum([x * y])]
+        return [math.fsum([x * x * x]), math.fsum([1.0, x * y])]
 
 
 class TestFallbackStep(TestCase):
@@ -237,6 +237,13 @@ class TestFallbackStep(TestCase):
         assert np.max(np.abs(jacobian - exact) / np.abs(exact).max(axis=1)[:, None]) < (
             1e-9
         )
+
+    def test_a_zero_component_steps_by_its_typical_size(self):
+        # At y = 0 the step is eps^(1/3) times the typical size, one. A step
+        # relative to |y| alone would be about 1e-305, under an ulp of the
+        # 1 in the second component, and read d(1 + x y)/dy as zero.
+        jacobian = self._orbit()._jacobian(np.array([1.0, 0.0]))  # noqa: SLF001
+        assert abs(jacobian[1, 1] - 1.0) < 1e-9
 
     def test_the_central_difference_is_second_order(self):
         # A forward difference errs by h f''/2 = 3 h x: 3e-7 at x = 1. The

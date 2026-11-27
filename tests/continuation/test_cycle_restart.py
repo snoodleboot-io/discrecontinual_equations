@@ -207,11 +207,15 @@ class TestRestartGuards(TestCase):
     6.7e-7 and 8.2e-7 off the exact ones.
     """
 
-    def _restart(self, radius: float) -> tuple[np.ndarray | None, int]:
+    def _restart(
+        self,
+        radius: float,
+        period: float = 2.0 * math.pi,
+    ) -> tuple[np.ndarray | None, int]:
         continuation = CycleContinuation(fold_equation(-0.24), 0, 40, 1, 0.0)
         continuation._dimension = 2  # noqa: SLF001 (trace sets it)
         continuation._mesh = np.linspace(0.0, 1.0, 41)  # noqa: SLF001
-        seed = CycleSeed(circle(radius, 40), 2.0 * math.pi, -0.24)
+        seed = CycleSeed(circle(radius, 40), period, -0.24)
         solve = CycleContinuation._solve_bordered  # noqa: SLF001
         with mock.patch.object(
             CycleContinuation,
@@ -254,6 +258,37 @@ class TestRestartGuards(TestCase):
             reached, _ = self._restart(0.9)
         assert reached is not None
         assert abs(self._radius(reached) - math.sqrt(0.6)) < 2e-6
+
+    def test_a_period_more_than_twice_off_is_refused(self):
+        # From the outer cycle's own states with its period scaled, Newton
+        # reaches the cycle at 2 pi every time; the seed's period window
+        # (a factor of two either way) decides whether that is the cycle meant.
+        outer = math.sqrt(0.6)
+        kept, _ = self._restart(outer, 1.9 * 2.0 * math.pi)
+        assert kept is not None
+        for factor in (0.45, 2.5):
+            refused, _ = self._restart(outer, factor * 2.0 * math.pi)
+            assert refused is None, factor
+
+    def test_a_singular_jacobian_ends_it_without_a_dense_solve(self):
+        # A restart never pays for the dense least-squares fallback: a seed
+        # whose sparse LU fails is handed to the staged solve instead.
+        with (
+            mock.patch.object(
+                cycle_continuation,
+                "splu",
+                side_effect=RuntimeError("singular"),
+            ),
+            mock.patch.object(
+                cycle_continuation.np.linalg,
+                "lstsq",
+                wraps=np.linalg.lstsq,
+            ) as least_squares,
+        ):
+            unknowns, solves = self._restart(0.78)
+        assert unknowns is None
+        assert solves == 1
+        least_squares.assert_not_called()
 
 
 @pytest.mark.slow  # the whole four-level cascade: about 7 s, then 45 restarts
