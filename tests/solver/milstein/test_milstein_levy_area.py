@@ -343,7 +343,10 @@ class TestNonCommutingInterface:
 
 
 # Recorded on main @ 4ca6382, before Levy areas existed: the commuting step must
-# not change by a single bit (oracle 3).
+# not change by a single bit (oracle 3). Bits are a fair pin here (DEQ-160): the
+# conformal drift and diffusion are linear, so are their central differences, the
+# step only adds and multiplies, and the increments are the RNG's normals times
+# sqrt(dt) - no operation whose rounding a CPU or libm may choose.
 _CONFORMAL_HEX = {
     ("ito", "generator"): ["0x1.c556e13b672a3p+0", "-0x1.f6c14b7038f73p-1"],
     ("ito", "path"): ["0x1.ac2d30d49a5a1p+0", "0x1.ed41cca16e038p-2"],
@@ -379,20 +382,26 @@ class TestCommutingCaseUnchanged:
 
 
 # Recorded at 0f43b4c (DEQ-70), before the accuracy setting existed: the default
-# must not change by a single bit (DEQ-67).
-_DEFAULT_HEX = {
-    ("iterated", "generator"): ["-0x1.38c20203854a6p+0", "0x1.2865129180357p-1"],
-    ("iterated", "gaussian"): ["0x1.ec4e59b07641ep-1", "-0x1.efcd9a088d8efp-1"],
-    ("cross", "generator"): ["-0x1.536cb7e3ace7cp-1", "-0x1.267545b983348p-1"],
-    ("cross", "gaussian"): ["0x1.6ea5448c29b27p-1", "-0x1.4f95b385e055bp-2"],
+# must not move (DEQ-67). Written out from their float.hex pins and held to a
+# tolerance rather than bits (DEQ-160): the areas' constants come from pi ** 2 and
+# a sum of 1 / k ** 2, which a libm need not round as this one did, and the cross
+# noise reads cos, a vectorised ufunc AVX-512 runners round an ulp differently,
+# through a central difference that turns that ulp into about 1e-11 of a slope.
+# A different accuracy or sampler moves these values at the first digit.
+_DEFAULT_TOLERANCE = {"iterated": 1.0e-12, "cross": 1.0e-10}
+_DEFAULT_BEFORE = {
+    ("iterated", "generator"): [-1.2217103251071335, 0.5788961222279835],
+    ("iterated", "gaussian"): [0.9615352657230039, -0.9683654914322498],
+    ("cross", "generator"): [-0.6629388299392782, -0.5751134671169007],
+    ("cross", "gaussian"): [0.7161046429726853, -0.32771950249305853],
 }
 
 
 class TestLevyAreaAccuracy:
     """DEQ-67: ``levy_area_accuracy`` is the sampler's ``c1``, default 1."""
 
-    @pytest.mark.parametrize(("noise", "source"), list(_DEFAULT_HEX))
-    def test_default_is_hex_identical_to_before(self, noise, source):
+    @pytest.mark.parametrize(("noise", "source"), list(_DEFAULT_BEFORE))
+    def test_default_is_the_values_of_before(self, noise, source):
         function_type = {"iterated": IteratedIntegralNoise, "cross": CrossCosineNoise}
         config = MilsteinConfig(
             end_time=1.0,
@@ -404,8 +413,13 @@ class TestLevyAreaAccuracy:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             solver.solve(_equation(function_type[noise]), [0.3, -0.2])
-        final = [float(r.discretization[-1]).hex() for r in solver.solution.results]
-        assert final == _DEFAULT_HEX[(noise, source)]
+        final = [r.discretization[-1] for r in solver.solution.results]
+        np.testing.assert_allclose(
+            final,
+            _DEFAULT_BEFORE[(noise, source)],
+            rtol=_DEFAULT_TOLERANCE[noise],
+            atol=0.0,
+        )
 
     @pytest.mark.parametrize("accuracy", [1.0, 0.05])
     def test_own_sampler_draws_at_the_configured_accuracy(self, accuracy):

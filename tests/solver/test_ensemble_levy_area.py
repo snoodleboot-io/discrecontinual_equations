@@ -353,46 +353,79 @@ class TestStrongOrderOnNonCommutingNoise:
         assert milstein[_STEPS[-1]] < 0.3 * euler[_STEPS[-1]], (milstein, euler)
 
 
-# sha256 of the final (4, n) states of a commuting Milstein ensemble, recorded
-# on d71dd72 before the areas were added.
-_COMMUTING_BEFORE = {
-    ("conformal", "ito", "generator"): (
+# The final (4, n) states of a commuting Milstein ensemble, recorded on d71dd72
+# before the areas were added, held two ways (DEQ-160).
+#
+# Conformal noise, by sha256: every operation on the way is IEEE-exact - the
+# drift a x and diffusion sigma [[x, -y], [y, x]] are linear, their central
+# differences are linear, the step and the einsum contractions only add and
+# multiply, and the increments are the RNG's normals scaled by sqrt(dt) - so
+# any conforming CPU gives these bits, and a digest is a fair pin.
+_CONFORMAL_BEFORE = {
+    ("ito", "generator"): (
         "457c659f2096fdd1765e2e107e5d451d9af7fdaa966715ae18ceb2535cff7c2d"
     ),
-    ("conformal", "ito", "path"): (
+    ("ito", "path"): (
         "fb087cce24f9dda2fbd95c4e9be3a029c26eee0336ac5df8c011ec32f93b8f22"
     ),
-    ("conformal", "ito", "gaussian"): (
+    ("ito", "gaussian"): (
         "87268570465bf68c5a9d7f8663bda9f69dba5beb7edf4ff0ac7bae42b7079394"
     ),
-    ("conformal", "stratonovich", "generator"): (
+    ("stratonovich", "generator"): (
         "bf40c81da26ded4ceaa7ceba50a48e5ab25f947e34a5b2e0de96a47483f2cfd0"
     ),
-    ("conformal", "stratonovich", "path"): (
+    ("stratonovich", "path"): (
         "c87c84f039795f49bc2b24c7ba9205a957538fd4a918dbdeb6345949547148cf"
     ),
-    ("conformal", "stratonovich", "gaussian"): (
+    ("stratonovich", "gaussian"): (
         "14f4842dccc319892ad0928162e5d18af22b2e98a63add9cbad097847f3617be"
     ),
-    ("diagonal", "ito", "generator"): (
-        "148111d27c814d659ac77635408fc814258a076967578e5ea05db213e953ff84"
-    ),
-    ("diagonal", "ito", "path"): (
-        "620043187bd66316f511756f7b7edf48e6decaf23d3e5e2927d5f778825b4da1"
-    ),
-    ("diagonal", "ito", "gaussian"): (
-        "034d78789f15876893677a16c887ddecf277bc80bc47c785277455a5d9354c6a"
-    ),
-    ("diagonal", "stratonovich", "generator"): (
-        "d20f0ed66f4317dfc850caa4365c143385838c56bc59c98daaef4ef2cab26ff9"
-    ),
-    ("diagonal", "stratonovich", "path"): (
-        "42144fe18d42da388b6d3c8e06086ddd7b0e912af92f97485c16e7e4a79ed28f"
-    ),
-    ("diagonal", "stratonovich", "gaussian"): (
-        "695ad4404e9e7dbab983d5a836f6779245645487bf183bede698ddc3c1c92efe"
-    ),
 }
+
+# Diagonal noise b = 0.3 sin x + 0.2 x, as values: sin is vectorised (SVML on
+# AVX-512 runners rounds it an ulp differently), and the step's central
+# difference of b amplifies an ulp in b to about 1e-11 of the slope, so these are
+# held to 1e-10 relative rather than to their bits. The decimals are the bits
+# the sha256 pins recorded (outputs/verification/deq-160).
+_DIAGONAL_BEFORE = {
+    ("ito", "generator"): [
+        [0.45279253525828034, 0.4522677226981758, 0.6731580320053151],
+        [0.22511614762703622, 0.6120263638378299, 0.700073282936082],
+        [0.3886651799603978, 0.5740223333350198, 1.0433876820769972],
+        [0.262510473491476, 0.23792439748189448, 0.8410621768401473],
+    ],
+    ("ito", "path"): [
+        [0.23368964923753885, 0.5223395109697528, 0.9549961993434133],
+        [0.23368964923753885, 0.5223395109697528, 0.9549961993434133],
+        [0.23368964923753885, 0.5223395109697528, 0.9549961993434133],
+        [0.23368964923753885, 0.5223395109697528, 0.9549961993434133],
+    ],
+    ("ito", "gaussian"): [
+        [0.18204314416277936, 0.5242017492974395, 1.0395554332392487],
+        [0.3247054368707262, 0.5557748495096458, 0.9421899706524054],
+        [0.49427420703593167, 0.6207532604202328, 0.4724424292431494],
+        [0.3105299121250704, 0.44464138996349406, 0.9838276432085769],
+    ],
+    ("stratonovich", "generator"): [
+        [0.4795761712619317, 0.4762766404274971, 0.701591846250924],
+        [0.23990463065156556, 0.6422733866788323, 0.7297500442672447],
+        [0.4121805736547019, 0.6035755345924062, 1.0770978615316567],
+        [0.27874586612664987, 0.2521469591502572, 0.8763832454078829],
+    ],
+    ("stratonovich", "path"): [
+        [0.24875764341226222, 0.5495235309790008, 0.9915934178147007],
+        [0.24875764341226222, 0.5495235309790008, 0.9915934178147007],
+        [0.24875764341226222, 0.5495235309790008, 0.9915934178147007],
+        [0.24875764341226222, 0.5495235309790008, 0.9915934178147007],
+    ],
+    ("stratonovich", "gaussian"): [
+        [0.19400000091972416, 0.5518606579278109, 1.071347433472758],
+        [0.3448485900137792, 0.5811233903053321, 0.975843165726774],
+        [0.5226643339909542, 0.6524857004237842, 0.49361126022157537],
+        [0.32998671012462577, 0.4683957795363494, 1.013801099032371],
+    ],
+}
+_DIFFERENCE_TOLERANCE = 1.0e-10
 
 
 def _commuting(noise):
@@ -409,9 +442,9 @@ def _commuting(noise):
 @pytest.mark.parametrize("source", ["generator", "path", "gaussian"])
 @pytest.mark.parametrize("calculus", ["ito", "stratonovich"])
 @pytest.mark.parametrize("noise", ["conformal", "diagonal", "matrix", "declared"])
-def test_commuting_ensembles_keep_their_bits(noise, calculus, source):
+def test_commuting_ensembles_keep_their_recorded_states(noise, calculus, source):
     # Arrange: diagonal noise as a vector, as the matrix diag(b), and declared
-    # all recorded the same bits; each is held to them.
+    # all recorded the same bits; each is held to them, to the tolerance above.
     equation, start, channels = _commuting(noise)
     wiener = {
         "generator": None,
@@ -436,9 +469,16 @@ def test_commuting_ensembles_keep_their_bits(noise, calculus, source):
         )
 
     # Assert
-    recorded = "conformal" if noise == "conformal" else "diagonal"
-    digest = hashlib.sha256(final.tobytes()).hexdigest()
-    assert digest == _COMMUTING_BEFORE[(recorded, calculus, source)]
+    if noise == "conformal":
+        digest = hashlib.sha256(final.tobytes()).hexdigest()
+        assert digest == _CONFORMAL_BEFORE[(calculus, source)]
+    else:
+        np.testing.assert_allclose(
+            final,
+            _DIAGONAL_BEFORE[(calculus, source)],
+            rtol=_DIFFERENCE_TOLERANCE,
+            atol=0.0,
+        )
 
 
 class _NoAreas(WienerSource):

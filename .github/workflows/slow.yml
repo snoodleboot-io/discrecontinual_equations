@@ -39,5 +39,5 @@ jobs:
 
       - name: Run every test, slow ones included, with coverage
         run: >-
-          uv run pytest tests/ -n auto -m "not timing" --durations=30
+          uv run pytest tests/ -n auto --dist loadgroup -m "not timing" --durations=30
           --cov=discrecontinual_equations --cov-report=term-missing

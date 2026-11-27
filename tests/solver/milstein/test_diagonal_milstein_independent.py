@@ -279,6 +279,7 @@ class TestAroundTheTolerance:
             with_area=False,
         )
         np.testing.assert_allclose(final, expected, rtol=0.0, atol=_ONE_STEP)
+        # Two solves in this process: bits are a fair comparison (DEQ-160).
         assert [v.hex() for v in declared] == [v.hex() for v in final]
 
 
@@ -310,6 +311,7 @@ def test_a_one_path_ensemble_is_the_per_path_step_bit_for_bit(calculus, coupling
 
     # Assert
     per_path = [result.discretization[-1] for result in curve.results]
+    # Two solves in this process: bits are a fair comparison (DEQ-160).
     assert [float(v).hex() for v in ensemble.final[0]] == [
         float(v).hex() for v in per_path
     ]

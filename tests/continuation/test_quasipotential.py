@@ -152,6 +152,27 @@ def _rotating_error(count):
     return float(np.max(np.abs(field.values.ravel()[inside] - exact[inside])))
 
 
+# --- Grids shared by the gate tests (DEQ-162) ----------------------------------
+#
+# A march on a 161 x 161 or 161 x 129 grid takes about ten seconds. Several gate
+# tests read the same one; a slow test used to build it first in the same worker,
+# through the caches above, and once the slow tests left the gate whichever gate
+# test came first paid for it in its own time. These fixtures build each grid
+# once per module, in setup, from the same caches - so the slow tests that call
+# the helpers directly share them too - and the xdist group keeps every test
+# that reads one grid on one worker (pytest -n auto --dist loadgroup), so the
+# gate builds each grid once.
+
+
+@pytest.fixture(scope="module")
+def double_well_161():
+    """The double well about its left well at 161 x 161: (grid, solver, field)."""
+    return _double_well_field(161)
+
+
+_DOUBLE_WELL_161 = pytest.mark.xdist_group("quasipotential-double-well-161")
+
+
 class TestGradientQuasipotential(TestCase):
     """Oracle 1: ``f = -grad V``, ``D = I`` gives ``U = 2 V`` exactly."""
 
@@ -207,11 +228,15 @@ class TestRotatingOrnsteinUhlenbeck(TestCase):
         assert np.max(np.abs(field.values[inside] - logarithm)) < 1.5e-2
 
 
-class TestMinimumActionPath(TestCase):
+class TestMinimumActionPath:
     """Oracle 3: in the gradient case the path is steepest descent via the saddle."""
 
-    def test_the_path_from_a_point_is_reversed_steepest_descent(self):
-        _grid, solver, field = _double_well_field(161)
+    @_DOUBLE_WELL_161
+    def test_the_path_from_a_point_is_reversed_steepest_descent(
+        self,
+        double_well_161,
+    ):
+        _grid, solver, field = double_well_161
         start = np.array([-0.3, 0.6])
         path = solver.minimum_action_path(field, start)
         assert np.allclose(path.states[0], start)
@@ -222,8 +247,12 @@ class TestMinimumActionPath(TestCase):
         exact = -1.0 / np.sqrt(1.0 + (1.0 / start[0] ** 2 - 1.0) * ratio)
         assert np.max(np.abs(x - exact)) < 1.0e-2
 
-    def test_descent_from_beside_the_saddle_follows_the_axis_to_the_well(self):
-        _grid, solver, field = _double_well_field(161)
+    @_DOUBLE_WELL_161
+    def test_descent_from_beside_the_saddle_follows_the_axis_to_the_well(
+        self,
+        double_well_161,
+    ):
+        _grid, solver, field = double_well_161
         path = solver.minimum_action_path(field, np.array([-0.05, 0.0]))
         assert np.max(np.abs(path.states[:, 1])) < 1.0e-2
         assert np.linalg.norm(path.states[-1] - np.array(WELL)) < 0.05
@@ -231,10 +260,14 @@ class TestMinimumActionPath(TestCase):
             1.0e-2
         )
 
-    def test_tracing_from_the_other_basin_stalls_at_the_saddle_and_says_so(self):
+    @_DOUBLE_WELL_161
+    def test_tracing_from_the_other_basin_stalls_at_the_saddle_and_says_so(
+        self,
+        double_well_161,
+    ):
         # Through a saddle -(f + D grad U) vanishes and U stops falling, so the
         # trace stops beside it. It must say so and must not jump to the well.
-        grid, solver, field = _double_well_field(161)
+        grid, solver, field = double_well_161
         path = solver.minimum_action_path(field, [0.5, 0.3], end=WELL)
         assert not path.arrived
         last = path.states[-1]
@@ -243,8 +276,9 @@ class TestMinimumActionPath(TestCase):
         steps = np.linalg.norm(np.diff(path.states, axis=0), axis=1)
         assert np.max(steps) <= grid.spacings[0]
 
-    def test_a_trace_that_arrives_ends_on_the_equilibrium(self):
-        _grid, solver, field = _double_well_field(161)
+    @_DOUBLE_WELL_161
+    def test_a_trace_that_arrives_ends_on_the_equilibrium(self, double_well_161):
+        _grid, solver, field = double_well_161
         path = solver.minimum_action_path(field, [-0.3, 0.6], end=WELL)
         assert path.arrived
         assert np.allclose(path.states[-1], WELL)
@@ -670,7 +704,13 @@ class TestAnisotropicReferences(TestCase):
         assert np.max(np.abs(field.values.ravel()[inside] - exact[inside])) < 1.2e-3
 
 
-class TestMaierStein(TestCase):
+@pytest.fixture(scope="module")
+def maier_stein_4():
+    """Maier-Stein about the left well at spacing 0.0125: (grid, solver, field)."""
+    return _maier_stein_field(4)
+
+
+class TestMaierStein:
     """Maier-Stein at beta = 10, where the escape path leaves the symmetry axis."""
 
     @pytest.mark.slow
@@ -699,11 +739,12 @@ class TestMaierStein(TestCase):
         assert abs(path.action - MAIER_STEIN_BARRIER) < 1.0e-4
         assert 0.28 < np.max(np.abs(path.states[:, 1])) < 0.34
 
-    def test_the_grid_the_trace_and_gmam_agree_on_a_point(self):
+    @pytest.mark.xdist_group("quasipotential-maier-stein-4")
+    def test_the_grid_the_trace_and_gmam_agree_on_a_point(self, maier_stein_4):
         # Three estimates of U at one point by three routes - the march, the
         # action along the traced characteristic, and the relaxed chain - and
         # the traced path lies on the chain to within a cell.
-        _grid, solver, field = _maier_stein_field(4)
+        _grid, solver, field = maier_stein_4
         target = np.array([-0.4, 0.3])
         traced = solver.minimum_action_path(field, target, end=WELL)
         relaxed = GeometricMinimumAction(
@@ -800,7 +841,16 @@ def _assert_tracks(estimate, true):
     assert np.all(above | close), (estimate, true)
 
 
-class TestErrorEstimate(TestCase):
+@pytest.fixture(scope="module")
+def checked_gradient():
+    """The anisotropic gradient at 81 points, checked at four points."""
+    return _checked("gradient")
+
+
+_CHECKED_GRADIENT = pytest.mark.xdist_group("quasipotential-checked-gradient")
+
+
+class TestErrorEstimate:
     """DEQ-57: an estimated error per checked point, against the true one."""
 
     @pytest.mark.slow
@@ -810,8 +860,12 @@ class TestErrorEstimate(TestCase):
         assert np.all(field.status == GRID)
         assert isinstance(field.attractor, EquilibriumAttractor)
 
-    def test_checking_marks_the_points_and_leaves_the_field_alone(self):
-        _solver, field, checked, indices, _true = _checked("gradient")
+    @_CHECKED_GRADIENT
+    def test_checking_marks_the_points_and_leaves_the_field_alone(
+        self,
+        checked_gradient,
+    ):
+        _solver, field, checked, indices, _true = checked_gradient
         assert np.all(checked.status.ravel()[indices] == CHECKED)
         assert np.all(np.isfinite(checked.errors.ravel()[indices]))
         others = np.ones(field.grid.size, dtype=bool)
@@ -825,8 +879,12 @@ class TestErrorEstimate(TestCase):
         _solver, _field, checked, indices, true = _checked("nonnormal")
         _assert_tracks(checked.errors.ravel()[indices], true)
 
-    def test_the_estimate_tracks_the_error_on_the_anisotropic_gradient(self):
-        _solver, _field, checked, indices, true = _checked("gradient")
+    @_CHECKED_GRADIENT
+    def test_the_estimate_tracks_the_error_on_the_anisotropic_gradient(
+        self,
+        checked_gradient,
+    ):
+        _solver, _field, checked, indices, true = checked_gradient
         _assert_tracks(checked.errors.ravel()[indices], true)
 
     @pytest.mark.slow
@@ -919,14 +977,18 @@ class TestErrorEstimate(TestCase):
         estimate = abs(field.values.ravel()[indices[0]] - value) + own
         assert checked.errors.ravel()[indices[0]] == pytest.approx(estimate, rel=1e-9)
 
-    def test_the_start_slides_to_where_u_plus_the_action_is_least(self):
+    @_CHECKED_GRADIENT
+    def test_the_start_slides_to_where_u_plus_the_action_is_least(
+        self,
+        checked_gradient,
+    ):
         # Started half a radian round the surface from the traced crossing, the
         # secant must still bring the start to the stationary point: anywhere
         # else U + S is larger, by the square of the distance. About the
         # nonlinear well the surface is not a level set of U, so only the root
         # of (grad U - p) . t is that point (on a linear system grad U . t
         # vanishes on the surface and (grad U + p) . t has the same root).
-        solver, field, _checked_field, _indices, _true = _checked("gradient")
+        solver, field, _checked_field, _indices, _true = checked_gradient
         drift = system(AnisotropicGradientField)
         noise = constant_noise(ANISOTROPIC_AMPLITUDE)
         target = np.array([-1.5, -0.8])
@@ -941,10 +1003,10 @@ class TestErrorEstimate(TestCase):
         exact = float(_gradient_exact(target[None, :])[0])
         assert abs(value - exact) < 1.0e-4
 
-    def test_a_field_without_its_attractor_cannot_be_checked(self):
-        _solver, field, _checked_field, _indices, _true = _checked("gradient")
+    @_CHECKED_GRADIENT
+    def test_a_field_without_its_attractor_cannot_be_checked(self, checked_gradient):
+        solver, field, _checked_field, _indices, _true = checked_gradient
         bare = GridQuasipotential(field.grid, field.values, field.floor)
-        solver = _checked("gradient")[0]
         with pytest.raises(ValueError, match="attractor"):
             solver.check(bare, [0])
 

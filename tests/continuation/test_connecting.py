@@ -12,6 +12,8 @@ from unittest import TestCase
 
 import numpy as np
 import pytest
+from scipy.integrate import solve_ivp
+from scipy.optimize import brentq
 
 from discrecontinual_equations.continuation.connecting_orbit import (
     HeteroclinicOrbit,
@@ -178,6 +180,58 @@ class TestShilnikovContinuation(TestCase):
         assert bottom.saddle_index > 1.0
 
 
+# The primary homoclinic of the jerk system near a = 0.465, computed without the
+# library by _independent_homoclinic below (DOP853 at rtol 1e-12, left-eigenvector
+# gap, brentq): 0.465109935774 to 0.465109935777 for offsets 1e-6 to 1e-8 and
+# rtol 1e-11 to 1e-13. The shooter (RK4 at dt 0.002, offset 1e-5) lands 3e-12
+# from it at horizon 100; at horizon 60 it finds no return and gives the bracket
+# end 0.49999999, 0.035 away (DEQ-161).
+_SHILNIKOV_HOMOCLINIC = 0.465109935777
+_LOCATE_TOLERANCE = 1.0e-8
+
+
+def _independent_homoclinic(offset: float = 1.0e-7, rtol: float = 1.0e-12) -> float:
+    """The jerk system's homoclinic parameter in [0.465, 0.4675], by SciPy alone.
+
+    The unstable manifold of the origin, started ``offset`` along the unstable
+    eigenvector and integrated by DOP853, makes its first return into the ball of
+    radius 0.4 after leaving radius 0.6; its gap is the closest point's component
+    along the left unstable eigenvector, the coordinate that vanishes on the
+    stable eigenspace (the shooter projects on the right one instead). brentq
+    finds the gap's root. Nothing here comes from the library.
+    """
+
+    def gap(a: float) -> float:
+        jacobian = np.array([[0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [1.0, -1.0, -a]])
+        values, right = np.linalg.eig(jacobian)
+        unstable = right[:, int(np.argmax(values.real))].real
+        unstable *= np.sign(unstable[0]) / np.linalg.norm(unstable)
+        values, left = np.linalg.eig(jacobian.T)
+        covector = left[:, int(np.argmax(values.real))].real
+        covector /= covector @ unstable
+        solution = solve_ivp(
+            lambda _t, s: [s[1], s[2], -a * s[2] - s[1] + s[0] - s[0] * s[0]],
+            (0.0, 100.0),
+            offset * unstable,
+            method="DOP853",
+            rtol=rtol,
+            atol=1.0e-3 * rtol,
+            dense_output=True,
+        )
+        times = np.linspace(0.0, 100.0, 200_001)
+        radius = np.linalg.norm(solution.sol(times).T, axis=1)
+        band = (np.cumsum(radius > 0.6) > 0) & (radius < 0.4)
+        first = int(np.flatnonzero(band)[0])
+        leaves = np.flatnonzero(~band[first:])
+        last = first + int(leaves[0]) if leaves.size else band.size
+        closest = first + int(np.argmin(radius[first:last]))
+        fine = np.linspace(times[closest - 1], times[closest + 1], 2001)
+        states = solution.sol(fine).T
+        return float(covector @ states[np.argmin(np.linalg.norm(states, axis=1))])
+
+    return float(brentq(gap, 0.465, 0.4675, xtol=1.0e-13))
+
+
 class TestShilnikovHomoclinic(TestCase):
     """The full pipeline: locate a saddle-focus homoclinic and confirm its chaos."""
 
@@ -202,10 +256,21 @@ class TestShilnikovHomoclinic(TestCase):
             ReturnSettings(dt=0.002, horizon=100.0, departure_radius=0.6),
         )
         located = shooter.locate(0.46, 0.50)
-        assert 0.46 < located < 0.50
+        # locate always returns a point of the bracket, so a failed search (no
+        # return within the horizon) still lands inside it, at an end (DEQ-161).
+        assert min(located - 0.46, 0.50 - located) > 1.0e-3, located
+        assert abs(located - _SHILNIKOV_HOMOCLINIC) < _LOCATE_TOLERANCE, located
         focus = classify_saddle_focus(self._jacobian(located))
         assert focus is not None
         assert focus.satisfies_shilnikov_criterion
+
+    @pytest.mark.slow
+    def test_the_reference_homoclinic_is_settled(self):
+        # The reference above, recomputed, and unmoved by a tenfold change of
+        # offset or tolerance: its digits are the system's, not the method's.
+        assert abs(_independent_homoclinic() - _SHILNIKOV_HOMOCLINIC) < 1.0e-10
+        coarse = _independent_homoclinic(offset=1.0e-6, rtol=1.0e-11)
+        assert abs(coarse - _SHILNIKOV_HOMOCLINIC) < 1.0e-10
 
     @pytest.mark.slow
     def test_chaos_tracks_the_saddle_index(self):
