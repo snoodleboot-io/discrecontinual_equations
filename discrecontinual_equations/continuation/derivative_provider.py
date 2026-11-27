@@ -183,19 +183,20 @@ class FiniteDifferenceDerivatives(DerivativeProvider):
 
     References:
         Dennis and Schnabel (1983), Sec. 5.4 and Algorithm A5.4.1: the step
-        scaled per component by ``max(|x_j|, typx_j)``, and ``eps^(1/3)`` for
-        a central slope. Mikulski and Uhl (2026), arXiv:2608.11020, Sec. 3.2
-        and Appendix B: the minimiser ``C_k eps^(1/(k+2))`` of a second-order
+        scaled per component by ``max(|x_j|, typx_j)``, and ``eps^(1/3)`` for a
+        central slope. Mikulski and Uhl (2026), arXiv:2608.11020, Sec. 3.2 and
+        Appendix B: the minimiser ``C_k eps^(1/(k+2))`` of a second-order
         central stencil's error for the ``k``-th derivative (we take ``C_k =
         1``). Fornberg (1988): the central stencils of accuracy two, as
-        tabulated in Wikipedia's "Finite difference coefficient". SciPy 1.14.1, ``scipy/optimize/_nonlin.py``,
-        ``KrylovJacobian.matvec``: a directional difference whose spacing is
-        divided by the direction's length, ``omega / ||v||``, so the move is
-        the same for any length. We depart from it on purpose for directions
-        shorter than one, which keep the spacing of a unit one, so that
-        results at unit scale are unchanged. The complex-direction identity
-        is the discrete Fourier inversion of a homogeneous polynomial; it is
-        derived above, not taken from a source. See ``docs/references.md``.
+        tabulated in Wikipedia's "Finite difference coefficient". SciPy 1.14.1,
+        ``scipy/optimize/_nonlin.py``, ``KrylovJacobian.matvec``: a directional
+        difference whose spacing is divided by the direction's length, ``omega /
+        ||v||``, so the move is the same for any length. We depart from it on
+        purpose for directions shorter than one, which keep the spacing of a
+        unit one, so that results at unit scale are unchanged. The
+        complex-direction identity is the discrete Fourier inversion of a
+        homogeneous polynomial; it is derived above, not taken from a source.
+        See ``docs/references.md``.
     """
 
     __slots__ = ["_epsilon", "_typical"]
