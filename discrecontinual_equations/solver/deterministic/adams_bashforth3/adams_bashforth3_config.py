@@ -1,7 +1,7 @@
 import numpy as np
 from pydantic import ConfigDict, Field
 
-from discrecontinual_equations.solver.solver_config import SolverConfig
+from discrecontinual_equations.solver.solver_config import SolverConfig, uniform_grid
 
 
 class AdamsBashforth3Config(SolverConfig):
@@ -26,6 +26,16 @@ class AdamsBashforth3Config(SolverConfig):
 
     @property
     def times(self) -> np.ndarray:
+        """The time grid, from ``start_time`` to ``end_time`` inclusive.
+
+        With ``step_size`` it is the shared fixed-step grid of
+        :func:`uniform_grid`, which refuses a span that is not a whole number of
+        steps; it was ``np.arange(start, end, h)``, which stopped a step short of
+        ``end_time`` (DEQ-129).
+        """
         if self.number_of_steps is not None:
             return np.linspace(self.start_time, self.end_time, self.number_of_steps)
-        return np.arange(self.start_time, self.end_time, self.step_size)
+        if self.step_size is None:
+            message = "give AdamsBashforth3Config a step_size or a number_of_steps"
+            raise ValueError(message)
+        return uniform_grid(self.start_time, self.end_time, self.step_size)
