@@ -328,19 +328,24 @@ class TestAdaptivePeriodicOrbit(TestCase):
             x, y = point
             return [y, mu * (1.0 - x * x) * y - x]
 
+        # The transient only has to land near the cycle, which then attracts the
+        # tight integration below: settling at 1e-6 moves the period by 1e-10 and the
+        # nodes by 1e-8 against 1e-9 settling, and is five times faster (DEQ-144)
         settled = solve_ivp(
             flow,
             [0.0, 100.0 * mu],
             [2.0, 0.0],
             method="Radau",
-            rtol=1.0e-9,
-            atol=1.0e-11,
+            rtol=1.0e-6,
+            atol=1.0e-8,
         ).y[:, -1]
 
         def section(_t, point):
             return point[1]
 
         section.direction = 1.0
+        # Two crossings give the period; stopping there leaves them unchanged
+        section.terminal = 2
         cycle = solve_ivp(
             flow,
             [0.0, 20.0 * mu],
@@ -484,7 +489,8 @@ class TestAdaptivePeriodicOrbit(TestCase):
     def test_error_estimate_rejects_a_mismatched_solution(self):
         """Passing a solution from a different solver is a caller error, not a nan."""
         mu, intervals = 2.0, 100
-        period, seed = self._van_der_pol_oracle(mu, intervals)
+        # Only the node count is wrong; no cycle has to be integrated to show that
+        period, seed = 1.0, np.zeros((intervals + 1, 2))
         orbit = AdaptivePeriodicOrbit(
             self._field(VanDerPolField, mu),
             intervals * 2,
