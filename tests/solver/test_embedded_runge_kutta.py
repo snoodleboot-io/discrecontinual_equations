@@ -112,6 +112,22 @@ class TestTermination:
         assert "h = 1e-08" in str(error)
 
     @pytest.mark.parametrize(("solver", "config"), PAIRS)
+    def test_step_too_small_for_t_stops_without_a_minimum_step(self, solver, config):
+        """With ``min_step_size = 0`` the floating-point guard ends the solve.
+
+        DOPRI5's ``0.1 |h| <= |t| UROUND`` exit: the step can no longer move
+        ``t``, so the error reports no ratio.
+        """
+        Singular.calls = 0
+        with pytest.raises(StepSizeTooSmallError) as raised:
+            solver(config(end_time=2.0, min_step_size=0.0)).solve(
+                equation(Singular), [0.0]
+            )
+        assert raised.value.error_ratio is None
+        assert 0.999 < raised.value.time < 1.0
+        assert "cannot advance t" in str(raised.value)
+
+    @pytest.mark.parametrize(("solver", "config"), PAIRS)
     def test_unreachable_tolerance_at_the_minimum_step_raises_at_once(
         self, solver, config
     ):

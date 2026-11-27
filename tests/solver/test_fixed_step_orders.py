@@ -6,12 +6,17 @@ Adams-Bashforth 3 at second order. The orders are measured on ``y' = y cos t``,
 whose field depends on ``t``, over four halvings of the step.
 """
 
+import math
 from typing import ClassVar
 
+import numpy as np
 import pytest
 
 from discrecontinual_equations.differential_equation import DifferentialEquation
 from discrecontinual_equations.function.deterministic import DeterministicFunction
+from discrecontinual_equations.solver.deterministic.adams_bashforth import (
+    classical_runge_kutta_step,
+)
 from discrecontinual_equations.solver.deterministic.adams_bashforth2.adams_bashforth2_config import (  # noqa: E501
     AdamsBashforth2Config,
 )
@@ -31,7 +36,13 @@ from discrecontinual_equations.solver.deterministic.euler.euler_solver import (
     EulerSolver,
 )
 from discrecontinual_equations.variable import Variable
-from tests.solver.deterministic_orders import END, Autonomous, Oscillating, orders
+from tests.solver.deterministic_orders import (
+    END,
+    Autonomous,
+    Oscillating,
+    equation,
+    orders,
+)
 
 STEPS = [0.1, 0.05, 0.025, 0.0125]
 
@@ -135,3 +146,22 @@ def test_history_is_the_field_at_the_computed_states(make, start_steps):
     assert (times[1], states[0]) not in Counted.seen
     # One evaluation at t_0, four per Runge-Kutta step, then one per inner node.
     assert len(Counted.seen) == 1 + 4 * start_steps + (len(times) - 2)
+
+
+def test_starting_step_is_fourth_order_runge_kutta():
+    """The start the Adams-Bashforth solvers use is the classical method itself.
+
+    Its order is measured on ``y' = y cos t`` by stepping
+    :func:`classical_runge_kutta_step` alone: 4. Adams-Bashforth 3 keeps its
+    order with any start of local error ``O(h^3)``, so its measured order does
+    not tell a second-order start from the classical one; this does.
+    """
+    field = equation(Oscillating)
+    errors = []
+    for h in STEPS:
+        y = np.array([1.0])
+        for step in range(round(END / h)):
+            y = classical_runge_kutta_step(field, step * h, y, h)
+        errors.append(abs(y[0] - Oscillating.exact(END)))
+    observed = [math.log2(errors[i] / errors[i + 1]) for i in range(len(STEPS) - 1)]
+    assert all(3.9 < p < 4.2 for p in observed), observed
