@@ -10,10 +10,11 @@ steps are more accurate, but the per-step errors add up, and they are largest
 where ``V`` changes fastest. On ``y' = lambda y`` the method is stable only for
 ``|1 + h lambda| <= 1``, so stiff or oscillatory problems need small steps.
 
-Departure from Euler's formula: the field is evaluated at the *new* node,
-``f(t_{n+1}, y_n)``, not ``f(t_n, y_n)``. For an autonomous field this changes
-nothing. For one that depends on ``t`` it is a different method, still first
-order: on ``y' = y cos t`` the error still halves with ``h``.
+The field is evaluated at the old node, ``f(t_n, y_n)``, as Euler's formula
+has it. Until DEQ-141 it was evaluated at ``f(t_{n+1}, y_n)``: the same method
+for an autonomous field, a different (still first-order) one for a field that
+depends on ``t`` (``y' = y cos t`` to ``t = 2`` with ``h = 0.1``: error 2.5e-1,
+now 7.5e-2).
 
 References:
     Euler, L. (1768). Institutionum calculi integralis, vol. 1, part I,
@@ -22,6 +23,8 @@ References:
 
     See ``docs/references.md`` (Euler1768).
 """
+
+from itertools import pairwise
 
 from discrecontinual_equations.curve import Curve
 from discrecontinual_equations.differential_equation import DifferentialEquation
@@ -32,10 +35,10 @@ from discrecontinual_equations.solver.solver import Solver
 
 
 class EulerSolver(Solver):
-    """Forward Euler, ``y_{n+1} = y_n + h f(t_{n+1}, y_n)``, on a fixed grid.
+    """Forward Euler, ``y_{n+1} = y_n + h f(t_n, y_n)``, on a fixed grid.
 
     First order. The grid is the config's ``times`` and the step its
-    ``step_size``; see the module docstring for the evaluation time.
+    ``step_size``.
 
     References:
         Euler (1768), Problem 85, section 650. See ``docs/references.md``
@@ -68,21 +71,15 @@ class EulerSolver(Solver):
             at the first node). It is also kept as ``solution``.
         """
         self.solution = self._new_solution(equation)
-        increment = 0
-        for time in self.solver_config.times:
-            if increment > 0:
-                last_value = [
-                    result.discretization[-1] for result in self.solution.results
-                ]
-                evaluated = equation.derivative.eval(point=last_value, time=time)
-                next_value = [
-                    last + value * self.solver_config.step_size
-                    for value, last in zip(evaluated, last_value, strict=False)
-                ]
-                self.solution.append([time, last_value, next_value])
-
-            else:
-                equation.derivative.eval(point=initial_values, time=time)
-                self.solution.append([time, [0] * len(initial_values), initial_values])
-            increment += 1
+        times = self.solver_config.times
+        step = self.solver_config.step_size
+        value = list(initial_values)
+        self.solution.append([times[0], [0] * len(value), value])
+        for start, end in pairwise(times):
+            slope = equation.derivative.eval(point=value, time=start)
+            following = [
+                last + rate * step for rate, last in zip(slope, value, strict=True)
+            ]
+            self.solution.append([end, value, following])
+            value = following
         return self.solution

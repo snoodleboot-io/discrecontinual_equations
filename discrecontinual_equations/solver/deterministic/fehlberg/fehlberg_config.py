@@ -1,13 +1,13 @@
 """Configuration of the Runge-Kutta-Fehlberg 4(5) solver: interval, tolerances and step control.
 
 An embedded pair needs a first step, a tolerance and bounds on the step. A step
-is accepted when every component's error estimate is within
-``absolute_tolerance + relative_tolerance |y|``; the next step is scaled by
-``safety_factor`` and an exponent set by ``beta``, and held within
+is accepted when the root-mean-square of the error estimates, each scaled by
+``absolute_tolerance + relative_tolerance max(|y|, |y_new|)``, is at most 1;
+the next step is ``h S E^(-alpha) E_old^beta`` with ``alpha = 1/q - 0.75 beta``
+(a PI controller), its change held to ``[0.2, 10]`` and the step to
 ``[min_step_size, max_step_size]``. The defaults ``safety_factor = 0.9`` and
-``beta = 0.04`` are those of Hairer and Wanner's ``DOPRI5``, though the
-controller that uses ``beta`` here differs from theirs (see
-``FehlbergSolver``).
+``beta = 0.04`` are those of Hairer and Wanner's ``DOPRI5``, whose controller
+this is (see ``embedded_runge_kutta``).
 
 References:
     Hairer, E. and Wanner, G. (1996). DOPRI5, Fortran code; ``SAFE`` and
@@ -29,12 +29,12 @@ class FehlbergConfig(SolverConfig):
         initial_step_size: The first step tried.
         absolute_tolerance: Absolute part of the per-component tolerance.
         relative_tolerance: Relative part, times ``|y|``.
-        min_step_size: Smallest step proposed. A step rejected at this size is
-            retried at it indefinitely (see ``FehlbergSolver``).
-        max_step_size: Largest step proposed; also the step after a zero
-            error estimate.
+        min_step_size: Smallest step proposed. A step rejected at this size
+            raises ``StepSizeTooSmallError``.
+        max_step_size: Largest step proposed.
         safety_factor: Factor ``S < 1`` on the proposed step.
-        beta: Extra exponent: the step scales as ``err^(-(1 + beta)/q)``.
+        beta: The proportional gain of the PI controller: the step scales as
+            ``E^(-(1/q - 0.75 beta)) E_old^beta``; 0 gives an integral controller.
 
     References:
         Hairer and Wanner (1996), ``DOPRI5`` defaults. See
@@ -75,7 +75,7 @@ class FehlbergConfig(SolverConfig):
     )
     beta: float = Field(
         default=0.04,
-        description="PI controller parameter for step size adaptation",
+        description="Proportional gain of the PI step-size controller (DOPRI5: 0.04)",
     )
 
     model_config = ConfigDict(arbitrary_types_allowed=True)

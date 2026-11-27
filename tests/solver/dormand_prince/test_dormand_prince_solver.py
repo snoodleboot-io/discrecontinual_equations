@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 
 from discrecontinual_equations.differential_equation import DifferentialEquation
 from discrecontinual_equations.parameter import Parameter
@@ -10,6 +11,13 @@ from discrecontinual_equations.solver.deterministic.dormand_prince.dormand_princ
     DormandPrinceSolver,
 )
 from discrecontinual_equations.variable import Variable
+from tests.solver.deterministic_orders import (
+    Mixed,
+    Oscillating,
+    forced,
+    orders,
+    rk_fixed,
+)
 
 
 class TestDormandPrinceSolver:
@@ -53,3 +61,28 @@ class TestDormandPrinceSolver:
         assert (
             abs(final_value - expected) < 1e-6
         )  # Should be very accurate due to adaptive stepping
+
+
+STEPS = [0.1, 0.05, 0.025, 0.0125]
+
+
+class TestDormandPrinceOrder:
+    """Fifth order on fields that depend on t, fourth for the embedded row (DEQ-137).
+
+    With ``c_5 = 7/9`` the fifth stage saw the wrong time and both rows fell to
+    first order on these fields: errors 1.28e-2, 6.36e-3, 3.16e-3, 1.58e-3 on
+    ``y' = y cos t``.
+    """
+
+    @pytest.mark.parametrize("field", [Oscillating, Mixed])
+    def test_solution_is_fifth_order_on_a_time_dependent_field(self, field):
+        observed = orders(
+            forced(DormandPrinceSolver, DormandPrinceConfig), field, STEPS
+        )
+        assert all(4.8 < p < 6.0 for p in observed), observed
+
+    @pytest.mark.parametrize("field", [Oscillating, Mixed])
+    def test_embedded_row_is_fourth_order_on_a_time_dependent_field(self, field):
+        solver = DormandPrinceSolver(DormandPrinceConfig())
+        observed = rk_fixed(solver.a, solver.c, solver.b4, field, STEPS)
+        assert all(3.6 < p < 4.4 for p in observed), observed

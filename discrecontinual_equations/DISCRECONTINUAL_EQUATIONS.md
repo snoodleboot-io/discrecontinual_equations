@@ -27,7 +27,7 @@ The library is organized into hierarchical modules providing complete functional
 - **Cash-Karp**: Embedded 4th/5th-order Runge-Kutta
 - **Fehlberg**: Alternative 4th/5th-order Runge-Kutta
 - **Dormand-Prince**: Industry-standard 5th/4th-order method
-- **Dormand-Prince 89**: High-precision 8th/9th-order method
+- **Prince-Dormand 8(7)**: High-precision 8th-order method with a 7th-order error estimate
 
 ### 🎲 **Stochastic Solvers (6 methods)**
 - **Euler-Maruyama**: Fundamental SDE method (strong order 0.5)
@@ -123,7 +123,7 @@ classDiagram
         +solve(equation, initial_values)
     }
 
-    class DormandPrince89Solver {
+    class PrinceDormand87Solver {
         +solve(equation, initial_values)
     }
 
@@ -407,10 +407,10 @@ The library implements numerical algorithms based on original research papers an
 ### Primary Algorithm Sources
 - **Euler Method**: Classical forward difference approximation (Leonhard Euler, 1768)
 - **Adams-Bashforth**: Adams (1855), Bashforth (1883) - Original linear multistep formulations
-- **Cash-Karp (4,5)**: Cash, J.R. and Karp, A.H. (1978) - ACM Transactions on Mathematical Software
-- **Fehlberg (4,5)**: Fehlberg, Erwin (1968) - NASA Technical Report R-287
+- **Cash-Karp 5(4)**: Cash, J.R. and Karp, A.H. (1990) - A variable order Runge-Kutta method for initial value problems with rapidly varying right-hand sides, ACM Trans. Math. Softw. 16(3):201-222
+- **Fehlberg 4(5)**: Fehlberg, Erwin (1969) - Low-order classical Runge-Kutta formulas with stepsize control, NASA Technical Report R-315
 - **Dormand-Prince (5,4)**: Dormand, J.R. and Prince, P.J. (1980) - Journal of Computational and Applied Mathematics
-- **Dormand-Prince (8,9)**: Dormand, J.R. and Prince, P.J. (1987) - Computational Mathematics with Applications
+- **Prince-Dormand 8(7)**: Prince, P.J. and Dormand, J.R. (1981) - High order embedded Runge-Kutta formulae, J. Comput. Appl. Math. 7(1):67-75
 - **Euler-Maruyama**: Maruyama, Gisiro (1955) - Rendiconti del Circolo Matematico di Palermo
 
 ### Reference Books

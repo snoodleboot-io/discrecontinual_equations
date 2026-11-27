@@ -47,12 +47,6 @@ from discrecontinual_equations.solver.deterministic.dormand_prince.dormand_princ
 from discrecontinual_equations.solver.deterministic.dormand_prince.dormand_prince_solver import (  # noqa: E501
     DormandPrinceSolver,
 )
-from discrecontinual_equations.solver.deterministic.dormand_prince89.dormand_prince89_config import (  # noqa: E501
-    DormandPrince89Config,
-)
-from discrecontinual_equations.solver.deterministic.dormand_prince89.dormand_prince89_solver import (  # noqa: E501
-    DormandPrince89Solver,
-)
 from discrecontinual_equations.solver.deterministic.euler.euler_config import (
     EulerConfig,
 )
@@ -64,6 +58,12 @@ from discrecontinual_equations.solver.deterministic.fehlberg.fehlberg_config imp
 )
 from discrecontinual_equations.solver.deterministic.fehlberg.fehlberg_solver import (
     FehlbergSolver,
+)
+from discrecontinual_equations.solver.deterministic.prince_dormand87.prince_dormand87_config import (  # noqa: E501
+    PrinceDormand87Config,
+)
+from discrecontinual_equations.solver.deterministic.prince_dormand87.prince_dormand87_solver import (  # noqa: E501
+    PrinceDormand87Solver,
 )
 from discrecontinual_equations.solver.solver import Solver
 from discrecontinual_equations.solver.stochastic.euler_maruyama.euler_maruyama_config import (  # noqa: E501
@@ -183,9 +183,9 @@ _FAMILIES: list[_Family] = [
         lambda: DormandPrinceSolver(DormandPrinceConfig(**_ADAPTIVE)),
     ),
     (
-        "dormand_prince89",
+        "prince_dormand87",
         _ordinary,
-        lambda: DormandPrince89Solver(DormandPrince89Config(**_ADAPTIVE)),
+        lambda: PrinceDormand87Solver(PrinceDormand87Config(**_ADAPTIVE)),
     ),
     (
         "euler_maruyama",

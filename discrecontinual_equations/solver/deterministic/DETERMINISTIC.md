@@ -14,7 +14,7 @@ Deterministic Solvers
 ├── CashKarpSolver - 4th/5th order adaptive RK
 ├── FehlbergSolver - 4th/5th order adaptive RK
 ├── DormandPrinceSolver - 5th/4th order adaptive RK
-└── DormandPrince89Solver - 8th/9th order adaptive RK
+└── PrinceDormand87Solver - 8th order adaptive RK, 7th-order error estimate (DormandPrince89Solver is a deprecated alias)
 ```
 
 ## Executive Summary
@@ -88,7 +88,7 @@ classDiagram
     AdaptiveSolver <|-- CashKarpSolver
     AdaptiveSolver <|-- FehlbergSolver
     AdaptiveSolver <|-- DormandPrinceSolver
-    AdaptiveSolver <|-- DormandPrince89Solver
+    AdaptiveSolver <|-- PrinceDormand87Solver
 ```
 
 ## Sequence Diagram - Adaptive Solving
@@ -146,10 +146,10 @@ deterministic/
 │   ├── __init__.py
 │   ├── dormand_prince_config.py
 │   └── dormand_prince_solver.py
-└── dormand_prince89/
+└── prince_dormand87/
     ├── __init__.py
-    ├── dormand_prince89_config.py
-    └── dormand_prince89_solver.py
+    ├── prince_dormand87_config.py
+    └── prince_dormand87_solver.py
 ```
 
 ## Examples
@@ -228,7 +228,7 @@ else:
 | Cash-Karp | 4/5 | 6 | Yes | Medium |
 | Fehlberg | 4/5 | 6 | Yes | Medium |
 | Dormand-Prince | 5/4 | 7 | Yes | Medium |
-| Dormand-Prince 89 | 8/9 | 13 | Yes | Slowest |
+| Prince-Dormand 8(7) | 8/7 | 13 | Yes | Slowest |
 
 ## References
 
@@ -247,4 +247,4 @@ else:
 - [CASH_KARP](cash_karp/CASH_KARP.md)
 - [FEHLBERG](fehlberg/FEHLBERG.md)
 - [DORMAND_PRINCE](dormand_prince/DORMAND_PRINCE.md)
-- [DORMAND_PRINCE89](dormand_prince89/DORMAND_PRINCE89.md)
+- [PRINCE_DORMAND87](prince_dormand87/PRINCE_DORMAND87.md)

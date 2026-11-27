@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 
 from discrecontinual_equations.differential_equation import DifferentialEquation
 from discrecontinual_equations.parameter import Parameter
@@ -10,6 +11,13 @@ from discrecontinual_equations.solver.deterministic.cash_karp.cash_karp_solver i
     CashKarpSolver,
 )
 from discrecontinual_equations.variable import Variable
+from tests.solver.deterministic_orders import (
+    Mixed,
+    Oscillating,
+    forced,
+    orders,
+    rk_fixed,
+)
 
 
 class TestCashKarpSolver:
@@ -53,3 +61,25 @@ class TestCashKarpSolver:
         assert (
             abs(final_value - expected) < 1e-6
         )  # Should be very accurate due to adaptive stepping
+
+
+STEPS = [0.1, 0.05, 0.025, 0.0125]
+
+
+class TestCashKarpOrder:
+    """Fifth order with local extrapolation, fourth for the embedded row (DEQ-138).
+
+    With the rows swapped the solver advanced with the fourth-order row: orders
+    4.06, 4.03, 4.02 on ``y' = y cos t``.
+    """
+
+    @pytest.mark.parametrize("field", [Oscillating, Mixed])
+    def test_solution_is_fifth_order(self, field):
+        observed = orders(forced(CashKarpSolver, CashKarpConfig), field, STEPS)
+        assert all(4.8 < p < 5.6 for p in observed), observed
+
+    @pytest.mark.parametrize("field", [Oscillating, Mixed])
+    def test_embedded_row_is_fourth_order(self, field):
+        solver = CashKarpSolver(CashKarpConfig())
+        observed = rk_fixed(solver.a, solver.c, solver.b4, field, STEPS)
+        assert all(3.8 < p < 4.3 for p in observed), observed

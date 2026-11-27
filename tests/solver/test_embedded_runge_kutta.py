@@ -1,0 +1,335 @@
+"""The adaptive stepping of the embedded pairs: termination, error norm, PI control.
+
+The controller is checked against ``DOPRI5``'s ``DOPCOR`` written out by hand:
+``FAC11 = ERR**EXPO1``, ``EXPO1 = 1/q - 0.75 BETA``, ``FAC = FAC11 /
+FACOLD**BETA`` held to ``[1/FAC2, 1/FAC1] = [0.1, 5]`` after dividing by
+``SAFE``, ``HNEW = H / FAC``; on rejection ``HNEW = H / MIN(5, FAC11 / SAFE)``.
+"""
+
+import math
+import time
+
+import numpy as np
+import pytest
+
+from discrecontinual_equations.differential_equation import DifferentialEquation
+from discrecontinual_equations.function.deterministic import DeterministicFunction
+from discrecontinual_equations.solver.deterministic.cash_karp.cash_karp_config import (
+    CashKarpConfig,
+)
+from discrecontinual_equations.solver.deterministic.cash_karp.cash_karp_solver import (
+    CashKarpSolver,
+)
+from discrecontinual_equations.solver.deterministic.dormand_prince.dormand_prince_config import (  # noqa: E501
+    DormandPrinceConfig,
+)
+from discrecontinual_equations.solver.deterministic.dormand_prince.dormand_prince_solver import (  # noqa: E501
+    DormandPrinceSolver,
+)
+from discrecontinual_equations.solver.deterministic.embedded_runge_kutta import (
+    StepSizeTooSmallError,
+)
+from discrecontinual_equations.solver.deterministic.fehlberg.fehlberg_config import (
+    FehlbergConfig,
+)
+from discrecontinual_equations.solver.deterministic.fehlberg.fehlberg_solver import (
+    FehlbergSolver,
+)
+from discrecontinual_equations.solver.deterministic.prince_dormand87.prince_dormand87_config import (  # noqa: E501
+    PrinceDormand87Config,
+)
+from discrecontinual_equations.solver.deterministic.prince_dormand87.prince_dormand87_solver import (  # noqa: E501
+    PrinceDormand87Solver,
+)
+from discrecontinual_equations.variable import Variable
+
+PAIRS = [
+    pytest.param(DormandPrinceSolver, DormandPrinceConfig, id="dormand_prince"),
+    pytest.param(CashKarpSolver, CashKarpConfig, id="cash_karp"),
+    pytest.param(FehlbergSolver, FehlbergConfig, id="fehlberg"),
+    pytest.param(PrinceDormand87Solver, PrinceDormand87Config, id="prince_dormand87"),
+]
+# q: one more than the order of each pair's error estimate.
+Q = {
+    DormandPrinceSolver: 5,
+    CashKarpSolver: 5,
+    FehlbergSolver: 5,
+    PrinceDormand87Solver: 8,
+}
+
+# More field evaluations than any of these solves needs (about 900): a solver
+# that loops fails the test here instead of hanging it.
+BUDGET = 100_000
+
+
+class Singular(DeterministicFunction):
+    """``y' = 1 / (1 - t)``: ``y = -log(1 - t)``, unbounded at ``t = 1``."""
+
+    calls = 0
+
+    def eval(self, point, time=None):  # noqa: ARG002
+        Singular.calls += 1
+        if Singular.calls > BUDGET:
+            message = "the solver did not stop: evaluation budget spent"
+            raise AssertionError(message)
+        return [1.0 / (1.0 - time)]
+
+
+class Decay(DeterministicFunction):
+    """``y' = -y``."""
+
+    def eval(self, point, time=None):  # noqa: ARG002
+        return [-point[0]]
+
+
+def equation(field: type[DeterministicFunction]) -> DifferentialEquation:
+    t, y, r = Variable(name="t"), Variable(name="y"), Variable(name="r")
+    return DifferentialEquation(
+        variables=[y],
+        time=t,
+        parameters=[],
+        derivative=field([y], [], [r], t),
+    )
+
+
+class TestTermination:
+    """A step rejected at ``min_step_size`` raises; it retried forever (DEQ-140)."""
+
+    @pytest.mark.parametrize(("solver", "config"), PAIRS)
+    def test_singular_field_stops_with_a_clear_error(self, solver, config):
+        Singular.calls = 0
+        started = time.perf_counter()
+        with pytest.raises(StepSizeTooSmallError) as raised:
+            solver(config(end_time=1.0)).solve(equation(Singular), [0.0])
+        assert time.perf_counter() - started < 5.0
+        error = raised.value
+        assert isinstance(error, RuntimeError)
+        assert 0.999 < error.time < 1.0
+        assert error.step <= 1e-8
+        assert error.error_ratio is not None
+        assert error.error_ratio > 1.0
+        assert f"t = {error.time!r}" in str(error)
+        assert "h = 1e-08" in str(error)
+
+    @pytest.mark.parametrize(("solver", "config"), PAIRS)
+    def test_step_too_small_for_t_stops_without_a_minimum_step(self, solver, config):
+        """With ``min_step_size = 0`` the floating-point guard ends the solve.
+
+        DOPRI5's ``0.1 |h| <= |t| UROUND`` exit: the step can no longer move
+        ``t``, so the error reports no ratio.
+        """
+        Singular.calls = 0
+        with pytest.raises(StepSizeTooSmallError) as raised:
+            solver(config(end_time=2.0, min_step_size=0.0)).solve(
+                equation(Singular), [0.0]
+            )
+        assert raised.value.error_ratio is None
+        assert 0.999 < raised.value.time < 1.0
+        assert "cannot advance t" in str(raised.value)
+
+    @pytest.mark.parametrize(("solver", "config"), PAIRS)
+    def test_unreachable_tolerance_at_the_minimum_step_raises_at_once(
+        self, solver, config
+    ):
+        settings = config(
+            end_time=1.0,
+            initial_step_size=0.5,
+            min_step_size=0.5,
+            max_step_size=0.5,
+            absolute_tolerance=1e-30,
+            relative_tolerance=1e-30,
+        )
+        with pytest.raises(StepSizeTooSmallError) as raised:
+            solver(settings).solve(equation(Decay), [1.0])
+        assert raised.value.time == 0.0
+        assert raised.value.step == 0.5
+
+    @pytest.mark.parametrize(("solver", "config"), PAIRS)
+    def test_last_point_is_end_time(self, solver, config):
+        curve = solver(config(end_time=1.7)).solve(equation(Decay), [1.0])
+        assert curve.time.discretization[-1] == 1.7
+        assert abs(curve.results[0].discretization[-1] - math.exp(-1.7)) < 1e-5
+
+    @pytest.mark.parametrize(("solver", "config"), PAIRS)
+    def test_beta_too_large_for_the_exponent_is_refused(self, solver, config):
+        q = Q[solver]
+        with pytest.raises(ValueError, match="beta"):
+            solver(config(beta=4 / (3 * q)))
+
+
+class TestController:
+    """The PI controller, step for step against DOPRI5's formulas."""
+
+    @pytest.mark.parametrize(("solver", "config"), PAIRS)
+    def test_accepted_step_is_proportional_integral(self, solver, config):
+        stepper = solver(config(max_step_size=100.0))
+        h, ratio, previous = 0.1, 0.3, 0.7
+        alpha = 1 / Q[solver] - 0.75 * 0.04
+        expected = h / ((ratio**alpha / previous**0.04) / 0.9)
+        assert stepper.accepted_step_size(h, ratio, previous) == pytest.approx(
+            expected,
+            rel=1e-14,
+        )
+
+    @pytest.mark.parametrize(("solver", "config"), PAIRS)
+    def test_previous_error_enters(self, solver, config):
+        stepper = solver(config(max_step_size=100.0))
+        calm = stepper.accepted_step_size(0.1, 0.5, 0.01)
+        rough = stepper.accepted_step_size(0.1, 0.5, 1.0)
+        assert calm / rough == pytest.approx(0.01**0.04, rel=1e-14)
+
+    @pytest.mark.parametrize(("solver", "config"), PAIRS)
+    def test_growth_is_at_most_tenfold(self, solver, config):
+        stepper = solver(config(max_step_size=100.0))
+        assert stepper.accepted_step_size(0.1, 0.0, 1e-4) == pytest.approx(1.0)
+        assert stepper.accepted_step_size(0.1, 1e-30, 1e-4) == pytest.approx(1.0)
+
+    @pytest.mark.parametrize(("solver", "config"), PAIRS)
+    def test_accepted_step_stays_within_the_bounds(self, solver, config):
+        stepper = solver(config(max_step_size=0.2, min_step_size=0.05))
+        assert stepper.accepted_step_size(0.1, 1e-12, 1e-4) == 0.2
+        assert stepper.accepted_step_size(0.06, 1.0, 1e-4) == 0.05
+
+    @pytest.mark.parametrize(("solver", "config"), PAIRS)
+    def test_rejected_step_shrinks(self, solver, config):
+        stepper = solver(config())
+        alpha = 1 / Q[solver] - 0.75 * 0.04
+        assert stepper.rejected_step_size(0.1, 2.0) == pytest.approx(
+            0.1 / (2.0**alpha / 0.9),
+            rel=1e-14,
+        )
+        assert stepper.rejected_step_size(0.1, 1e9) == pytest.approx(0.02)
+        assert stepper.rejected_step_size(0.1, math.inf) == pytest.approx(0.02)
+
+    @pytest.mark.parametrize(("solver", "config"), PAIRS)
+    def test_error_is_the_rms_of_the_scaled_components(self, solver, config):
+        stepper = solver(config(absolute_tolerance=1e-3, relative_tolerance=1e-2))
+        y = np.array([1.0, -2.0])
+        y_new = np.array([3.0, -1.0])
+        error = np.array([3e-3, 8e-3])
+        scale = 1e-3 + 1e-2 * np.array([3.0, 2.0])
+        expected = math.sqrt(((3e-3 / scale[0]) ** 2 + (8e-3 / scale[1]) ** 2) / 2)
+        assert stepper.error_ratio(error, y, y_new) == pytest.approx(
+            expected,
+            rel=1e-14,
+        )
+
+    @pytest.mark.parametrize(("solver", "config"), PAIRS)
+    def test_nan_error_is_rejected(self, solver, config):
+        stepper = solver(config())
+        ratio = stepper.error_ratio(
+            np.array([math.nan]),
+            np.array([1.0]),
+            np.array([1.0]),
+        )
+        assert ratio == math.inf
+
+
+def dopri5_times(solver, settings, equation, y0):
+    """The accepted times of DOPRI5's DOPCOR, written out from the Fortran.
+
+    An independent loop: only the tableau is borrowed from ``solver``. The
+    error norm, ``FAC11 = ERR**EXPO1``, ``FAC = FAC11 / FACOLD**BETA``, the
+    limits ``FACC1 = 1/0.2``, ``FACC2 = 1/10``, ``FACOLD = MAX(ERR, 1e-4)``,
+    ``HNEW = MIN(HNEW, H)`` after a rejection and the last-step rule
+    ``X + 1.01 H - XEND > 0`` follow ``dopri5.f`` line by line.
+    """
+    a, c, b, b_hat = solver.a, solver.c, solver.b, solver.b_hat
+    f = equation.derivative
+    expo1 = 1 / (solver.tableau.error_order + 1) - 0.75 * settings.beta
+    facold, reject = 1e-4, False
+    x, y, h, xend = (
+        settings.start_time,
+        np.array(y0, float),
+        settings.initial_step_size,
+        settings.end_time,
+    )
+    times = [x]
+    while x < xend:
+        last = (x + 1.01 * h - xend) > 0
+        if last:
+            h = xend - x
+        k = np.zeros((len(b), len(y)))
+        for i in range(len(b)):
+            k[i] = f.eval(
+                point=(y + h * (a[i, :i] @ k[:i])).tolist(), time=x + c[i] * h
+            )
+        y1 = y + h * (b @ k)
+        sk = settings.absolute_tolerance + settings.relative_tolerance * np.maximum(
+            np.abs(y), np.abs(y1)
+        )
+        err = math.sqrt(np.mean((h * ((b - b_hat) @ k) / sk) ** 2))
+        fac11 = err**expo1
+        fac = max(
+            1 / 10, min(1 / 0.2, fac11 / facold**settings.beta / settings.safety_factor)
+        )
+        hnew = h / fac
+        if err <= 1:
+            facold = max(err, 1e-4)
+            x = xend if last else x + h
+            y = y1
+            times.append(x)
+            hnew = min(max(hnew, settings.min_step_size), settings.max_step_size)
+            if reject:
+                hnew = min(hnew, h)
+            reject = False
+        else:
+            hnew = max(
+                h / min(1 / 0.2, fac11 / settings.safety_factor), settings.min_step_size
+            )
+            reject = True
+        h = hnew
+    return times
+
+
+class VanDerPol(DeterministicFunction):
+    """``x'' = (1 - x^2) x' - x`` as a first-order system."""
+
+    def eval(self, point, time=None):  # noqa: ARG002
+        return [point[1], (1.0 - point[0] ** 2) * point[1] - point[0]]
+
+
+@pytest.mark.parametrize(("solver", "config"), PAIRS)
+@pytest.mark.parametrize("tolerance", [1e-4, 1e-7])
+def test_step_sequence_is_dopri5s(solver, config, tolerance):
+    """Every accepted time agrees with the hand-written DOPCOR loop.
+
+    Van der Pol to ``t = 6.05`` rejects steps at both tolerances, so the
+    no-growth rule after a rejection, the error floor and the last-step rule
+    are all exercised.
+    """
+    t = Variable(name="t")
+    ys = [Variable(name="x"), Variable(name="v")]
+    rs = [Variable(name="rx"), Variable(name="rv")]
+    equation = DifferentialEquation(
+        variables=ys,
+        time=t,
+        parameters=[],
+        derivative=VanDerPol(ys, [], rs, t),
+    )
+    settings = config(
+        end_time=6.05,
+        absolute_tolerance=tolerance,
+        relative_tolerance=tolerance,
+    )
+    stepper = solver(settings)
+    curve = stepper.solve(equation, [2.0, 0.0])
+    expected = dopri5_times(stepper, settings, equation, [2.0, 0.0])
+    assert len(curve.time.discretization) == len(expected)
+    np.testing.assert_allclose(curve.time.discretization, expected, rtol=1e-12)
+    assert curve.time.discretization[-1] == 6.05
+
+
+@pytest.mark.parametrize(("solver", "config"), PAIRS)
+def test_last_step_stretches_within_one_percent(solver, config):
+    """``t + 1.01 h >= end`` ends the solve in one step, as DOPRI5's rule does."""
+    settings = config(
+        end_time=1.005,
+        initial_step_size=0.5,
+        min_step_size=0.001,
+        max_step_size=0.5,
+        absolute_tolerance=1e30,
+        relative_tolerance=0.0,
+    )
+    curve = solver(settings).solve(equation(Decay), [1.0])
+    assert curve.time.discretization == [0.0, 0.5, 1.005]
