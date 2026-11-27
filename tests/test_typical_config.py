@@ -62,6 +62,7 @@ from discrecontinual_equations.solver.stochastic.milstein.milstein_solver import
 )
 from discrecontinual_equations.solver.stochastic.srk2.srk2_config import SRK2Config
 from discrecontinual_equations.solver.stochastic.srk2.srk2_solver import SRK2Solver
+from discrecontinual_equations.solver.stochastic.srk3 import srk3_solver
 from discrecontinual_equations.solver.stochastic.srk3.srk3_config import SRK3Config
 from discrecontinual_equations.solver.stochastic.srk3.srk3_solver import SRK3Solver
 from discrecontinual_equations.solver.stochastic.srk4.srk4_config import SRK4Config
@@ -552,3 +553,36 @@ class TestCodim2Steps:
             )
         assert seen == [("finite_difference_derivatives", 2.0e-4)]
         assert [point.kind for point in result.points] == ["cusp"]
+
+
+class TestSeveralChannelSRK3:
+    """SRK3's own several-channel step builds its coefficients from the config."""
+
+    def test_the_typical_size_reaches_its_coefficients(self):
+        seen: list[object] = []
+        original = srk3_solver.ItoCoefficients
+
+        class Recording(original):
+            def __init__(self, *arguments, **settings):
+                seen.append(settings.get("typical"))
+                super().__init__(*arguments, **settings)
+
+        time = Variable(name="t", discretization=[])
+        variables = [Variable(name=f"X{i}", discretization=[]) for i in range(2)]
+        equation = DifferentialEquation(
+            variables=variables,
+            time=time,
+            parameters=[],
+            derivative=_Cubic(variables, [], time),
+        )
+        config = SRK3Config(
+            end_time=_STEP * 2,
+            step_size=_STEP,
+            calculus="stratonovich",
+            typical=[_SIGMA, 2.0 * _SIGMA],
+            random_seed=3,
+        )
+        with mock.patch.object(srk3_solver, "ItoCoefficients", Recording):
+            SRK3Solver(config).solve(equation, [0.5 * _SIGMA, 0.25 * _SIGMA])
+        assert len(seen) == 1
+        assert np.array_equal(seen[0], [_SIGMA, 2.0 * _SIGMA])
