@@ -18,6 +18,7 @@ from discrecontinual_equations.continuation.connecting_orbit import MeshSpec
 from discrecontinual_equations.continuation.homoclinic_curve import (
     EigenvalueCountError,
     HomoclinicCurve,
+    _held_partition,
 )
 from discrecontinual_equations.differential_equation import DifferentialEquation
 from discrecontinual_equations.function.deterministic import DeterministicFunction
@@ -204,7 +205,7 @@ class TestEigenvalueCountRefusal(TestCase):
 
 
 class _NearlyCentral(DeterministicFunction):
-    """``x' = x, y' = -y, z' = lam z + c z^2``: a saddle with eigenvalues ``1, -1, lam``.
+    """``x' = x, y' = -y, z' = lam z + c z^2``: a saddle, eigenvalues ``1, -1, lam``.
 
     The verifier's probe for DEQ-154: a forward difference with step ``dx``
     reads ``lam`` as ``lam + c dx`` at the saddle, and as ``lam + 3 c dx`` at the
@@ -222,7 +223,11 @@ class _NearlyCentral(DeterministicFunction):
         first = self.parameters[0].value
         second = self.parameters[1].value
         z = point[2]
-        return [point[0] + 0 * first, -point[1] + 0 * second, self.lam * z + self.c * z * z]
+        return [
+            point[0] + 0 * first,
+            -point[1] + 0 * second,
+            self.lam * z + self.c * z * z,
+        ]
 
 
 def _nearly_central_curve(lam: float, c: float) -> HomoclinicCurve:
@@ -296,3 +301,35 @@ class TestExactSaddleJacobian(TestCase):
                 curve = _nearly_central_curve(lam, c)
                 point = curve.solve_point(0.0, np.zeros((21, 3)), np.zeros(3), 0.0)
                 assert point is not None
+
+    def test_a_field_without_jets_is_counted_by_the_forward_difference(self):
+        """``math.pow`` refuses a Taylor jet, so the counts fall back to a difference.
+
+        At ``lam = -1e-6, c = 1`` the difference reads ``lam + c dx < 0``: still
+        a saddle with two stable eigenvalues, now read without automatic
+        differentiation.
+        """
+        curve = _nearly_central_curve(-1.0e-6, 1.0)
+        field = curve._equation.derivative  # noqa: SLF001
+        field.eval = lambda point, time=None: [  # noqa: ARG005 (base signature)
+            point[0],
+            -point[1],
+            field.lam * point[2] + field.c * math.pow(point[2], 2),
+        ]
+        assert curve._seed_counts(np.zeros(3), 0.0, 0.0) == (2, 1)  # noqa: SLF001
+        jacobian = curve._saddle_jacobian(np.zeros(3), 0.0, 0.0)  # noqa: SLF001
+        assert abs(jacobian[2, 2] - (-1.0e-6 + 1.0e-7)) < 1.0e-12
+
+
+class TestHeldPartition(TestCase):
+    """A shifted saddle's eigenvalues inherit the partition of the unshifted one."""
+
+    def test_a_reordered_shift_keeps_the_reference_rows_in_their_order(self):
+        reference = (np.array([1.0, -1.0, -1.0e-7]), [1, 2], [0])
+        shifted = np.array([1.0e-7, 1.0, -1.0])
+        assert _held_partition(shifted, reference) == ([2, 0], [1])
+
+    def test_a_complex_pair_keeps_its_two_members_apart(self):
+        reference = (np.array([-0.5 + 2.0j, -0.5 - 2.0j, 3.0]), [0, 1], [2])
+        shifted = np.array([3.0, -0.5 - 2.0j, -0.5 + 2.0j])
+        assert _held_partition(shifted, reference) == ([2, 1], [0])
