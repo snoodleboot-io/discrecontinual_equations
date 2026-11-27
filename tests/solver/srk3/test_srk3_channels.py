@@ -304,6 +304,11 @@ class TestDeterministicPart:
         assert slope(table) > 2.7, table
 
 
+# sha256 prefixes of scalar geometric Brownian motion runs on main. Bits are a fair
+# pin here (DEQ-160): the drift mu x and diffusion sigma x are linear, the scalar
+# step (Kloeden-Platen (11.2.1)) only adds, multiplies, divides and takes sqrt(h),
+# and dW, dZ are the RNG's normals times sqrt(h) and h sqrt(h) - each operation
+# IEEE-exact, so no CPU or libm can round them differently.
 _MAIN_HASHES = [
     "f0e077d20d0f39df",
     "9954679e7aaca142",

@@ -31,6 +31,8 @@ _SUBSET = ("saddle_node", "transcritical", "pitchfork", "hysteresis")
 
 
 def _digests(directory: Path) -> dict[str, str]:
+    """sha256 per file. Every comparison is between builds made by this test run,
+    on this machine, never against a recorded digest (DEQ-160)."""
     return {
         path.name: hashlib.sha256(path.read_bytes()).hexdigest()
         for path in sorted(directory.iterdir())

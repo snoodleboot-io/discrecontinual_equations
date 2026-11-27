@@ -54,6 +54,7 @@ def _per_path(solver_type, config, case, start, path):
     return np.array([result.discretization[-1] for result in solver.solution.results])
 
 
+# Hex equality is only ever between two runs in this process (DEQ-160).
 def _hex(values):
     return [float(v).hex() for v in values]
 

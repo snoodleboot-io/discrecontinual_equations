@@ -12,8 +12,9 @@ Stratonovich drift correction. The oracles here are:
   with the exact derivative, written out in this file (Section 10.3; restated
   for the Stratonovich form as eq. (17) of Garcia-Alvarez, arXiv:1102.4401, and
   for commuting Ito noise as eq. (1.10) of Wang and Gan, arXiv:1102.0662);
-* bits recorded before the change (3cecacb), for commuting diagonal noise and
-  for vector noise that does not commute, whose Levy-area step must not move;
+* values recorded before the change (3cecacb), to 1e-10 relative, for commuting
+  diagonal noise and for vector noise that does not commute, whose Levy-area
+  step must not move;
 * the memory a step holds, which was cubic in ``n``.
 """
 
@@ -323,34 +324,40 @@ def test_the_step_is_kloeden_and_platens_diagonal_scheme(calculus):
     np.testing.assert_allclose(solved, expected, rtol=_DIFFERENCES, atol=0.0)
 
 
-# Recorded at 3cecacb, before DEQ-48: the general step, bit for bit.
+# Recorded at 3cecacb, before DEQ-48: the general step (written out from its
+# float.hex pins). b is 0.3 sin x + 0.2 x or cos of the other component, both
+# vectorised ufuncs that AVX-512 runners round an ulp differently, and the step's
+# central difference turns an ulp of b into about 1e-11 of the slope; so the
+# values are held to 1e-10 relative, not to their bits (DEQ-160). Any change to
+# the step itself moves them by far more (outputs/verification/deq-160).
+_RECORDED = 1.0e-10
 _BEFORE = {
     ("ito", "generator", "diagonal"): [
-        "0x1.f33c6ab7bc7bap-3",
-        "0x1.c53f9804d70c2p-3",
-        "0x1.3e4ac96d7efa4p-1",
+        0.24376757977694102,
+        0.2213127018429813,
+        0.6216643282091252,
     ],
     ("ito", "path", "diagonal"): [
-        "0x1.919bb3b220b47p-3",
-        "0x1.fa965f0e03494p-2",
-        "0x1.ab2b3ddc7083ap-2",
+        0.19609775912621272,
+        0.4947142460158116,
+        0.41715714128452286,
     ],
     ("stratonovich", "gaussian", "diagonal"): [
-        "0x1.c6677cee37103p-2",
-        "0x1.25b673a6c4734p-2",
-        "0x1.72c8e9510d0dfp-1",
+        0.44375415042829064,
+        0.28682881074302036,
+        0.7241890822829439,
     ],
-    ("ito", "generator", "cross"): ["0x1.d0a229f015bb2p-2", "-0x1.65930ea4a652dp-1"],
-    ("ito", "path", "cross"): ["0x1.05f52644f77c9p-2", "0x1.556926a0ec24ap-2"],
+    ("ito", "generator", "cross"): [0.45374360587941986, -0.6983875823963551],
+    ("ito", "path", "cross"): [0.25581798358859636, 0.33340893132393445],
     ("stratonovich", "gaussian", "cross"): [
-        "0x1.2b303de84ea8dp-1",
-        "-0x1.b665a1ef53478p-2",
+        0.5843524309232905,
+        -0.4281220724413468,
     ],
 }
 
 
 @pytest.mark.parametrize(("calculus", "source", "noise"), list(_BEFORE))
-def test_the_bits_of_before_are_kept(calculus, source, noise):
+def test_the_values_of_before_are_kept(calculus, source, noise):
     # Arrange
     function_type, start = {
         "diagonal": (DiagonalNoise, [0.5, 1.0, 1.5]),
@@ -372,7 +379,12 @@ def test_the_bits_of_before_are_kept(calculus, source, noise):
     )
 
     # Assert
-    assert [float(value).hex() for value in final] == _BEFORE[(calculus, source, noise)]
+    np.testing.assert_allclose(
+        final,
+        _BEFORE[(calculus, source, noise)],
+        rtol=_RECORDED,
+        atol=0.0,
+    )
 
 
 def test_vector_noise_that_does_not_commute_still_warns_and_draws_areas():
@@ -520,6 +532,7 @@ def test_declared_diagonal_noise_takes_the_same_step_bit_for_bit(calculus, sourc
     )
 
     # Assert: the two moved points give every b_i the same input, hence the bits.
+    # Exact is fair here: both runs are in this process, on this CPU (DEQ-160).
     assert [float(v).hex() for v in declared] == [float(v).hex() for v in found]
 
 

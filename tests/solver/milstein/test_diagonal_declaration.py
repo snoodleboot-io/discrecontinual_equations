@@ -81,6 +81,7 @@ def _per_path(solver_type, config_type, function_type, start, calculus):
             _equation(function_type, len(start)),
             start,
         )
+    # Compared only with another solve in this process, so bits are fair (DEQ-160).
     final = [float(result.discretization[-1]).hex() for result in curve.results]
     return final, [str(warning.message) for warning in caught]
 
