@@ -19,11 +19,11 @@ This module is the bookkeeping layer over the projection boundary-value solver i
   unstable manifold is 2-D the full-space problem has a family of solutions, and
   in non-orthogonal coordinates the full-space solve does not find the one in the
   plane: its Newton matrix is nearly rank-deficient (smallest singular value
-  1e-9 and below, though the factorisation never fails), Gauss-Newton diverges,
-  and the best iterate it returns is the seed itself. The full-space solve is
-  still run, uninformed of the subspace, as a check; and every returned path
-  must satisfy the full field's collocation equations, which is what refuses
-  a "connection" in a plane the flow leaves;
+  1e-9 and below, though the factorisation never fails) and Gauss-Newton
+  diverges; its best iterate is the seed itself, and the solve refuses it. The
+  full-space solve is still run, uninformed of the subspace, as a check; and
+  every returned path must satisfy the full field's collocation equations,
+  which is what refuses a "connection" in a plane the flow leaves;
 * **cycles** are the elementary cycles of the directed graph of connections;
 * each cycle's **spectrum** classifies the eigenvalues at every node by the role
   they play *for that cycle* - radial, contracting, expanding, transverse - which
@@ -49,6 +49,7 @@ from discrecontinual_equations.continuation.connecting_orbit import (
     CollocationResidual,
     HeteroclinicOrbit,
     MeshSpec,
+    NotConvergedError,
     OrbitResolution,
     OrbitSolution,
     Terminus,
@@ -122,20 +123,26 @@ class FullSpaceCheck:
     ``residual`` its collocation residual under the full field. Where the
     connection is isolated in the full space this lands on the subspace solve;
     where it is not, or where the subspace is not invariant along the orbit, the
-    two disagree, and these say how.
+    two disagree, and these say how. ``converged`` says whether the full-space
+    solve converged at all; where it did not - Gauss-Newton diverges on the
+    near-singular Newton matrix of a connection that is not isolated -
+    ``solution`` is its best iterate, kept for diagnosis and not an orbit.
     """
 
-    __slots__ = ["residual", "solution", "subspace_defect"]
+    __slots__ = ["converged", "residual", "solution", "subspace_defect"]
 
     def __init__(
         self,
         solution: OrbitSolution,
         subspace_defect: float,
         residual: CollocationResidual,
+        *,
+        converged: bool,
     ) -> None:
         self.solution = solution
         self.subspace_defect = subspace_defect
         self.residual = residual
+        self.converged = converged
 
 
 class ConnectionOrbit:
@@ -486,8 +493,11 @@ class HeteroclinicNetwork:
         a sink, so the connection is isolated even where, in the full space, the
         source's unstable manifold is 2-D and the connections leaving it are not.
 
-        The full-space solve from the same seed is kept as ``full_space``. The
-        resolution estimate is the subspace solve's, measured in full coordinates.
+        The full-space solve from the same seed is kept as ``full_space``, with
+        whether it converged: where it does not, its refusal is recorded there and
+        not raised, because the check failing is a fact about the full-space
+        problem, not about the connection in its subspace. The resolution
+        estimate is the subspace solve's, measured in full coordinates.
 
         A connection whose :meth:`persistence_margin` is not positive does not exist
         in its subspace, and is refused: the least-squares solve would otherwise
@@ -525,7 +535,10 @@ class HeteroclinicNetwork:
         start = self.seed(connection, mesh) if seed is None else seed
         inside = reduced.solve(start @ basis)
         lifted = OrbitSolution(inside.times, inside.states @ basis.T)
-        check = full.solve(start)
+        try:
+            check, converged = full.solve(start), True
+        except NotConvergedError as refused:
+            check, converged = refused.solution, False
         orbit = ConnectionOrbit(
             connection,
             lifted,
@@ -536,6 +549,7 @@ class HeteroclinicNetwork:
                 check,
                 _subspace_defect(check.states, connection.basis),
                 full.collocation_residual(check),
+                converged=converged,
             ),
         )
         if not orbit.residual.is_trajectory:

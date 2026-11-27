@@ -26,9 +26,11 @@ from scipy.sparse.linalg import splu
 
 from discrecontinual_equations.continuation.connecting_orbit import (
     _IMAGINARY,
+    CollocationResidual,
     MeshSpec,
     OrbitSolution,
     _collocation_triplets,
+    _measure_collocation,
     _projection_conditions,
     _split_eigenspaces,
 )
@@ -67,7 +69,11 @@ def _continuous_phases(values: np.ndarray, left: np.ndarray) -> np.ndarray:
 
 
 class HomoclinicCurvePoint:
-    """A solved point on the homoclinic curve: its two parameters and orbit."""
+    """A solved point on the homoclinic curve: its two parameters and orbit.
+
+    The orbit carries its :class:`CollocationResidual` under the field at this
+    point's parameters, also available as ``residual``.
+    """
 
     __slots__ = ["_continuation", "_equilibrium", "_orbit", "_sweep"]
 
@@ -102,6 +108,11 @@ class HomoclinicCurvePoint:
     def equilibrium(self) -> np.ndarray:
         """The saddle equilibrium the orbit connects to."""
         return self._equilibrium
+
+    @property
+    def residual(self) -> CollocationResidual | None:
+        """The orbit's collocation residual under the field at this point."""
+        return self._orbit.residual
 
 
 class HomoclinicCurve:
@@ -369,14 +380,15 @@ class HomoclinicCurve:
         self,
         unknowns: np.ndarray,
         times: np.ndarray,
-        nodes: int,
         dimension: int,
         sweep: float,
     ) -> np.ndarray | None:
         for _ in range(_ITERATIONS):
-            residual = self._residual(unknowns, times, nodes, dimension, sweep)
-            if np.linalg.norm(residual) < _TOLERANCE:
+            norm, residual = self._residual_norm(unknowns, times, dimension, sweep)
+            if norm < _TOLERANCE:
                 return unknowns
+            if not np.isfinite(norm):
+                return None
             jacobian = self._jacobian(
                 unknowns,
                 times,
@@ -385,10 +397,29 @@ class HomoclinicCurve:
                 residual,
             )
             unknowns = unknowns + self._step(jacobian, residual)
-        residual = self._residual(unknowns, times, nodes, dimension, sweep)
-        if np.linalg.norm(residual) < _TOLERANCE:
+        norm, _ = self._residual_norm(unknowns, times, dimension, sweep)
+        if norm < _TOLERANCE:
             return unknowns
         return None
+
+    def _residual_norm(
+        self,
+        unknowns: np.ndarray,
+        times: np.ndarray,
+        dimension: int,
+        sweep: float,
+    ) -> tuple[float, np.ndarray]:
+        """The residual and its norm, ``inf`` once a diverging iterate overflows.
+
+        Overflow surfaces as Python's ``OverflowError`` from the field, or as
+        numpy's refusal to decompose the saddle's non-finite Jacobian.
+        """
+        try:
+            residual = self._residual(unknowns, times, times.size, dimension, sweep)
+        except (OverflowError, np.linalg.LinAlgError):
+            return np.inf, np.empty(0)
+        with np.errstate(over="ignore", invalid="ignore"):
+            return float(np.linalg.norm(residual)), residual
 
     def solve_point(
         self,
@@ -397,7 +428,27 @@ class HomoclinicCurve:
         equilibrium_seed: np.ndarray,
         continuation_seed: float,
     ) -> HomoclinicCurvePoint | None:
-        """Solve one point of the curve at a fixed swept-parameter value."""
+        """Solve one point of the curve at a fixed swept-parameter value.
+
+        Returns ``None`` unless Newton's method drives the residual of the square
+        system below ``_TOLERANCE``, whichever step - sparse LU or the dense
+        least-squares fallback - got it there; a diverging iterate that overflows
+        is a ``None`` too. The orbit carries its collocation residual.
+
+        Args:
+            sweep: Value of the swept parameter.
+            orbit_seed: Initial path, shape ``(intervals + 1, dimension)``.
+            equilibrium_seed: Initial saddle position.
+            continuation_seed: Initial value of the continuation parameter.
+
+        Returns:
+            The converged point, or ``None``.
+
+        References:
+            Bader and Ascher 1987 (docs/references.md, ``Bader1987``), COLNEW
+            subroutine ``CONTRL``: a Newton iteration that fails returns no
+            solution (``IFLAG = -2``), as this returns ``None``.
+        """
         nodes = self._mesh.intervals + 1
         dimension = orbit_seed.shape[1]
         times = np.linspace(-self._mesh.half_length, self._mesh.half_length, nodes)
@@ -408,16 +459,21 @@ class HomoclinicCurve:
                 [float(continuation_seed)],
             ],
         )
-        solved = self._newton(unknowns, times, nodes, dimension, sweep)
+        solved = self._newton(unknowns, times, dimension, sweep)
         if solved is None:
             return None
         states = solved[: nodes * dimension].reshape(nodes, dimension)
         equilibrium = solved[nodes * dimension : nodes * dimension + dimension]
         continuation = float(solved[-1])
+        rows = self._residual(solved, times, nodes, dimension, sweep)
+        measured = _measure_collocation(
+            states,
+            rows[: (nodes - 1) * dimension].reshape(nodes - 1, dimension),
+        )
         return HomoclinicCurvePoint(
             continuation,
             sweep,
-            OrbitSolution(times, states),
+            OrbitSolution(times, states, measured),
             equilibrium,
         )
 
@@ -428,7 +484,11 @@ class HomoclinicCurve:
         equilibrium_seed: np.ndarray,
         continuation_seed: float,
     ) -> list[HomoclinicCurvePoint]:
-        """Trace the curve across ``sweep_values``, seeding each from the last."""
+        """Trace the curve across ``sweep_values``, seeding each from the last.
+
+        Stops at the first value whose point does not converge, so the list can
+        be shorter than ``sweep_values``; every point in it converged.
+        """
         points: list[HomoclinicCurvePoint] = []
         orbit = orbit_seed.astype(float)
         equilibrium = np.asarray(equilibrium_seed, dtype=float)

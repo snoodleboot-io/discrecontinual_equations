@@ -174,6 +174,25 @@ solver returns the same near-optimal result as the uniform mesh (no regression).
   resolution measured from 40 to 640 intervals, on homoclinic and heteroclinic
   alike - that factor is `E - E/4` for a second-order method, not a tuning constant.
 
+- **A solve that did not converge is refused (RESOLVED, DEQ-120).**
+  `ConnectingOrbit.solve` used to return its best iterate whatever it was. On the
+  sheared Kirk-Silber edges leaving `xi2`, solved in the full space, Gauss-Newton
+  diverges on a near-singular Newton matrix and the best iterate is the seed
+  itself (trapezoidal residual 0.09). The refinement solves returned their seeds
+  too, so the estimate read 0.0. Now an iterate is converged only if its Newton
+  residual is below 1e-9, or if its Gauss-Newton correction is below 1e-7 of
+  `1 + |x|` in every component. That is the test AUTO (EPSU) and COLNEW use. The
+  correction must also satisfy the normal equations. Anything else raises
+  `NotConvergedError`, which carries the best iterate. A refinement that does not
+  converge makes its estimate component `inf`, and `OrbitResolution.valid` reports
+  it. Every returned orbit, `HomoclinicCurvePoint` orbits included, carries its
+  `CollocationResidual`. Measured but not adopted: a damped step (Armijo, smallest
+  step 1e-3 as in COLNEW) still stalls on those edges. Levenberg-Marquardt, and
+  lsmr in place of the factorisation, do converge, but to a *different* member of
+  the family of connections leaving `xi2`, 0.025 to 0.16 off the plane. The
+  connection is not isolated in the full space. Reporting that, rather than only
+  diverging, is the open item.
+
   Headroom left:
 
   - **No iterative search.** There is no `solve_to_resolved` analogue of

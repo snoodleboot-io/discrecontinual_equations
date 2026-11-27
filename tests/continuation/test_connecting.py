@@ -19,6 +19,7 @@ from discrecontinual_equations.continuation.connecting_orbit import (
     HeteroclinicOrbit,
     HomoclinicOrbit,
     MeshSpec,
+    NotConvergedError,
     Terminus,
     _projection_conditions,
     _split_eigenspaces,
@@ -349,6 +350,15 @@ class TestHomoclinicShooting(TestCase):
             assert abs(located - slope * control) < 5.0e-3
 
     def test_shooting_seed_refines_to_exact_loop(self):
+        """Pinned where the orbit crosses ``y = 0``, the solve converges.
+
+        Pinned at the peak ``x = 1.5`` instead, as this test once was, the phase
+        condition fixes the time shift only to second order (``x' = 0`` there),
+        the Newton matrix is ill-conditioned along the shift (``sigma_min /
+        sigma_max`` 5e-6) and Gauss-Newton never converges: the best iterate's
+        correction is 0.36 of the state. That iterate was returned, and is now
+        refused (DEQ-120), though it lies within 1e-3 of the loop.
+        """
         mu = self._shooter().locate(-0.05, 0.05)
         field = self._field(mu)
         half_length, intervals = 12.0, 240
@@ -370,11 +380,27 @@ class TestHomoclinicShooting(TestCase):
             MeshSpec(
                 half_length=half_length,
                 intervals=intervals,
-                phase_index=0,
-                phase_value=1.5,
+                phase_index=1,
+                phase_value=0.0,
             ),
         ).solve(seed)
         assert np.max(np.linalg.norm(solution.states - exact, axis=1)) < 2.0e-2
+        assert solution.residual.is_trajectory
+        peak = HomoclinicOrbit(
+            field,
+            np.zeros(2),
+            jacobian,
+            MeshSpec(
+                half_length=half_length,
+                intervals=intervals,
+                phase_index=0,
+                phase_value=1.5,
+            ),
+        )
+        with pytest.raises(NotConvergedError) as caught:
+            peak.solve(seed)
+        best = caught.value.solution.states
+        assert np.max(np.linalg.norm(best - exact, axis=1)) < 2.0e-2
 
 
 class TestThreeDimensionalConnection(TestCase):
