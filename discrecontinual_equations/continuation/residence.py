@@ -13,13 +13,32 @@ A visit is a maximal interval during which the trajectory is within ``radius`` o
 one saddle. Entry and exit times are interpolated linearly between samples, and a
 visit cut off by the start or end of the record is discarded, since its length is
 not known.
+
+The lemma is asymptotic: it holds once the trajectory passes close enough to each
+saddle that the local linearisation governs the dwell, so the first few ratios of a
+record are transients; the latest ratios are the ones to read. The radius should be
+small against the distance between saddles and large against the distance moved in
+one sample, or a visit is missed or split.
+
+References:
+- Gaunersdorfer, A. "Time averages for heteroclinic attractors", SIAM Journal on
+  Applied Mathematics 52(5), 1476-1489 (1992), doi:10.1137/0152085. Lemma 1 and its
+  proof: with expanding eigenvalue ``e_j`` and contracting eigenvalue ``-c_j`` at
+  saddle ``j``, the sojourn times satisfy ``t_{j+1} / t_j -> c_j / e_{j+1}``. Read
+  in the IIASA working paper of the same title (WP-91-011, May 1991).
 """
 
 import numpy as np
 
 
 class Visit:
-    """One passage near one saddle: which saddle, and when it entered and left."""
+    """One passage near one saddle: which saddle, and when it entered and left.
+
+    Args:
+        saddle: Index of the saddle in the list given to :meth:`Itinerary.measure`.
+        entry: Time the trajectory entered the ball around the saddle.
+        exit: Time it left.
+    """
 
     __slots__ = ["entry", "exit", "saddle"]
 
@@ -35,7 +54,20 @@ class Visit:
 
 
 class Itinerary:
-    """The visits a trajectory makes to a set of saddles, in time order."""
+    """The visits a trajectory makes to a set of saddles, in time order.
+
+    Build one with :meth:`measure`. Its :meth:`growth_ratios` and
+    :meth:`step_ratios` are the measured side of Gaunersdorfer's Lemma 1, to set
+    against the predicted ``CycleSpectrum.residence_ratios`` of
+    :mod:`.heteroclinic_network`.
+
+    Args:
+        visits: The visits, in any order; they are sorted by entry time.
+
+    References:
+    - Gaunersdorfer, A. "Time averages for heteroclinic attractors", SIAM J. Appl.
+      Math. 52(5), 1476-1489 (1992), doi:10.1137/0152085, Lemma 1.
+    """
 
     __slots__ = ["_visits"]
 
@@ -50,7 +82,19 @@ class Itinerary:
         saddles: list[np.ndarray],
         radius: float,
     ) -> "Itinerary":
-        """Find every complete visit of ``states`` to a ball around each saddle."""
+        """Find every complete visit of ``states`` to a ball around each saddle.
+
+        Args:
+            times: Sample times, increasing, shape ``(count,)``.
+            states: The trajectory at those times, shape ``(count, dimension)``.
+            saddles: The saddle states. Pass them in cycle order for
+                :meth:`step_ratios` to line up with the predicted ratios.
+            radius: Radius of the ball that counts as "near" a saddle.
+
+        Returns:
+            The itinerary of complete visits; a visit cut off by either end of the
+            record is dropped.
+        """
         visits: list[Visit] = []
         for index, saddle in enumerate(saddles):
             distance = np.linalg.norm(states - np.asarray(saddle), axis=1) - radius
@@ -91,6 +135,9 @@ class Itinerary:
 
         For a cycle whose steps all grow by the same ratio - a symmetric cycle -
         this converges to that ratio, free of the additive constant.
+
+        Returns:
+            One ratio per consecutive triple of visits, so two fewer than the visits.
         """
         steps = np.diff(self.durations)
         return steps[1:] / steps[:-1]
@@ -104,6 +151,13 @@ class Itinerary:
         the latest such ratio for the step that *leaves* saddle ``s``, so for saddles
         passed to :meth:`measure` in cycle order it lines up with
         ``CycleSpectrum.residence_ratios``.
+
+        Args:
+            period: Number of saddles in one revolution of the cycle.
+
+        Returns:
+            The latest measured growth of each step, indexed by the saddle it leaves;
+            ``nan`` for a step the record is too short to measure.
         """
         durations = self.durations
         revolutions = durations[period:] - durations[:-period]
