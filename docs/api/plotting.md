@@ -60,4 +60,48 @@ they fit together.
 
 ::: discrecontinual_equations.plot.delay_plot
 
+### Spectra: power spectrum or power spectral density
+
+`SpectrumPlot.plot_periodogram` shows how a sampled signal's power is spread over
+frequency. It takes the raw periodogram: the mean is removed, no window taper is
+applied (a boxcar), and nothing is averaged or smoothed. Each value is the
+squared modulus of one DFT bin, and `scaling` says how it is normalised
+([SciPy2026](../references.md#pages-films-and-numerics-infrastructure)):
+
+| `scaling` | What a value is | Units | Use it for |
+|---|---|---|---|
+| `"spectrum"` (default) | power in one frequency bin | amplitude² | a sine's power: it peaks at the mean square $A^2/2$ |
+| `"density"` | power per unit frequency | amplitude²/Hz | broadband noise: its level does not depend on $N$ |
+
+The y-axis title states which one is plotted. The bins of the power spectrum sum
+to the signal's variance; the density's bins sum to it after multiplying by the
+bin width $1/(N\,\Delta t)$.
+
+```python
+import tempfile
+
+import numpy as np
+
+from discrecontinual_equations.plot.spectrum_plot import SpectrumPlot
+from discrecontinual_equations.variable import Variable
+
+dt, n = 0.1, 64
+times = np.arange(n) * dt
+x = Variable(discretization=list(2.0 * np.sin(2 * np.pi * 5 / (n * dt) * times)))
+
+plot = SpectrumPlot(output_dir=tempfile.mkdtemp(), output_format="html")
+plot.plot_periodogram(x, dt=dt)
+print(plot.figure.layout.yaxis.title.text, max(plot.figure.data[0].y))
+```
+
+prints the file it wrote, then `Power spectrum (amplitude²) 2.0`: the
+sine of amplitude 2 has mean square 2.
+
+**Limits.** The raw periodogram is not a consistent estimate of a noise
+spectrum: its variance does not shrink as the record grows. A boxcar also leaks
+a sine that falls between bins into its neighbours, so the peak height is exact
+only on a bin frequency. Welch averaging and tapered windows address both and
+are not applied. `plot_fft` and `plot_multiple` plot $|X_k|^2$ unnormalised,
+labelled "Power".
+
 ::: discrecontinual_equations.plot.spectrum_plot

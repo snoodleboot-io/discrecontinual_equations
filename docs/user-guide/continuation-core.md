@@ -387,6 +387,48 @@ print((x * x * x).coefficients)  # (2 + s)^3 = 8 + 12 s + 6 s^2 + s^3
 
 prints `[8.0, 12.0, 6.0, 1.0]`.
 
+### Dividing series
+
+A rational field, such as a predation rate $xy/(1+x)$, evaluates on series too.
+Dividing by a number scales every coefficient. Dividing by a series $w$ inverts
+the product: from $u = h\,w$, the part of $h$ of exact total degree $k$ is
+
+$$
+h_k = \frac{1}{w_0}\Big(u_k - \sum_{j=0}^{k-1} h_j\, w_{k-j}\Big),
+$$
+
+where $u_k$, $w_k$, $h_k$ are the homogeneous parts of degree $k$. This is the
+one-variable division formula of [Neidinger2010](../references.md#numerical-continuation-predictor-corrector-jacobians-step-control)
+(§6, derived from the product rule (6.2)) applied to homogeneous parts, the
+extension his §8 describes for series in several variables. Every coefficient up
+to the series' `order` is exact.
+
+```python
+from discrecontinual_equations.continuation.bivariate import Bivariate
+
+s = Bivariate({(1, 0): 1.0}, 4)
+t = Bivariate({(0, 1): 1.0}, 4)
+print((s / 2).coefficients)
+quotient = 1 / (1 - s - t)  # the sum of (s + t)^n
+print(quotient.coefficient(2, 2), quotient.coefficient(1, 3))
+try:
+    1 / s
+except ZeroDivisionError as error:
+    print("refused:", str(error).split(":")[0])
+```
+
+prints
+
+```text
+{(1, 0): 0.5}
+6.0 4.0
+refused: cannot divide by a series whose constant term is zero
+```
+
+The focal values need nothing more: the field's denominator is evaluated at the
+equilibrium plus a small offset, so its constant term is the denominator's value
+at the equilibrium.
+
 ### Limits
 
 - **Absolute difference step.** $\varepsilon = 10^{-7}$ is the same for every
@@ -395,10 +437,12 @@ prints `[8.0, 12.0, 6.0, 1.0]`.
 - **A sparsity pattern smaller than the truth gives a wrong Jacobian, silently.**
   `"detect"` reads the pattern at the first point and two probes nearby, and can
   miss a dependence that vanishes at all three.
-- **Jets and series have arithmetic only.** `Jet` has `+ - * / **`; `Bivariate`
-  and `Multivariate` have `+ - * **` and no division at all, so `x / 2` must be
-  written `0.5 * x`. A field built from `sin`, `exp` and the like needs the
-  finite-difference provider.
+- **Jets and series have arithmetic only.** `Jet`, `Bivariate` and
+  `Multivariate` have `+ - * / **`. A field built from `sin`, `exp` and the like
+  needs the finite-difference provider. Dividing by a series needs a non-zero
+  constant term, the denominator's value at the expansion point; one that
+  vanishes there has no power series and raises `ZeroDivisionError` (see
+  [Dividing series](#dividing-series)).
 
 Sources: [CurtisPowellReid1974, ColemanMore1983, GebremedhinMannePothen2005, More2001, GriewankWalther2008](../references.md#numerical-continuation-predictor-corrector-jacobians-step-control).
 API: [`FiniteDifferenceJacobian`](../api/continuation.md#discrecontinual_equations.continuation.jacobian.FiniteDifferenceJacobian),
@@ -580,7 +624,7 @@ $\eta_{2k}(x^2 + y^2)^{2k}$. Their own first terms, $\eta_2(x^2+y^2) +
 \eta_4(x^2+y^2)^2$, show the exponent is $k$, which is what the code uses.
 
 **Limits.** Planar systems only (reduce to the centre manifold first); polynomial
-fields only (no division in `Bivariate`); $\eta_6$ means something only where
+fields only (`+ - * / **`, with every denominator non-zero at the equilibrium); $\eta_6$ means something only where
 $\eta_4 = 0$; the Jacobian must have a pair $\pm i\omega$, $\omega > 0$.
 
 Sources: [EuzebioLlibreTonon2020, Kuznetsov1998](../references.md#numerical-continuation-predictor-corrector-jacobians-step-control).

@@ -6,7 +6,7 @@ with each coordinate replaced by a seeded :class:`Bivariate` gives the full loca
 Taylor expansion of the field - every mixed monomial, not just the symmetric
 directional contractions - which the Lyapunov focal-value recursion needs.
 
-Only arithmetic is provided (``+ - * **``), which covers polynomial and rational
+Only arithmetic is provided (``+ - * / **``), which covers polynomial and rational
 planar fields; that is the setting for the classical focal-value computation.
 
 This is Taylor-mode algorithmic differentiation in two variables: each arithmetic
@@ -15,19 +15,96 @@ coefficients with every term above the total degree ``order`` dropped, which is
 the propagation of Taylor coefficients of Griewank and Walther (2008, Chapter 13),
 here carried as a full multivariate polynomial rather than through univariate
 directional propagation. A product costs ``O(order^4)`` coefficient multiplications.
-Division is not implemented, even by a number: ``x / 2`` raises ``TypeError``
-and must be written ``0.5 * x``. So, despite the sentence above, only polynomial
-fields evaluate; a rational one needs a division rule first.
+Division by a number scales every coefficient. Division by a series ``w`` whose
+constant term ``w_0`` is non-zero is the truncated quotient: from ``u = h w``,
+taken degree by degree, ``h_k = (u_k - sum_{j<k} h_j w_{k-j}) / w_0``, where
+``u_k``, ``w_k`` and ``h_k`` are the parts of exact total degree ``k`` - the
+univariate recurrence of Neidinger (2010, Section 6) applied to homogeneous
+parts, as his Section 8 suggests for multivariable series. A denominator whose
+constant term is zero vanishes at the expansion point, so the quotient is not a
+power series there; it raises ``ZeroDivisionError`` instead.
 
 References:
 - Griewank, A. and Walther, A. "Evaluating Derivatives: Principles and
   Techniques of Algorithmic Differentiation", 2nd ed., SIAM, 2008,
   doi:10.1137/1.9780898717761, Chapter 13 ("Taylor and Tensor Coefficients").
+- Neidinger, R. D. "Introduction to Automatic Differentiation and MATLAB
+  Object-Oriented Programming", SIAM Review 52(3), 545-563, 2010,
+  doi:10.1137/080743627, Section 6 (division of series, from the
+  multiplication theorem (6.2)) and Section 8 (multivariable series).
 """
 
 from numbers import Number
+from typing import cast
 
 _Scalar = complex | float | int
+
+
+def truncated_quotient[Key: tuple[int, ...]](
+    numerator: dict[Key, _Scalar],
+    denominator: dict[Key, _Scalar],
+    order: int,
+    dimension: int,
+) -> dict[Key, _Scalar]:
+    """Coefficients of ``numerator / denominator`` to total degree ``order``.
+
+    The idea: ``u = h w`` holds degree by degree, so the part of ``h`` of degree
+    ``k`` is ``(u_k - sum_{j<k} h_j w_{k-j}) / w_0``, each term a product of
+    homogeneous parts. Every coefficient of degree at most ``order`` is exact
+    (up to rounding); nothing above it is formed.
+
+    Args:
+        numerator: Exponent tuple to coefficient of ``u``.
+        denominator: Exponent tuple to coefficient of ``w``.
+        order: Maximum retained total degree.
+        dimension: Number of variables (the length of every exponent tuple).
+
+    Returns:
+        Exponent tuple to coefficient of the quotient ``h``.
+
+    Raises:
+        ZeroDivisionError: If the constant term ``w_0`` is zero: then ``w``
+            vanishes at the expansion point and ``u / w`` has no power series.
+
+    References:
+    - Neidinger (2010), Section 6, the division formula derived from (6.2);
+      Section 8 for its extension to multivariable series.
+    """
+    leading = denominator.get(cast("Key", (0,) * dimension), 0)
+    if leading == 0:
+        message = (
+            "cannot divide by a series whose constant term is zero: it vanishes "
+            "at the expansion point, so the quotient is not a power series there; "
+            "expand about a point where the denominator is non-zero"
+        )
+        raise ZeroDivisionError(message)
+    denominator_parts = _by_degree(denominator, order)
+    numerator_parts = _by_degree(numerator, order)
+    quotient_parts: list[dict[Key, _Scalar]] = []
+    for degree in range(order + 1):
+        part = dict(numerator_parts[degree])
+        for lower in range(degree):
+            for left_key, left_value in quotient_parts[lower].items():
+                for right_key, right_value in denominator_parts[degree - lower].items():
+                    key = cast(
+                        "Key",
+                        tuple(a + b for a, b in zip(left_key, right_key, strict=True)),
+                    )
+                    part[key] = part.get(key, 0.0) - left_value * right_value
+        quotient_parts.append({key: value / leading for key, value in part.items()})
+    return {key: value for part in quotient_parts for key, value in part.items()}
+
+
+def _by_degree[Key: tuple[int, ...]](
+    coefficients: dict[Key, _Scalar],
+    order: int,
+) -> list[dict[Key, _Scalar]]:
+    parts: list[dict[Key, _Scalar]] = [{} for _ in range(order + 1)]
+    for key, value in coefficients.items():
+        degree = sum(key)
+        if degree <= order:
+            parts[degree][key] = value
+    return parts
 
 
 class Bivariate:
@@ -141,6 +218,35 @@ class Bivariate:
         return Bivariate(result, order)
 
     __rmul__ = __mul__
+
+    def __truediv__(self, other: object) -> "Bivariate":
+        """Divide by a number, or by a series with a non-zero constant term.
+
+        A series quotient is truncated at this series' ``order``; a zero
+        constant term in the denominator raises ``ZeroDivisionError`` (see
+        :func:`truncated_quotient`).
+        """
+        if isinstance(other, Number):
+            scale = cast("_Scalar", other)
+            return Bivariate(
+                {key: value / scale for key, value in self._coefficients.items()},
+                self._order,
+            )
+        if not isinstance(other, Bivariate):
+            return NotImplemented
+        quotient = truncated_quotient(
+            self._coefficients,
+            other._coefficients,
+            self._order,
+            2,
+        )
+        return Bivariate(quotient, self._order)
+
+    def __rtruediv__(self, other: object) -> "Bivariate":
+        right = self._combine(other)
+        if right is NotImplemented:
+            return NotImplemented
+        return right / self
 
     def __pow__(self, exponent: int) -> "Bivariate":
         if not isinstance(exponent, int) or exponent < 0:
