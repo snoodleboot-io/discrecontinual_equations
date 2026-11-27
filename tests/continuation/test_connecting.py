@@ -160,10 +160,11 @@ class TestShilnikovContinuation(TestCase):
         raises=ValueError,
         strict=True,
         reason=(
-            "DEQ-135: the old trace returned its bracket's upper end at every "
-            "step (0.519, 0.589, ..., 0.799: +0.07 = half_width each time), so "
-            "this curve was never located. Followed honestly, the branch leaves "
-            "its window near a = 0.591, where six of nine samples are NaN. "
+            "DEQ-135: after its first point (0.519), the old trace returned its "
+            "bracket's upper end at every step (0.589, ..., 0.799: +0.07 = "
+            "half_width each time), so this curve was never located. Followed "
+            "honestly, the branch leaves its window near a = 0.591, where six "
+            "of nine samples are NaN. "
             "DEQ-161 replaces this test with one checked against an independent "
             "reference."
         ),

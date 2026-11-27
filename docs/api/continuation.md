@@ -748,9 +748,11 @@ must also satisfy the normal equations `J^T (J dx + r) = 0`, to within `1e-11`
 of `|J|_F (|J|_F |dx| + |r|)`, so a broken linear solve cannot certify an
 iterate by returning a zero step. That includes the dense fallback, which
 truncates singular directions below `1e-8 sigma_max`. A step truncated along a
-direction with `sigma > 1e-11 |J|_F` is refused. Below that, its defect is
-smaller than the rounding in forming `J dx`, and no normal-equation test can
-see it. Any other outcome raises
+direction with `sigma > 1e-11 |J|_F` is refused when the residual lies along
+that direction. A residual mostly in other directions raises the limit by
+`(|J|_F |dx| + |r|) / |r_t|`, with `r_t` the residual's part along it, so such
+a truncation can still be certified. Below the limit, the defect is smaller
+than the rounding in forming `J dx`, and no normal-equation test can see it. Any other outcome raises
 `NotConvergedError`, which carries the best iterate for diagnosis.
 
 Converged is not the same as *a trajectory*. Every returned `OrbitSolution`
@@ -1098,7 +1100,10 @@ about `h^5.5`. These were measured on a quarter-decade grid at half-length 10:
 | before (per-interval only) | | `9e-3` | | | |
 
 Below those values, a broken loop and the corrected scheme's own error cannot
-be told apart on that mesh, so refine it. The genuine controls stayed well
+be told apart on that mesh, so refine it. Where the boundary-miss term
+dominates the bound, refining stops helping and a longer interval is needed:
+a Nagumo front broken in its speed, at half-length 8, was refused from
+`1.8e-6` at both `h = 0.125` and `h = 0.0625`. The genuine controls stayed well
 inside their bounds. One is the reversible loop, and one is a dissipative loop
 `y' = x - x^2 + k y H` that keeps `x = 1.5 sech^2(t/2)` exactly while the
 trapezoidal rule breaks it at `O(h^2)`. On both, from `h = 0.5` to `0.03125`,
@@ -1113,6 +1118,10 @@ Bogdanov-Takens curve still report trajectories.
 - A path with fewer than eight nodes is not checked, because `D7` needs eight.
 - `HomoclinicCurve` solves a square system, which has no inconsistent
   direction, and keeps only the per-interval test.
+- A mesh far too coarse for the fastest rate, `h |lambda|_max` of about 4 or
+  more, can have a genuine connection refused on consistency, because the
+  difference expansion no longer converges there. On such meshes the exact
+  orbit already fails the per-interval test.
 - The boundary-miss estimate is leading order in the distance to the
   equilibrium. On intervals so short that it fails, the per-interval test
   already refuses the path: at half-length 3 it did on every mesh measured

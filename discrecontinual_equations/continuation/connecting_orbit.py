@@ -86,8 +86,9 @@ _TRUNCATION_EXTENSION = 0.25
 # orbit, sampled, reaches 1.24 of it (see CollocationResidual).
 _RESIDUAL_SAFETY = 2.0
 # Multiple of its own error bound the deferred-corrected inconsistency may reach.
-# Genuine connections measured at most 0.38 of the unscaled bound, and 0.08 on
-# intervals long enough to resolve (see CollocationResidual); the factor is
+# Genuine connections measured up to 0.38 of the unscaled bound on the damped
+# well, and up to 1.5 of it on Nagumo fronts at half-lengths 2 to 3, where the
+# leading-order boundary miss runs low (see _manifold_miss); the factor is
 # margin for the leading-order estimates the bound is made of.
 _INCONSISTENCY_SAFETY = 2.0
 # Differences of order 7 bound the corrected truncation estimate, so a path needs
@@ -1046,8 +1047,11 @@ def _manifold_miss(
     bounded solution is ``c_k = l_k N(e) / (2 mu - lambda_k)``. The arrival end
     is the same in reverse time, ``|l_k N(e)| / (2 nu + Re lambda_k)``, with
     ``nu`` the slowest stable rate. Each denominator is replaced by its real
-    part, which is smaller in modulus, so the estimate errs high. Returns one
-    magnitude per row that :func:`_projection_conditions` makes, in its order.
+    part, which is smaller in modulus. The manifold's cubic and higher terms
+    are left out, and on short intervals they make the estimate low: on a
+    Nagumo front it was 0.81 of the exact miss at half-length 2, 0.90 at 3 and
+    0.97 at 5. ``_INCONSISTENCY_SAFETY`` covers that. Returns one magnitude per
+    row that :func:`_projection_conditions` makes, in its order.
     """
     values, left, stable, unstable = _split_eigenspaces(end.jacobian)
     projected, kept = (stable, unstable) if departing else (unstable, stable)
@@ -1149,16 +1153,21 @@ def _relative_correction(
     ``_RCOND sigma_max``, and a residual along such a direction leaves the
     defect ``sigma |r|``. At the old tolerance of 1e-6, a step truncated at
     ``sigma = 1e-10`` was certified with a correction of 1.6e-16, against a true
-    step of 1e10 (DEQ-156). At ``1e-11`` the test sees every truncated direction
-    with ``sigma > 1e-11 |J|_F``. A step truncated below that is invisible to
-    any normal-equation test: its defect is smaller than the rounding in
-    forming ``J dx``.
+    step of 1e10 (DEQ-156). At ``1e-11`` the test sees a truncated direction
+    with ``sigma > 1e-11 |J|_F`` when the residual lies along it. In general
+    it sees one only when ``sigma |r_t| > 1e-11 |J|_F (|J|_F |dx| + |r|)``,
+    with ``r_t`` the residual's part along it. So a residual mostly in
+    resolved directions hides a truncation: with ``sigma = 1e-9`` and ten
+    times as much residual elsewhere, a step whose truncated part is 0.1 is
+    certified. A step truncated below the limit is invisible to any
+    normal-equation test: its defect is smaller than the rounding in forming
+    ``J dx``.
 
     That rounding, about ``eps |J| |dx|``, is why ``|J|_F |dx|`` is in the
     scale. Without it, a tolerance this tight refuses a correct but large step.
     A truncated step is near zero, so the term costs it nothing. Measured over
-    every step the connecting-orbit tests certify, the defect is at most
-    ``DEFECT_MAX`` of this scale. A step that is not finite makes the defect
+    every step the connecting-orbit tests trust, the defect is at most 1.5e-15
+    of this scale. A step that is not finite makes the defect
     NaN, and fails the test too.
     """
     norm = float(np.sqrt(jacobian.multiply(jacobian).sum()))
