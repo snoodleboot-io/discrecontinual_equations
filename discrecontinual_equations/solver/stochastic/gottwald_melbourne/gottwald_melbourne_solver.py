@@ -10,6 +10,12 @@ from discrecontinual_equations.solver.stochastic.gottwald_melbourne.gottwald_mel
     epsilon_exceeds_step,
 )
 
+# Remark 4.4: x_0 is the image of a uniform draw under this many iterations.
+_BURN_IN = 10_000
+# Section 4.2: a perturbation of standard deviation 1e-10, at least this far apart.
+_PERTURBATION_INTERVAL = 10_000
+_PERTURBATION_SIZE = 1e-10
+
 
 class GottwaldMelbourneSolver(Solver):
     """
@@ -23,9 +29,9 @@ class GottwaldMelbourneSolver(Solver):
     and the fast dynamics on the Thaler map generate the required α-stable increments.
 
     References:
-    - Gottwald, G. A. and Melbourne, I. "Simulation of non-Lipschitz α-stable stochastic
-      differential equations: a method based on deterministic homogenisation"
-      arXiv preprint, 2020
+    - Gottwald, G. A. and Melbourne, I. "Simulation of non-Lipschitz stochastic
+      differential equations driven by α-stable noise: a method based on deterministic
+      homogenisation", Multiscale Model. Simul. 19(2), 2021; arXiv:2004.09914
     """
 
     def __init__(self, solver_config: GottwaldMelbourneConfig):
@@ -63,6 +69,13 @@ class GottwaldMelbourneSolver(Solver):
         self._gamma = self.solver_config.gamma
         self._x_star = self._compute_x_star()
         self._d_alpha = self._compute_d_alpha()
+        # v on [0, x*] and on (x*, 1] (Section 4.1).
+        self._v_laminar = (
+            self.solver_config.eta
+            * self._d_alpha ** (-self._gamma)
+            * (1 - 2 ** (self._gamma - 1)) ** (-self._gamma)
+        )
+        self._v_hyperbolic = self._v_laminar / (1 - 2 ** (1 - self._gamma))
 
     def _compute_x_star(self) -> float:
         """Compute the fixed point x* of the Thaler map."""
@@ -84,36 +97,75 @@ class GottwaldMelbourneSolver(Solver):
         return (low + high) / 2
 
     def _compute_d_alpha(self) -> float:
-        """Compute the constant d_α from the paper."""
+        """d_α = α^α (1-γ)/(2^{1-γ}-1) g_α, g_α = Γ(1-α) cos(απ/2) (paper (2.4), (2.5))."""
         alpha = self.solver_config.alpha
         gamma = self._gamma
         g_alpha = math.gamma(1 - alpha) * math.cos(math.pi * alpha / 2)
-        return alpha**alpha * (1 - gamma) ** 2 / ((1 - gamma) * g_alpha)
+        return alpha**alpha * (1 - gamma) / (2 ** (1 - gamma) - 1) * g_alpha
 
     def _thaler_map(self, x: float) -> float:
-        """Compute the Thaler map T(x)."""
+        """
+        The Thaler map T(x) = (x^{1-γ} + (1+x)^{1-γ} - 1)^{1/(1-γ)} mod 1 (Remark 2.2).
+
+        (1+x)^{1-γ} - 1 is formed by expm1/log1p so that it keeps its digits near
+        the neutral fixed point at 0, where the orbit spends most of its time.
+        """
         gamma = self._gamma
-        if x <= 0:
-            return 0.0
-        if x >= 1:
-            return 1.0
-        term1 = x ** (1 - gamma)
-        term2 = (1 + x) ** (1 - gamma)
-        return (term1 + term2 - 1) ** (1 / (1 - gamma)) % 1
+        inner = x ** (1 - gamma) + math.expm1((1 - gamma) * math.log1p(x))
+        return inner ** (1 / (1 - gamma)) % 1.0
 
     def _compute_observable(self, x: float, chi: int) -> float:
-        """Compute the observable v(x) for the fast dynamics."""
-        eta = self.solver_config.eta
-        gamma = self._gamma
-        d_alpha = self._d_alpha
+        """
+        The observable χ v(x) of the fast dynamics (Section 4.1).
 
+        v = η d_α^{-γ} (1 - 2^{γ-1})^{-γ} ṽ with ṽ = 1 on [0, x*] and
+        ṽ = (1 - 2^{1-γ})^{-1} on (x*, 1], which is negative: v has mean zero
+        under the invariant measure. The sign χ multiplies both branches.
+        """
         if x <= self._x_star:
-            v_tilde = 1.0
-        else:
-            v_tilde = (1 - 2 ** (gamma - 1)) ** (-1) * chi
+            return chi * self._v_laminar
+        return chi * self._v_hyperbolic
 
-        v = eta * (d_alpha ** (-gamma)) * v_tilde
-        return v
+    def _draw_sign(self) -> int:
+        """δ = ±1 with P(δ = ±1) = (1 ± β)/2."""
+        return 1 if self._generator.random() < (1 + self.solver_config.beta) / 2 else -1
+
+    def _initial_fast_state(self) -> float:
+        """x_0 = T^10000 x_0' with x_0' uniform on [0, 1] (Remark 4.4)."""
+        x = self._generator.random()
+        for _ in range(_BURN_IN):
+            x = self._thaler_map(x)
+        return x
+
+    def _advance(self, x: float, since_perturbation: int) -> tuple[float, int]:
+        """
+        One step of the fast map, and the iterations since the last perturbation.
+
+        In floating point the orbit can be caught on a spurious periodic orbit of
+        the map, so on entering (x*, 1] at least 10^4 iterations after the previous
+        one it gets a N(0, 10^-20) perturbation, mod 1 (Section 4.2).
+        """
+        x = self._thaler_map(x)
+        since_perturbation += 1
+        if x > self._x_star and since_perturbation >= _PERTURBATION_INTERVAL:
+            x = (x + self._generator.normal(0.0, _PERTURBATION_SIZE)) % 1.0
+            since_perturbation = 0
+        return x, since_perturbation
+
+    def _fast_steps(self, times: np.ndarray) -> list[int]:
+        """
+        n_i = ⌊(t_i - t_0)/ε⌋, the fast steps taken by each grid time (Theorem 4.1).
+
+        A quotient that falls a few ulps short of a whole number, as 0.3/0.1 does,
+        is counted as that number.
+        """
+        epsilon = self.solver_config.epsilon
+        start = times[0]
+        counts = []
+        for t in times:
+            quotient = (t - start) / epsilon
+            counts.append(math.floor(quotient * (1 + 1e-12) + 1e-12))
+        return counts
 
     def solve(
         self,
@@ -121,7 +173,12 @@ class GottwaldMelbourneSolver(Solver):
         initial_values: list[float],
     ) -> Curve:
         """
-        Solve the SDE using the Thaler homogenisation method.
+        Solve the SDE by the fast-slow map (4.2) of Gottwald & Melbourne.
+
+        z_{n+1} = z_n + ε a(z_n) + ε^γ b(z_n) χ_n v(x_n), x_{n+1} = T x_n, and the
+        value at grid time t_i is z_{n_i} with n_i = ⌊(t_i - t_0)/ε⌋ (Theorem 4.1).
+        χ_n is the δ drawn when the orbit last entered (x*, 1]: one sign for the
+        hyperbolic step and the laminar steps that follow it.
 
         Args:
             equation: The SDE to solve (must have stochastic derivative function)
@@ -129,60 +186,39 @@ class GottwaldMelbourneSolver(Solver):
         """
         self.solution = self._new_solution(equation)
 
-        # Initialize
-        t = self.solver_config.start_time
+        start = self.solver_config.start_time
+        epsilon = self.solver_config.epsilon
+        kick = epsilon**self._gamma
         z = np.array(initial_values, dtype=float)
 
-        # Initialize fast dynamics
-        x = 0.5  # Start in the middle of [0,1]
-        chi = 1 if self._generator.random() < (1 + self.solver_config.beta) / 2 else -1
+        x = self._initial_fast_state()
+        # The excursion under way at x_0 began with a δ of its own.
+        chi = self._draw_sign()
+        since_perturbation = 0
 
-        # Append initial point
-        self.solution.append([t, [0] * len(initial_values), z.tolist()])
-
-        # Time stepping loop
-        dt = self.solver_config.dt
-        epsilon = self.solver_config.epsilon
-        n_steps_per_time_step = max(1, int(dt / epsilon))
+        self.solution.append([start, [0] * len(initial_values), z.tolist()])
 
         # The time grid is read once: ``times`` builds it afresh on every read,
         # so reading it per step made a path of K steps cost O(K^2) (DEQ-47).
         times = self.solver_config.times
-        for i in range(len(times) - 1):
-            # Current time
-            t_current = times[i]
-
-            # Evolve fast dynamics for n_steps_per_time_step steps
-            for _ in range(n_steps_per_time_step):
-                # Compute observable
+        steps = self._fast_steps(times)
+        n = 0
+        for i in range(1, len(times)):
+            while n < steps[i]:
+                if x > self._x_star:
+                    chi = self._draw_sign()
                 v = self._compute_observable(x, chi)
 
-                # Evaluate drift and diffusion at current z
-                drift = np.array(
-                    equation.derivative.eval(point=z.tolist(), time=t_current),
-                )
+                # The drift's time is the fast step's own slow time, t_0 + n ε.
+                t_n = start + n * epsilon
+                drift = np.array(equation.derivative.eval(point=z.tolist(), time=t_n))
                 diffusion = np.array(
-                    equation.derivative.diffusion(point=z.tolist(), time=t_current),
+                    equation.derivative.diffusion(point=z.tolist(), time=t_n),
                 )
+                z = z + epsilon * drift + kick * diffusion * v
 
-                # Update slow variable (z)
-                z = z + epsilon * drift + epsilon**self._gamma * diffusion * v
+                x, since_perturbation = self._advance(x, since_perturbation)
+                n += 1
 
-                # Update fast variable (x)
-                x = self._thaler_map(x)
-
-                # Update chi based on position
-                if x > self._x_star:
-                    # In hyperbolic region, sample new chi
-                    chi = (
-                        1
-                        if self._generator.random() < (1 + self.solver_config.beta) / 2
-                        else -1
-                    )
-
-            # Update time
-            t_next = times[i + 1]
-
-            # Append to solution
-            self.solution.append([t_next, [0] * len(initial_values), z.tolist()])
+            self.solution.append([times[i], [0] * len(initial_values), z.tolist()])
         return self.solution

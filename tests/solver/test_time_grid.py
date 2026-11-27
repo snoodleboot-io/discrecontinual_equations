@@ -299,10 +299,13 @@ class _Recording(_Linear):
 # evaluate at the right one. Reading the grid once must not move a node.
 _LEFT = "left"
 _BOTH = "both"
+# Gottwald-Melbourne takes ⌊h/ε⌋ fast steps of the map per grid step, each at its
+# own slow time t_0 + n ε (DEQ-108), so its drift nodes are the fast grid's.
+_FAST = "fast"
 _DRIFT_NODES = [
     ("euler_maruyama", _LEFT),
     ("milstein", _LEFT),
-    ("gottwald_melbourne", _LEFT),
+    ("gottwald_melbourne", _FAST),
     ("zhan_duan_li_li", _BOTH),
     ("srk2", _LEFT),
     ("srk3", _BOTH),
@@ -345,4 +348,9 @@ def test_the_drift_is_evaluated_at_the_grids_own_nodes(
     expected = config.times.tolist()
     if nodes == _LEFT:
         expected = expected[:-1]
+    if nodes == _FAST:
+        fast_steps = round((grid["end_time"] - grid["start_time"]) / extra["epsilon"])
+        expected = [
+            grid["start_time"] + n * extra["epsilon"] for n in range(fast_steps)
+        ]
     assert sorted(set(_Recording.times)) == expected
