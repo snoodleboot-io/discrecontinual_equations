@@ -193,6 +193,19 @@ except ImportError:  # run as a script path: only this directory is on sys.path
     from pages_coloured import _coloured_thresholds
 
 try:  # python -m examples.continuation.webplot_examples
+    from examples.continuation.pages_residence import (
+        _efield_residence_densities,
+        _efield_residence_response,
+        _kramers_asymptotics,
+    )
+except ImportError:  # run as a script path: only this directory is on sys.path
+    from pages_residence import (
+        _efield_residence_densities,
+        _efield_residence_response,
+        _kramers_asymptotics,
+    )
+
+try:  # python -m examples.continuation.webplot_examples
     from examples.continuation.pages_stochastic import (
         _density_family,
         _dynamical_bifurcation,
@@ -319,6 +332,11 @@ _EQUATIONS = {
     "bogdanov_takens_surface.html": _BT_FAMILY_EQN,
     "efield_operating_map.html": _FERROELECTRIC,
     "efield_detection.html": _FERROELECTRIC,
+    "efield_residence_response.html": _FERROELECTRIC + r" + \sigma\,\dot{W}_i",
+    "efield_residence_densities.html": _FERROELECTRIC + r" + \sigma\,\dot{W}_i",
+    "kramers_asymptotics.html": r"dx = -\nabla V\,dt + \sigma\,dW,\quad "
+    r"\tau \sim \frac{2\pi}{|\lambda_1|}\sqrt{\frac{|\det H_s|}{\det H_m}}"
+    r"\,e^{2\Delta V/\sigma^2}",
     "fluxgate_bias_surface.html": _FLUXGATE,
     "exploration_diagram.html": _SWALLOWTAIL_EQN,
     "exploration_skeleton.html": _SWALLOWTAIL_EQN,
@@ -371,6 +389,9 @@ def _raw_catalogue() -> list[tuple[str, Scene]]:
         ("bogdanov_takens_surface.html", _bogdanov_takens_surface()),
         ("efield_operating_map.html", _efield_operating_map()),
         ("efield_detection.html", _efield_detection()),
+        ("efield_residence_response.html", _efield_residence_response()),
+        ("efield_residence_densities.html", _efield_residence_densities()),
+        ("kramers_asymptotics.html", _kramers_asymptotics()),
         ("fluxgate_bias_surface.html", _fluxgate_bias_surface()),
         ("exploration_diagram.html", _exploration_diagram()),
         ("exploration_skeleton.html", _exploration_skeleton()),
