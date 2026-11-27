@@ -29,6 +29,7 @@ from discrecontinual_equations.continuation.manifold import (
     TaylorManifold,
     UnstableManifold,
 )
+from discrecontinual_equations.continuation.noise import jacobian_at
 from discrecontinual_equations.differential_equation import DifferentialEquation
 from discrecontinual_equations.webplot.manifold_flow import flow_branches
 from discrecontinual_equations.webplot.stage import (
@@ -74,8 +75,6 @@ _BRANCH_POINTS = ("branch_point", "pitchfork", "transcritical")
 _FIELD_CHECKS = 8
 _FIELD_AGREEMENT = 1.0e-9
 _AUTODIFF = AutomaticDifferentiation()
-# Step for the finite-difference Jacobian a non-analytic field falls back to.
-_STEP = 1.0e-7
 # An eigenvalue with an imaginary part smaller than this is a real one, and
 # so spans a line rather than joining a pair that spans a plane.
 _REAL_EIGENVALUE = 1.0e-9
@@ -501,17 +500,7 @@ def _jacobian(function, point: np.ndarray) -> np.ndarray:
     try:
         return _AUTODIFF.jacobian(function, point, 0.0)
     except (TypeError, ValueError, AttributeError):
-        base = np.array(function.eval(point=list(point), time=None), dtype=float)
-        columns = []
-        for index in range(point.size):
-            shifted = np.asarray(point, dtype=float).copy()
-            shifted[index] += _STEP
-            moved = np.array(
-                function.eval(point=list(shifted), time=None),
-                dtype=float,
-            )
-            columns.append((moved - base) / _STEP)
-        return np.column_stack(columns)
+        return jacobian_at(function, np.asarray(point, dtype=float))
 
 
 def sheets(cycles: list[Cycle]) -> list[list[int]]:

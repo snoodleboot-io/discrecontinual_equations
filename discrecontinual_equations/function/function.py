@@ -87,6 +87,12 @@ class Function:
         Fokker-Planck assembly) cost a few array operations instead of a Python call
         per point.
 
+        Each row is handed over as Python floats, as
+        :func:`~discrecontinual_equations.continuation.noise.field_at` hands a single
+        state, so the two agree to the bit. NumPy scalars would round the same in
+        arithmetic but not in the builtin ``sum``, which since Python 3.12 adds floats
+        with compensation and NumPy scalars without it.
+
         Args:
             points: The points, one per row.
             time: The time, shared by all rows.
@@ -94,7 +100,8 @@ class Function:
         Returns:
             The values, one row per point.
         """
+        rows = np.asarray(points, dtype=float).tolist()
         return np.array(
-            [self.eval(point=list(point), time=time) for point in points],
+            [self.eval(point=row, time=time) for row in rows],
             dtype=float,
         )

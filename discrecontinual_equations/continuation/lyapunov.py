@@ -92,15 +92,24 @@ def _step(
     frame: np.ndarray,
     dt: float,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """One RK4 step of the state and its co-evolving tangent frame."""
+    """One RK4 step of the state and its co-evolving tangent frame.
+
+    Each stage point is formed once and shared by the field and its Jacobian; the
+    arithmetic is otherwise the textbook step's, so the result is the same to the
+    bit.
+    """
+    half = 0.5 * dt
     f1 = field_at(function, state)
     y1 = jacobian_at(function, state) @ frame
-    f2 = field_at(function, state + 0.5 * dt * f1)
-    y2 = jacobian_at(function, state + 0.5 * dt * f1) @ (frame + 0.5 * dt * y1)
-    f3 = field_at(function, state + 0.5 * dt * f2)
-    y3 = jacobian_at(function, state + 0.5 * dt * f2) @ (frame + 0.5 * dt * y2)
-    f4 = field_at(function, state + dt * f3)
-    y4 = jacobian_at(function, state + dt * f3) @ (frame + dt * y3)
+    second = state + half * f1
+    f2 = field_at(function, second)
+    y2 = jacobian_at(function, second) @ (frame + half * y1)
+    third = state + half * f2
+    f3 = field_at(function, third)
+    y3 = jacobian_at(function, third) @ (frame + half * y2)
+    fourth = state + dt * f3
+    f4 = field_at(function, fourth)
+    y4 = jacobian_at(function, fourth) @ (frame + dt * y3)
     new_state = state + dt / 6.0 * (f1 + 2.0 * f2 + 2.0 * f3 + f4)
     new_frame = frame + dt / 6.0 * (y1 + 2.0 * y2 + 2.0 * y3 + y4)
     return new_state, new_frame

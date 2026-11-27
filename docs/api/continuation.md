@@ -975,3 +975,39 @@ The concepts, worked examples and limits are on the
 ::: discrecontinual_equations.continuation.cycle_manifold
 
 ::: discrecontinual_equations.continuation.cycle_connection
+
+## Jacobians along an orbit
+
+The Lyapunov estimators, the quasipotential's linearisation and the equilibrium
+classifier read a field's Jacobian from `jacobian_at`. By default it forward-
+differences the field with the step of Dennis and Schnabel (*Numerical Methods for
+Unconstrained Optimization and Nonlinear Equations*, 1983, Sec. 5.4 and Algorithm
+A5.4.1): `h_j = sqrt(eps) max(|x_j|, typical_j) sign(x_j)`, divided by the step the
+machine actually took. `typical` (one by default) is the size a component has where
+its value says nothing - near zero, or on a component that lives at `1e-8`.
+`central=True` uses `eps^(1/3)` steps either side: twice the evaluations, error
+`eps^(2/3)` instead of `sqrt(eps)`. `base`, the field at the state when the caller
+has it, saves the forward difference one evaluation. `jacobians_along` takes the
+same steps at every row of a batch of states, through `eval_batch`, and matches
+`jacobian_at` row by row.
+
+No step fixes everything. An entry `df_i/dx_j` is resolved only to about
+`sqrt(eps) |f_i| / |x_j|` forward (`eps^(2/3)` central), so a coupling of one in a
+row of size `1e8` comes back anywhere in `1 +- 3` forward and `1 +- 5e-3` central
+(the worst of 2000 states). Wrap the field in
+`JacobianField` and `jacobian_at` returns its exact Jacobian instead, either a
+closed form you pass or, by default, Taylor jets.
+
+Lorenz's top exponent over `T = 1000` (`dt = 0.01`, one BLAS thread, best CPU
+time of three on a loaded machine):
+
+| Jacobian | per call | `T = 1000` |
+|---|---|---|
+| forward difference | 4 field evaluations | 29 s |
+| Taylor jets (`JacobianField(field)`) | 3 jet evaluations | 45 s |
+| closed form (`JacobianField(field, jacobian)`) | about 1 field evaluation | 9 s |
+
+All three scale linearly in `T` (fitted log-log slopes 1.07, 0.97, 1.01). Jets
+buy exactness, not speed; the closed form buys both.
+
+::: discrecontinual_equations.continuation.jacobian_field

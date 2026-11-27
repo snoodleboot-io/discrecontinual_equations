@@ -29,11 +29,15 @@ from collections.abc import Sequence
 
 import numpy as np
 
+from discrecontinual_equations.continuation.jacobian_field import JacobianField
 from discrecontinual_equations.continuation.stochastic import NoiseConvention
 from discrecontinual_equations.function.function import Function
 from discrecontinual_equations.function.stochastic import StochasticFunction
 
-_JACOBIAN_STEP = 1.0e-7
+# Dennis and Schnabel's relative steps: sqrt(eps) balances a forward difference's
+# truncation against its rounding, eps^(1/3) a central difference's.
+_FORWARD_STEP = float(np.sqrt(np.finfo(float).eps))
+_CENTRAL_STEP = float(np.cbrt(np.finfo(float).eps))
 _UNIT = 1.0
 _VECTOR = 1
 # A batch of vector fields is one row per point.
@@ -52,8 +56,17 @@ def stratonovich_factor(convention: NoiseConvention) -> float:
 
 
 def field_at(function: Function, state: np.ndarray) -> np.ndarray:
-    """Evaluate a vector field at a state."""
-    return np.array(function.eval(point=list(state), time=None), dtype=float)
+    """Evaluate a vector field at a state.
+
+    The state is handed over as Python floats: arithmetic on NumPy scalars costs
+    several times as much, and a field is evaluated ``O(n)`` times per Jacobian.
+    It rounds the same, except in the builtin ``sum``, which adds Python floats
+    with compensation (Python 3.12 on) and NumPy scalars without; the default
+    :meth:`Function.eval_batch` hands its rows over as Python floats too, so
+    :func:`fields_at` and this agree to the bit either way.
+    """
+    point = np.asarray(state, dtype=float).tolist()
+    return np.array(function.eval(point=point, time=None), dtype=float)
 
 
 def fields_at(function: Function, states: np.ndarray) -> np.ndarray:
@@ -76,57 +89,144 @@ def fields_at(function: Function, states: np.ndarray) -> np.ndarray:
     return values
 
 
-def jacobians_along(
-    function: Function,
-    states: np.ndarray,
-    base: np.ndarray,
-) -> np.ndarray:
-    """:func:`jacobian_at` at every row of ``states``, as ``(count, out, n)``.
-
-    ``base`` is the field at ``states`` (``fields_at``), already in hand wherever this
-    is called. Each column is one batched evaluation with the same relative step and
-    the same arithmetic as :func:`jacobian_at`, so every entry matches it exactly.
-    """
-    count, dimension = states.shape
-    steps = _JACOBIAN_STEP * np.maximum(np.abs(states), 1.0)
-    jacobians = np.empty((count, base.shape[1], dimension))
-    for j in range(dimension):
-        shifted = states.copy()
-        shifted[:, j] += steps[:, j]
-        jacobians[:, :, j] = (fields_at(function, shifted) - base) / steps[:, j, None]
-    return jacobians
-
-
 def jacobian_at(
     function: Function,
     state: np.ndarray,
     base: np.ndarray | None = None,
+    *,
+    typical: float | np.ndarray | None = None,
+    central: bool = False,
 ) -> np.ndarray:
-    """Forward-difference Jacobian of a vector field, stepped relative to the state.
+    """Jacobian of a vector field, exact if it carries one, else finite-differenced.
 
-    The step is scaled by the size of the component it perturbs, floored at one. A
-    fixed absolute step is a silent trap here: the reference orbit of a stochastic
-    Benettin estimate need not be bounded - the linear multiplicative system above its
-    dynamical threshold grows like ``exp(lambda t)`` and reaches ``1e30`` over a
-    perfectly ordinary horizon - and once the state exceeds ``step / eps`` the
-    perturbed state rounds back to the state itself, the difference is exactly zero,
-    and the Jacobian comes back as a zero matrix. Nothing raises; the exponent just
-    quietly stops depending on the parameter. Scaling the step keeps it meaningful at
-    any magnitude.
+    A :class:`~.jacobian_field.JacobianField` returns its own Jacobian, and nothing
+    else here applies. Otherwise the field is differenced with the steps of Dennis
+    and Schnabel (*Numerical Methods for Unconstrained Optimization and Nonlinear
+    Equations*, 1983, Sec. 5.4, Algorithm A5.4.1): component ``j`` is moved by
+    ``h_j = sqrt(eps) max(|x_j|, typical_j) sign(x_j)``, and the column is divided
+    by the step the machine actually took, ``(x_j + h_j) - x_j``, not the one asked
+    for. ``typical`` - one per component, or one for all, one by default - is the
+    size a component has where its value does not say: near zero, or on a
+    component that lives at ``1e-8``, where a step floored at one is all
+    truncation. ``central=True`` steps ``eps^(1/3)`` either side instead: twice
+    the evaluations, error ``eps^(2/3)`` rather than ``sqrt(eps)``.
 
     ``base`` is the field at ``state`` when the caller has it already, which saves
-    one evaluation.
+    the forward difference one evaluation; a central difference does not use it.
+    It stays the third positional argument it has always been, so ``typical`` and
+    ``central`` are keyword-only.
+
+    The step follows the size of the component because a fixed absolute step is a
+    silent trap here: the reference orbit of a stochastic Benettin estimate need not
+    be bounded - the linear multiplicative system above its dynamical threshold grows
+    like ``exp(lambda t)`` and reaches ``1e30`` over a perfectly ordinary horizon -
+    and once the state exceeds ``step / eps`` the perturbed state rounds back to the
+    state itself, the difference is exactly zero, and the Jacobian comes back as a
+    zero matrix. Nothing raises; the exponent just quietly stops depending on the
+    parameter.
+
+    No step fixes the rounding of the field itself: entry ``(i, j)`` is resolved to
+    about ``sqrt(eps) |f_i| / |x_j|``, so a unit coupling in a row of size ``1e8``
+    comes back anywhere in ``1 +- 3``. That is what the exact Jacobian is for.
     """
+    if isinstance(function, JacobianField):
+        return function.jacobian(state)
+    point = np.asarray(state, dtype=float)
+    scale = np.maximum(np.abs(point), _typical_sizes(typical, point.size))
+    if central:
+        return _central_jacobian(function, point, _CENTRAL_STEP * scale)
+    steps = _FORWARD_STEP * scale * np.where(point < 0.0, -1.0, 1.0)
     if base is None:
-        base = field_at(function, state)
-    dimension = state.size
-    steps = _JACOBIAN_STEP * np.maximum(np.abs(state), 1.0)
-    columns = np.empty((base.size, dimension))
-    for j in range(dimension):
-        shifted = state.copy()
+        base = field_at(function, point)
+    columns = np.empty((base.size, point.size))
+    for j in range(point.size):
+        shifted = point.copy()
         shifted[j] += steps[j]
-        columns[:, j] = (field_at(function, shifted) - base) / steps[j]
+        columns[:, j] = (field_at(function, shifted) - base) / (shifted[j] - point[j])
     return columns
+
+
+def jacobians_along(
+    function: Function,
+    states: np.ndarray,
+    base: np.ndarray | None = None,
+    *,
+    typical: float | np.ndarray | None = None,
+    central: bool = False,
+) -> np.ndarray:
+    """:func:`jacobian_at` at every row of ``states``, as ``(count, out, n)``.
+
+    ``base`` is the field at ``states`` (``fields_at``) when it is already in hand.
+    Each column is one batched evaluation with the steps of :func:`jacobian_at` -
+    the same ``typical`` sizes, the same sign rule, the same division by the step
+    actually taken - formed elementwise by the same arithmetic, so row ``p``
+    matches ``jacobian_at(function, states[p])`` to the bit wherever ``fields_at``
+    matches ``field_at``. A :class:`~.jacobian_field.JacobianField` is asked for its
+    own Jacobian at each row.
+    """
+    states = np.asarray(states, dtype=float)
+    if isinstance(function, JacobianField):
+        return np.stack([function.jacobian(state) for state in states])
+    dimension = states.shape[1]
+    scale = np.maximum(np.abs(states), _typical_sizes(typical, dimension))
+    if central:
+        return _central_jacobians(function, states, _CENTRAL_STEP * scale)
+    steps = _FORWARD_STEP * scale * np.where(states < 0.0, -1.0, 1.0)
+    if base is None:
+        base = fields_at(function, states)
+    jacobians = np.empty((states.shape[0], base.shape[1], dimension))
+    for j in range(dimension):
+        shifted = states.copy()
+        shifted[:, j] += steps[:, j]
+        taken = shifted[:, j] - states[:, j]
+        jacobians[:, :, j] = (fields_at(function, shifted) - base) / taken[:, None]
+    return jacobians
+
+
+def _central_jacobians(
+    function: Function,
+    states: np.ndarray,
+    steps: np.ndarray,
+) -> np.ndarray:
+    """:func:`_central_jacobian` at every row, one batched evaluation a side."""
+    columns: list[np.ndarray] = []
+    for j in range(states.shape[1]):
+        up = states.copy()
+        down = states.copy()
+        up[:, j] += steps[:, j]
+        down[:, j] -= steps[:, j]
+        difference = fields_at(function, up) - fields_at(function, down)
+        columns.append(difference / (up[:, j] - down[:, j])[:, None])
+    return np.stack(columns, axis=2)
+
+
+def _typical_sizes(typical: float | np.ndarray | None, dimension: int) -> np.ndarray:
+    """The typical size of each component, checked to be positive."""
+    sizes = np.broadcast_to(
+        np.asarray(_UNIT if typical is None else typical, dtype=float),
+        (dimension,),
+    )
+    if not np.all(sizes > 0.0):
+        message = "typical sizes must be positive"
+        raise ValueError(message)
+    return sizes
+
+
+def _central_jacobian(
+    function: Function,
+    point: np.ndarray,
+    steps: np.ndarray,
+) -> np.ndarray:
+    """Central differences, each over the width the machine actually stepped."""
+    columns: list[np.ndarray] = []
+    for j in range(point.size):
+        up = point.copy()
+        down = point.copy()
+        up[j] += steps[j]
+        down[j] -= steps[j]
+        difference = field_at(function, up) - field_at(function, down)
+        columns.append(difference / (up[j] - down[j]))
+    return np.column_stack(columns)
 
 
 class NoiseMatrix:
