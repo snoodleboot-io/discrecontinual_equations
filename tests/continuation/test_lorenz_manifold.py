@@ -202,6 +202,8 @@ def _lorenz(distance: float, loss: float = 0.0, *, escalate: bool = True):
         )
 
 
+# setUpClass grows the manifold once, and the growth is the slow part (DEQ-144)
+@pytest.mark.slow
 class TestLorenzManifoldAsFarAsItGoes(TestCase):
     """Grown without the escalated continuation budget, which stops it at
     157.38 in about a minute; with it the growth reaches 165.25 but takes
@@ -219,7 +221,6 @@ class TestLorenzManifoldAsFarAsItGoes(TestCase):
         # 2003, Sec. 4.5) and 154.75 (the IJBC 2005 survey, Sec. 2.3).
         assert 151.75 < self.mesh.ring_distances[-1] < 170.0
 
-    @pytest.mark.slow
     def test_the_scrolls_have_formed_around_the_secondary_equilibria(self):
         offset = math.sqrt(_BETA * (_RHO - 1.0))
         for sign in (1.0, -1.0):
@@ -374,6 +375,8 @@ class TestLorenzManifoldIsOnTheManifold(TestCase):
         assert coarse / fine > 4.0
 
 
+# setUpClass grows the manifold once, and the growth is the slow part (DEQ-144)
+@pytest.mark.slow
 class TestLorenzManifoldAtThePublishedSettings(TestCase):
     """Krauskopf and Osinga's own growth, reproduced at their settings.
 
@@ -414,7 +417,6 @@ class TestLorenzManifoldAtThePublishedSettings(TestCase):
             ),
         ).compute(function, np.zeros(3), jacobian, StableManifold(), distance=160.0)
 
-    @pytest.mark.slow
     def test_the_bands_reach_the_published_distances(self):
         distances = self.mesh.ring_distances
         assert distances[25] == pytest.approx(62.75, abs=1.0e-9)
