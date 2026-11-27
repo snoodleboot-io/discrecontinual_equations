@@ -413,7 +413,6 @@ def _raw_catalogue() -> list[tuple[str, Scene]]:
         ("stochastic_density.html", _density_family()),
         ("stochastic_lyapunov.html", _lyapunov()),
         ("coloured_noise_thresholds.html", _coloured_thresholds()),
-        (rossler.CASCADE_FILENAME, rossler.cascade_page()),
         ("rossler_cascade.html", _rossler_cascade()),
     ]
 
