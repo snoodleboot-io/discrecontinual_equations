@@ -1690,8 +1690,33 @@ print(abs(a1 - 3.0e18) / 3.0e18)  # about 2e-11; 0.33 when the step grew with |d
 ```
 
 A long direction at unit scale (`max |d| > 1`, components of size one or less)
-now takes `epsilon / max |d|`, not `epsilon`; the library's own callers pass
-eigenvector-like directions of length one or less, which are unaffected.
+now takes `epsilon / max |d|`, not `epsilon`. The library's detectors do pass
+such directions, so their results moved when they run on this provider. The
+DEQ-163 verifier measured, by instrumenting the calls:
+
+| caller | largest `max |d|` | calls with `max |d| > 1` |
+|---|---|---|
+| Bogdanov-Takens / Hopf forms (`bt_hopf`) | 1.125 | 372 of 5440 |
+| cusp | 2 | 127 of 954 |
+| Bautin (generalised Hopf) | 2.12 | 126 of 922 |
+| `MultilinearForms` polarization sums (van der Pol `l1`) | 2.74 | - |
+
+Codimension-two points keep their kind and count, and their locations move by at
+most `1.3e-6` relative. The error in the cusp coefficient `a` goes from `6.2e-7`
+to `1.3e-6`. `FiniteDifferenceDerivatives` is used only when it is chosen through
+the opt-in `derivative_provider` registry key; the default is automatic
+differentiation, which these changes do not touch.
+
+**Mixed-scale limit.** One spacing serves every component, so the components
+that bind move `epsilon s_j` and the others move less, in proportion to
+`|d_j| / s_j`. A component whose ratio is `R` times smaller than the binding
+one moves `epsilon s_j / R`, and its share of the coefficient errs by about
+`eps R / epsilon` relative (`eps` the machine epsilon): a few per cent once `R`
+passes about `1e8` at `epsilon = 1e-6`, and near `R = epsilon / eps` the move
+rounds away entirely and that share is lost. At
+`x = (1e9, 1e-3)`, `d = (1, 1e6)` the spacing is `1e-12`, `x_0` does not move, and
+the identity field's first coefficient comes back `(0, 1e6)`, not `(1, 1e6)`.
+Difference such a direction component by component (the Jacobian) instead.
 
 ```python
 import numpy as np

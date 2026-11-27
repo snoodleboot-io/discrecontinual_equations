@@ -16,12 +16,15 @@ by hand and checked against exact rational differences first, so nothing here is
 checked against the code under test.
 """
 
+import ast
 from fractions import Fraction
+from pathlib import Path
 from typing import ClassVar
 
 import numpy as np
 import pytest
 
+from discrecontinual_equations import finite_difference
 from discrecontinual_equations.continuation.continuation_config import (
     ContinuationConfig,
 )
@@ -721,9 +724,31 @@ class TestCentralStepConstant:
         assert ((step + below) / 2) ** 3 <= Fraction(_EPS) < ((step + above) / 2) ** 3
 
     def test_it_is_a_literal(self):
-        # DEQ-164: a literal, not a cbrt kernel's rounding of eps.
+        # DEQ-164: a literal, not a cbrt kernel's rounding of eps. Where that
+        # kernel happens to round correctly the value cannot tell them apart,
+        # so the source is read too.
         assert CENTRAL_STEP.hex() == "0x1.965fea53d6e3dp-18"
+        tree = ast.parse(Path(finite_difference.__file__).read_text())
+        values = [
+            node.value
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Assign)
+            and any(
+                isinstance(target, ast.Name) and target.id == "CENTRAL_STEP"
+                for target in node.targets
+            )
+        ]
+        assert len(values) == 1
+        call = values[0]
+        assert isinstance(call, ast.Call)
+        assert ast.unparse(call.func) == "float.fromhex"
+        assert [ast.literal_eval(arg) for arg in call.args] == [
+            "0x1.965fea53d6e3dp-18",
+        ]
 
     def test_the_configured_epsilon_is_described_as_relative(self):
         field = ContinuationConfig.model_fields["finite_difference_epsilon"]
-        assert "Relative step" in str(field.description)
+        description = str(field.description)
+        assert "Relative step" in description
+        assert "max(|x_j|, typical_j)" in description
+        assert "max(|lambda|, parameter_typical)" in description
