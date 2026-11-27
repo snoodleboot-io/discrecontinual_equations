@@ -17,12 +17,15 @@ successive errors.
 import functools
 import itertools
 import math
-from unittest import TestCase
+from unittest import TestCase, mock
 
 import numpy as np
 import pytest
 from scipy.spatial import cKDTree
 
+from discrecontinual_equations.continuation import (
+    quasipotential as quasipotential_module,
+)
 from discrecontinual_equations.continuation.fokker_planck import (
     DensityGrid,
     StationaryFokkerPlanck,
@@ -31,16 +34,20 @@ from discrecontinual_equations.continuation.noise import NoiseMatrix, fields_at
 from discrecontinual_equations.continuation.quasipotential import (
     _ACCEPTED,
     CHECKED,
+    FAILED,
     GRID,
     MIDPOINT,
     QUADRATIC,
     REFINED,
+    UNBOUNDED,
     CycleAttractor,
     EquilibriumAttractor,
     GeometricMinimumAction,
     GridQuasipotential,
     OrderedLineIntegral,
     _action,
+    _base_cost,
+    _base_slope,
     _cubic_coefficients,
     _curved_triangle,
     _guide,
@@ -62,6 +69,7 @@ from tests.continuation.fields import (
 from tests.continuation.quasipotential_systems import (
     ANISOTROPIC_AMPLITUDE,
     CUBIC_TERMS,
+    ELLIPSE_AMPLITUDE,
     MAIER_STEIN_BARRIER,
     MAIER_STEIN_VALUES,
     NON_NORMAL_AMPLITUDE,
@@ -71,6 +79,7 @@ from tests.continuation.quasipotential_systems import (
     WELL,
     AnisotropicGradientField,
     DoubleWellField,
+    EllipticCycleField,
     MaierSteinField,
     MultiplicativeField,
     NonNormalField,
@@ -79,6 +88,8 @@ from tests.continuation.quasipotential_systems import (
     RotatingCubicField,
     constant_noise,
     double_well,
+    ellipse_quasipotential,
+    ellipse_states,
     kronecker_covariance,
     multiplicative_noise,
     potential,
@@ -937,15 +948,17 @@ class TestErrorEstimate:
         field = solver.solve(EquilibriumAttractor([0.0, 0.0]))
         index = np.ravel_multi_index(grid.nearest([0.5, 0.3]), grid.shape)
         target = grid.points()[index]
-        exact = 2.0 * target[0] ** 2 + target[1] ** 2
         value, own = solver.reference(field, target)
-        checked = solver.check(field, [index])
+        with pytest.warns(UserWarning, match="not a bound"):
+            checked = solver.check(field, [index])
         # The chain from the surface is no better than the grid here - the
-        # path spirals out of the origin ten times faster than it climbs -
-        # but its own estimate says so, and the grid's estimate stays a bound.
-        assert abs(value - exact) <= own
-        grid_error = abs(field.values.ravel()[index] - exact)
-        assert checked.errors.ravel()[index] >= grid_error
+        # path spirals out of the origin ten times faster than it climbs - and
+        # since DEQ-117 the reference says it has no bound rather than offer
+        # one that holds only because it is large.
+        assert np.isinf(own)
+        assert np.isfinite(value)
+        assert checked.status.ravel()[index] == UNBOUNDED
+        assert np.array_equal(checked.values, field.values)
 
     @pytest.mark.slow
     def test_the_references_own_estimate_bounds_its_error(self):
@@ -1037,6 +1050,203 @@ class TestRefinement(TestCase):
         flagged = solver.check(field, indices[:2], tolerance=1.0e-7)
         assert np.all(flagged.status.ravel()[indices[:2]] == CHECKED)
         assert np.array_equal(flagged.values, field.values)
+
+
+# Inside and beside the elliptic cycle, and beside SDE (24)'s round one.
+_ELLIPSE_TARGETS = ((0.3, 0.0), (0.0, 0.3), (1.4, 0.3))
+
+
+@functools.cache
+def _ellipse_checked():
+    """The fast elliptic cycle at 81 points, checked with a tolerance."""
+    grid = DensityGrid.box([-2.0, -1.6], [2.0, 1.6], [81, 81])
+    solver = OrderedLineIntegral(
+        system(EllipticCycleField),
+        constant_noise(ELLIPSE_AMPLITUDE),
+        grid,
+    )
+    field = solver.solve(CycleAttractor(ellipse_states()))
+    indices = [
+        np.ravel_multi_index(grid.nearest(t), grid.shape) for t in _ELLIPSE_TARGETS
+    ]
+    with pytest.warns(UserWarning, match="of the points checked") as caught:
+        checked = solver.check(field, indices, tolerance=1.0e-3)
+    return solver, field, checked, indices, [str(w.message) for w in caught]
+
+
+class TestUnboundedPoints(TestCase):
+    """DEQ-117: a point the reference cannot bound is labelled, not fatal."""
+
+    def test_a_failed_reference_marks_its_point_and_the_rest_are_checked(self):
+        solver, field, _checked_field, indices, _true = _checked("gradient")
+        broken = field.grid.points()[indices[1]]
+        genuine = OrderedLineIntegral.reference
+
+        def reference(self, field, state, nodes=81):
+            if np.allclose(state, broken):
+                message = "the minimum action path did not stay finite"
+                raise ValueError(message)
+            return genuine(self, field, state, nodes)
+
+        with (
+            mock.patch.object(OrderedLineIntegral, "reference", reference),
+            pytest.warns(UserWarning, match="no reference could be computed at 1"),
+        ):
+            checked = solver.check(field, indices[:3])
+        status = checked.status.ravel()[indices[:3]]
+        assert status.tolist() == [CHECKED, FAILED, CHECKED]
+        assert np.isnan(checked.errors.ravel()[indices[1]])
+        assert checked.unbounded.tolist() == [indices[1]]
+        assert np.array_equal(checked.values, field.values)
+
+    def test_inside_a_fast_cycle_the_reference_is_labelled_not_bounded(self):
+        # Measured at (0.3, 0): the reference was 1.66 off with an estimate of
+        # 1.47; the chain from the band winds 0.14 times where the path winds
+        # several, and the surface at twice the distance came out closer.
+        # At (0, 0.3) the chain does not even stay finite: no reference.
+        _solver, field, checked, indices, _messages = _ellipse_checked()
+        inside = indices[:2]
+        status = checked.status.ravel()[inside]
+        assert status[0] == UNBOUNDED
+        assert np.isinf(checked.errors.ravel()[inside[0]])
+        assert status[1] in (UNBOUNDED, FAILED)
+        assert set(inside) <= set(checked.unbounded.tolist())
+        assert np.array_equal(
+            checked.values.ravel()[inside], field.values.ravel()[inside]
+        )
+
+    def test_outside_the_fast_cycle_the_reference_is_labelled_too(self):
+        # (1.4, 0.32): the reference was 0.054 off, with an estimate of 0.011.
+        _solver, _field, checked, indices, _messages = _ellipse_checked()
+        assert checked.status.ravel()[indices[2]] == UNBOUNDED
+
+    def test_a_value_that_moves_going_in_again_has_no_bound(self):
+        # The third surface, at half the inner distance: shift its value by
+        # more than the estimate and the reference must stop claiming one.
+        # (On the verification's gradient system at (-0.49, -0.9) it moved by
+        # 4.1e-5 against an estimate of 3.3e-5, and the error was 5.4e-5.)
+        solver, field, _checked_field, _indices, _true = _checked("gradient")
+        genuine = _relax_from
+        target = np.array([-1.5, -0.8])
+
+        def shifted(shift):
+            calls = []
+
+            def relax(gmam, surface, guide):
+                value, chain, place = genuine(gmam, surface, guide)
+                calls.append(value)
+                return value + (shift if len(calls) == 3 else 0.0), chain, place
+
+            return relax
+
+        with mock.patch.object(quasipotential_module, "_relax_from", shifted(0.0)):
+            _value, own = solver.reference(field, target)
+        assert np.isfinite(own)
+        with mock.patch.object(
+            quasipotential_module,
+            "_relax_from",
+            shifted(2.0 * own),
+        ):
+            _value, moved = solver.reference(field, target)
+        assert np.isinf(moved)
+
+    def test_the_third_surface_is_half_the_second(self):
+        # The third relaxation starts closer in again; from the second surface
+        # it would measure nothing.
+        solver, field, _checked_field, _indices, _true = _checked("gradient")
+        genuine = _relax_from
+        surfaces = []
+
+        def relax(gmam, surface, guide):
+            surfaces.append(surface)
+            return genuine(gmam, surface, guide)
+
+        with mock.patch.object(quasipotential_module, "_relax_from", relax):
+            solver.reference(field, np.array([-1.5, -0.8]))
+        assert len(surfaces) == 3
+        for angle in (0.0, 1.0, 2.5):
+            second, third = surfaces[1].point(angle), surfaces[2].point(angle)
+            assert not np.allclose(third, second)
+            assert np.allclose(third, surfaces[1].shrunk().point(angle))
+
+    def test_a_third_chain_that_will_not_stay_finite_has_no_bound(self):
+        solver, field, _checked_field, _indices, _true = _checked("gradient")
+        genuine = _relax_from
+        calls = []
+
+        def relax(gmam, surface, guide):
+            calls.append(surface)
+            if len(calls) == 3:
+                message = "the minimum action path did not stay finite"
+                raise ValueError(message)
+            return genuine(gmam, surface, guide)
+
+        with mock.patch.object(quasipotential_module, "_relax_from", relax):
+            _value, own = solver.reference(field, np.array([-1.5, -0.8]))
+        assert np.isinf(own)
+
+    def test_outer_surfaces_apart_by_half_of_u_there_have_no_bound(self):
+        # Shift the outer surface's value by a share of U on that surface:
+        # a quarter is an estimate, three quarters is no bound.
+        solver, field, _checked_field, _indices, _true = _checked("gradient")
+        genuine = _relax_from
+
+        def shifted(share):
+            calls = []
+
+            def relax(gmam, surface, guide):
+                value, chain, place = genuine(gmam, surface, guide)
+                calls.append(value)
+                if len(calls) == 1:
+                    value += share * abs(surface.value(surface.point(place)))
+                return value, chain, place
+
+            return relax
+
+        owns = []
+        for share in (0.25, 0.75):
+            with mock.patch.object(
+                quasipotential_module, "_relax_from", shifted(share)
+            ):
+                owns.append(solver.reference(field, np.array([-1.5, -0.8]))[1])
+        assert np.isfinite(owns[0])
+        assert np.isinf(owns[1])
+
+    def test_refinement_skips_the_points_it_cannot_bound_and_says_so(self):
+        _solver, field, checked, _indices, messages = _ellipse_checked()
+        assert any("not a bound" in m and "not refined" in m for m in messages)
+        skipped = checked.unbounded
+        assert skipped.size > 0
+        assert np.all(checked.status.ravel()[skipped] != REFINED)
+        assert np.array_equal(
+            checked.values.ravel()[skipped], field.values.ravel()[skipped]
+        )
+
+    def test_the_estimate_bounds_the_error_wherever_it_is_claimed(self):
+        # Inside and outside the fast cycle, and beside SDE (24)'s: every
+        # reference either says it has no bound or has one.
+        ellipse_solver, ellipse_field, *_ = _ellipse_checked()
+        cycle_solver, cycle_field, *_ = _checked("cycle")
+        cases = [
+            (ellipse_solver, ellipse_field, target, ellipse_quasipotential)
+            for target in _ELLIPSE_TARGETS
+        ] + [
+            (cycle_solver, cycle_field, target, _cycle_exact)
+            for target in ((1.0, 1.0), (0.5, 0.0))
+        ]
+        claimed = 0
+        for solver, field, target, exact in cases:
+            point = field.grid.points()[
+                np.ravel_multi_index(field.grid.nearest(target), field.grid.shape)
+            ]
+            try:
+                value, own = solver.reference(field, point)
+            except ValueError:
+                continue  # no reference, so no bound claimed
+            error = abs(value - float(exact(point[None, :])[0]))
+            assert own >= error, (target, value, own, error)
+            claimed += bool(np.isfinite(own))
+        assert claimed >= 2
 
 
 class TestCubicTerm(TestCase):
@@ -1287,16 +1497,34 @@ class TestDefaultUpdate(TestCase):
             )
 
 
+def _random_rows(rng, count):
+    """Half-lattice rows - ``f`` and a positive definite ``A`` - at random."""
+    factor = rng.normal(size=(count, 2, 2))
+    metric = factor @ factor.transpose(0, 2, 1) + 0.1 * np.eye(2)
+    drift = rng.normal(size=(count, 2)) * rng.choice([0.3, 1.0, 3.0], (count, 1))
+    return np.column_stack([drift, metric[:, 0, 0], metric[:, 0, 1], metric[:, 1, 1]])
+
+
+def _kept(edge, reach):
+    """Bases that move, to targets off them: the cases a march can offer."""
+    moving = (edge[0] != 0.0) | (edge[1] != 0.0)
+    degenerate = ((reach[0] == 0.0) & (reach[1] == 0.0)) | (
+        (reach[0] == edge[0]) & (reach[1] == edge[1])
+    )
+    return moving & ~degenerate
+
+
 class TestQuadraticUpdate(TestCase):
     """``U`` a parabola along the triangle's base, through a third front point."""
 
     @pytest.mark.slow
-    def test_the_rotating_case_converges_at_second_order(self):
-        # Measured 1.70e-4, 4.25e-5, 1.16e-5 at 41, 81, 161 (radius 8): orders
-        # 2.00, 1.87. The midpoint update: 2.27e-3, 9.68e-4, 5.00e-4.
+    def test_the_rotating_case_is_exact_at_every_size(self):
+        # DEQ-116. On a linear drift with a constant D the parabola's F is
+        # exact, so only the minimisation over s was left: Newton steps with f
+        # and A frozen gave 1.70e-4, 4.25e-5, 1.16e-5 at 41, 81, 161 points;
+        # the exact root of F' gives 3.1e-15, 4.7e-15, 8.4e-15 - rounding.
         errors = [_rotating_error_by_order(count, QUADRATIC) for count in _COUNTS]
-        assert errors[2] < 2.0e-5
-        assert min(_orders(errors)) > 1.8
+        assert max(errors) < 1.0e-10
 
     @pytest.mark.slow
     def test_it_is_ten_times_closer_than_the_midpoint_update(self):
@@ -1342,6 +1570,85 @@ class TestQuadraticUpdate(TestCase):
         kept = moving & ~degenerate
         assert kept.sum() > count // 2
         assert np.max(value[kept] - brute[kept]) < 1.0e-8
+
+    def test_the_base_is_minimised_with_its_coefficients_moving_along_it(self):
+        # DEQ-116. On the grid f and A change along the base, from the midpoint
+        # of x0-x to that of x1-x, half a cell apart. With them frozen at the
+        # current s the old Newton steps missed the minimum on 18% of these
+        # (3,500 of 20,000, by up to 54); F' with their change included finds
+        # it on all but the few where F has a second local minimum that F' at
+        # the start and at the end does not bracket.
+        rng = np.random.default_rng(7)
+        count = 20000
+        near = _random_rows(rng, count)
+        far = near + 0.05 * _random_rows(rng, count)
+        edge = tuple(rng.integers(-1, 2, count).astype(float) for _ in range(2))
+        reach = tuple(rng.integers(-8, 9, count).astype(float) for _ in range(2))
+        rise = 0.5 * rng.normal(size=count)
+        bend = 0.05 * rng.normal(size=count)
+        value = _curved_triangle(0.0, rise, bend, edge, reach, (near, far))
+
+        def cost(s):
+            return (
+                s * rise
+                + bend * s * (s - 1.0)
+                + _action(
+                    reach[0] - s * edge[0],
+                    reach[1] - s * edge[1],
+                    near + s[:, None] * (far - near),
+                )
+            )
+
+        samples = [cost(np.full(count, s)) for s in np.linspace(0, 1, 2001)]
+        brute = np.min(samples, 0)
+        kept = _kept(edge, reach)
+        missed = value[kept] - brute[kept] > 1.0e-8
+        assert missed.sum() < 1.0e-3 * kept.sum()
+        # The ends are the one-point updates: the triangle never offers more.
+        ends = np.minimum(samples[0], samples[-1])
+        assert np.all(value[kept] <= ends[kept] + 1.0e-12)
+
+    def test_the_root_takes_secant_steps_not_only_bisections(self):
+        # Bisection alone would reach the same root, but in some 40 steps;
+        # the secant steps settle these in well under twenty.
+        rng = np.random.default_rng(5)
+        count = 2000
+        near = _random_rows(rng, count)
+        far = near + 0.05 * _random_rows(rng, count)
+        edge = tuple(rng.integers(-1, 2, count).astype(float) for _ in range(2))
+        reach = tuple(rng.integers(-8, 9, count).astype(float) for _ in range(2))
+        rise = 0.5 * rng.normal(size=count)
+        bend = 0.05 * np.abs(rng.normal(size=count))
+        with mock.patch(
+            "discrecontinual_equations.continuation.quasipotential._base_slope",
+            side_effect=_base_slope,
+        ) as slope:
+            _curved_triangle(0.0, rise, bend, edge, reach, (near, far))
+        assert slope.call_count < 20
+
+    def test_the_slope_along_the_base_is_the_derivative_of_f(self):
+        # F' with f and A linear in s, against central differences of F.
+        rng = np.random.default_rng(11)
+        count = 2000
+        near = _random_rows(rng, count)
+        far = near + 0.3 * _random_rows(rng, count)
+        edge = tuple(rng.integers(-1, 2, count).astype(float) for _ in range(2))
+        reach = tuple(rng.integers(-8, 9, count).astype(float) for _ in range(2))
+        rise = 0.5 * rng.normal(size=count)
+        bend = 0.05 * rng.normal(size=count)
+        place = rng.uniform(0.05, 0.95, count)
+        step = 1.0e-6
+        midpoints = (near, far)
+        ahead = _base_cost(0.0, rise, bend, edge, reach, midpoints, place + step)
+        behind = _base_cost(0.0, rise, bend, edge, reach, midpoints, place - step)
+        slope = _base_slope(rise, bend, edge, reach, (near, far - near), place)
+        kept = _kept(edge, reach)
+        np.testing.assert_allclose(
+            slope[kept],
+            ((ahead - behind) / (2.0 * step))[kept],
+            rtol=1.0e-5,
+            atol=1.0e-6,
+        )
 
     def test_the_bend_is_the_parabola_through_the_third_point(self):
         # U = x^2 along a row: U(x0 + s h) = U0 + s dU + h^2 s (s - 1), so the

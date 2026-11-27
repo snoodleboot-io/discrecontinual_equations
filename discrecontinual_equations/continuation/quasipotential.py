@@ -44,13 +44,12 @@ where ``Q(a, x) = |x - a|_A |f_m|_A - <x - a, f_m>_A`` is the geometric action o
 straight segment by the midpoint rule, in the metric ``A = D^{-1}`` taken at the
 midpoint. Midpoints of two grid points always lie on the grid of half the spacing,
 so ``f`` and ``A`` are evaluated once there and looked up; along a triangle's
-segment they are interpolated linearly between its two end midpoints, which makes
-the one-dimensional minimisation over ``s`` for a straight ``U(x_s)`` a quadratic
-with a closed-form root, refined twice from the midpoint of the segment. This
+segment they are interpolated linearly between its two end midpoints. This
 matches Dahiya and Cameron's handling of a variable anisotropic ``D`` (Physica D
 2018, arXiv 1806.05321, their Eqs. (19), (21), (22)): ``A`` is ``D^{-1}`` at each
 midpoint, not the inverse of an averaged ``D``, and ``f`` and ``A`` are linear
-along the base. The update radius is what lets the
+along the base. How the minimum over ``s`` is found is the subject of *Triangle
+minimisation* below. The update radius is what lets the
 method see around an anisotropic or rotating drift: a minimum action path can meet
 the accepted front at a shallow angle, and only a stencil wide enough to reach back
 along it finds the right predecessor. Every triangle is tried rather than the
@@ -93,17 +92,17 @@ the error is 0.0107, 0.0112 and 0.0420 for radii 2, 4 and 8.
 the parabola through ``x0``, ``x1 = x0 + e`` and a third accepted point on the
 same line, ``x0 - e`` or else ``x0 + 2 e`` - straight only where neither is
 accepted - so its interpolation error is ``O(h^3)`` rather than ``O(h^2)``.
-``F(s)`` is then minimised by Newton steps from the straight base's closed-form
-root, keeping the lower of the two. This is not a published method, and it is
-not the default. The ticket proposed a Hermite cubic with ``grad U`` from the
-march; it was built first and failed: ``grad U`` at a point can only come from
-the update that set it, by the momentum ``|f|_A A t / |t|_A - A f`` along the
-segment's direction ``t``, which is first order (the chord), or second order if
-the start's own ``grad U`` fixes the curvature (the chord's reflection) - and
-then each point's error feeds the next. On the rotating case at 41 points the
-median ``grad U`` was off by 25% from the chord and 80% by reflection, and ``U``
-by 0.32. Dahiya and Cameron also warn that ``U`` need not be smooth across the
-front (arXiv 1806.05321, Sec. 3.3.2); the parabola uses accepted values only.
+``F(s)`` is then minimised exactly (see *Triangle minimisation*). This is not a
+published method, and it is not the default. The ticket proposed a Hermite cubic
+with ``grad U`` from the march; it was built first and failed: ``grad U`` at a
+point can only come from the update that set it, by the momentum ``|f|_A A t /
+|t|_A - A f`` along the segment's direction ``t``, which is first order (the
+chord), or second order if the start's own ``grad U`` fixes the curvature (the
+chord's reflection) - and then each point's error feeds the next. On the
+rotating case at 41 points the median ``grad U`` was off by 25% from the chord
+and 80% by reflection, and ``U`` by 0.32. Dahiya and Cameron also warn that
+``U`` need not be smooth across the front (arXiv 1806.05321, Sec. 3.3.2); the
+parabola uses accepted values only.
 
 The parabola does not raise the order: the quadrature term above is ``O(K^2
 h^2)`` either way. What it does is make the update exact where ``U`` is
@@ -112,46 +111,99 @@ quadratic - a linear drift with a constant ``D``. There the midpoint rule's
 (``grad U`` at the midpoint is exact for a quadratic ``U``, and
 ``grad U . (x - a) <= Q(a, x)`` with equality along it), the parabola is
 exact, and what is left is how well ``s`` is found: on the rotating
-Ornstein-Uhlenbeck process at 41 points the parabola gives 1.70e-4 with the
-Newton steps and 5.5e-8 with ``s`` minimised by brute force. On a nonlinear
-drift the straight base's overestimate of a convex ``U`` partly cancels the
-midpoint rule's underestimate, and the parabola takes that away.
+Ornstein-Uhlenbeck process the Newton steps with ``f`` and ``A`` frozen that
+the parabola used before DEQ-116 left 1.70e-4, 4.25e-5 and 1.16e-5 at 41, 81
+and 161 points, and the exact root leaves 3.1e-15, 4.4e-15 and 8.0e-15 -
+rounding; the non-normal linear system likewise goes from 1.08e-3 and
+5.16e-4 at 41 and 81 points to 1.5e-15 and 1.1e-15. A linear drift that
+rotates faster than the radius reaches is still limited by the radius (SDE
+(21): 1.38e-3, 4.62e-4, 5.38e-4). On a nonlinear drift the straight base's
+overestimate of a convex ``U`` partly cancels the midpoint rule's
+underestimate, and the parabola takes that away; the exact minimum takes
+away more (below).
 
 When it helps - linear or nearly linear drifts. Max error at 321 points,
-radius 8, straight against parabolic, on the sets above: rotating
-Ornstein-Uhlenbeck 3.34e-4 and 3.41e-6 (94 times); their SDE (21) 1.34e-3 and
-3.73e-4 (3.6 times); the non-normal linear system 2.36e-4 and 9.26e-5 (2.5
-times); Maier-Stein's barrier at 161 x 129 points (radius 10) 5.6e-4 and
-2.0e-5.
+radius 8, straight against parabolic, measured before DEQ-116 made the
+parabola's minimisation exact: rotating Ornstein-Uhlenbeck 3.34e-4 and
+3.41e-6; their SDE (21) 1.34e-3 and 3.73e-4; the non-normal linear system
+2.36e-4 and 9.26e-5; Maier-Stein's barrier at 161 x 129 points (radius 10)
+5.6e-4 and 2.0e-5. Since then the rotating and the non-normal systems are
+exact to rounding at every size measured (above).
 
-When it does not - nonlinear drifts. At 321 points, straight against
-parabolic: double well 2.85e-3 both; anisotropic gradient 2.09e-3 and 2.15e-3;
-SDE (24) 4.66e-3 and 5.15e-3; and on the verification's nonlinear rotating
-systems (``f = -D grad V + c R grad V`` with ``c = 4``, a multiplicative-noise
-one, an elliptic cycle with rotation 3) 7.1e-4 and 5.3e-4, 8.2e-4 and 1.27e-3,
-8.5e-3 and 5.3e-3 - and at 161 points the parabola was worse on all three
-(1.23e-3 and 2.23e-3, 4.28e-3 and 5.16e-3, 1.88e-2 and 3.17e-2). It costs 2.3
-to 2.8 times the march's time (measured at 321 points, best of one under
-load), so at equal cost the comparison is the straight base at 321 points
-against the parabola at 161, and the straight base wins on every nonlinear
-problem measured:
+When it does not - nonlinear drifts. Before DEQ-116, at 321 points, straight
+against parabolic: double well 2.85e-3 both; anisotropic gradient 2.09e-3 and
+2.15e-3; SDE (24) 4.66e-3 and 5.15e-3; and on the verification's nonlinear
+rotating systems (``f = -D grad V + c R grad V`` with ``c = 4``, a
+multiplicative-noise one, an elliptic cycle with rotation 3) 7.1e-4 and 5.3e-4,
+8.2e-4 and 1.27e-3, 8.5e-3 and 5.3e-3. The exact minimisation made the parabola
+worse again on every one of these, by 1.2 to 1.45 times at 41, 81 and 161 points
+(on the verification's masks, before against after: double well 0.153, 0.0420,
+0.0113 against 0.210, 0.0524, 0.0136; anisotropic gradient 0.145, 0.0395,
+8.70e-3 against 0.207, 0.0442, 0.0110; SDE (24) 0.381, 0.0907, 0.0219 against
+0.525, 0.129, 0.0306; ``c = 4`` 0.0464, 9.85e-3, 2.23e-3 against 0.0654, 0.0143,
+3.06e-3; multiplicative 0.0867, 0.0215, 5.16e-3 against 0.108, 0.0280, 6.86e-3;
+elliptic cycle 0.505, 0.133, 0.0317 against 0.594, 0.161, 0.0390): the frozen
+steps' shortfall had been offsetting the midpoint rule's underestimate there
+too. The parabola also costs more than the straight base: 2.3 to 2.8 times its
+march before DEQ-116, and the exact root a further 1.6 to 1.9 times at 61 to 161
+points (best of three, under load; the march stays near linear in the number of
+points, a log-log slope of 1.04 to 1.05 against 0.91 to 0.93 before), so at
+equal cost the comparison is the straight base at 321 points against the
+parabola at 161, and the straight base wins on every nonlinear problem measured:
 
   ==========================  ===============  ================
   problem                     straight, 321    parabolic, 161
   ==========================  ===============  ================
-  double well                 2.85e-3          1.13e-2
-  anisotropic gradient        2.09e-3          8.70e-3
-  SDE (24)                    4.66e-3          2.19e-2
-  rotating, c = 4             7.13e-4          2.23e-3
-  multiplicative noise        8.19e-4          5.16e-3
-  elliptic cycle              8.54e-3          3.17e-2
-  rotating Ornstein-Uhlenbeck 3.34e-4          1.16e-5
+  double well                 2.85e-3          1.36e-2
+  anisotropic gradient        2.09e-3          1.10e-2
+  SDE (24)                    4.66e-3          3.06e-2
+  rotating, c = 4             7.13e-4          3.06e-3
+  multiplicative noise        8.19e-4          6.86e-3
+  elliptic cycle              8.54e-3          3.90e-2
+  rotating Ornstein-Uhlenbeck 3.34e-4          8.0e-15
   ==========================  ===============  ================
 
+(The parabolic column is on the verification's masks; before DEQ-116 those
+gave the same three digits as the masks the straight column was measured on.)
 So the parabola is for a drift that is linear, or nearly so on the region
-asked about; ``update_order="midpoint"``, the default, is OLIM-MID as
-published. On the noisy Hopf film's grid, near its singular origin, the worst
-frame is 0.054 straight and 0.056 parabolic.
+asked about; ``update_order="midpoint"``, the default, is OLIM-MID with the
+departures listed at the end. On the noisy Hopf film's grid, near its
+singular origin, the worst frame was 0.054 straight and 0.056 parabolic
+(before DEQ-116).
+
+*Triangle minimisation.* Dahiya and Cameron minimise over ``s`` exactly: they
+solve ``F'(s) = 0`` for the full derivative - their Eq. (23), which includes
+the change of ``f`` and ``A`` along the base - by Wilkinson's hybrid secant and
+bisection method, where ``F'`` changes sign between the ends. The default
+straight base here does not: it freezes ``f`` and ``A`` at the current ``s``,
+where ``F'(s) = 0`` is a quadratic with a closed-form root, and refines that
+twice from the middle of the segment. The exact root was built and measured
+(DEQ-116; max error at 41, 81, 161 points, radius 8, on the verification's
+masks, frozen against exact): on linear drifts it is better - rotating
+Ornstein-Uhlenbeck 2.89e-3, 1.23e-3, 6.14e-4 against 1.90e-3, 7.53e-4,
+4.10e-4; SDE (21) 5.35e-3, 3.23e-3, 2.28e-3 against 4.38e-3, 2.13e-3,
+1.71e-3 - and on nonlinear ones worse at every size: double well 0.153,
+0.0420, 0.0113 against 0.210, 0.0524, 0.0135; anisotropic gradient 0.145,
+0.0391, 8.67e-3 against 0.203, 0.0433, 0.0106; rotating, ``c = 4``, 3.89e-2,
+6.55e-3, 1.23e-3 against 5.70e-2, 1.09e-2, 1.64e-3; elliptic cycle 0.472,
+0.119, 1.88e-2 against 0.566, 0.141, 2.75e-2. The frozen step stops short of
+the least value, and that partly offsets the midpoint rule's underestimate of
+a convex integrand, which the exact minimum takes in full. So the default keeps
+the frozen step, a departure from the paper made on these measurements.
+
+The parabolic base solves Eq. (23) - with ``U(x_s)`` the parabola - by the same
+kind of hybrid: ``F'`` at the frozen root and at the end it points away from
+bracket the minimum, and secant steps are taken inside the bracket, a
+bisection whenever a step is not half the one before last (Brent's rule); the
+least of ``F`` at that root, at the frozen root and at both ends is kept, the
+ends being the one-point updates, so the triangle never offers more than they
+do. Unlike the paper's, the bracket need not span the whole base: a minimum
+next to the frozen root is found where ``F'`` has one sign at both ends. On a
+march it reaches the least ``F`` over a fine grid of ``s`` on all but about
+one triangle in ten thousand (59 of 529,376 on the rotating process at 41
+points, by at most 8e-4: a second local minimum that neither bracket holds),
+where the Newton steps it replaces missed it on one in five (107,958, by up to
+0.21).
 
 *Radius.* The radius is 8 cells on every grid unless ``update_radius`` says
 otherwise. Dahiya and Cameron's rule of thumb ``K = 10 + 4 (round(log2 N) -
@@ -225,6 +277,22 @@ non-normal linear system, the anisotropic gradient, SDE (24) and Maier-Stein,
 every estimate is above the true error or within a factor of three of it
 wherever that exceeds ``1e-4``.
 
+*Where the reference has no bound.* That estimate rests on an assumption: that
+what changes as the surface shrinks is the surface's own error. Where the path
+winds round the attractor faster than a chain of nodes follows, the chain
+resolves less of the winding the closer it starts, and the value gets worse
+going in, not better - inside the verification's fast elliptic cycle the
+reference at (0.3, 0) was 1.66 off with an estimate of 1.47 (DEQ-117). The
+reference therefore also relaxes from a surface at half the distance, and
+reports no bound (an estimate of ``inf``) where that moves the value by more
+than the estimate, or where the first two surfaces' values differ by more than
+half of ``U`` on the outer one. A check never stops at a point: one without a
+bound is marked :data:`UNBOUNDED`, one where no reference could be computed
+:data:`FAILED`; neither is refined, :attr:`GridQuasipotential.unbounded` lists
+them and a warning names them. Across the verification's systems every finite
+estimate measured bounds its reference's error (see
+:meth:`OrderedLineIntegral.reference`).
+
 The traced path's action was the first candidate, being cheap, and was measured
 and rejected: its own error, from a path that follows the grid's gradient, is
 the size of the grid's (at 81 points the median 3.6e-4 against a largest grid
@@ -249,9 +317,54 @@ claimed to the order above. ``U`` near the boundary of the box is wrong wherever
 true minimum action path would leave the box, so the box should contain the sublevel set
 of ``U`` being asked about: ``U`` increases along every minimum action path, so the
 path to ``x`` stays inside ``{U <= U(x)}``.
+
+*Errata and departures*, each measured above:
+
+  - The linear quasipotential is ``(1/2) x^T S^{-1} x``, not ``x^T S^{-1} x``
+    as the DEQ-31 ticket wrote (*Normalisation*).
+  - OLIM-MID here tries every triangle, not the paper's hierarchical subset,
+    which doubled the rotating Ornstein-Uhlenbeck error (*Method*).
+  - Dahiya and Cameron's radius rule, Eq. (28), is opt-in through
+    :func:`default_radius`: it pays on strongly rotating drifts and costs on
+    nearly gradient ones (*Radius*).
+  - The parabolic update is opt-in and not a published method: exact to
+    rounding on a linear drift with a constant ``D``, worse than the
+    straight base on every nonlinear drift measured (*Order*).
+  - The default straight base finds ``s`` with ``f`` and ``A`` frozen, not by
+    the paper's exact Eq. (23), which was better on linear drifts and worse
+    on nonlinear ones (*Triangle minimisation*).
+  - The grid-free reference's error estimate is not a bound everywhere;
+    where it cannot be shown to be one it is reported as ``inf``
+    (*Where the reference has no bound*).
+
+References:
+    - Dahiya, D. and Cameron, M. (2018). Ordered line integral methods for
+      computing the quasi-potential. Journal of Scientific Computing.
+      arXiv:1706.07509, doi:10.1007/s10915-017-0590-9. Eqs. (2), (3): the
+      geometric action and the Hamilton-Jacobi equation; (9)-(12): the start
+      beside a cycle; (14), (15), (B-7), (B-8): the OLIM-MID updates; (21),
+      (24): test systems; (28): the radius rule.
+    - Dahiya, D. and Cameron, M. (2018). An ordered line integral method for
+      computing the quasi-potential in the case of variable anisotropic
+      diffusion. Physica D. arXiv:1806.05321,
+      doi:10.1016/j.physd.2018.07.002. Eqs. (14)-(18): the start at an
+      equilibrium; (19), (21), (22): the updates with a matrix ``D``; (23)
+      and Wilkinson's hybrid secant/bisection solver: the exact triangle
+      minimisation; Sec. 3.3.2: ``U`` need not be smooth across the front.
+    - Heymann, M. and Vanden-Eijnden, E. (2008). The geometric minimum action
+      method: a least action principle on the space of curves. Communications
+      on Pure and Applied Mathematics 61(8), 1052-1117. doi:10.1002/cpa.20238.
+      The gMAM; not read here, used as Grafke et al. restate it.
+    - Grafke, T., Schafer, T. and Vanden-Eijnden, E. (2017). Long term effects
+      of small random perturbations on dynamical systems: theoretical and
+      computational tools. Fields Institute Communications, Springer.
+      arXiv:1604.03818, doi:10.1007/978-1-4939-6969-2_2. Eq. (19): the gMAM
+      descent flow, with the additive-noise Hamiltonian of Eqs. (32)-(35);
+      Eqs. (38)-(42): the simplified flow for a state-dependent ``D``.
 """
 
 import heapq
+import warnings
 from collections.abc import Sequence
 
 import numpy as np
@@ -282,7 +395,11 @@ _CYCLE_CELLS = 1.5
 _CYCLE_SAMPLES_PER_CELL = 4
 _ELLIPTICITY_FLOOR = 1.0e-10
 _REFINEMENTS = 2
-_NEWTON_STEPS = 3
+# The triangle's root on its base: at most this many secant or bisection
+# steps, stopping once F anywhere in the bracket is within the tolerance of
+# its least value there.
+_ROOT_STEPS = 40
+_ROOT_TOLERANCE = 1.0e-13
 _HALF = 0.5
 _NEIGHBOURS = ((-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1))
 _UNKNOWN, _ACCEPTED = 0, 2
@@ -308,7 +425,7 @@ _JUMP_SHARE = 0.25
 # value squared; 1e-10, the default, costs twice the steps for nothing visible.
 _REFERENCE_SETTLED = 1.0e-8
 _BAND_SAMPLES_PER_CELL = 16
-GRID, CHECKED, REFINED = 0, 1, 2
+GRID, CHECKED, REFINED, FAILED, UNBOUNDED = 0, 1, 2, 3, 4
 
 
 def default_radius(grid: DensityGrid) -> int:
@@ -322,6 +439,18 @@ def default_radius(grid: DensityGrid) -> int:
     it as ``update_radius`` for a strongly rotating drift on a fine grid, where
     it pays, and not for one that is nearly a gradient, where it costs (the
     module docstring's *Radius*).
+
+    Args:
+        grid: The grid the march will run on.
+
+    Returns:
+        The radius in cells, at least 8.
+
+    References:
+        - Dahiya, D. and Cameron, M. (2018). Ordered line integral methods for computing
+          the quasi-potential. Journal of Scientific Computing. arXiv:1706.07509,
+          doi:10.1007/s10915-017-0590-9. Eq. (28), the rule of thumb for the update
+          factor ``K``. Departure: held at 8 below 128 points, and not the default.
     """
     sides = max(grid.shape)
     rule = _RULE_BASE + _RULE_SLOPE * (round(np.log2(sides)) - _RULE_START)
@@ -335,6 +464,20 @@ class EquilibriumAttractor:
     line integrals take over. It is a fixed number of cells, so the region shrinks
     with the spacing and the error it carries (of order ``|x - x*|^3``) shrinks
     faster than the method's own.
+
+    Near ``x*`` the drift is ``J (x - x*)`` and the noise ``D(x*)``, and the
+    quasipotential of that linear system is ``(1/2) (x - x*)^T S^{-1} (x -
+    x*)`` with ``J S + S J^T + D(x*) = 0`` - the stationary covariance of the
+    linearisation. Dahiya and Cameron write the same matrix in closed form
+    after a change of variables; the Lyapunov solve is equivalent and works for
+    any ``D``. The equilibrium must be stable: a quasipotential is measured
+    from an attractor.
+
+    References:
+        - Dahiya, D. and Cameron, M. (2018). An ordered line integral method for
+          computing the quasi-potential in the case of variable anisotropic diffusion.
+          Physica D. arXiv:1806.05321, doi:10.1016/j.physd.2018.07.002. Eqs. (14)-(18),
+          the initialisation by the quasi-potential of the linearisation.
     """
 
     __slots__ = ["_radius", "_state"]
@@ -560,6 +703,21 @@ class CycleAttractor:
     it left ``U`` next to the cycle off by 5.45e-3 and 3.27e-3 at 161 and 321
     points (order 0.74); from this start, 1.47e-3 and 3.0e-4 (order 2.3), the
     same as from the exact values.
+
+    *Limit.* Taking ``l`` parallel to ``f(x*)`` is exact when the rotation
+    keeps its direction across the cycle, as on SDE (24)'s circle. Where it
+    turns - an elliptic cycle run round fast - the start's ``U`` can be off by
+    a large share of itself (DEQ-117 measured 0.0241 against an exact 0.0146
+    on the reference's outer start curve, at 81 points on an ellipse with
+    rotation 3, and values below zero inside it), and
+    the grid-free check beside such a cycle labels its points as not
+    bounded rather than trust it (see :meth:`OrderedLineIntegral.reference`).
+
+    References:
+        - Dahiya, D. and Cameron, M. (2018). Ordered line integral methods for computing
+          the quasi-potential. Journal of Scientific Computing. arXiv:1706.07509,
+          doi:10.1007/s10915-017-0590-9. Eqs. (9)-(12), the start next to a limit cycle,
+          here with a matrix ``D``.
     """
 
     __slots__ = ["_states", "_width"]
@@ -795,6 +953,22 @@ def _geometric(step: np.ndarray, velocity: np.ndarray, metric: np.ndarray) -> fl
     )
 
 
+def _warn_unchecked(failed: list[int], unbounded: list[int], *, refining: bool) -> None:
+    """Say which points :meth:`OrderedLineIntegral.check` could not bound."""
+    parts = []
+    if failed:
+        parts.append(f"no reference could be computed at {len(failed)} ({failed})")
+    if unbounded:
+        parts.append(
+            f"the reference's own error is not a bound at {len(unbounded)} "
+            f"({unbounded})",
+        )
+    message = "; ".join(parts) + " of the points checked"
+    if refining:
+        message += ", and they were not refined"
+    warnings.warn(message, UserWarning, stacklevel=3)
+
+
 def _check_inside(grid: DensityGrid, state: np.ndarray) -> None:
     for axis, value in enumerate(state):
         coordinates = grid.axis(axis)
@@ -819,6 +993,10 @@ class GridQuasipotential:
     :meth:`OrderedLineIntegral.check` a checked point has status :data:`CHECKED`
     and an estimated error, and a point whose value was replaced by the grid-free
     one has status :data:`REFINED` and the estimated error of the new value.
+    A point the check could not bound keeps the grid's value: status
+    :data:`FAILED` (no grid-free value could be computed; error ``nan``) or
+    :data:`UNBOUNDED` (one was, but its own error estimate is not a bound
+    there; error ``inf``). :attr:`unbounded` lists both.
     """
 
     __slots__ = [
@@ -890,8 +1068,20 @@ class GridQuasipotential:
 
     @property
     def status(self) -> np.ndarray:
-        """:data:`GRID`, :data:`CHECKED` or :data:`REFINED` per value."""
+        """:data:`GRID`, :data:`CHECKED`, :data:`REFINED`, :data:`FAILED` or
+        :data:`UNBOUNDED` per value."""
         return self._status
+
+    @property
+    def unbounded(self) -> np.ndarray:
+        """Flat indices of the points a check could not bound, in order.
+
+        Those of status :data:`FAILED` - no grid-free value could be computed -
+        and :data:`UNBOUNDED` - one was, but its own error estimate is not a
+        bound there. Their values are the grid's, unrefined.
+        """
+        flat = self._status.ravel()
+        return np.flatnonzero((flat == FAILED) | (flat == UNBOUNDED))
 
     def at(self, state: Sequence[float] | np.ndarray) -> float:
         """``U`` at a state, bilinearly interpolated; ``inf`` off the grid."""
@@ -1050,6 +1240,33 @@ class OrderedLineIntegral:
     a drift that is linear or nearly so; see the module docstring's *Order*
     for where it helps and where it does not). See the module docstring for
     both, the method, the normalisation, and its limits.
+
+    The march accepts grid points in increasing order of ``U``, as Dijkstra's
+    method does, and offers each unaccepted point within the radius a
+    one-point update - the midpoint-rule action of the straight segment from
+    the accepted point - and a triangle update from every segment between the
+    accepted point and an accepted neighbour, minimised over the point where
+    the path leaves that segment. It is first order in general (the straight
+    interpolation of ``U`` along the front) and exact to rounding on a linear
+    drift with a constant ``D`` with the parabola.
+
+    References:
+        - Dahiya, D. and Cameron, M. (2018). Ordered line integral methods for computing
+          the quasi-potential. Journal of Scientific Computing. arXiv:1706.07509,
+          doi:10.1007/s10915-017-0590-9. The OLIM family and OLIM-MID: the geometric
+          action, Eq. (2); the Hamilton-Jacobi equation, Eq. (3); the one-point and
+          triangle updates, Eqs. (14), (15), (B-7), (B-8); the update radius, Eq. (28).
+          Departure: every triangle is tried, not the hierarchical subset; Eq. (28) is
+          not the default.
+        - Dahiya, D. and Cameron, M. (2018). An ordered line integral method for
+          computing the quasi-potential in the case of variable anisotropic diffusion.
+          Physica D. arXiv:1806.05321, doi:10.1016/j.physd.2018.07.002. The midpoint
+          update with a matrix ``D``, Eq. (19); the triangle update with ``f`` and ``A =
+          D^{-1}`` linear along the base, Eqs. (21), (22); its exact derivative, Eq.
+          (23), solved by Wilkinson's hybrid secant/bisection method. Departure: the
+          default straight base freezes ``f`` and ``A`` at the current ``s`` instead of
+          solving Eq. (23) (measured; see the module docstring's *Triangle
+          minimisation*); the parabolic update solves it.
     """
 
     __slots__ = ["_drift", "_grid", "_noise", "_offsets", "_quadratic", "update_radius"]
@@ -1205,9 +1422,33 @@ class OrderedLineIntegral:
         error is within the tolerance; otherwise it is only flagged, by its
         error. The field returned is a new one; ``field`` is not changed.
 
+        A point is never the end of the check. Where no reference can be
+        computed - a chain that will not stay finite at any step - the point
+        gets status :data:`FAILED` and keeps an error of ``nan``; where the
+        reference's own estimate is not a bound (see :meth:`reference`), it
+        gets status :data:`UNBOUNDED` and an error of ``inf``. Neither is
+        refined, whatever the tolerance; both are listed by
+        :attr:`GridQuasipotential.unbounded`, and a ``UserWarning`` names them
+        once the check is done.
+
         This costs a few relaxations of a chain of ``nodes`` states per point -
         of the order of a second each - against well under a millisecond per
         point for the march, which is why it is a separate step.
+
+        Args:
+            field: A field from :meth:`solve`, which knows its attractor.
+            indices: Flat grid indices to check; by default every
+                ``stride``-th point along each axis.
+            stride: The spacing of the default points.
+            tolerance: Refine where the estimated error exceeds this, if the
+                reference is good to it.
+            nodes: The number of states in each relaxed chain.
+
+        Returns:
+            A new field with the errors and statuses of the points checked.
+
+        Raises:
+            ValueError: If ``field`` does not know its attractor.
         """
         attractor = field.attractor
         if attractor is None:
@@ -1221,16 +1462,28 @@ class OrderedLineIntegral:
         values = field.values.copy().ravel()
         errors = field.errors.copy().ravel()
         status = field.status.copy().ravel()
+        failed, unbounded = [], []
         for index in np.asarray(indices, dtype=int).tolist():
             target = points[index]
             if not np.isfinite(values[index]) or attractor.reached(target, grid):
                 continue
-            reference, own = self.reference(field, target, nodes)
+            try:
+                reference, own = self.reference(field, target, nodes)
+            except ValueError:
+                status[index] = FAILED
+                failed.append(index)
+                continue
+            if not np.isfinite(own):
+                errors[index], status[index] = np.inf, UNBOUNDED
+                unbounded.append(index)
+                continue
             estimate = abs(float(field.values.ravel()[index]) - reference) + own
             if tolerance is not None and estimate > tolerance and own <= tolerance:
                 values[index], errors[index], status[index] = reference, own, REFINED
             else:
                 errors[index], status[index] = estimate, CHECKED
+        if failed or unbounded:
+            _warn_unchecked(failed, unbounded, refining=tolerance is not None)
         return GridQuasipotential(
             grid,
             values,
@@ -1263,6 +1516,43 @@ class OrderedLineIntegral:
         from a surface at twice the distance, which measures the expansion's
         error, and from the value on a chain of half the nodes, which measures
         the chain's.
+
+        That sum is a bound only while it is the surface's error that changes
+        as the surface shrinks - an assumption, not a theorem - and it fails
+        where the path winds round the attractor faster than the chain can
+        follow: the chain then resolves less of the winding the closer it
+        starts, and gets worse, not better. Inside the fast elliptic cycle of
+        the tests the reference at (0.3, 0) was 1.66 off with an estimate of
+        1.47: the chain wound 0.14 times, the surface at twice the distance
+        was 0.19 off, and one at half the distance 1.84 off. So the value is
+        also relaxed from a third surface, at half the distance, and the
+        estimate is returned as ``inf`` - no bound - where going in again
+        moves the value by more than the estimate, or where the first two
+        surfaces' values differ by more than half of ``U`` on the outer one,
+        more than the expansion could be wrong by. Measured (DEQ-117) on 73
+        references at 81 points on ten systems - the non-normal,
+        anisotropic-gradient and SDE (24) reference problems, the rotating
+        Ornstein-Uhlenbeck process, SDE (21), and the verification's strongly
+        rotating linear, gradient, rotating, multiplicative and elliptic-cycle
+        systems, 16 of the references beside or inside the elliptic cycle -
+        every finite estimate bounds the reference's error. 24 are labelled: all
+        16 of the cycle's and 8 elsewhere whose estimate did hold, the price of
+        the test. Two more points inside the cycle had no reference at all (the
+        chain would not stay finite). The third relaxation, run only when the
+        first two pass, costs up to a third more per point.
+
+        Args:
+            field: A field from :meth:`solve`, which knows its attractor.
+            state: The point to evaluate ``U`` at.
+            nodes: The number of states in the relaxed chain.
+
+        Returns:
+            ``(value, error)``: ``U`` at ``state`` and the estimate of its
+            error, ``inf`` where no bound could be established.
+
+        Raises:
+            ValueError: If ``field`` does not know its attractor, or a chain
+                does not stay finite at any step.
         """
         attractor = field.attractor
         if attractor is None:
@@ -1277,7 +1567,8 @@ class OrderedLineIntegral:
         )
         outer = attractor.start(field.grid, self._drift, self._noise, target)
         inner = outer.shrunk()
-        far, _, _ = _relax_from(gmam, outer, _guide(outer, trace, nodes))
+        inmost = inner.shrunk()
+        far, _, place = _relax_from(gmam, outer, _guide(outer, trace, nodes))
         near, chain, parameter = _relax_from(gmam, inner, _guide(inner, trace, nodes))
         start = inner.point(parameter)
         coarse = _equal_arc_length(_resample(chain, nodes // 2 + 1))
@@ -1288,7 +1579,25 @@ class OrderedLineIntegral:
         # systems (1.04e-3, 8.4e-5, 5.9e-6 at 41, 81, 161 nodes, non-normal)
         # but at second order on the anisotropic gradient (-4.9e-5, -1.3e-5 at
         # 81, 161 at (-1.5, -0.8)), and the whole difference bounds both.
-        return near, abs(far - near) + abs(rough - near)
+        own = abs(far - near) + abs(rough - near)
+        # The estimate is a bound only while the surface's error is what
+        # changes as the surface shrinks. Where the path winds round the
+        # attractor faster than the chain resolves, the value moves further
+        # on going in again than the estimate allows, or the two chains are
+        # different paths altogether - further apart than U on the outer
+        # surface, all the expansion could be wrong by (DEQ-117).
+        level = abs(outer.value(outer.point(place)))
+        if abs(far - near) > _HALF * level:
+            return near, np.inf
+        try:
+            nearest, _, _ = _relax_from(gmam, inmost, _guide(inmost, trace, nodes))
+        except ValueError:
+            # A chain that will not stay finite that close in is the winding
+            # the label is for.
+            return near, np.inf
+        if abs(near - nearest) > own:
+            return near, np.inf
+        return near, own
 
     def _backward(self, state: np.ndarray, gradient) -> np.ndarray:
         slope = np.array([component(state[None, :])[0] for component in gradient])
@@ -1471,70 +1780,181 @@ def _triangle(own, other, edge, reach, midpoints):
 
 
 def _curved_triangle(own, other, bend, edge, reach, midpoints):  # noqa: PLR0913
-    """The triangle update with ``U`` a parabola along the base.
+    """The triangle update with ``U`` a parabola along the base, minimised exactly.
 
-    ``U(x_s) = U0 + s dU + c s (s - 1)`` in place of the straight line, so
-    ``F(s) = U(x_s) + Q(x_s, x)`` is no longer minimised in closed form. It
-    starts from the straight line's root, takes Newton steps on
-    ``F'(s) = dU + c (2 s - 1) + Q'(s)`` with ``f`` and ``A`` frozen at the
-    current ``s``, and keeps whichever of the two values is lower.
+    ``U(x_s) = U0 + s dU + c s (s - 1)`` in place of the straight line, and
+    ``f`` and ``A`` in ``Q`` linear in ``s`` between the two end midpoints, as
+    Dahiya and Cameron take them (arXiv 1806.05321, Eqs. (21), (22)). The
+    minimum of ``F(s) = U(x_s) + Q(x_s, x)`` is where ``F'(s) = 0``, with
+    ``F'`` the exact derivative of that ``F`` (:func:`_base_slope`), the change
+    of ``f`` and ``A`` along the base included - their Eq. (23) - and its
+    root is found by :func:`_root_on_base`, a secant iteration safeguarded by
+    bisection like the paper's hybrid solver, from the straight base's
+    frozen-coefficient root. The value returned is the least of ``F`` at that
+    root, at the starting point and at both ends of the base, the ends being
+    the one-point updates through ``x0`` and ``x1``: the update never offers
+    more than they do.
+
+    On a linear drift with a constant ``D`` this ``F`` is exact - the midpoint
+    rule is exact along the characteristic through the segment's midpoint and
+    the parabola is exact for a quadratic ``U`` - so what was left of the error
+    was the minimisation: Newton steps with ``f`` and ``A`` frozen at the
+    current ``s`` left the rotating Ornstein-Uhlenbeck process 1.70e-4 off at
+    41 points, and the exact root leaves it 3e-15 off.
     """
-    near, far = midpoints
     rise = other - own
-    fraction = np.full(rise.shape[0], _HALF)
+    near, far = midpoints
+    start = np.full(rise.shape[0], _HALF)
     for _ in range(_REFINEMENTS):
-        coefficients = near + fraction[:, None] * (far - near)
-        fraction = _stationary_fraction(edge, reach, rise, coefficients)
-    linear = fraction
-    for _ in range(_NEWTON_STEPS):
-        coefficients = near + fraction[:, None] * (far - near)
-        reach_slope, reach_curvature = _action_derivatives(
-            edge,
-            reach,
-            fraction,
-            coefficients,
-        )
-        total = 2.0 * bend + reach_curvature
-        with np.errstate(divide="ignore", invalid="ignore"):
-            step = (rise + bend * (2.0 * fraction - 1.0) + reach_slope) / total
-        step = np.where(np.isfinite(step) & (total > 0.0), step, 0.0)
-        fraction = np.clip(fraction - step, 0.0, 1.0)
-    value = _curved_cost(own, rise, bend, edge, reach, fraction, midpoints)
-    fallback = _curved_cost(own, rise, bend, edge, reach, linear, midpoints)
-    return np.minimum(value, fallback)
+        coefficients = near + start[:, None] * (far - near)
+        start = _stationary_fraction(edge, reach, rise, coefficients)
+    root = _root_on_base(rise, bend, edge, reach, midpoints, start)
+    candidates = [
+        _base_cost(own, rise, bend, edge, reach, midpoints, fraction)
+        for fraction in (root, start, np.zeros_like(start), np.ones_like(start))
+    ]
+    return np.minimum.reduce(candidates)
 
 
-def _action_derivatives(edge, reach, fraction, coefficients):
-    """``dQ/ds`` and ``d2Q/ds2`` along the base, ``f`` and ``A`` frozen.
-
-    With ``d = reach - s edge``: ``Q' = <edge, f>_A - |f|_A <edge, d>_A / |d|_A``
-    and ``Q'' = |f|_A (|edge|_A^2 |d|_A^2 - <edge, d>_A^2) / |d|_A^3``.
-    """
-    edge_x, edge_y = edge
-    step_x = reach[0] - fraction * edge_x
-    step_y = reach[1] - fraction * edge_y
-    velocity_x, velocity_y = coefficients[:, 0], coefficients[:, 1]
-    speed = np.sqrt(_form(velocity_x, velocity_y, coefficients, velocity_x, velocity_y))
-    squared = _form(step_x, step_y, coefficients, step_x, step_y)
-    length = np.sqrt(squared)
-    along = _form(edge_x, edge_y, coefficients, step_x, step_y)
-    edge_squared = _form(edge_x, edge_y, coefficients, edge_x, edge_y)
-    drift = _form(edge_x, edge_y, coefficients, velocity_x, velocity_y)
-    with np.errstate(divide="ignore", invalid="ignore"):
-        slope = drift - speed * along / length
-        curvature = (
-            speed * (edge_squared * squared - along * along) / (squared * length)
-        )
-    return slope, curvature
-
-
-def _curved_cost(own, rise, bend, edge, reach, fraction, midpoints):  # noqa: PLR0913
+def _base_cost(own, rise, bend, edge, reach, midpoints, fraction):  # noqa: PLR0913
+    """``F(s) = U0 + s rise + bend s (s - 1) + Q(x_s, x)``."""
     near, far = midpoints
     coefficients = near + fraction[:, None] * (far - near)
     step_x = reach[0] - fraction * edge[0]
     step_y = reach[1] - fraction * edge[1]
     curve = own + fraction * rise + bend * fraction * (fraction - 1.0)
     return curve + _action(step_x, step_y, coefficients)
+
+
+def _base_slope(rise, bend, edge, reach, base, fraction):  # noqa: PLR0913
+    """``F'(s)`` with ``f`` and ``A`` linear along the base, not frozen.
+
+    ``base`` is the pair ``(near, far - near)``: ``f`` and ``A`` at ``s`` are
+    ``near + s (far - near)``. With ``d = reach - s edge``, ``a = |d|_A^2``,
+    ``b = |f|_A^2`` and ``c = <d, f>_A``, all three depending on ``s`` through
+    ``d``, ``f`` and ``A``, ``Q = sqrt(a b) - c`` and ``Q' = (a' b + a b') /
+    (2 sqrt(a b)) - c'`` - Dahiya and Cameron's Eq. (23) (Physica D 2018,
+    arXiv 1806.05321), their Eq. (B-8) of arXiv 1706.07509 with a matrix
+    ``A``. ``nan`` where ``Q`` is not differentiable: a vanishing ``f``, or
+    ``A`` undefined beside a point where ``D`` vanishes.
+    """
+    near, change = base
+    coefficients = near + fraction[:, None] * change
+    edge_x, edge_y = edge
+    step_x = reach[0] - fraction * edge_x
+    step_y = reach[1] - fraction * edge_y
+    velocity_x, velocity_y = coefficients[:, 0], coefficients[:, 1]
+    turn_x, turn_y = change[:, 0], change[:, 1]
+    first, mixed, second = coefficients[:, 2], coefficients[:, 3], coefficients[:, 4]
+    # A d, A f, A' d and A' f, component by component.
+    pulled_x = first * step_x + mixed * step_y
+    pulled_y = mixed * step_x + second * step_y
+    carried_x = first * velocity_x + mixed * velocity_y
+    carried_y = mixed * velocity_x + second * velocity_y
+    first, mixed, second = change[:, 2], change[:, 3], change[:, 4]
+    bent_x = first * step_x + mixed * step_y
+    bent_y = mixed * step_x + second * step_y
+    swept_x = first * velocity_x + mixed * velocity_y
+    swept_y = mixed * velocity_x + second * velocity_y
+    squared = step_x * pulled_x + step_y * pulled_y
+    speed = velocity_x * carried_x + velocity_y * carried_y
+    squared_slope = (
+        step_x * bent_x
+        + step_y * bent_y
+        - 2.0 * (edge_x * pulled_x + edge_y * pulled_y)
+    )
+    speed_slope = (
+        velocity_x * swept_x
+        + velocity_y * swept_y
+        + 2.0 * (turn_x * carried_x + turn_y * carried_y)
+    )
+    cross_slope = (
+        turn_x * pulled_x
+        + turn_y * pulled_y
+        + step_x * swept_x
+        + step_y * swept_y
+        - edge_x * carried_x
+        - edge_y * carried_y
+    )
+    with np.errstate(divide="ignore", invalid="ignore"):
+        action_slope = (squared_slope * speed + squared * speed_slope) / (
+            2.0 * np.sqrt(squared * speed)
+        ) - cross_slope
+    return rise + bend * (2.0 * fraction - 1.0) + action_slope
+
+
+def _root_on_base(rise, bend, edge, reach, midpoints, start):  # noqa: PLR0913
+    """Where ``F'`` changes sign from negative to positive in ``[0, 1]``.
+
+    ``F'`` is evaluated at ``start`` and at the end it points away from:
+    where the two differ in sign they bracket a minimum, and a secant step
+    from the last two iterates is taken whenever it falls inside the bracket
+    and at most half its width from the last iterate, a bisection otherwise
+    - the hybrid secant and bisection solver Dahiya and Cameron use
+    (Wilkinson 1967). The bracket shrinks at every step and the iterate never
+    leaves it. Where nothing is bracketed, ``start`` is returned: the caller
+    compares ``F`` at the ends anyway.
+    """
+    base = (midpoints[0], midpoints[1] - midpoints[0])
+    start_slope = _base_slope(rise, bend, edge, reach, base, start)
+    end = np.where(start_slope < 0.0, 1.0, 0.0)
+    end_slope = _base_slope(rise, bend, edge, reach, base, end)
+    fraction = start.copy()
+    active = np.flatnonzero(
+        ((start_slope < 0.0) & (end_slope > 0.0))
+        | ((start_slope > 0.0) & (end_slope < 0.0)),
+    )
+    if active.size == 0:
+        return fraction
+    upward = end[active] == 1.0
+    low = np.where(upward, start[active], 0.0)
+    high = np.where(upward, 1.0, start[active])
+    low_slope = np.where(upward, start_slope[active], end_slope[active])
+    high_slope = np.where(upward, end_slope[active], start_slope[active])
+    # The secant starts from the two ends of the bracket, start the later.
+    previous, previous_slope = end[active], end_slope[active]
+    current, slope = start[active], start_slope[active]
+    rise, bend = rise[active], bend[active]
+    edge = (edge[0][active], edge[1][active])
+    reach = (reach[0][active], reach[1][active])
+    base = (base[0][active], base[1][active])
+    # The last step's length and the one before it.
+    last, lagged = np.full(active.size, np.inf), np.full(active.size, np.inf)
+    for _ in range(_ROOT_STEPS):
+        with np.errstate(divide="ignore", invalid="ignore"):
+            secant = current - slope * (current - previous) / (slope - previous_slope)
+        # A secant step that leaves the bracket, or is not half as long as
+        # the step before last, gives way to a bisection (Brent's rule).
+        inside = (secant > low) & (secant < high)
+        inside &= np.abs(secant - current) < _HALF * lagged
+        following = np.where(inside, secant, _HALF * (low + high))
+        last, lagged = np.abs(following - current), last
+        following_slope = _base_slope(rise, bend, edge, reach, base, following)
+        below = following_slope < 0.0
+        low = np.where(below, following, low)
+        high = np.where(below, high, following)
+        low_slope = np.where(below, following_slope, low_slope)
+        high_slope = np.where(below, high_slope, following_slope)
+        # F' rises through zero across the bracket, so F at the end where
+        # |F'| is smaller is within |F'| times the width of its least value.
+        closer = -low_slope < high_slope
+        fraction[active] = np.where(closer, low, high)
+        spread = np.minimum(-low_slope, high_slope) * (high - low)
+        settled = (spread <= _ROOT_TOLERANCE) | ~np.isfinite(following_slope)
+        moving = ~settled
+        if not np.any(moving):
+            break
+        active = active[moving]
+        rise, bend = rise[moving], bend[moving]
+        edge = (edge[0][moving], edge[1][moving])
+        reach = (reach[0][moving], reach[1][moving])
+        base = (base[0][moving], base[1][moving])
+        low, high = low[moving], high[moving]
+        low_slope, high_slope = low_slope[moving], high_slope[moving]
+        last, lagged = last[moving], lagged[moving]
+        previous, previous_slope = current[moving], slope[moving]
+        current, slope = following[moving], following_slope[moving]
+    return fraction
 
 
 def _stationary_fraction(edge, reach, rise, coefficients):
@@ -1599,6 +2019,29 @@ class GeometricMinimumAction:
     is off by 1.36e-4, 3.11e-5 and 1.04e-5 with 41, 81 and 161
     nodes. A ``D`` that is the same at every state of the chain and at the
     states moved a little along each axis is taken as constant.
+
+    *Limits.* A chain of nodes cannot follow a path that winds round its
+    start - the minimiser out of a rotating equilibrium or cycle winds
+    infinitely often - so the chain finds the least action among the paths
+    it can resolve; :meth:`OrderedLineIntegral.reference` starts it off a
+    small surface for that reason. Which minimiser it reaches depends on the
+    starting chain.
+
+    References:
+        - Heymann, M. and Vanden-Eijnden, E. (2008). The geometric minimum action
+          method: a least action principle on the space of curves. Communications on
+          Pure and Applied Mathematics 61(8), 1052-1117. doi:10.1002/cpa.20238. The
+          method; not read here (the publisher refused the fetch) - used as Grafke et
+          al. restate it.
+        - Grafke, T., Schafer, T. and Vanden-Eijnden, E. (2017). Long term effects of
+          small random perturbations on dynamical systems: theoretical and computational
+          tools. Fields Institute Communications, Springer. arXiv:1604.03818,
+          doi:10.1007/978-1-4939-6969-2_2. Eq. (19), the gMAM descent flow, taken with
+          the additive-noise Hamiltonian of Eqs. (32)-(35) after ``z = L^{-1} x``; Eqs.
+          (38)-(42), the simplified flow for a state-dependent ``D``.
+        - Vanden-Eijnden, E. and Heymann, M. (2008). The geometric minimum action method
+          for computing minimum energy paths. Journal of Chemical Physics 128, 061103.
+          doi:10.1063/1.2833040. The semi-implicit form; not read here.
     """
 
     __slots__ = ["_drift", "_iterations", "_noise", "_step", "_tolerance"]

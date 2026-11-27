@@ -383,3 +383,52 @@ class MultiplicativeColumn(DeterministicFunction):
 
 def multiplicative_noise() -> NoiseMatrix:
     return NoiseMatrix([MultiplicativeColumn(index) for index in range(2)])
+
+
+# --- A fast elliptic cycle (verification of DEQ-57, DEQ-117) ----------------
+#
+# U = (1/2) (q - 1)^2 with q = x^2 + 2 y^2, and f = -(1/2) D grad U + w R grad q:
+# R grad q is perpendicular to grad U, so grad U . f = -(1/2) |grad U|_D^2 and
+# U solves the Hamilton-Jacobi equation exactly. The ellipse q = 1 is a stable
+# cycle, run round three times faster than it is approached, and the direction
+# of R grad q turns across it - which the march's start beside a cycle assumes
+# it does not.
+ELLIPSE_ROTATION = 3.0
+ELLIPSE_AMPLITUDE = np.array([[0.8, 0.0], [0.3, 0.6]])
+
+
+def ellipse_quasipotential(points: np.ndarray) -> np.ndarray:
+    return 0.5 * (points[:, 0] ** 2 + 2.0 * points[:, 1] ** 2 - 1.0) ** 2
+
+
+def ellipse_states(count: int = 800) -> np.ndarray:
+    angle = np.linspace(0.0, 2.0 * np.pi, count, endpoint=False)
+    return np.column_stack([np.cos(angle), np.sqrt(0.5) * np.sin(angle)])
+
+
+class EllipticCycleField(DeterministicFunction):
+    """``f = -(1/2) D grad U + w R grad q`` for the ellipse ``q = x^2 + 2 y^2``."""
+
+    def eval(
+        self,
+        point: list[float],
+        time: float | None = None,  # noqa: ARG002 (base signature)
+    ) -> list[float]:
+        x, y = point[0], point[1]
+        diffusion = ELLIPSE_AMPLITUDE @ ELLIPSE_AMPLITUDE.T
+        excess = x * x + 2.0 * y * y - 1.0
+        slope_x, slope_y = 2.0 * x, 4.0 * y
+        rise_x, rise_y = excess * slope_x, excess * slope_y
+        return [
+            -0.5 * (diffusion[0, 0] * rise_x + diffusion[0, 1] * rise_y)
+            - ELLIPSE_ROTATION * slope_y,
+            -0.5 * (diffusion[1, 0] * rise_x + diffusion[1, 1] * rise_y)
+            + ELLIPSE_ROTATION * slope_x,
+        ]
+
+    def eval_batch(
+        self,
+        points: np.ndarray,
+        time: float | None = None,  # noqa: ARG002 (base signature)
+    ) -> np.ndarray:
+        return np.column_stack(self.eval(list(np.asarray(points).T)))
