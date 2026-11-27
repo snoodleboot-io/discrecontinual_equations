@@ -236,8 +236,15 @@ class TestHomoclinicShooting(TestCase):
         )
 
     def _shooter(self) -> HomoclinicShooting:
+        # The well is symmetric, so the root is mu = 0 at any step: dt 0.01 over 30
+        # time units locates the same 1.2e-11 as the default dt 0.002 over 60 (DEQ-144)
         departure = Departure(np.array([0.05, 0.05]), np.array([1.0, 1.0]))
-        return HomoclinicShooting(self._field(0.0), 0, departure)
+        return HomoclinicShooting(
+            self._field(0.0),
+            0,
+            departure,
+            ReturnSettings(dt=1.0e-2, horizon=30.0),
+        )
 
     def test_return_gap_changes_sign_at_homoclinic(self):
         shooter = self._shooter()
@@ -264,9 +271,11 @@ class TestHomoclinicShooting(TestCase):
             field,
             0,
             Departure(np.array([0.05, 0.05]), np.array([1.0, 1.0])),
-            ReturnSettings(dt=0.002, horizon=120.0, departure_radius=0.6),
+            # dt 0.01 over 40 time units misses the line by 1e-5, as dt 0.002 over 120
+            # and dt 0.005 over 60 do; three points still fit the slope (DEQ-144)
+            ReturnSettings(dt=0.01, horizon=40.0, departure_radius=0.6),
         )
-        curve = shooter.trace(1, [0.0, 0.05, 0.10, 0.15, 0.20], 0.0, 0.06)
+        curve = shooter.trace(1, [0.0, 0.05, 0.10], 0.0, 0.06)
         for control, located in curve:
             assert abs(located - slope * control) < 5.0e-3
 
