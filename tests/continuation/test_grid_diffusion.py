@@ -138,6 +138,13 @@ class TestGridDiffusion(TestCase):
         with pytest.raises(ValueError, match="different grid"):
             StationaryFokkerPlanck(_drift(0.3), _noise(), Ito(), shifted, shared)
 
+    def test_a_grid_changed_in_place_afterwards_is_refused(self):
+        grid = _grid(11)
+        shared = GridDiffusion(_noise(), grid)
+        grid.axis(0)[:] = np.linspace(-1.0, 1.0, 11)
+        with pytest.raises(ValueError, match="different grid"):
+            StationaryFokkerPlanck(_drift(0.3), _noise(), Ito(), grid, shared)
+
     def test_an_equal_grid_built_again_is_accepted(self):
         shared = GridDiffusion(_noise(), _grid(11))
         problem = StationaryFokkerPlanck(

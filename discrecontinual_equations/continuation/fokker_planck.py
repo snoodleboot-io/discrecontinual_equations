@@ -403,6 +403,9 @@ class GridDiffusion:
     __slots__ = ["_cells", "_faces", "_grid"]
 
     def __init__(self, noise: NoiseMatrix, grid: DensityGrid) -> None:
+        # A copy of the axes, so a grid changed in place afterwards no longer
+        # matches and is refused rather than served the old arrays.
+        grid = DensityGrid([grid.axis(index).copy() for index in range(grid.dimension)])
         points = grid.points()
         self._grid = grid
         self._cells = _products(noise.columns_along(points))
