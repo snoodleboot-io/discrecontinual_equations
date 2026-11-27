@@ -98,6 +98,19 @@ with the Jacobian at every Runge–Kutta stage, which makes it fourth order too;
 straight chord between the nodes would put an $O(h^2)$ floor under the multipliers
 however well the orbit were solved.
 
+The Jacobian $D_x f$ in the variational equation
+$\Phi' = T\,D_x f(x(s))\,\Phi$, $\Phi(0) = I$ (Kuznetsov 2014, lecture 8, slide 4)
+is exact wherever the field allows it: a field written in `+ - * /` and integer
+powers is differentiated by dual numbers or Taylor jets (Griewank and Walther
+2008). A field that calls `math`, branches on its state or takes a fractional
+power is differenced centrally instead, each component moved by
+$\varepsilon^{1/3}\max(|x_j|, 1)$ (Dennis and Schnabel 1983), the rule AUTO-07p
+follows when no Jacobian is supplied; COLNEW asks the user for one outright. A
+forward difference at a fixed step $h = 10^{-7}$ errs by $h f''/2$, the same on
+every mesh, and that bias was a floor: on a forced Duffing cycle the multipliers'
+error stayed at $5.9 \times 10^{-6}$ from 160 to 640 exact nodes, where with the
+exact Jacobian it fell to $5.8 \times 10^{-10}$ (DEQ-128).
+
 **Limits.** A solution means the *discrete* system was satisfied; it does not mean
 the mesh resolves the orbit (see `estimate_period_error` on the
 [API page](../api/continuation.md#trusting-a-computed-cycle)). The plain Newton
@@ -226,10 +239,6 @@ about Feigenbaum's $\delta \approx 4.669$ per doubling (Feigenbaum 1978) while t
 drift grows only with the number of turns: on Rössler's cascade at 16 turns the
 drift read 43 times low and passed cycles 6.2–6.7% wrong.
 
-!!! note "Pending: DEQ-105 (PR #74, not yet merged)"
-    Until PR #74 merges, a Hermite–Simpson point's `floquet_error` on `main` is
-    the drift alone, with the failure just described.
-
 DEQ-105 gives Hermite–Simpson points the same
 $\max(\text{drift}, 2\,\text{gap})$; on 45 cascade cycles it never read low, with a
 median over-read of 1.87, the $2(1 - 2^{-4})$ that order four predicts.
@@ -247,10 +256,15 @@ median over-read of 1.87, the $2(1 - 2^{-4})$ that order four predicts.
   Duffing cycle or a twelve-turn Lorenz cycle, the solve landed on two-, six- or
   three-turn orbits traversed two or four times, and passed with errors of 1 to 68
   against the cycle seeded. Detecting the repetition is DEQ-127.
-- *The forward-difference floor (DEQ-128).* The Hermite monodromy takes the
-  Jacobian by forward differences, which biases both meshes alike, so neither the
-  gap nor the drift sees it. Below about $10^{-5}$ the estimate can read up to about
-  four times low. An automatic-differentiation Jacobian is DEQ-128.
+- *The Jacobian's own error.* A bias in $D_x f$ that both meshes share is seen by
+  neither the gap nor the drift. Until DEQ-128 the monodromy differenced $f$
+  forward at a fixed step, a bias of about $10^{-5}$ under which the estimate read
+  up to four times low. With the exact Jacobian, re-run against the same Radau
+  references (forced Duffing, Lorenz at $r = 350$, Langford), it read 1.87–1.88
+  times the true error on all 34 cycles that converged to the one seeded, down to
+  true errors of $9 \times 10^{-9}$. A field that can only be differenced carries
+  the central difference's $\varepsilon^{2/3}$, about $4 \times 10^{-11}$
+  relative, which a cycle of ordinary scale never reaches.
 - The argument needs the error at least to halve per doubling. Before convergence is
   asymptotic two meshes can agree while both are wrong; a doubled solve that fails
   reads infinite and the point is refused.
@@ -260,6 +274,109 @@ median over-read of 1.87, the $2(1 - 2^{-4})$ that order four predicts.
 
 API: [`CyclePoint.floquet_error`](../api/continuation.md#discrecontinual_equations.continuation.CyclePoint.floquet_error),
 [`ResolvedBranch`](../api/continuation.md#discrecontinual_equations.continuation.ResolvedBranch).
+
+## Restarting a trace from one of its points
+
+A traced branch is often wanted again from somewhere along it: further in the
+parameter, with a finer step, or in the other direction. `CycleSeed.from_point`
+makes a seed of a traced point that carries every one of its states, interior
+collocation points included, and a `CycleContinuation` on the same scheme and
+mesh starts from it as it is, as AUTO-07p restarts from a stored solution
+(`IRS`). A converged point is taken without a Newton iteration; a seed that is
+nearly a solution of the target scheme - a point's mesh states alone, or an
+accurate integration - is corrected on that scheme by Newton's method, and kept
+when every iteration at least halves the residual and the cycle lies within 5% of
+the seed's size of the seed. Anything else goes through the staged solve
+(trapezoidal first, then the target scheme), as before.
+
+```python
+import warnings
+
+import numpy as np
+from scipy.integrate import solve_ivp
+
+from discrecontinual_equations.continuation import (
+    CycleContinuation,
+    CycleSeed,
+    CycleSeedWarning,
+)
+from discrecontinual_equations.differential_equation import DifferentialEquation
+from discrecontinual_equations.function.deterministic import DeterministicFunction
+from discrecontinual_equations.parameter import Parameter
+from discrecontinual_equations.variable import Variable
+
+
+class Rossler(DeterministicFunction):
+    def eval(self, point, time=None):
+        c = self.parameters[0].value
+        x, y, z = point[0], point[1], point[2]
+        return [-y - z, x + 0.2 * y, 0.2 + z * (x - c)]
+
+
+def xyz():
+    return [Variable(name=n, abbreviation=n) for n in "xyz"]
+
+
+c = Parameter(value=2.85, name="c", abbreviation="c")
+equation = DifferentialEquation(
+    variables=xyz(),
+    time=Variable(name="t", abbreviation="t"),
+    parameters=[c],
+    derivative=Rossler(variables=xyz(), parameters=[c], results=xyz(), time=None),
+)
+
+
+def flow(_t, u):
+    return [-u[1] - u[2], u[0] + 0.2 * u[1], 0.2 + u[2] * (u[0] - 2.85)]
+
+
+def section(_t, u):
+    return u[1]
+
+
+section.direction = 1.0
+settled = solve_ivp(flow, (0, 400), [1, 1, 0], rtol=1e-10, atol=1e-12, events=section)
+start, end = settled.t_events[0][-4], settled.t_events[0][-2]  # two turns
+orbit = solve_ivp(flow, (0, end - start), settled.y_events[0][-4], rtol=1e-10,
+                  atol=1e-12, dense_output=True)
+seed = CycleSeed(orbit.sol(np.linspace(0, end - start, 41)).T, end - start, 2.85)
+
+traced, _ = CycleContinuation(
+    equation, 0, 40, phase_index=1, collocation="gauss_legendre"
+).trace(seed, 0.01, 3)
+point = traced[-1]
+again, _ = CycleContinuation(
+    equation, 0, 40, phase_index=1, collocation="gauss_legendre"
+).trace(CycleSeed.from_point(point), 0.01, 3)
+print(np.max(np.abs(again[0].solution.states - point.solution.states)))  # 0.0
+
+with warnings.catch_warnings(record=True) as caught:
+    warnings.simplefilter("always", CycleSeedWarning)
+    hopeless = CycleSeed(0.1 * seed.states, 2.0 * seed.period, 2.85)
+    print(CycleContinuation(equation, 0, 40, phase_index=1).trace(hopeless, 0.01, 3))
+print(caught[0].message)  # no cycle found from the seed at parameter 2.85 ...
+```
+
+Rössler's period-2 cycle crosses the phase section $y = 0$ upward twice a period,
+so the point phase condition has two solutions on it. Before DEQ-106 a point's
+full states raised an `IndexError` under Gauss–Legendre, and from its mesh states
+the trapezoidal stage could carry the cycle to the other crossing: on the cascade
+page's four branches one restart in 45 came back 2.18 away, and at $c = 2.85$ on
+40 intervals 1.44. Now all 45 restarts reproduce their point to $4 \times 10^{-12}$,
+and a seed starts 1.3 to 2.3 times faster from 20 to 320 intervals. A seed from
+which no cycle is found returns an empty trace in under a second at 320
+intervals, with a `CycleSeedWarning` saying what was tried.
+
+**Limits.** The restart is on the scheme and mesh the point was traced on; a seed
+of any other length raises `ValueError`. A seed that is nearly a solution is
+corrected on the target scheme rather than staged, so a trace started from an
+accurate integration now begins up to about $10^{-14}$ from where it used to. The
+5% window keeps the restart near the seed, but it cannot tell two cycles apart when
+both lie inside it. `PeriodDoublingCascade` still retraces each branch from its
+own seed, so that its levels keep the points they always had.
+
+API: [`CycleSeed`](../api/continuation.md#discrecontinual_equations.continuation.CycleSeed),
+[`CycleSeedWarning`](../api/continuation.md#discrecontinual_equations.continuation.CycleSeedWarning).
 
 ## Multipliers without forming the monodromy
 
@@ -551,8 +668,8 @@ API page; its docstrings are the reference.
 
 ## References
 
-[Ascher1995], [Bojanczyk1992], [DeBoor1973], [DeWitte2013], [Doedel1991a],
-[Doedel1991b], [Doedel2003], [DoedelAUTO07p], [Fairgrieve1991], [Feigenbaum1978],
-[Griewank2008], [Iooss1988], [Kressner2006], [Kuznetsov2005], [Kuznetsov2014],
-[Lust2001]: full entries on the [References](../references.md#periodic-orbits-collocation-and-floquet-multipliers)
+[Ascher1995], [Bader1987], [Bojanczyk1992], [DeBoor1973], [DennisSchnabel1983],
+[DeWitte2013], [Doedel1991a], [Doedel1991b], [Doedel2003], [DoedelAUTO07p],
+[Fairgrieve1991], [Feigenbaum1978], [Griewank2008], [Iooss1988], [Kressner2006],
+[Kuznetsov2005], [Kuznetsov2014], [Kuznetsov2014L8], [Lust2001]: full entries on the [References](../references.md#periodic-orbits-collocation-and-floquet-multipliers)
 page.

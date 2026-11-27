@@ -401,11 +401,16 @@ Radau shooting on Lorenz, forced Duffing and Langford cycles:
   six- or three-turn orbit traversed two or four times, and passed with errors of
   1 to 68 against the cycle seeded. The estimate bounded the error against the
   orbit it found. Detecting the repetition is tracked as DEQ-127.
-- The monodromy's forward-difference Jacobian biases both meshes alike, so
-  neither the gap nor the drift sees it. Below a floor of about `1e-5` the
-  estimate can read up to about four times low (a 5.9e-6 floor on Duffing),
-  still orders of magnitude under the gate. Switching to an automatic-
-  differentiation Jacobian is tracked as DEQ-128.
+- Until DEQ-128 the monodromy's forward-difference Jacobian biased both meshes
+  alike, so neither the gap nor the drift saw it, and below a floor of about
+  `1e-5` the estimate read up to about four times low (a 5.9e-6 floor on
+  Duffing). The Jacobian is now exact where the field allows and a relative
+  central difference where it does not. Re-run against the same Radau
+  references (forced Duffing at 1, 2 and 4 turns, Lorenz at `r = 350`, Langford;
+  20 to 160 nodes a turn, 35 cycles), the estimate read 1.87 to 1.88 times the
+  true error on all 34 that converged to the cycle seeded, down to true errors
+  of 9e-9; the 35th is the four-turn Duffing seed that lands on another orbit
+  (DEQ-127). The 14 cycles that read low before all bound now.
 
 ### Equidistributing the mesh, measured again
 
