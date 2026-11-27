@@ -23,6 +23,7 @@ from discrecontinual_equations.continuation.cycle_continuation import (
     CyclePoint,
 )
 from discrecontinual_equations.function.deterministic import DeterministicFunction
+from discrecontinual_equations.webplot.cycle_tube import add_cycle_tubes
 from discrecontinual_equations.webplot.report import AtlasEntry
 from discrecontinual_equations.webplot.stage import (
     Frame,
@@ -139,7 +140,10 @@ def fold_of_cycles_stage() -> StageScene:
             "fold at mu = -1/4 and returns as the inner cycle. At that fold the "
             "two cycles' nontrivial Floquet multipliers meet at 1, which is "
             "what a fold of cycles is; the readout carries the error on those "
-            "multipliers beside them."
+            "multipliers beside them. The faint fan round the inner cycle is "
+            "its unstable manifold, the fence made visible: CycleManifold's "
+            "Fourier-Taylor chart in the Floquet normal form (Castelli, "
+            "Lessard and Mireles James 2015), carried on by the flow."
         ),
     )
     scene = stage_scene(
@@ -154,6 +158,10 @@ def fold_of_cycles_stage() -> StageScene:
     for point in scene.timeline.special:
         if point.kind == "hopf":
             point.label = "Hopf (subcritical)"
+    # The repelling cycle's unstable manifold: the band of orbits it sheds,
+    # inward to the origin and outward to the attracting cycle, drawn from its
+    # Fourier-Taylor chart and carried on by the flow.
+    add_cycle_tubes(scene, eq.derivative, eq.derivative.parameters[0])
     return scene
 
 

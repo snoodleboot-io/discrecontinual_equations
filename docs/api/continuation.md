@@ -798,6 +798,47 @@ simulation), so that the test function is a deterministic function of the parame
 
 ::: discrecontinual_equations.continuation.topological_modes
 
+## Manifolds of cycles
+
+`CycleManifold` computes the stable or unstable manifold of a hyperbolic cycle as a
+Fourier-Taylor chart `P(theta, sigma)`, following Castelli, Lessard and Mireles
+James, *Parameterization of invariant manifolds for periodic orbits I* (SIADS 14,
+2015). The chart conjugates the flow to `(theta, sigma) -> (theta + t, e^(lambda t)
+sigma)`, so `chart.flow_image(theta, sigma, t)` is where the flow carries
+`chart.point(theta, sigma)`. Its input is any of the library's cycles (a
+`CyclePoint`'s `solution` and `mesh`), refined first to a Fourier cycle by Newton's
+method; the Floquet bundles are the real eigenpairs of `Df(gamma) - d/dtheta` on
+`2T`-periodic grids, so a twisted (Mobius) bundle needs no special case; and the
+homological equations are solved mode by mode in the Floquet basis, their
+equation (21). Nothing integrates the field.
+
+What was checked, and how:
+
+| Check | Reference | Result |
+|---|---|---|
+| Chart against closed form | `r' = r(1 - r^2)`, `z' = mu z + z^3`, pulled through a rational diffeomorphism | `< 1e-11` at `|sigma| <= 0.1` (order 14, 48 modes) |
+| Mobius band | normal plane turning half a revolution per period | multipliers `-e^(aT)`, chart `< 1e-12` |
+| Conjugacy | DOP853 at `1e-13` | `< 1e-9` after 1.5 time units |
+| Equation (21) | dense Fourier-Galerkin solve of (18), no Floquet basis | `< 1e-9` per coefficient |
+| Published values | Lorenz `rho = 22` (paper II, Section 4.3) | period and stable exponent to `1e-9` |
+
+`chart.invariance_error(radius)` is the paper's a-posteriori indicator (28): it
+falls geometrically with the Taylor order at the oracle's measured rate, and
+geometrically with the number of Fourier modes until the truncation in `sigma`
+takes over. `chart.radius(tolerance)` is where the last term reaches
+`tolerance`: where the chart should hand over to the flow.
+
+One manifold coordinate per chart is supported (a two-dimensional manifold); complex
+Floquet multipliers are refused. `webplot.cycle_tube.add_cycle_tubes` draws the
+unstable manifold of every unstable cycle on a stage as the chart's fibres carried on
+by the flow; the fold-of-cycles film shows the repelling cycle's band.
+
+`CycleConnectingOrbit` solves the paper's equation (35),
+`phi_L(P(theta_0, R_0)) = Q(theta_1, R_1)`, for an orbit from one cycle's unstable
+chart to another's stable chart, by damped Gauss-Newton with DOP853, seeded by
+scanning the flowed source ring for its nearest approach to the target ring. The
+charts' conjugacies supply both infinite tails (`connection.orbit(tail)`).
+
 ## Continuation
 
 ::: discrecontinual_equations.continuation
@@ -928,3 +969,9 @@ The concepts, worked examples and limits are on the
 ## Period-doubling cascades
 
 ::: discrecontinual_equations.continuation.period_doubling
+
+## Cycle manifolds
+
+::: discrecontinual_equations.continuation.cycle_manifold
+
+::: discrecontinual_equations.continuation.cycle_connection

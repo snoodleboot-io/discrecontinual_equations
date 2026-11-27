@@ -80,6 +80,10 @@ from discrecontinual_equations.continuation.cycle_codim2 import (
     CycleCurveContinuation,
     CycleCurvePoint,
 )
+from discrecontinual_equations.continuation.cycle_connection import (
+    CycleConnectingOrbit,
+    CycleConnection,
+)
 from discrecontinual_equations.continuation.cycle_continuation import (
     CycleBifurcation,
     CycleContinuation,
@@ -88,6 +92,12 @@ from discrecontinual_equations.continuation.cycle_continuation import (
     ResolvedBranch,
     classify_transition,
     resolved_branch,
+)
+from discrecontinual_equations.continuation.cycle_manifold import (
+    CycleManifold,
+    CycleManifoldChart,
+    FloquetBundles,
+    FourierCycle,
 )
 from discrecontinual_equations.continuation.cycle_normal_form import CycleNormalForm
 from discrecontinual_equations.continuation.deflation import (
@@ -307,10 +317,14 @@ __all__ = [
     "CycleAttractor",
     "CycleBifurcation",
     "CycleCodim2Point",
+    "CycleConnectingOrbit",
+    "CycleConnection",
     "CycleContinuation",
     "CycleCurve",
     "CycleCurveContinuation",
     "CycleCurvePoint",
+    "CycleManifold",
+    "CycleManifoldChart",
     "CycleNormalForm",
     "CyclePoint",
     "CycleSeed",
@@ -336,7 +350,9 @@ __all__ = [
     "FastSlowSystem",
     "FenichelExpansion",
     "FiniteTimeExponents",
+    "FloquetBundles",
     "FlowTangent",
+    "FourierCycle",
     "FourierReduction",
     "GeodesicLevelSets",
     "GeodesicMesh",
