@@ -21,6 +21,7 @@ from unittest import TestCase, mock
 
 import numpy as np
 import pytest
+from scipy.integrate import solve_ivp
 from scipy.spatial import cKDTree
 
 from discrecontinual_equations.continuation import (
@@ -33,6 +34,7 @@ from discrecontinual_equations.continuation.fokker_planck import (
 from discrecontinual_equations.continuation.noise import NoiseMatrix, fields_at
 from discrecontinual_equations.continuation.quasipotential import (
     _ACCEPTED,
+    _NODES_PER_TURN,
     CHECKED,
     FAILED,
     GRID,
@@ -50,14 +52,20 @@ from discrecontinual_equations.continuation.quasipotential import (
     _base_slope,
     _cubic_coefficients,
     _curved_triangle,
+    _CycleExpansion,
     _guide,
     _HalfLattice,
     _March,
+    _moved_start,
+    _periodic_linear,
     _relax_from,
+    _resample_closed,
     _stationary_fraction,
+    _winding_nodes,
     default_radius,
 )
 from discrecontinual_equations.continuation.stochastic import Ito
+from discrecontinual_equations.function.deterministic import DeterministicFunction
 from discrecontinual_equations.function.function import Function
 from tests.continuation.fields import (
     Alpha,
@@ -472,6 +480,271 @@ def _hopf_cycle_field(mu):
         update_order=MIDPOINT,
     )
     return grid, solver, solver.solve(CycleAttractor(cycle))
+
+
+class _ReversedCycleField(DeterministicFunction):
+    """SDE (24)'s drift run backwards: the unit circle is a repelling cycle."""
+
+    def eval(
+        self,
+        point: list[float],
+        time: float | None = None,  # noqa: ARG002 (base signature)
+    ) -> list[float]:
+        x, y = point[0], point[1]
+        shrink = 1.0 - x * x - y * y
+        return [-(y + x * shrink), -(-x + y * shrink)]
+
+
+def _ellipse_closed_form(samples):
+    """``G`` and ``C`` of ``U = (1/2) (q - 1)^2`` on the ellipse, by hand.
+
+    With ``n`` the drift turned by a right angle, ``q(gamma + z n) - 1 = g z +
+    c z^2`` for ``g = grad q . n`` and ``c = (1/2) n^T Hess(q) n``, so ``U =
+    (1/2) g^2 z^2 + g c z^3 + ...``: ``G = g^2`` and ``C = 6 g c``.
+    """
+    velocity = fields_at(system(EllipticCycleField), samples)
+    tangent = velocity / np.linalg.norm(velocity, axis=1)[:, None]
+    normal = np.column_stack([-tangent[:, 1], tangent[:, 0]])
+    hessian = np.diag([2.0, 4.0])
+    slope = np.einsum("ki,ki->k", samples @ hessian, normal)
+    bend = 0.5 * np.einsum("ki,ij,kj->k", normal, hessian, normal)
+    return slope * slope, 6.0 * slope * bend
+
+
+@functools.cache
+def _ellipse_field(count):
+    grid = DensityGrid.box([-2.0, -1.6], [2.0, 1.6], [count, count])
+    solver = OrderedLineIntegral(
+        system(EllipticCycleField),
+        constant_noise(ELLIPSE_AMPLITUDE),
+        grid,
+    )
+    return grid, solver, solver.solve(CycleAttractor(ellipse_states()))
+
+
+def _ellipse_band_error(count):
+    grid = DensityGrid.box([-2.0, -1.6], [2.0, 1.6], [count, count])
+    indices, values = CycleAttractor(ellipse_states()).initial(
+        grid,
+        system(EllipticCycleField),
+        constant_noise(ELLIPSE_AMPLITUDE),
+    )
+    exact = ellipse_quasipotential(grid.points()[indices])
+    return float(np.max(np.abs(values - exact)))
+
+
+class TestCycleExpansion(TestCase):
+    """DEQ-151: the band about a cycle starts from U's expansion across it.
+
+    ``U = (1/2) G z^2 + (1/6) C z^3`` in the distance ``z`` along the normal,
+    ``G`` the periodic solution of Lin, Yu and Zhou's Riccati equation (their
+    Eqs. (30), (36), (37)), ``C`` from the next order.
+    """
+
+    def test_on_sde_24s_circle_the_coefficients_are_4_and_12(self):
+        # U = (1/2) (r^2 - 1)^2 = 2 z^2 + 2 z^3 + z^4 / 2 at r = 1 + z.
+        # Measured 5.0e-7 and 1e-10 relative.
+        angle = np.linspace(0.0, 2.0 * math.pi, 400, endpoint=False)
+        samples = _resample_closed(
+            np.column_stack([np.cos(angle), np.sin(angle)]),
+            0.05,
+        )
+        expansion = _CycleExpansion(
+            samples,
+            system(PaperCycleField),
+            constant_noise(_IDENTITY),
+        )
+        assert np.allclose(expansion.quadratic, 4.0, rtol=1.0e-5)
+        assert np.allclose(expansion.cubic, 12.0, rtol=1.0e-5)
+
+    def test_on_the_fast_ellipse_the_coefficients_are_its_closed_form(self):
+        # Here the rotation turns across the cycle. Measured 1.6e-5 and 4.6e-5
+        # relative at 800 samples, second order in the sampling.
+        samples = _resample_closed(ellipse_states(), 0.05)
+        expansion = _CycleExpansion(
+            samples,
+            system(EllipticCycleField),
+            constant_noise(ELLIPSE_AMPLITUDE),
+        )
+        quadratic, cubic = _ellipse_closed_form(samples)
+        assert np.allclose(expansion.quadratic, quadratic, rtol=1.0e-4)
+        assert np.allclose(expansion.cubic, cubic, rtol=2.0e-4)
+
+    def test_the_gradient_is_the_exact_one_to_third_order(self):
+        # Across the cycle G z + C z^2 / 2, along it G' z^2 / (2 s), against
+        # grad U = (q - 1) grad q. Measured 3.1e-5 and 2.6e-5 at |q - 1| =
+        # 0.025 and 0.045, 1.8e-4 to 6.4e-4 at 0.09 to 0.12 (|grad U| 0.21
+        # to 0.23).
+        samples = _resample_closed(ellipse_states(), 0.01)
+        expansion = _CycleExpansion(
+            samples,
+            system(EllipticCycleField),
+            constant_noise(ELLIPSE_AMPLITUDE),
+        )
+        for point, bound in (
+            ([1.01, 0.05], 1.0e-4),
+            ([1.02, 0.05], 1.0e-4),
+            ([1.04, 0.1], 1.0e-3),
+            ([0.3, 0.64], 1.0e-3),
+            ([-0.62, -0.5], 1.0e-3),
+        ):
+            state = np.array(point)
+            excess = state[0] ** 2 + 2.0 * state[1] ** 2 - 1.0
+            exact = excess * np.array([2.0 * state[0], 4.0 * state[1]])
+            assert np.max(np.abs(expansion.gradient(state) - exact)) < bound
+
+    def test_the_elliptic_band_starts_at_the_exact_u(self):
+        # Dahiya and Cameron's start, l parallel to f at the foot, was off by
+        # 0.117, 0.0289 and 0.0082 here at 41, 81 and 161 points. From the
+        # expansion: 2.9e-4, 2.5e-5 and 1.8e-6, order 3.5 to 3.8 - faster
+        # than the march's own.
+        errors = [_ellipse_band_error(count) for count in (41, 81)]
+        assert errors[1] < 1.0e-4
+        assert min(_orders(errors)) > 3.0
+
+    def test_u_about_the_fast_ellipse_is_never_negative(self):
+        # With l parallel to f at the foot U went down to -0.080, -0.020 and
+        # -0.0059 inside the cycle at 41, 81 and 161 points.
+        _grid, _solver, field = _ellipse_field(41)
+        assert float(np.nanmin(field.values)) >= 0.0
+
+    def test_sde_24s_band_is_as_exact_as_before(self):
+        # The old start was exact in direction on the circle (4.4e-5 at 81
+        # points); the expansion's error there is the z^4 term: 1.7e-5.
+        grid = DensityGrid.box([-2.0, -2.0], [2.0, 2.0], [81, 81])
+        indices, values = _paper_cycle().initial(
+            grid,
+            system(PaperCycleField),
+            constant_noise(_IDENTITY),
+        )
+        exact = _cycle_exact(grid.points()[indices])
+        assert np.max(np.abs(values - exact)) < 3.0e-5
+
+    def test_a_cycle_given_coarsely_is_measured_from_its_spline(self):
+        # SDE (24)'s circle at 64 states: the polygon through them cuts inside
+        # by 1.2e-3, which put about 4e-4 into the band at 81 points; through
+        # the periodic spline the band is as good as from 400 states.
+        angle = np.linspace(0.0, 2.0 * math.pi, 64, endpoint=False)
+        grid = DensityGrid.box([-2.0, -2.0], [2.0, 2.0], [81, 81])
+        indices, values = CycleAttractor(
+            np.column_stack([np.cos(angle), np.sin(angle)]),
+        ).initial(grid, system(PaperCycleField), constant_noise(_IDENTITY))
+        exact = _cycle_exact(grid.points()[indices])
+        assert np.max(np.abs(values - exact)) < 3.0e-5
+
+    def test_a_repelling_cycle_is_refused(self):
+        grid = DensityGrid.box([-2.0, -2.0], [2.0, 2.0], [41, 41])
+        with pytest.raises(ValueError, match="not stable"):
+            _paper_cycle().initial(
+                grid,
+                system(_ReversedCycleField),
+                constant_noise(_IDENTITY),
+            )
+
+
+class TestPeriodicLinear(TestCase):
+    """The periodic solution of ``y' = a y + b`` round a cycle's samples."""
+
+    def test_constant_coefficients_give_the_fixed_point(self):
+        times = np.full(50, 0.1)
+        values = _periodic_linear(times, np.full(50, -2.0), np.full(50, 3.0))
+        assert np.allclose(values, 1.5, rtol=1.0e-13)
+
+    def test_varying_coefficients_match_an_independent_integration(self):
+        # a = -1 + cos t / 2, b = 1 + sin t / 3 on [0, 2 pi): integrated by
+        # scipy over twenty periods from zero, where the start is forgotten.
+        count = 400
+        times = np.full(count, 2.0 * math.pi / count)
+        clock = np.arange(count) * times[0]
+        rate = -1.0 + 0.5 * np.cos(clock)
+        source = 1.0 + np.sin(clock) / 3.0
+        values = _periodic_linear(times, rate, source)
+        solution = solve_ivp(
+            lambda t, y: (-1.0 + 0.5 * np.cos(t)) * y + 1.0 + np.sin(t) / 3.0,
+            (0.0, 40.0 * math.pi),
+            [0.0],
+            rtol=1.0e-11,
+            atol=1.0e-13,
+            dense_output=True,
+        )
+        expected = solution.sol(38.0 * math.pi + clock)[0]
+        assert np.max(np.abs(values - expected)) < 1.0e-5
+
+
+class TestWindingReference(TestCase):
+    """DEQ-152: the reference follows a path that winds round the attractor."""
+
+    def test_a_chain_gets_nodes_for_every_turn(self):
+        angle = np.linspace(0.0, 6.0 * math.pi, 3000)
+        spiral = (1.0 + 0.05 * angle)[:, None] * np.column_stack(
+            [np.cos(angle), np.sin(angle)],
+        )
+        # Three turns need about a thousand nodes: with the exact path to
+        # (0.3, 0) inside the fast ellipse as the start, 3.6 turns, the chain
+        # was off by 2.1e-2, 1.7e-3 and 1.3e-4 at 321, 641 and 1281 nodes.
+        nodes = _winding_nodes(spiral, 81)
+        assert nodes >= 900
+        assert nodes == (math.ceil(3 * _NODES_PER_TURN) | 1)
+        straight = np.column_stack([np.linspace(0.0, 1.0, 50), np.zeros(50)])
+        assert _winding_nodes(straight, 81) == 81
+
+    def test_a_trace_that_stalls_far_out_is_carried_into_the_surface(self):
+        # At (0.3, 0) inside the fast ellipse the trace stops after a step or
+        # two; the true path winds about three and a half times from the band.
+        grid, solver, field = _ellipse_field(41)
+        target = np.array([0.3, 0.0])
+        trace = solver.minimum_action_path(field, target).states
+        surface = field.attractor.start(
+            grid,
+            system(EllipticCycleField),
+            constant_noise(ELLIPSE_AMPLITUDE),
+            target,
+        ).shrunk()
+        assert not any(surface.inside(state) for state in trace)
+        carried = solver._onto(field, trace, surface)  # noqa: SLF001
+        assert surface.inside(carried[-1])
+        assert not surface.inside(carried[-2])
+        assert np.array_equal(carried[: len(trace)], trace)
+        assert _winding_nodes(carried, 81) > 640
+
+    def test_the_step_onto_the_surface_is_not_a_turn(self):
+        # A trace that stalled and doubled back: the chain from the surface
+        # runs out past the target and back, half a turn at the corner, but
+        # the trace itself never turns. Counted with the corner, the tests'
+        # non-normal system got 141 nodes for a trace that turns 0.03 times.
+        surface = EquilibriumAttractor([0.0, 0.0]).start(
+            None,
+            system(RotatingCubicField),
+            constant_noise(_IDENTITY),
+            [0.4, 0.2],
+        )
+        trace = np.column_stack([np.linspace(0.4, 0.6, 30), np.full(30, 0.2)])
+        chain, _parameter = _guide(surface, trace, 81)
+        assert len(chain) == 81
+
+    def test_a_moved_start_carries_the_chain_without_a_corner(self):
+        # Moving the first state alone puts a corner the size of the move into
+        # the chain; shared out along the arc, a straight chain stays straight
+        # and its end stays put.
+        chain = np.column_stack([np.linspace(0.0, 1.0, 201), np.zeros(201)])
+        moved = _moved_start(chain, np.array([0.0, 0.3]))
+        assert np.allclose(moved[0], [0.0, 0.3])
+        assert np.allclose(moved[-1], chain[-1])
+        along = moved - moved[0]
+        cross = along[:, 0] * 0.3 + along[:, 1] * 1.0
+        assert np.max(np.abs(cross)) < 1.0e-12
+
+    def test_a_trace_that_reached_the_surface_is_left_alone(self):
+        solver, field, _checked_field, _indices, _true = _checked("gradient")
+        target = np.array([-1.5, -0.8])
+        trace = solver.minimum_action_path(field, target).states
+        surface = field.attractor.start(
+            field.grid,
+            system(AnisotropicGradientField),
+            constant_noise(ANISOTROPIC_AMPLITUDE),
+            target,
+        )
+        assert solver._onto(field, trace, surface) is trace  # noqa: SLF001
 
 
 class TestRefusals(TestCase):
@@ -949,16 +1222,17 @@ class TestErrorEstimate:
         index = np.ravel_multi_index(grid.nearest([0.5, 0.3]), grid.shape)
         target = grid.points()[index]
         value, own = solver.reference(field, target)
-        with pytest.warns(UserWarning, match="not a bound"):
-            checked = solver.check(field, [index])
-        # The chain from the surface is no better than the grid here - the
-        # path spirals out of the origin ten times faster than it climbs - and
-        # since DEQ-117 the reference says it has no bound rather than offer
-        # one that holds only because it is large.
-        assert np.isinf(own)
-        assert np.isfinite(value)
-        assert checked.status.ravel()[index] == UNBOUNDED
-        assert np.array_equal(checked.values, field.values)
+        checked = solver.check(field, [index])
+        # Before DEQ-152 the chain from the surface was no better than the
+        # grid here - the path spirals out of the origin ten times faster than
+        # it climbs - and the reference said it had no bound. With nodes for
+        # every turn of the trace it is 1.8e-5 off with an estimate of 1.4e-4,
+        # where the grid is 2.5e-3 off.
+        exact = 2.0 * target[0] ** 2 + target[1] ** 2
+        assert np.isfinite(own)
+        assert abs(value - exact) <= own < 1.0e-3
+        assert checked.status.ravel()[index] == CHECKED
+        assert checked.errors.ravel()[index] >= abs(field.values.ravel()[index] - exact)
 
     @pytest.mark.slow
     def test_the_references_own_estimate_bounds_its_error(self):
@@ -1052,28 +1326,6 @@ class TestRefinement(TestCase):
         assert np.array_equal(flagged.values, field.values)
 
 
-# Inside and beside the elliptic cycle, and beside SDE (24)'s round one.
-_ELLIPSE_TARGETS = ((0.3, 0.0), (0.0, 0.3), (1.4, 0.3))
-
-
-@functools.cache
-def _ellipse_checked():
-    """The fast elliptic cycle at 81 points, checked with a tolerance."""
-    grid = DensityGrid.box([-2.0, -1.6], [2.0, 1.6], [81, 81])
-    solver = OrderedLineIntegral(
-        system(EllipticCycleField),
-        constant_noise(ELLIPSE_AMPLITUDE),
-        grid,
-    )
-    field = solver.solve(CycleAttractor(ellipse_states()))
-    indices = [
-        np.ravel_multi_index(grid.nearest(t), grid.shape) for t in _ELLIPSE_TARGETS
-    ]
-    with pytest.warns(UserWarning, match="of the points checked") as caught:
-        checked = solver.check(field, indices, tolerance=1.0e-3)
-    return solver, field, checked, indices, [str(w.message) for w in caught]
-
-
 class TestUnboundedPoints(TestCase):
     """DEQ-117: a point the reference cannot bound is labelled, not fatal."""
 
@@ -1098,27 +1350,6 @@ class TestUnboundedPoints(TestCase):
         assert np.isnan(checked.errors.ravel()[indices[1]])
         assert checked.unbounded.tolist() == [indices[1]]
         assert np.array_equal(checked.values, field.values)
-
-    def test_inside_a_fast_cycle_the_reference_is_labelled_not_bounded(self):
-        # Measured at (0.3, 0): the reference was 1.66 off with an estimate of
-        # 1.47; the chain from the band winds 0.14 times where the path winds
-        # several, and the surface at twice the distance came out closer.
-        # At (0, 0.3) the chain does not even stay finite: no reference.
-        _solver, field, checked, indices, _messages = _ellipse_checked()
-        inside = indices[:2]
-        status = checked.status.ravel()[inside]
-        assert status[0] == UNBOUNDED
-        assert np.isinf(checked.errors.ravel()[inside[0]])
-        assert status[1] in (UNBOUNDED, FAILED)
-        assert set(inside) <= set(checked.unbounded.tolist())
-        assert np.array_equal(
-            checked.values.ravel()[inside], field.values.ravel()[inside]
-        )
-
-    def test_outside_the_fast_cycle_the_reference_is_labelled_too(self):
-        # (1.4, 0.32): the reference was 0.054 off, with an estimate of 0.011.
-        _solver, _field, checked, indices, _messages = _ellipse_checked()
-        assert checked.status.ravel()[indices[2]] == UNBOUNDED
 
     def test_a_value_that_moves_going_in_again_has_no_bound(self):
         # The third surface, at half the inner distance: shift its value by
@@ -1169,6 +1400,28 @@ class TestUnboundedPoints(TestCase):
             assert not np.allclose(third, second)
             assert np.allclose(third, surfaces[1].shrunk().point(angle))
 
+    def test_the_surface_error_is_the_larger_move(self):
+        # Outer and inner values made equal, the inmost moved by half of a
+        # shift: the surface's share is that half, not the zero between the
+        # outer two (the multiplicative system's (-1.01, -0.71), DEQ-152).
+        solver, field, _checked_field, _indices, _true = _checked("gradient")
+        genuine = _relax_from
+        shift = 1.0e-2
+        calls = []
+
+        def relax(gmam, surface, guide):
+            value, chain, place = genuine(gmam, surface, guide)
+            calls.append(value)
+            if len(calls) == 1:
+                return value + shift, chain, place
+            moved = calls[1] + (shift if len(calls) < 3 else 0.5 * shift)
+            return moved, chain, place
+
+        with mock.patch.object(quasipotential_module, "_relax_from", relax):
+            _value, own = solver.reference(field, np.array([-1.5, -0.8]))
+        assert np.isfinite(own)
+        assert own >= 1.4 * shift
+
     def test_a_third_chain_that_will_not_stay_finite_has_no_bound(self):
         solver, field, _checked_field, _indices, _true = _checked("gradient")
         genuine = _relax_from
@@ -1213,40 +1466,89 @@ class TestUnboundedPoints(TestCase):
         assert np.isinf(owns[1])
 
     def test_refinement_skips_the_points_it_cannot_bound_and_says_so(self):
-        _solver, field, checked, _indices, messages = _ellipse_checked()
-        assert any("not a bound" in m and "not refined" in m for m in messages)
-        skipped = checked.unbounded
-        assert skipped.size > 0
-        assert np.all(checked.status.ravel()[skipped] != REFINED)
-        assert np.array_equal(
-            checked.values.ravel()[skipped], field.values.ravel()[skipped]
-        )
+        solver, field, _checked_field, indices, _true = _checked("gradient")
+        unbounded = field.grid.points()[indices[0]]
+        genuine = OrderedLineIntegral.reference
 
-    def test_the_estimate_bounds_the_error_wherever_it_is_claimed(self):
-        # Inside and outside the fast cycle, and beside SDE (24)'s: every
-        # reference either says it has no bound or has one.
-        ellipse_solver, ellipse_field, *_ = _ellipse_checked()
+        def reference(self, field, state, nodes=81):
+            value, own = genuine(self, field, state, nodes)
+            return (value, np.inf) if np.allclose(state, unbounded) else (value, own)
+
+        with (
+            mock.patch.object(OrderedLineIntegral, "reference", reference),
+            pytest.warns(UserWarning, match="not a bound") as caught,
+        ):
+            checked = solver.check(field, indices[:2], tolerance=1.0e-12)
+        assert any("not refined" in str(w.message) for w in caught)
+        assert checked.unbounded.tolist() == [indices[0]]
+        assert checked.status.ravel()[indices[0]] == UNBOUNDED
+        assert checked.values.ravel()[indices[0]] == field.values.ravel()[indices[0]]
+
+    def test_the_estimate_bounds_the_error_beside_sde_24s_cycle(self):
         cycle_solver, cycle_field, *_ = _checked("cycle")
-        cases = [
-            (ellipse_solver, ellipse_field, target, ellipse_quasipotential)
-            for target in _ELLIPSE_TARGETS
-        ] + [
-            (cycle_solver, cycle_field, target, _cycle_exact)
-            for target in ((1.0, 1.0), (0.5, 0.0))
-        ]
-        claimed = 0
-        for solver, field, target, exact in cases:
-            point = field.grid.points()[
-                np.ravel_multi_index(field.grid.nearest(target), field.grid.shape)
+        for target in ((1.0, 1.0), (0.5, 0.0)):
+            point = cycle_field.grid.points()[
+                np.ravel_multi_index(
+                    cycle_field.grid.nearest(target), cycle_field.grid.shape
+                )
             ]
-            try:
-                value, own = solver.reference(field, point)
-            except ValueError:
-                continue  # no reference, so no bound claimed
-            error = abs(value - float(exact(point[None, :])[0]))
+            value, own = cycle_solver.reference(cycle_field, point)
+            error = abs(value - float(_cycle_exact(point[None, :])[0]))
+            assert np.isfinite(own)
             assert own >= error, (target, value, own, error)
-            claimed += bool(np.isfinite(own))
-        assert claimed >= 2
+
+
+# Inside the fast elliptic cycle, and beside it outside.
+_ELLIPSE_TARGETS = ((0.3, 0.0), (0.0, 0.32), (0.5, 0.2), (1.4, 0.32))
+
+
+@pytest.mark.slow  # a winding reference relaxes chains of a thousand nodes
+class TestFastCycleReference(TestCase):
+    """DEQ-151/152: inside and beside the fast ellipse the reference is bounded.
+
+    Before, every reference here was labelled UNBOUNDED or FAILED: the band's
+    start was off at leading order and the chain wound 0.12 times where the
+    path winds about four (the value got worse going in: 0.19, 1.68, 1.84 off
+    at (0.3, 0)). Measured at 81 points, error against estimate: 4.7e-4 and
+    6.7e-3 at (0.3, 0), 2.2e-4 and 2.5e-3 at (0, 0.32), 1.6e-4 and 1.8e-3 at
+    (0.5, 0.2), 1.2e-4 and 2.5e-4 at (1.4, 0.32). Inside the cycle a point
+    costs one to four minutes.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        grid, solver, field = _ellipse_field(81)
+        cls.results = []
+        genuine = _relax_from
+        for target in _ELLIPSE_TARGETS:
+            point = grid.points()[
+                np.ravel_multi_index(grid.nearest(target), grid.shape)
+            ]
+            values = []
+
+            def relax(gmam, surface, guide, values=values):
+                value, chain, place = genuine(gmam, surface, guide)
+                values.append(value)
+                return value, chain, place
+
+            with mock.patch.object(quasipotential_module, "_relax_from", relax):
+                value, own = solver.reference(field, point)
+            exact = float(ellipse_quasipotential(point[None, :])[0])
+            cls.results.append((target, value, own, exact, values))
+
+    def test_every_reference_is_finite_and_bounds_its_error(self):
+        for target, value, own, exact, _values in self.results:
+            assert np.isfinite(own), target
+            assert abs(value - exact) <= own, (target, value, own, exact)
+
+    def test_the_value_settles_as_the_surface_moves_in(self):
+        # From the surfaces at 1.5, 0.75 and 0.375 cells: going in moves the
+        # value by less than the estimate, and far less than U.
+        for target, _value, own, exact, values in self.results:
+            far, near, nearest = values[0], values[1], values[-1]
+            assert abs(far - near) <= own, target
+            assert abs(near - nearest) <= own, target
+            assert abs(near - nearest) < 1.0e-2 * exact, target
 
 
 class TestCubicTerm(TestCase):

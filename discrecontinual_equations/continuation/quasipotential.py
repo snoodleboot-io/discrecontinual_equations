@@ -60,10 +60,14 @@ Ornstein-Uhlenbeck error below at 161 points (1.06e-3 against 5.0e-4).
 The attractor is initialised exactly where it can be: around a stable equilibrium
 ``x*`` the points within a couple of cells get the quadratic quasipotential of the
 linearisation, ``(1/2) (x - x*)^T S^{-1} (x - x*)`` with ``J S + S J^T + D(x*) = 0``;
-around a limit cycle the points within a cell and a half get the paper's
-Simpson-rule start from the nearest point of the cycle (see
-:class:`CycleAttractor`), with ``grad U`` from the split of the drift into a
-gradient and a rotational part.
+around a limit cycle the points within a cell and a half get the expansion of
+``U`` across the cycle, ``(1/2) G z^2 + (1/6) C z^3`` in the distance ``z``
+along its normal, with ``G`` the periodic solution of Lin, Yu and Zhou's
+Riccati equation along the orbit and ``C`` from the next order (see
+:class:`CycleAttractor`). Before DEQ-151 it was Dahiya and Cameron's start,
+which takes the drift's rotational part parallel to the drift at the nearest
+point of the cycle: wrong at leading order where the rotation turns across
+the cycle, and below zero inside the verification's fast elliptic cycle.
 
 *Measured.* The error in ``U`` against the closed forms, by doubling the grid on a
 fixed box, at a radius held at 8 cells (the tests repeat these):
@@ -293,6 +297,22 @@ them and a warning names them. Across the verification's systems every finite
 estimate measured bounds its reference's error (see
 :meth:`OrderedLineIntegral.reference`).
 
+*Winding paths* (DEQ-152). That cycle's failures had two causes, both since
+removed. Its band started from a wrong ``U`` (see :class:`CycleAttractor`),
+and the chain was a straight line: the traced path it starts from stops where
+a step would raise ``U``, which round a fast rotation is almost at once, and
+81 nodes cannot hold the four turns the true path makes. The trace is now
+carried on into the start surface whatever ``U`` does, with the attractor's
+expansion for ``grad U`` once inside its band, and the chain gets 320 nodes
+for every turn the trace makes (81 at least); a start slid along the surface
+moves the whole chain with it, not its first node alone. Every reference
+beside and inside that cycle is now finite and bounds its error (0.3, 0:
+4.7e-4 off, estimate 6.7e-3, where the grid is 9.3e-3 off), and the
+strongly rotating equilibria gain as much: on SDE (21) the references went
+from 2.1e-2 to 4.3e-2 off to 1.7e-5 to 2.9e-5. A winding point costs far
+more than one that does not: 21 to 230 seconds inside the cycle at 81
+points, 3 to 16 beside it, against 0.4 to 16 elsewhere.
+
 The traced path's action was the first candidate, being cheap, and was measured
 and rejected: its own error, from a path that follows the grid's gradient, is
 the size of the grid's (at 81 points the median 3.6e-4 against a largest grid
@@ -341,9 +361,9 @@ References:
     - Dahiya, D. and Cameron, M. (2018). Ordered line integral methods for
       computing the quasi-potential. Journal of Scientific Computing.
       arXiv:1706.07509, doi:10.1007/s10915-017-0590-9. Eqs. (2), (3): the
-      geometric action and the Hamilton-Jacobi equation; (9)-(12): the start
-      beside a cycle; (14), (15), (B-7), (B-8): the OLIM-MID updates; (21),
-      (24): test systems; (28): the radius rule.
+      geometric action and the Hamilton-Jacobi equation; Sec. 2.1.2, (7)-(12):
+      the start beside a cycle, replaced by DEQ-151; (14), (15), (B-7), (B-8):
+      the OLIM-MID updates; (21), (24): test systems; (28): the radius rule.
     - Dahiya, D. and Cameron, M. (2018). An ordered line integral method for
       computing the quasi-potential in the case of variable anisotropic
       diffusion. Physica D. arXiv:1806.05321,
@@ -361,6 +381,12 @@ References:
       arXiv:1604.03818, doi:10.1007/978-1-4939-6969-2_2. Eq. (19): the gMAM
       descent flow, with the additive-noise Hamiltonian of Eqs. (32)-(35);
       Eqs. (38)-(42): the simplified flow for a state-dependent ``D``.
+    - Lin, L., Yu, H. and Zhou, X. (2019). Quasi-potential calculation and
+      minimum action method for limit cycle. Journal of Nonlinear Science
+      29(3), 961-991. arXiv:1806.04031, doi:10.1007/s00332-018-9509-3. Eq.
+      (23): the quadratic expansion of ``U`` about a cycle; Eq. (30): the
+      periodic Riccati equation for its coefficient; Sec. 4.2, Eqs. (36),
+      (37): the periodic solution in the plane; Eq. (32): its momentum.
 """
 
 import heapq
@@ -368,7 +394,7 @@ import warnings
 from collections.abc import Sequence
 
 import numpy as np
-from scipy.interpolate import RegularGridInterpolator
+from scipy.interpolate import CubicSpline, RegularGridInterpolator
 from scipy.linalg import cho_factor, solve_banded, solve_continuous_lyapunov
 from scipy.spatial import cKDTree
 
@@ -379,6 +405,7 @@ from discrecontinual_equations.continuation.noise import (
     field_at,
     fields_at,
     jacobian_at,
+    jacobians_along,
 )
 from discrecontinual_equations.function.function import Function
 
@@ -411,6 +438,8 @@ _ARRIVAL_CELLS = 2.0
 _CUBIC_DIRECTIONS = 8
 _TAYLOR_STEP = 1.0e-3
 _REFERENCE_NODES = 81
+# The fewest chain nodes per turn of a winding path (see _winding_nodes).
+_NODES_PER_TURN = 320
 _START_SHARE = 0.25
 _SECANT_STEPS = 6
 _SECANT_TOLERANCE = 1.0e-4
@@ -425,6 +454,8 @@ _JUMP_SHARE = 0.25
 # value squared; 1e-10, the default, costs twice the steps for nothing visible.
 _REFERENCE_SETTLED = 1.0e-8
 _BAND_SAMPLES_PER_CELL = 16
+# Below this |a dt| the step's exponential integrals are taken by their series.
+_SERIES_BELOW = 1.0e-4
 GRID, CHECKED, REFINED, FAILED, UNBOUNDED = 0, 1, 2, 3, 4
 
 
@@ -680,44 +711,73 @@ def _cubic_coefficients(
 class CycleAttractor:
     """A stable limit cycle, given as states around it in order.
 
-    ``U`` vanishes on the cycle. The points within ``width`` cells of it start
-    from the value Dahiya and Cameron's initialisation gives (their Eqs. (9) to
-    (12)), carried over to a matrix ``D``. Near the cycle the drift splits as
-    ``f = -(1/2) D grad U + l`` with ``grad U . l = 0``, and ``l`` is close to
-    ``f`` on the cycle, where ``grad U`` vanishes; taking ``l`` parallel to ``f``
-    at the foot ``x*`` of ``x`` on the cycle gives
+    ``U`` vanishes on the cycle, and the points within ``width`` cells of it
+    start from the expansion of ``U`` about it in the distance ``z`` along the
+    cycle's normal: ``U = (1/2) G(tau) z^2 + (1/6) C(tau) z^3 + O(z^4)``, with
+    ``tau`` the time along the cycle. ``G`` is the periodic solution of the
+    Riccati equation of Lin, Yu and Zhou (their Eq. (30)), which in the plane
+    is scalar,
 
-        ``grad U(z) = -2 D(z)^{-1} (f(z) - c f(x*))``,
-        ``c = <f(z), f(x*)>_A / <f(x*), f(x*)>_A``, ``A = D(z)^{-1}``,
+        ``G' = -2 M G - A G^2``,  ``M = n^T J n``,  ``A = n^T D n``,
 
-    and ``U(x) = integral of grad U . dx`` from the foot, where ``U`` and
-    ``grad U`` vanish, by Simpson's rule:
-    ``(4 grad U(x_m) + grad U(x)) . (x - x*) / 6`` with ``x_m`` the midpoint.
-    The foot is the projection of ``x`` on the chord from the nearest point of
-    the cycle, resampled to a quarter of a cell, to its neighbour on ``x``'s side.
+    for the drift's Jacobian ``J`` and the unit normal ``n`` on the cycle;
+    ``H = 1 / G`` then solves the linear ``H' = 2 M H + A``, whose periodic
+    solution is their Eq. (37) - positive exactly when the cycle is stable
+    (``integral of M`` over a period below zero) and ``A`` is not zero all the
+    way round. ``C`` comes from the third-order terms of the same expansion of
+    the Hamilton-Jacobi equation, derived here (see :class:`_CycleExpansion`):
+    a linear periodic equation with the same stability. Both are solved round
+    the cycle once, exactly for piecewise-linear coefficients.
 
-    A straight-segment action from the foot, the obvious alternative, is wrong
-    by ``O(h)``: across a rotating flow it pays ``|l|`` per unit length. The
-    march accepts the band in the order of these values and cannot repair the
-    first ones it accepts, so that error stays. On Dahiya and Cameron's SDE (24)
-    it left ``U`` next to the cycle off by 5.45e-3 and 3.27e-3 at 161 and 321
-    points (order 0.74); from this start, 1.47e-3 and 3.0e-4 (order 2.3), the
-    same as from the exact values.
+    The start Dahiya and Cameron give (their Sec. 2.1.2, Eqs. (7) to (12)) was
+    used before DEQ-151: it splits the drift as ``f = -(1/2) D grad U + l``
+    and takes ``l`` parallel to ``f`` at the cycle point nearest. That is
+    exact when the rotation keeps its direction across the cycle, as on SDE
+    (24)'s circle, but where it turns it is wrong at the leading order: ``l``
+    is large and its direction changes by ``O(z)``, so ``grad U`` is off by
+    ``O(|l| z)``, as much as itself. On the verification's elliptic cycle run
+    round three times faster than it is approached it left the band off by
+    0.117, 0.0289 and 0.0082 at 41, 81 and 161 points, and ``U`` below zero
+    inside the cycle (down to -0.080, -0.020, -0.0059). From the expansion
+    the band is off by 2.9e-4, 2.5e-5 and 1.8e-6 (order 3.5 to 3.8: the
+    ``z^4`` term), ``U`` is nowhere negative, and the largest error on the
+    verification's mask falls from 0.472, 0.119 and 0.0188 to 0.372, 0.0911
+    and 0.0119. On SDE (24)'s circle, where the old start was right in
+    direction, the band is off by 2.3e-4, 1.7e-5 and 1.3e-6 against 1.6e-4,
+    4.4e-5 and 9.3e-6, and the largest error is unchanged to four digits.
 
-    *Limit.* Taking ``l`` parallel to ``f(x*)`` is exact when the rotation
-    keeps its direction across the cycle, as on SDE (24)'s circle. Where it
-    turns - an elliptic cycle run round fast - the start's ``U`` can be off by
-    a large share of itself (DEQ-117 measured 0.0241 against an exact 0.0146
-    on the reference's outer start curve, at 81 points on an ellipse with
-    rotation 3, and values below zero inside it), and
-    the grid-free check beside such a cycle labels its points as not
-    bounded rather than trust it (see :meth:`OrderedLineIntegral.reference`).
+    *Limit.* What is left beside a fast cycle is the march's own error, not
+    the start's. The drift's rotation-to-gradient ratio grows without bound
+    towards the cycle, where ``grad U`` vanishes, so no fixed radius reaches
+    far enough back along the front just outside the band (see the module
+    docstring's *What the radius must cover*): on the elliptic cycle the
+    largest error within ``|q - 1| < 0.2`` is 3.6e-3 and 4.7e-3 at 81 and 161
+    points, and neither a band of three cells nor a radius of 16 brings it
+    down. Inside the cycle the largest error is 0.0106 to 0.0139 at 81
+    points, against 0.0149 to 0.0276 before, but 5.2e-3 to 8.7e-3 at 161
+    points, against 1.4e-3 to 6.2e-3 (by bands of ``q``): there the old
+    start's error, below the true ``U``, had offset the march's, above it.
+
+    A straight-segment action from the foot, the other obvious start, is wrong
+    by ``O(h)``: across a rotating flow it pays ``|l|`` per unit length, and
+    the march cannot repair the first values it accepts.
+
+    The cycle's own states should lie on it to well within a cell: ``U`` is
+    measured from the polygon through them, and a polygon off the cycle by
+    ``e`` puts ``G z e`` into every value of the band.
 
     References:
+        - Lin, L., Yu, H. and Zhou, X. (2019). Quasi-potential calculation and
+          minimum action method for limit cycle. Journal of Nonlinear Science
+          29, 961-991. arXiv:1806.04031, doi:10.1007/s00332-018-9509-3. Eq.
+          (23), the quadratic expansion about the cycle; Eq. (30), the
+          periodic Riccati equation; Eqs. (36), (37) and Sec. 4.2, its
+          periodic solution in the plane; Eq. (32), the momentum of the
+          expansion. The cubic term is derived here, not taken from them.
         - Dahiya, D. and Cameron, M. (2018). Ordered line integral methods for computing
           the quasi-potential. Journal of Scientific Computing. arXiv:1706.07509,
-          doi:10.1007/s10915-017-0590-9. Eqs. (9)-(12), the start next to a limit cycle,
-          here with a matrix ``D``.
+          doi:10.1007/s10915-017-0590-9. Sec. 2.1.2, Eqs. (7)-(12), the start
+          next to a limit cycle this replaces; Eqs. (24)-(26), SDE (24).
     """
 
     __slots__ = ["_states", "_width"]
@@ -738,15 +798,10 @@ class CycleAttractor:
         cell = float(np.min(grid.spacings))
         samples = _resample_closed(self._states, cell / _CYCLE_SAMPLES_PER_CELL)
         points = grid.points()
-        distance, nearest = cKDTree(samples).query(points)
+        distance, _ = cKDTree(samples).query(points)
         near = np.flatnonzero(distance <= self._width * cell)
-        values = np.array(
-            [
-                _cycle_start(drift, noise, samples, int(index), point)
-                for index, point in zip(nearest[near], points[near], strict=True)
-            ],
-        )
-        return near, values
+        expansion = _CycleExpansion(samples, drift, noise)
+        return near, expansion.values(points[near])
 
     def end(self) -> np.ndarray | None:
         """A cycle has no single end point; a traced path stops on reaching it."""
@@ -770,13 +825,237 @@ class CycleAttractor:
 
         The curve ``width`` cells from the cycle on ``target``'s side, capped at
         half the distance to ``target``, with ``U`` there from the same
-        Simpson-rule start the march uses.
+        expansion the march starts from.
         """
         cell = float(np.min(grid.spacings))
         samples = _resample_closed(self._states, cell / _BAND_SAMPLES_PER_CELL)
         distance, _ = cKDTree(samples).query(np.asarray(target, dtype=float))
         offset = min(self._width * cell, _HALF * float(distance))
-        return _BandStart(samples, drift, noise, target, offset)
+        return _BandStart(_CycleExpansion(samples, drift, noise), target, offset)
+
+
+class _CycleExpansion:
+    """``U`` about a stable cycle to third order in the distance from it.
+
+    With ``tau`` the time along the cycle ``gamma``, ``v = f(gamma)`` of speed
+    ``s``, ``e = v / s``, ``n`` the unit normal ``e`` turned by a right angle,
+    and ``x = gamma(tau) + z n(tau)``, ``U = (1/2) G z^2 + (1/6) C z^3``.
+    Substituting into ``grad U . f + (1/2) grad U^T D grad U = 0`` - with
+    ``grad U = (dU / dtau) e / (s (1 - k z)) + (dU / dz) n``, ``k = n^T J e /
+    s`` the curvature, ``f = v + z J n + (1/2) z^2 f_nn`` and ``D = D(gamma) +
+    z D_n`` - the terms in ``z^2`` give Lin, Yu and Zhou's Riccati equation
+    (their Eq. (30) in the plane), and those in ``z^3``
+
+        ``C' = -3 (M + G A) C - 3 (k G' + G' (e^T J n + G e^T D n) / s
+              + G n . f_nn + G^2 n^T D_n n)``.
+
+    Both ``H = 1 / G`` and ``C`` solve ``y' = a(tau) y + b(tau)`` with
+    ``integral of a`` over a period negative on a stable cycle (for ``C``,
+    ``M + G A = -G'/G - M``), so each has one periodic solution,
+    ``y(0) = integral of exp(integral_t^T a) b dt / (1 - exp(integral_0^T a))``
+    (Lin, Yu and Zhou's Eq. (37) for ``H``). It is taken between the samples
+    with ``a`` and ``b`` linear in ``tau`` (the trapezoidal rule inside the
+    exponential and for ``b``), and ``tau`` from the chords at the mean of
+    the speeds at their ends. The derivatives of ``f`` and ``D`` across the
+    cycle are central differences.
+
+    A point's foot is its projection on the chord from the nearest sample to
+    its neighbour on the point's side; the coefficients there are linear
+    between the two samples.
+
+    On SDE (24)'s circle (``G = 4``, ``C = 12``) and the verification's
+    elliptic cycle (``U = (1/2) (q - 1)^2``, ``G = |grad q|^2``) both
+    coefficients match the closed forms (the tests).
+    """
+
+    __slots__ = [
+        "_count",
+        "_cubic",
+        "_normals",
+        "_quadratic",
+        "_rate",
+        "_samples",
+        "_speeds",
+        "_tangents",
+        "_tree",
+    ]
+
+    def __init__(self, samples: np.ndarray, drift: Function, noise: NoiseMatrix):
+        self._samples = samples
+        self._count = len(samples)
+        self._tree = cKDTree(samples)
+        velocity = fields_at(drift, samples)
+        speeds = np.linalg.norm(velocity, axis=1)
+        if not np.all(speeds > 0.0):
+            message = "the drift vanishes on the cycle; it is not a limit cycle"
+            raise ValueError(message)
+        tangents = velocity / speeds[:, None]
+        normals = np.column_stack([-tangents[:, 1], tangents[:, 0]])
+        scale = _TAYLOR_STEP * np.maximum(np.max(np.abs(samples), axis=1), 1.0)
+        ahead = samples + scale[:, None] * normals
+        behind = samples - scale[:, None] * normals
+        forward = samples + scale[:, None] * tangents
+        backward = samples - scale[:, None] * tangents
+        across = fields_at(drift, ahead), fields_at(drift, behind)
+        along = fields_at(drift, forward), fields_at(drift, backward)
+        turn_n = (across[0] - across[1]) / (2.0 * scale[:, None])
+        turn_e = (along[0] - along[1]) / (2.0 * scale[:, None])
+        bend = (across[0] - 2.0 * velocity + across[1]) / (scale * scale)[:, None]
+        cells = _cells(noise, samples)
+        change = (_cells(noise, ahead) - _cells(noise, behind)) / (2.0 * scale)[
+            :, None, None
+        ]
+        normal_rate = np.einsum("ki,ki->k", normals, turn_n)
+        shear = np.einsum("ki,ki->k", tangents, turn_n)
+        curvature = np.einsum("ki,ki->k", normals, turn_e) / speeds
+        spread = np.einsum("ki,kij,kj->k", normals, cells, normals)
+        mixed = np.einsum("ki,kij,kj->k", tangents, cells, normals)
+        spread_change = np.einsum("ki,kij,kj->k", normals, change, normals)
+        bend_n = np.einsum("ki,ki->k", normals, bend)
+        closed = np.vstack([samples, samples[:1]])
+        lengths = np.linalg.norm(np.diff(closed, axis=0), axis=1)
+        times = lengths / (_HALF * (speeds + np.roll(speeds, -1)))
+        if float(np.sum(_HALF * (normal_rate + np.roll(normal_rate, -1)) * times)) >= 0:
+            message = (
+                "the cycle is not stable: the drift's normal rate n^T J n "
+                "does not integrate to below zero round it"
+            )
+            raise ValueError(message)
+        inverse = _periodic_linear(times, 2.0 * normal_rate, spread)
+        if not np.all(inverse > 0.0):
+            message = (
+                "the Riccati equation about the cycle has no positive periodic "
+                "solution: the noise does not reach across the cycle"
+            )
+            raise ValueError(message)
+        quadratic = 1.0 / inverse
+        rate = -2.0 * normal_rate * quadratic - spread * quadratic * quadratic
+        source = -3.0 * (
+            curvature * rate
+            + rate * (shear + quadratic * mixed) / speeds
+            + quadratic * bend_n
+            + quadratic * quadratic * spread_change
+        )
+        self._cubic = _periodic_linear(
+            times,
+            -3.0 * (normal_rate + quadratic * spread),
+            source,
+        )
+        self._quadratic = quadratic
+        self._rate = rate
+        self._speeds = speeds
+        self._tangents = tangents
+        self._normals = normals
+
+    @property
+    def samples(self) -> np.ndarray:
+        """The cycle's samples."""
+        return self._samples
+
+    @property
+    def quadratic(self) -> np.ndarray:
+        """``G`` at each sample."""
+        return self._quadratic
+
+    @property
+    def cubic(self) -> np.ndarray:
+        """``C`` at each sample."""
+        return self._cubic
+
+    def _locate(self, points: np.ndarray):
+        """The normal distance of each point and the weights of its two samples."""
+        _, nearest = self._tree.query(points)
+        previous = (nearest - 1) % self._count
+        following = (nearest + 1) % self._count
+        closest = self._samples[nearest]
+        offset = points - closest
+        ahead = np.einsum("ki,ki->k", offset, self._samples[following] - closest)
+        behind = np.einsum("ki,ki->k", offset, self._samples[previous] - closest)
+        beside = np.where(ahead >= behind, following, previous)
+        chord = self._samples[beside] - closest
+        share = np.einsum("ki,ki->k", offset, chord) / np.einsum(
+            "ki,ki->k", chord, chord
+        )
+        share = np.clip(share, 0.0, 1.0)
+        normal = (1.0 - share)[:, None] * self._normals[nearest] + share[
+            :, None
+        ] * self._normals[beside]
+        normal /= np.linalg.norm(normal, axis=1)[:, None]
+        foot = closest + share[:, None] * chord
+        distance = np.einsum("ki,ki->k", points - foot, normal)
+        return distance, nearest, beside, share, normal
+
+    def _blend(self, values: np.ndarray, nearest, beside, share) -> np.ndarray:
+        return (1.0 - share) * values[nearest] + share * values[beside]
+
+    def values(self, points: np.ndarray) -> np.ndarray:
+        """``U`` at each row of ``points``."""
+        points = np.atleast_2d(np.asarray(points, dtype=float))
+        distance, nearest, beside, share, _ = self._locate(points)
+        quadratic = self._blend(self._quadratic, nearest, beside, share)
+        cubic = self._blend(self._cubic, nearest, beside, share)
+        return distance * distance * (_HALF * quadratic + cubic * distance / 6.0)
+
+    def gradient(self, point: np.ndarray) -> np.ndarray:
+        """``grad U`` at ``point``, to second order in the distance.
+
+        Across the cycle ``G z + (1/2) C z^2``; along it ``(1/2) G' z^2 / s``,
+        Lin, Yu and Zhou's Eq. (32) in the plane.
+        """
+        points = np.atleast_2d(np.asarray(point, dtype=float))
+        distance, nearest, beside, share, normal = self._locate(points)
+        z = float(distance[0])
+        quadratic = float(self._blend(self._quadratic, nearest, beside, share)[0])
+        cubic = float(self._blend(self._cubic, nearest, beside, share)[0])
+        rate = float(self._blend(self._rate, nearest, beside, share)[0])
+        speed = float(self._blend(self._speeds, nearest, beside, share)[0])
+        tangent = np.array([normal[0, 1], -normal[0, 0]])
+        return (quadratic * z + _HALF * cubic * z * z) * normal[0] + (
+            _HALF * rate * z * z / speed
+        ) * tangent
+
+
+def _cells(noise: NoiseMatrix, states: np.ndarray) -> np.ndarray:
+    """``D = G G^T`` at each row of ``states``."""
+    amplitude = noise.columns_along(states)
+    return np.einsum("pki,pkj->pij", amplitude, amplitude)
+
+
+def _periodic_linear(times: np.ndarray, rate: np.ndarray, source: np.ndarray):
+    """The periodic solution of ``y' = a y + b`` at the samples of a cycle.
+
+    ``times[k]`` is the time from sample ``k`` to the next (the last back to
+    the first). Over each step ``a`` is held at the mean of its ends and ``b``
+    is linear, and the step is then exact: with ``g = a dt``,
+    ``y_{k+1} = P y_k + dt (b_k E1(g) + (b_{k+1} - b_k) E2(g))``, ``P = exp(g)``,
+    ``E1 = (P - 1) / g``, ``E2 = (P - 1 - g) / g^2``. The periodic ``y_0`` is
+    ``sum_k S_k prod_{j > k} P_j / (1 - prod_k P_k)``, summed in logarithms.
+    (The trapezoidal rule for ``b`` was tried first: its error, ``g^2 / 12``
+    relative, was 3e-4 in ``G`` on SDE (24)'s circle at 400 samples.)
+    """
+    after_source = np.roll(source, -1)
+    growth = times * _HALF * (rate + np.roll(rate, -1))
+    factor = np.exp(growth)
+    small = np.abs(growth) < _SERIES_BELOW
+    safe = np.where(small, 1.0, growth)
+    first_kind = np.where(
+        small,
+        1.0 + growth / 2.0 + growth**2 / 6.0,
+        np.expm1(safe) / safe,
+    )
+    second_kind = np.where(
+        small,
+        0.5 + growth / 6.0 + growth**2 / 24.0,
+        (np.expm1(safe) - safe) / (safe * safe),
+    )
+    gain = times * (source * first_kind + (after_source - source) * second_kind)
+    later = np.concatenate([np.cumsum(growth[::-1])[::-1][1:], [0.0]])
+    first = float(np.sum(gain * np.exp(later))) / (-float(np.expm1(np.sum(growth))))
+    values = np.empty_like(rate)
+    values[0] = first
+    for index in range(len(rate) - 1):
+        values[index + 1] = factor[index] * values[index] + gain[index]
+    return values
 
 
 class _BandStart:
@@ -784,13 +1063,13 @@ class _BandStart:
 
     Points on it are ``c(s) + d n(s)`` for the cycle ``c`` by arc length ``s``
     and ``n`` its unit normal towards the side of the target, interpolated
-    between the samples' normals so that the curve has no corners.
+    between the samples' normals so that the curve has no corners. ``U`` and
+    ``grad U`` on it come from the cycle's expansion.
     """
 
     __slots__ = [
         "_arc",
-        "_drift",
-        "_noise",
+        "_expansion",
         "_normals",
         "_offset",
         "_samples",
@@ -800,15 +1079,13 @@ class _BandStart:
 
     def __init__(
         self,
-        samples: np.ndarray,
-        drift: Function,
-        noise: NoiseMatrix,
+        expansion: _CycleExpansion,
         target: np.ndarray,
         offset: float,
     ) -> None:
+        samples = expansion.samples
+        self._expansion = expansion
         self._samples = samples
-        self._drift = drift
-        self._noise = noise
         self._target = np.asarray(target, dtype=float)
         self._offset = offset
         self._tree = cKDTree(samples)
@@ -826,13 +1103,7 @@ class _BandStart:
 
     def shrunk(self) -> "_BandStart":
         """The same curve at half the distance from the cycle."""
-        return _BandStart(
-            self._samples,
-            self._drift,
-            self._noise,
-            self._target,
-            _HALF * self._offset,
-        )
+        return _BandStart(self._expansion, self._target, _HALF * self._offset)
 
     @property
     def step(self) -> float:
@@ -873,77 +1144,29 @@ class _BandStart:
         return bool(distance < self._offset)
 
     def value(self, state: np.ndarray) -> float:
-        """``U`` at ``state`` by the cycle's Simpson-rule start."""
-        point = np.asarray(state, dtype=float)
-        _, index = self._tree.query(point)
-        return _cycle_start(self._drift, self._noise, self._samples, int(index), point)
+        """``U`` at ``state`` from the cycle's expansion."""
+        return float(self._expansion.values(np.asarray(state, dtype=float))[0])
 
     def gradient(self, state: np.ndarray) -> np.ndarray:
-        """``grad U`` at ``state`` from the split of the drift at its foot."""
-        point = np.asarray(state, dtype=float)
-        _, index = self._tree.query(point)
-        foot = _cycle_foot(self._samples, int(index), point)
-        along = field_at(self._drift, foot)
-        return _cycle_slope(self._drift, self._noise, along, point)
+        """``grad U`` at ``state`` from the cycle's expansion."""
+        return self._expansion.gradient(np.asarray(state, dtype=float))
 
 
 def _resample_closed(states: np.ndarray, spacing: float) -> np.ndarray:
+    """Points about ``spacing`` apart on the periodic spline through ``states``.
+
+    The spline, in the chord length, rather than the polygon: ``U`` beside the
+    cycle is measured from these points, and a polygon cuts inside the cycle by
+    its sagitta - ``3e-5`` for SDE (24)'s circle given at 400 states, which put
+    ``G z`` times that into every value of the band, about as much as the
+    expansion's own error (DEQ-151).
+    """
     closed = np.vstack([states, states[:1]])
     lengths = np.linalg.norm(np.diff(closed, axis=0), axis=1)
     arc = np.concatenate([[0.0], np.cumsum(lengths)])
     count = max(int(np.ceil(arc[-1] / spacing)), len(states))
     target = np.linspace(0.0, arc[-1], count, endpoint=False)
-    return np.column_stack(
-        [np.interp(target, arc, closed[:, axis]) for axis in range(_PLANE)],
-    )
-
-
-def _cycle_start(
-    drift: Function,
-    noise: NoiseMatrix,
-    samples: np.ndarray,
-    index: int,
-    point: np.ndarray,
-) -> float:
-    """``U`` at ``point`` from the cycle sample ``index`` nearest it (see above)."""
-    foot = _cycle_foot(samples, index, point)
-    along = field_at(drift, foot)
-    step = point - foot
-    middle = _HALF * (foot + point)
-    return float(
-        (
-            4.0 * _cycle_slope(drift, noise, along, middle)
-            + _cycle_slope(drift, noise, along, point)
-        )
-        @ step
-        / 6.0,
-    )
-
-
-def _cycle_foot(samples: np.ndarray, index: int, point: np.ndarray) -> np.ndarray:
-    """The projection of ``point`` on the chord from sample ``index`` to its side."""
-    closest = samples[index]
-    neighbours = (samples[index - 1], samples[(index + 1) % len(samples)])
-    beside = max(
-        neighbours,
-        key=lambda other: float((point - closest) @ (other - closest)),
-    )
-    tangent = (beside - closest) / np.linalg.norm(beside - closest)
-    return closest + float((point - closest) @ tangent) * tangent
-
-
-def _cycle_slope(
-    drift: Function,
-    noise: NoiseMatrix,
-    along: np.ndarray,
-    state: np.ndarray,
-) -> np.ndarray:
-    """``grad U = -2 D^{-1} (f - c f(x*))`` at ``state``, ``along = f(x*)``."""
-    metric = np.linalg.inv(diffusion_matrix(noise.columns_at(state)))
-    velocity = field_at(drift, state)
-    weight = float(along @ metric @ along)
-    share = float(velocity @ metric @ along) / weight if weight > 0.0 else 0.0
-    return -2.0 * metric @ (velocity - share * along)
+    return CubicSpline(arc, closed, bc_type="periodic")(target)
 
 
 def _geometric(step: np.ndarray, velocity: np.ndarray, metric: np.ndarray) -> float:
@@ -1523,23 +1746,33 @@ class OrderedLineIntegral:
         follow: the chain then resolves less of the winding the closer it
         starts, and gets worse, not better. Inside the fast elliptic cycle of
         the tests the reference at (0.3, 0) was 1.66 off with an estimate of
-        1.47: the chain wound 0.14 times, the surface at twice the distance
-        was 0.19 off, and one at half the distance 1.84 off. So the value is
-        also relaxed from a third surface, at half the distance, and the
-        estimate is returned as ``inf`` - no bound - where going in again
+        1.47 (DEQ-117): the chain wound 0.14 times, the surface at twice the
+        distance was 0.19 off, and one at half the distance 1.84 off. So the
+        value is also relaxed from a third surface, at half the distance, and
+        the estimate is returned as ``inf`` - no bound - where going in again
         moves the value by more than the estimate, or where the first two
         surfaces' values differ by more than half of ``U`` on the outer one,
-        more than the expansion could be wrong by. Measured (DEQ-117) on 73
-        references at 81 points on ten systems - the non-normal,
+        more than the expansion could be wrong by. Otherwise the surface's
+        share of the estimate is the larger of the two moves, outer to inner
+        and inner to inmost.
+
+        So that the chain can follow a winding path at all (DEQ-152), the
+        trace it starts from is carried on into the inmost surface when it
+        stalls outside it (:meth:`_onto`), each chain gets 320 nodes per turn
+        of its trace (:func:`_winding_nodes`), and a start slid along the
+        surface carries the chain with it (:func:`_moved_start`). Measured on
+        77 references at 81 points on eleven sets of points - the non-normal,
         anisotropic-gradient and SDE (24) reference problems, the rotating
         Ornstein-Uhlenbeck process, SDE (21), and the verification's strongly
         rotating linear, gradient, rotating, multiplicative and elliptic-cycle
-        systems, 16 of the references beside or inside the elliptic cycle -
-        every finite estimate bounds the reference's error. 24 are labelled: all
-        16 of the cycle's and 8 elsewhere whose estimate did hold, the price of
-        the test. Two more points inside the cycle had no reference at all (the
-        chain would not stay finite). The third relaxation, run only when the
-        first two pass, costs up to a third more per point.
+        systems, 20 of them beside or inside the elliptic cycle - every finite
+        estimate bounds the reference's error. Before, 24 were labelled and 4
+        failed, the elliptic cycle's 20 among them; now none fails and 5 are
+        labelled, none of them the cycle's (one of the five, on the rotating
+        Ornstein-Uhlenbeck process, had a bound before; it is 1.7e-7 off).
+        The relaxations of a winding path cost far more: 21 to 230 seconds a
+        point inside the cycle, 3 to 16 beside it, and 0.4 to 16 elsewhere
+        (all at 81 points).
 
         Args:
             field: A field from :meth:`solve`, which knows its attractor.
@@ -1568,10 +1801,11 @@ class OrderedLineIntegral:
         outer = attractor.start(field.grid, self._drift, self._noise, target)
         inner = outer.shrunk()
         inmost = inner.shrunk()
+        trace = self._onto(field, trace, inmost)
         far, _, place = _relax_from(gmam, outer, _guide(outer, trace, nodes))
         near, chain, parameter = _relax_from(gmam, inner, _guide(inner, trace, nodes))
         start = inner.point(parameter)
-        coarse = _equal_arc_length(_resample(chain, nodes // 2 + 1))
+        coarse = _equal_arc_length(_resample(chain, len(chain) // 2 + 1))
         coarse[0] = start
         rough = inner.value(start) + gmam.path(coarse).action
         # Each difference is taken whole, not divided by 2^p - 1 as a Richardson
@@ -1597,7 +1831,78 @@ class OrderedLineIntegral:
             return near, np.inf
         if abs(near - nearest) > own:
             return near, np.inf
-        return near, own
+        # The surface's error is measured from whichever neighbour is further:
+        # the outer start can land where the expansion happens to be good and
+        # the inner one where it is not. On the verification's multiplicative
+        # system at (-1.01, -0.71) the outer value was 1.8e-5 off, the inner
+        # 2.37e-4 and the inmost 3e-6, and |far - near| + |rough - near| came
+        # to 2.36e-4 (DEQ-152).
+        surface = max(abs(far - near), abs(near - nearest))
+        return near, surface + abs(rough - near)
+
+    def _onto(
+        self, field: GridQuasipotential, trace: np.ndarray, surface
+    ) -> np.ndarray:
+        """``trace`` carried on until it is inside ``surface``.
+
+        The traced path stops where a step would raise ``U``, and round a fast
+        rotation that happens far out: the path there runs almost along the
+        level sets, ``U`` falls by little per step, and the grid's error in it
+        is enough to stop the trace - at the verification's elliptic cycle
+        (DEQ-152) after 0.02 of the 12.6 units of the path to (0.3, 0), which
+        left the chain a straight line that wound 0.12 times against 3.6. So
+        the trace goes on along ``-(f + D grad U)`` by the same midpoint
+        steps, whatever ``U`` does: with the grid's ``grad U`` until it
+        reaches the region the attractor initialised, and from there, where
+        the grid has nothing more to say, with the attractor's own expansion
+        (``surface.gradient``), until it enters the surface. It stops early if
+        it leaves the grid or stops moving. A trace that entered the surface
+        is returned as it was.
+        """
+        if any(surface.inside(state) for state in trace):
+            return trace
+        attractor = field.attractor
+        spacing = float(np.min(self._grid.spacings))
+        length = _DESCENT_STEP * spacing
+        lower = np.array([self._grid.axis(a)[0] for a in range(_PLANE)])
+        upper = np.array([self._grid.axis(a)[-1] for a in range(_PLANE)])
+        grid_slope = field.gradient()
+
+        def from_grid(state: np.ndarray) -> np.ndarray:
+            return self._backward(state, grid_slope)
+
+        def from_expansion(state: np.ndarray) -> np.ndarray:
+            return self._backward_along(state, surface.gradient(state))
+
+        states = list(trace)
+        current = np.asarray(trace[-1], dtype=float)
+        backward = from_grid
+        for _ in range(_DESCENT_MAX_STEPS):
+            if attractor is not None and attractor.reached(current, self._grid):
+                backward = from_expansion
+            half = current + _HALF * length * backward(current)
+            following = current + length * backward(half)
+            if not (
+                np.all(np.isfinite(following))
+                and np.all(following >= lower)
+                and np.all(following <= upper)
+            ):
+                break
+            current = following
+            states.append(current)
+            if surface.inside(current):
+                break
+        return np.array(states)
+
+    def _backward_along(self, state: np.ndarray, slope: np.ndarray) -> np.ndarray:
+        """The unit vector along ``-(f + D grad U)`` for a given ``grad U``."""
+        velocity = field_at(self._drift, state) + (
+            diffusion_matrix(self._noise.columns_at(state)) @ slope
+        )
+        size = float(np.linalg.norm(velocity))
+        if size == 0.0:
+            return np.full(_PLANE, np.nan)
+        return -velocity / size
 
     def _backward(self, state: np.ndarray, gradient) -> np.ndarray:
         slope = np.array([component(state[None, :])[0] for component in gradient])
@@ -2018,14 +2323,23 @@ class GeometricMinimumAction:
     tests' multiplicative system, ``U = 2 V``) the action at ``(-0.6, 0.5)``
     is off by 1.36e-4, 3.11e-5 and 1.04e-5 with 41, 81 and 161
     nodes. A ``D`` that is the same at every state of the chain and at the
-    states moved a little along each axis is taken as constant.
+    states moved a little along each axis is taken as constant. The drift, its
+    Jacobian and ``D`` are evaluated at every state of the chain in one
+    batch (:func:`~.noise.fields_at`, :func:`~.noise.jacobians_along`), which
+    the long chains of a winding path need (DEQ-152): a 321-node chain into
+    the verification's elliptic cycle took 105 s under a profiler one state
+    at a time, 97% of it in the drift, and about 5 s batched (the action the same
+    to the digits printed).
 
     *Limits.* A chain of nodes cannot follow a path that winds round its
     start - the minimiser out of a rotating equilibrium or cycle winds
     infinitely often - so the chain finds the least action among the paths
     it can resolve; :meth:`OrderedLineIntegral.reference` starts it off a
     small surface for that reason. Which minimiser it reaches depends on the
-    starting chain.
+    starting chain, and a path that winds needs a few hundred nodes a turn:
+    from the exact path into the elliptic cycle (3.6 turns) the action was
+    off by 0.26, 0.21, 2.1e-2, 1.7e-3 and 1.3e-4 at 81, 161, 321, 641 and
+    1281 nodes.
 
     References:
         - Heymann, M. and Vanden-Eijnden, E. (2008). The geometric minimum action
@@ -2204,14 +2518,8 @@ class GeometricMinimumAction:
         is the vector of ``theta^T (dD / dx_k) theta``. With a constant ``D``
         this is the flow of :meth:`_relax` in the coordinates ``x = L z``.
         """
-        fields = [field_at(self._drift, state) for state in chain]
-        velocity = np.array(fields)
-        jacobians = np.array(
-            [
-                jacobian_at(self._drift, state, base)
-                for state, base in zip(chain, fields, strict=True)
-            ],
-        )
+        velocity = fields_at(self._drift, chain)
+        jacobians = jacobians_along(self._drift, chain, velocity)
         cells, slopes = _diffusion_and_slopes(self._noise, chain)
         metric = np.linalg.inv(cells)
         tangent = np.gradient(chain, spacing, axis=0)
@@ -2244,25 +2552,19 @@ class GeometricMinimumAction:
         """``sum |f|_A |dx|_A - <f, dx>_A`` with ``f`` and ``A`` at each midpoint."""
         middle = _HALF * (chain[1:] + chain[:-1])
         steps = np.diff(chain, axis=0)
-        total = 0.0
-        for state, step in zip(middle, steps, strict=True):
-            total += _geometric(
-                step,
-                field_at(self._drift, state),
-                np.linalg.inv(diffusion_matrix(self._noise.columns_at(state))),
-            )
-        return total
+        velocity = fields_at(self._drift, middle)
+        metric = np.linalg.inv(_cells(self._noise, middle))
+        size = np.sqrt(np.einsum("ki,kij,kj->k", velocity, metric, velocity))
+        length = np.sqrt(np.einsum("ki,kij,kj->k", steps, metric, steps))
+        return float(
+            np.sum(size * length - np.einsum("ki,kij,kj->k", steps, metric, velocity)),
+        )
 
     def _drift_at(self, chain, factor, inverse):
         states = chain @ factor.T
-        fields = [field_at(self._drift, state) for state in states]
-        velocity = np.array(fields) @ inverse.T
-        jacobians = np.array(
-            [
-                inverse @ jacobian_at(self._drift, state, base) @ factor
-                for state, base in zip(states, fields, strict=True)
-            ],
-        )
+        fields = fields_at(self._drift, states)
+        velocity = fields @ inverse.T
+        jacobians = inverse @ jacobians_along(self._drift, states, fields) @ factor
         return velocity, jacobians
 
     def _relax(self, chain, factor, inverse, spacing, step):
@@ -2290,9 +2592,7 @@ class GeometricMinimumAction:
     def _action(self, chain, factor, inverse) -> float:
         middle = _HALF * (chain[1:] + chain[:-1])
         steps = np.diff(chain, axis=0)
-        velocity = np.array(
-            [inverse @ field_at(self._drift, factor @ state) for state in middle],
-        )
+        velocity = fields_at(self._drift, middle @ factor.T) @ inverse.T
         return float(
             np.sum(
                 np.linalg.norm(velocity, axis=1) * np.linalg.norm(steps, axis=1)
@@ -2327,17 +2627,13 @@ def _implicit_step(chain, push, stiffness, spacing):
 
 def _diffusion_and_slopes(noise: NoiseMatrix, chain: np.ndarray):
     """``D`` at each state, and ``dD / dx_k`` by central differences."""
-    cells = np.array([diffusion_matrix(noise.columns_at(state)) for state in chain])
+    cells = _cells(noise, chain)
     slopes = np.empty((chain.shape[0], _PLANE, _PLANE, _PLANE))
     for axis in range(_PLANE):
         shift = np.zeros(_PLANE)
         shift[axis] = _TAYLOR_STEP
-        ahead = np.array(
-            [diffusion_matrix(noise.columns_at(state + shift)) for state in chain],
-        )
-        behind = np.array(
-            [diffusion_matrix(noise.columns_at(state - shift)) for state in chain],
-        )
+        ahead = _cells(noise, chain + shift)
+        behind = _cells(noise, chain - shift)
         slopes[:, axis] = (ahead - behind) / (2.0 * _TAYLOR_STEP)
     return cells, slopes
 
@@ -2347,7 +2643,8 @@ def _guide(surface, trace: np.ndarray, nodes: int) -> tuple[np.ndarray, float]:
 
     The traced path runs from the target towards the attractor; it is cut where
     it enters the surface, or at its end if it stalled outside, and its last
-    state outside is moved onto the surface.
+    state outside is moved onto the surface. The chain has ``nodes`` states, or
+    more where the traced path winds (:func:`_winding_nodes`).
     """
     outside = 0
     while outside < len(trace) and not surface.inside(trace[outside]):
@@ -2355,7 +2652,30 @@ def _guide(surface, trace: np.ndarray, nodes: int) -> tuple[np.ndarray, float]:
     kept = trace[: max(outside, 1)]
     parameter = surface.parameter(kept[-1])
     chain = np.vstack([surface.point(parameter), kept[::-1]])
-    return _resample(chain, nodes), parameter
+    # The turns are counted on the traced path alone: the step from its last
+    # state onto the surface is a corner, not a turn, and counted in it gave
+    # the tests' non-normal system 141 nodes for a trace that turns 0.03 times.
+    return _resample(chain, _winding_nodes(kept, nodes)), parameter
+
+
+def _winding_nodes(trace: np.ndarray, nodes: int) -> int:
+    """``nodes``, or more where ``trace`` turns more than once.
+
+    The chain's error grows with how far its path turns per node: on the
+    verification's elliptic cycle, with the exact path to (0.3, 0) from 0.06
+    off the cycle (3.6 turns) as the initial chain, the relaxed value was off
+    by 0.26, 0.21, 2.1e-2, 1.7e-3, 1.3e-4 and 1.3e-5 at 81, 161, 321, 641,
+    1281 and 2561 nodes (DEQ-152), and at 81 it unwound a whole turn. So the
+    chain gets at least ``_NODES_PER_TURN`` nodes for every turn the trace's
+    direction makes, counted net, from its first step to its last.
+    """
+    steps = np.diff(trace, axis=0)
+    steps = steps[np.linalg.norm(steps, axis=1) > 0.0]
+    if len(steps) < _PLANE:
+        return nodes
+    angle = np.unwrap(np.arctan2(steps[:, 1], steps[:, 0]))
+    turns = abs(float(angle[-1] - angle[0])) / (2.0 * np.pi)
+    return max(nodes, int(np.ceil(_NODES_PER_TURN * turns)) | 1)
 
 
 def _resample(chain: np.ndarray, count: int) -> np.ndarray:
@@ -2402,9 +2722,7 @@ def _relax_from(
 
     def attempt(where: float, previous: np.ndarray) -> tuple[float, np.ndarray, float]:
         start = surface.point(where)
-        initial = previous.copy()
-        initial[0] = start
-        path = gmam.path(_equal_arc_length(initial))
+        path = gmam.path(_equal_arc_length(_moved_start(previous, start)))
         tangent = (surface.point(where + nudge) - surface.point(where - nudge)) / (
             2.0 * nudge
         )
@@ -2433,6 +2751,22 @@ def _relax_from(
         behind_place, behind = place, here
         place = following
     return best[0], best[1], best_place
+
+
+def _moved_start(chain: np.ndarray, start: np.ndarray) -> np.ndarray:
+    """``chain`` with its first state at ``start``, the move shared out along it.
+
+    Each state moves by the start's move times the share of the arc length
+    still to go, so the end stays put and no corner is made. Moving the first
+    state alone - as before DEQ-152 - put a corner the size of the secant's
+    step into the chain, harmless at 81 nodes but not at the thousand a
+    winding path is given: inside the verification's elliptic cycle the
+    chain then blew up at every step.
+    """
+    lengths = np.linalg.norm(np.diff(chain, axis=0), axis=1)
+    arc = np.concatenate([[0.0], np.cumsum(lengths)])
+    share = 1.0 - arc / arc[-1] if arc[-1] > 0.0 else np.zeros_like(arc)
+    return chain + share[:, None] * (np.asarray(start) - chain[0])
 
 
 def _equal_arc_length(chain: np.ndarray) -> np.ndarray:
