@@ -271,6 +271,25 @@ class TestRankDeficientStepIsNeverCertified(TestCase):
                 # Same sign as Gauss-Newton, and the filter's size to 25%.
                 assert ratio == pytest.approx(expected, rel=0.25)
 
+    def test_the_rank_report_does_not_change_with_the_scale_of_j(self):
+        """Rank is ``sigma_min / sigma_max``, so ``c J`` has the rank of ``J``.
+
+        An absolute threshold (``sigma_min > _RCOND``) passes every test at
+        ``sigma_max`` near 1: scaled by 1e6, a ``sigma_min / sigma_max`` of
+        1e-12 then reads as full rank, and scaled by 1e-6 one of 1e-3 reads
+        as rank-deficient.
+        """
+        solver = _tanh_problem()[0]
+        for smallest, full_rank in ((1.0e-3, True), (1.0e-12, False)):
+            jacobian, residual, _ = self._mixed(smallest, 1.0)
+            for scale in (1.0e-6, 1.0e6):
+                with self.subTest(sigma=smallest, scale=scale):
+                    _, resolved = solver._newton_step(  # noqa: SLF001
+                        scale * jacobian,
+                        scale * residual,
+                    )
+                    assert resolved == full_rank
+
     def test_lsmr_reports_rank_from_its_condition_estimate(self):
         """With no sigma_min estimate, lsmr's estimate of cond(J) decides."""
         solver = _tanh_problem()[0]
