@@ -126,6 +126,25 @@ class OneSidedTranscritical(DeterministicFunction):
         return [x * (mu - 30.0 * mu * mu - x)]
 
 
+class NoisySkewCrossing(DeterministicFunction):
+    """x' = e^x (x - mu)(x - 2 mu) + 1000 (cos^2 x + sin^2 x - 1).
+
+    The last term is zero but rounds to about 1e-13 wherever it is evaluated, so
+    the second differences of the branching equation see noise of that size; the
+    branches are those of :class:`SkewCrossing`.
+    """
+
+    def eval(
+        self,
+        point: list[float],
+        time: float | None = None,  # noqa: ARG002 (base signature)
+    ) -> list[float]:
+        mu = self.parameters[0].value
+        x = point[0]
+        noise = 1000.0 * (math.cos(x) ** 2 + math.sin(x) ** 2 - 1.0)
+        return [math.exp(x) * (x - mu) * (x - 2.0 * mu) + noise]
+
+
 def _point(state, parameter, tangent) -> ContinuationPoint:
     return ContinuationPoint(
         arclength=0.0,
@@ -385,6 +404,15 @@ class TestSecondaryDirection(TestCase):
         # Primary x = mu, secondary x = 2 mu: tangent (2, 1), which is not the
         # unit vector orthogonal to the primary tangent (1, 1).
         direction = _switcher(SkewCrossing, [X()]).secondary_direction(
+            np.zeros(2),
+            _unit([1.0, 1.0]),
+        )
+        self._assert_parallel(direction, [2.0, 1.0])
+
+    def test_second_differences_survive_rounding_in_the_field(self):
+        # The eps^(1/4) step: at sqrt(eps) the rounding of the field, amplified
+        # by 1 / step^2, turns the secondary tangent by 19 degrees (measured).
+        direction = _switcher(NoisySkewCrossing, [X()]).secondary_direction(
             np.zeros(2),
             _unit([1.0, 1.0]),
         )
