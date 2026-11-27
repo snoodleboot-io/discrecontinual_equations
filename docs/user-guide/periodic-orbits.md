@@ -362,8 +362,9 @@ so the point phase condition has two solutions on it. Before DEQ-106 a point's
 full states raised an `IndexError` under Gauss–Legendre, and from its mesh states
 the trapezoidal stage could carry the cycle to the other crossing: on the cascade
 page's four branches one restart in 45 came back 2.18 away, and at $c = 2.85$ on
-40 intervals 1.44. Now all 45 restarts reproduce their point to $4 \times 10^{-12}$,
-and a seed starts 1.3 to 2.3 times faster from 20 to 320 intervals. A seed from
+40 intervals 1.44. Now all 45 restarts reproduce their point: exactly from its
+full states, and to $4.4 \times 10^{-10}$ from its mesh states alone. A seed starts
+1.3 to 2.3 times faster from 20 to 320 intervals. A seed from
 which no cycle is found returns an empty trace in under a second at 320
 intervals, with a `CycleSeedWarning` saying what was tried.
 
