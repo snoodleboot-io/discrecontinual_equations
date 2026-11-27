@@ -204,7 +204,12 @@ class TestRefusal(TestCase):
 
 class TestNonStiffUnchanged(TestCase):
     def test_the_staged_solve_is_still_what_starts_a_mild_cycle(self):
-        """Bit for bit: the staged path answers first wherever it already did."""
+        """The same cycle, to the corrector's tolerance, whichever path answers.
+
+        Bit for bit until DEQ-106. An accurate seed is now corrected on the
+        target scheme first (``_restarted``), and lands within 5e-15 of where
+        the staged solve does.
+        """
         reference, orbit = _reference(1.0)
         for scheme in ("trapezoidal", "hermite_simpson", "gauss_legendre"):
             continuation = CycleContinuation(
@@ -219,7 +224,7 @@ class TestNonStiffUnchanged(TestCase):
             nodes = 40 * continuation.collocation_points + 1
             staged = continuation._staged_seed(seed, nodes)  # noqa: SLF001
             solved = continuation._solve_seed(seed, nodes)  # noqa: SLF001
-            np.testing.assert_array_equal(solved, staged)
+            np.testing.assert_allclose(solved, staged, rtol=0.0, atol=1e-12)
             assert math.isclose(solved[2 * nodes], reference, rel_tol=1e-2)
 
 

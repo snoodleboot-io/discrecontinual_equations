@@ -28,6 +28,7 @@ old cycle's halves coincide. The eigenvector comes from the Hermite monodromy of
 the cycle (:meth:`PeriodicOrbit.monodromy`), and the flow from scipy's DOP853.
 """
 
+import warnings
 from collections.abc import Sequence
 
 import numpy as np
@@ -38,6 +39,7 @@ from discrecontinual_equations.continuation.cycle_continuation import (
     CycleContinuation,
     CyclePoint,
     CycleSeed,
+    CycleSeedWarning,
     ResolvedBranch,
     classify_transition,
     resolved_branch,
@@ -351,14 +353,13 @@ class PeriodDoublingCascade:
         because the parameter barely moves at first: the doubled cycle leaves
         its birth as the square root of the distance past it.
 
-        Always again from the seed, never on from a traced point: re-seeding
-        :class:`CycleContinuation` solves the seed first under trapezoidal
-        collocation on the same mesh, and on a long orbit traced under
-        Gauss-Legendre that mesh is too coarse for it. On the Rossler period-4
-        cycle at ``c = 3.853`` on 80 intervals the trapezoidal solve from the
-        converged Gauss-Legendre nodes fails; on the period-16 cycle at
-        ``c = 4.195`` on 320 the solve from the flow itself failed, where the
-        branch's own seed had been accepted.
+        Always again from the seed, never on from a traced point. That was a
+        workaround: re-seeding :class:`CycleContinuation` solved the seed under
+        trapezoidal collocation first, which failed on long orbits traced under
+        Gauss-Legendre, or carried a period-2 cycle to its other crossing of
+        the section. Since DEQ-106 a trace restarts from any of its points
+        (:meth:`CycleSeed.from_point`), but retracing from the seed is kept so
+        that every level's points are the ones the cascade always gave.
         """
         points: list[CyclePoint] = []
         past = _INTERPOLATION_POINTS // 2
@@ -451,7 +452,10 @@ class PeriodDoublingCascade:
                     )
                     if trial is None:
                         continue
-                    solved, _ = continuation.trace(trial, 0.0, 0)
+                    with warnings.catch_warnings():
+                        # Most kicks find no cycle; that is the search, not news.
+                        warnings.simplefilter("ignore", CycleSeedWarning)
+                        solved, _ = continuation.trace(trial, 0.0, 0)
                     if solved and _halves_differ(solved[0], size):
                         return trial, _start_gap(solved[0]) / np.sqrt(distance)
         return None

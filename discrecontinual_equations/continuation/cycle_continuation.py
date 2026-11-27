@@ -100,6 +100,21 @@ _SEED_PERIOD_RATIO = 2.0
 # a cycle many times smaller is a spurious one round an equilibrium (see
 # :meth:`CycleContinuation._plausible`).
 _SEED_EXTENT_RATIO = 2.0
+# Restarting from a seed that is already (nearly) a solution of the target
+# scheme (DEQ-106): undamped Newton on that scheme, at most this many
+# iterations, each of which must at least halve the residual - from a traced
+# point it converges in one to three, and a rough seed is handed on to the
+# staged solve after one or two. The result must stay within this fraction of
+# the seed's extent of the seed itself; otherwise the seed was not near a
+# solution and the staged solve decides, as it always did. The interior points
+# filled off a 20-interval Rossler period-2 mesh are 1.04% of the extent off
+# the converged ones; the other crossing the staged solve reached was 0.46
+# to 2.18 away on extents near 5.6, 8% and more.
+_RESTART_ITERATIONS = 8
+# A seed's states are a table, one state to a row.
+_TABLE = 2
+_RESTART_CONTRACTION = 0.5
+_RESTART_MOVE = 5.0e-2
 # Imaginary parts this many machine epsilons per factor of a multiplier's size
 # are the complex arithmetic's rounding, not a conjugate pair.
 _REAL_TOLERANCE = 64.0 * float(np.finfo(float).eps)
@@ -134,6 +149,20 @@ def _near(period: float, expected: float) -> bool:
 def _extent(states: np.ndarray) -> float:
     """The largest distance of a state from the mean state."""
     return float(np.max(np.linalg.norm(states - states.mean(axis=0), axis=1)))
+
+
+def _no_dense_fallback() -> np.ndarray:
+    """Refuse the dense least-squares fallback: a restart is not worth one."""
+    message = "the seed's Jacobian is singular"
+    raise np.linalg.LinAlgError(message)
+
+
+class CycleSeedWarning(RuntimeWarning):
+    """A seed from which :meth:`CycleContinuation.trace` found no cycle.
+
+    The trace then returns no points. The warning says what was tried, so that
+    an empty branch is not mistaken for a branch that does not exist.
+    """
 
 
 class _VectorField:
@@ -624,30 +653,13 @@ def _product_multipliers(transfers: np.ndarray) -> tuple[np.ndarray, str]:
     return values, _PERIODIC_QR
 
 
-class _DifferentiatedOrbit(PeriodicOrbit):
-    """The Hermite monodromy with ``df/dx`` by automatic differentiation.
-
-    Falls back to the parent's forward difference for a field that automatic
-    differentiation rejects, as :meth:`CycleContinuation._state_jacobian` does.
-    """
-
-    __slots__ = []
-
-    def _jacobian(self, state: np.ndarray) -> np.ndarray:
-        try:
-            return _AUTODIFF.jacobian(self._function, state, 0.0)
-        except (TypeError, ValueError, AttributeError):
-            return super()._jacobian(state)
-
-    def _jacobians(self, states: np.ndarray) -> np.ndarray:
-        batched = field_jacobians(self._function, states, self._jacobian)
-        if batched is not None:
-            return batched
-        return np.array([self._jacobian(state) for state in states])
-
-
 class CycleSeed:
-    """Initial guess for a cycle branch: node states, period, and parameter."""
+    """Initial guess for a cycle branch: node states, period, and parameter.
+
+    ``states`` holds one state per mesh point, ``intervals + 1`` of them, or -
+    to restart from a point a trace returned - every state of that point,
+    interior collocation points included (:meth:`from_point`).
+    """
 
     __slots__ = ["parameter", "period", "states"]
 
@@ -655,6 +667,23 @@ class CycleSeed:
         self.states = states
         self.period = period
         self.parameter = parameter
+
+    @classmethod
+    def from_point(cls, point: "CyclePoint") -> "CycleSeed":
+        """A seed that restarts a trace from one of its own points (DEQ-106).
+
+        It carries the point's every state, so a :class:`CycleContinuation`
+        with the scheme and mesh the point was traced on starts from it as it
+        is: a converged point is taken without a single Newton iteration, and
+        one from a neighbouring parameter is corrected on that scheme alone.
+        AUTO restarts the same way, from a stored solution rather than a
+        fresh guess (``IRS``).
+        """
+        return cls(
+            np.array(point.solution.states, dtype=float),
+            point.solution.period,
+            point.parameter,
+        )
 
 
 class _Arc:
@@ -1810,22 +1839,19 @@ class CycleContinuation:
     ) -> np.ndarray:
         """The Hermite monodromy's multipliers of the states (DEQ-29).
 
-        Under the one-wide schemes this is exactly the monodromy the films have
-        always used, forward-difference Jacobian and all. Under Gauss-Legendre it
-        is the cross-check, and takes ``df/dx`` analytically where the field
-        allows (:class:`_DifferentiatedOrbit`): the forward difference is a
-        floor there. On the Bogdanov-Takens orbit at b1 = -0.4554 under ``m = 4``
-        its trivial drift sat at 3.0e-5 on 80, 160 and 320 intervals alike, and
+        Under the one-wide schemes these are the point's multipliers; under
+        Gauss-Legendre, the cross-check. Either way ``df/dx`` is exact where
+        the field allows and a relative central difference where it does not
+        (:meth:`PeriodicOrbit._jacobian`). A forward difference is a floor
+        here: on the Bogdanov-Takens orbit at b1 = -0.4554 under ``m = 4`` its
+        trivial drift sat at 3.0e-5 on 80, 160 and 320 intervals alike, and
         with the analytic Jacobian falls 1.9e-7, 1.1e-8, 7.1e-10 - sixteen per
-        doubling, the interpolant's own order.
+        doubling, the interpolant's own order. Under Hermite-Simpson the
+        one-wide schemes kept the forward difference until DEQ-128, and the
+        doubled-mesh estimate read up to four times low under its floor.
         """
         self._equation.derivative.parameters[self._parameter_index].value = parameter
-        kind = (
-            _DifferentiatedOrbit
-            if self._collocation.jacobian_monodromy
-            else PeriodicOrbit
-        )
-        orbit = kind(
+        orbit = PeriodicOrbit(
             self._equation.derivative,
             states.shape[0] - 1,
             self._phase_index,
@@ -1979,9 +2005,17 @@ class CycleContinuation:
     def _solve_seed(self, seed: CycleSeed, nodes: int) -> np.ndarray | None:
         """The first point on the branch, or ``None`` if no believable one is found.
 
-        The staged solve (:meth:`_staged_seed`) is tried first, exactly as it
-        always ran, so every seed it already started is started the same way to
-        the last bit. Its answer is kept only if it is a cycle: a positive
+        A seed that is already a solution of the target scheme, or nearly
+        one, is corrected on that scheme first (:meth:`_restarted`): a point
+        the trace returned, as :meth:`CycleSeed.from_point` carries it, comes
+        back unchanged, and its mesh states alone come back to Newton
+        tolerance (DEQ-106). The staged solve then took the seed through
+        trapezoidal collocation, which on a cycle crossing the phase section
+        twice - Rossler's period-2 at ``c = 2.85`` - could carry it to the other
+        crossing, 1.44 away, and a seed with interior points raised.
+
+        Any other seed takes the staged solve (:meth:`_staged_seed`), as it
+        always did. Its answer is kept only if it is a cycle: a positive
         period within a factor of two of the seed's, and states that have not
         collapsed onto one point (see :meth:`_plausible`). Otherwise the target
         scheme is corrected directly from the seed with a damped Newton
@@ -1994,9 +2028,37 @@ class CycleContinuation:
         those; started from the integration itself it converges. A seed path
         that finds nothing believable returns ``None`` rather than hand a
         negative period, or a point, to the continuation.
+
+        Raises:
+            ValueError: ``seed.states`` has neither ``intervals + 1`` rows nor
+                the ``nodes`` a point of this scheme and mesh has.
+
+        References:
+            AUTO-07p, restarting from a stored solution (``IRS``) and
+            correcting it on the scheme in use; see ``docs/references.md``.
         """
+        states = np.asarray(seed.states, dtype=float)
+        mesh_points = self._intervals + 1
+        if states.ndim != _TABLE or states.shape[0] not in {mesh_points, nodes}:
+            rows = states.shape[0] if states.ndim else 0
+            message = (
+                f"the seed has {rows} states; on {self._intervals} intervals of "
+                f"{self._collocation.name} a seed has {mesh_points} states (one "
+                f"per mesh point) or {nodes} (every state of a traced point, "
+                f"CycleSeed.from_point)"
+            )
+            raise ValueError(message)
         if not (np.isfinite(seed.period) and seed.period > 0.0):
             return None
+        restarted = self._restarted(seed, states, nodes)
+        if restarted is not None:
+            return restarted
+        if states.shape[0] != mesh_points:
+            seed = CycleSeed(
+                states[:: self._collocation.width],
+                seed.period,
+                seed.parameter,
+            )
         if self._phase == "integral":
             # Until there is a previous cycle, the seed is the reference: the
             # first point takes the phase nearest the guess it was given.
@@ -2037,6 +2099,75 @@ class CycleContinuation:
         ):
             return direct
         return None
+
+    def _restarted(
+        self,
+        seed: CycleSeed,
+        states: np.ndarray,
+        nodes: int,
+    ) -> np.ndarray | None:
+        """The seed corrected on the target scheme, if it is nearly a solution.
+
+        The seed's states are taken as they are when they include the interior
+        points, and filled off the cubic Hermite interpolant otherwise (see
+        :meth:`_filled`). Undamped Newton with the parameter held fixed then
+        has :data:`_RESTART_ITERATIONS` iterations, each of which must at
+        least halve the residual, and the cycle it reaches must be plausible
+        and within :data:`_RESTART_MOVE` of the seed's extent of the seed -
+        otherwise ``None``, and the staged solve takes over. A seed that is a
+        converged point already passes on the residual test alone and is
+        returned unchanged.
+
+        Nothing here falls back to the dense finite-difference Jacobian: a
+        seed singular enough to need it is not nearly a solution.
+        """
+        self._equation.derivative.parameters[self._parameter_index].value = (
+            seed.parameter
+        )
+        start = (
+            states
+            if states.shape[0] == nodes
+            else self._filled(
+                PeriodicOrbitSolution(states, seed.period), seed.parameter
+            )
+        )
+        unknowns = np.concatenate([start.ravel(), [seed.period], [seed.parameter]])
+        if self._phase == "integral":
+            self._set_phase_reference(unknowns, nodes)
+        fixed_parameter = np.zeros(unknowns.size)
+        fixed_parameter[-1] = 1.0
+        arc = _Arc(unknowns, fixed_parameter, 0.0)
+        previous = float("inf")
+        for iteration in range(_RESTART_ITERATIONS + 1):
+            residual = self._augmented(unknowns, nodes, arc)
+            norm = float(np.linalg.norm(residual))
+            if norm < _TOLERANCE:
+                break
+            if (
+                iteration == _RESTART_ITERATIONS
+                or not np.isfinite(norm)
+                or norm > _RESTART_CONTRACTION * previous
+            ):
+                return None
+            previous = norm
+            try:
+                update = self._solve_bordered(
+                    unknowns,
+                    nodes,
+                    arc.tangent,
+                    -residual,
+                    _no_dense_fallback,
+                )
+            except np.linalg.LinAlgError:
+                return None
+            unknowns = unknowns + update
+        size = _extent(start)
+        moved = unknowns[: nodes * self._dimension].reshape(start.shape) - start
+        if float(np.max(np.linalg.norm(moved, axis=1))) > _RESTART_MOVE * size:
+            return None
+        if not self._plausible(unknowns, nodes, seed.period, extent=size):
+            return None
+        return unknowns
 
     def _plausible(
         self,
@@ -2265,7 +2396,7 @@ class CycleContinuation:
         limits = _step_limits(arclength, max_arclength, min_arclength)
         unknowns = self._solve_seed(seed, nodes)
         if unknowns is None:
-            return [], []
+            return self._no_cycle(seed)
         self._set_phase_reference(unknowns, nodes)
         seed_direction = np.zeros(unknowns.size)
         seed_direction[-1] = direction
@@ -2320,6 +2451,22 @@ class CycleContinuation:
                     limits[0],
                 )
         return points, bifurcations
+
+    def _no_cycle(
+        self,
+        seed: CycleSeed,
+    ) -> tuple[list[CyclePoint], list[CycleBifurcation]]:
+        """The empty trace, with a warning that ``seed`` led nowhere (DEQ-106)."""
+        warnings.warn(
+            f"no cycle found from the seed at parameter {seed.parameter} with "
+            f"period {seed.period}: neither a correction on "
+            f"{self._intervals} intervals of {self._collocation.name} nor the "
+            "trapezoidal stage reached a cycle within a factor of two of the "
+            "seed's period and extent; the trace is empty",
+            CycleSeedWarning,
+            stacklevel=3,
+        )
+        return [], []
 
     def _point(self, unknowns: np.ndarray, nodes: int) -> CyclePoint:
         dimension = self._dimension
