@@ -11,7 +11,7 @@ AdamsBashforth2Solver
 ├── Config: start_time, end_time, step_size
 ├── Method: 2-step linear multistep (Adams-Bashforth)
 ├── Order: 2nd order, O(h²)
-└── Startup: Requires Euler or other single-step method
+└── Startup: one classical Runge-Kutta (RK4) step (DEQ-141)
 ```
 
 ## Executive Summary
@@ -85,8 +85,8 @@ sequenceDiagram
     participant Equation
     participant Startup
 
-    Solver->>Startup: First step with Euler method
-    Startup-->>Solver: y1, f(t0,y0)
+    Solver->>Startup: First step with classical RK4
+    Startup-->>Solver: y1, then f(t1,y1) at the computed state
 
     loop For each subsequent step
         Solver->>Equation: eval(current_state, time) - f(tn, yn)
@@ -156,7 +156,7 @@ This is derived from the Newton backward difference interpolation of the integra
 
 ### Multistep Nature
 
-- **Requires startup**: First step uses Euler method to get y₁ and f(t₀,y₀)
+- **Requires startup**: the first step is a classical fourth-order Runge-Kutta step giving y₁; the stored derivative for node 1 is f(t₁, y₁) (DEQ-141; until then an Euler step and f(t₁, y₀))
 - **History dependence**: Uses information from previous step
 - **Memory efficient**: Only stores one previous function value
 
@@ -173,11 +173,11 @@ This is derived from the Newton backward difference interpolation of the integra
 
 ```python
 def solve(self, equation, initial_values):
-    # First step using Euler
+    # First step: classical RK4 (adams_bashforth.classical_runge_kutta_step)
     y0 = np.array(initial_values)
     f0 = np.array(equation.derivative.eval(y0, self.start_time))
 
-    y1 = y0 + self.step_size * f0
+    y1 = classical_runge_kutta_step(equation, self.start_time, y0, self.step_size)
     t1 = self.start_time + self.step_size
 
     # Store for AB2
