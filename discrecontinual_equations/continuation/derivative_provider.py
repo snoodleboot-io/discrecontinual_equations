@@ -26,6 +26,7 @@ _SECOND_ORDER = 2
 _THIRD_ORDER = 3
 _FOURTH_ORDER = 4
 _CENTRAL_PAIR = 2.0
+_UNIT_LENGTH = 1.0
 
 
 class DerivativeProvider(ABC):
@@ -103,26 +104,61 @@ class FiniteDifferenceDerivatives(DerivativeProvider):
 
     Coefficient ``m`` along a direction ``d`` is the central difference of order
     ``m`` of ``s -> f(x + s d)`` at ``s = 0``, over the stencil ``s = k t``.
-    ``epsilon`` is a *relative* step (DEQ-118): with ``s_j = max(|x_j|,
-    typical_j)``, ``t = epsilon max_j |d_j| / max_j(|d_j| / s_j)``, so the
-    component that moves most for its size moves ``epsilon s_j`` times the
-    direction's largest entry. Along a unit direction ``e_j`` that is Dennis and
+    ``epsilon`` is a *relative* step (DEQ-118). With ``s_j = max(|x_j|,
+    typical_j)`` the spacing is
+
+        ``t = epsilon min(1, max_j |d_j|) / max_j(|d_j| / s_j)``,
+
+    so no component moves more than its own step, ``|t d_j| <= epsilon s_j``,
+    however long ``d`` is (DEQ-163): a spacing that grew with ``max |d|`` moved
+    ``x = d = 1e6`` by ``1e6`` and got the first coefficient of ``x^3`` wrong by
+    a third. Along a unit direction ``e_j`` the spacing is Dennis and
     Schnabel's per-component step ``epsilon s_j``, so the Jacobian is
-    differenced column by column at each component's scale; when every
-    component the direction moves is no larger than its typical size (one by
-    default) it is ``epsilon`` itself, bit for bit, as it was when the step was
-    absolute. A component of
-    size ``1e12`` would round an absolute ``1e-6`` away and return zero; one of
-    size ``1e-12`` needs ``typical`` - one per component, or one for all - or a
-    step floored at one swamps it. Exact only to first order in practice, and
-    the stencil is not divided by the width actually stepped, which along a
-    general direction differs per component; the rounding that leaves is the
-    same order as the field's own.
+    differenced column by column at each component's scale. A direction no
+    longer than one (``max |d| <= 1``) takes ``epsilon max|d| / max_j(|d_j| /
+    s_j)``, and where every component it moves is no larger than its typical
+    size (one by default) that is ``epsilon`` itself, bit for bit, as it was
+    when the step was absolute. A longer direction at unit scale takes
+    ``epsilon / max |d|`` instead, which is what keeps its move to ``epsilon``.
+
+    The library's detectors do pass longer directions, so their results moved
+    with DEQ-163 when they run on this provider. Measured (DEQ-163 verifier):
+    the Bogdanov-Takens/Hopf forms up to ``max |d| = 1.125`` (372 of 5440
+    calls), the cusp up to 2 (127 of 954), Bautin up to 2.12 (126 of 922), and
+    the ``MultilinearForms`` polarization sums up to 2.74 (van der Pol's
+    ``l1``). Codimension-two points keep their kind and count, and move by at
+    most ``1.3e-6`` relative; the error in the cusp coefficient ``a`` goes from
+    ``6.2e-7`` to ``1.3e-6``. This provider is used only when chosen through
+    the opt-in ``derivative_provider`` registry key; the default is
+    :class:`AutomaticDifferentiation`.
+
+    A component of size ``1e12`` would round an absolute ``1e-6`` away and
+    return zero; one of size ``1e-12`` needs ``typical`` - one per component,
+    or one for all - or a step floored at one swamps it. Exact only to first
+    order in practice, and the stencil is not divided by the width actually
+    stepped, which along a general direction differs per component.
+
+    Limit: one spacing serves every component, so the components that bind
+    move ``epsilon s_j`` and the others move less, in proportion to ``|d_j| /
+    s_j``. A component whose ratio is ``R`` times smaller than the binding
+    one moves ``epsilon s_j / R``, and its share of the coefficient errs by
+    about ``eps R / epsilon`` relative (``eps`` the machine epsilon): a few per
+    cent once ``R`` passes about ``1e8`` at ``epsilon = 1e-6``, and the move
+    rounds away entirely, losing that share, near ``R = epsilon / eps``. At ``x = (1e9,
+    1e-3)``, ``d = (1, 1e6)`` the spacing is ``1e-12`` and ``x_0`` does not
+    move: the identity field's first coefficient comes back ``(0, 1e6)``, not
+    ``(1, 1e6)``. Difference such a direction component by component (the
+    Jacobian) instead.
 
     References:
         Dennis and Schnabel (1983), Sec. 5.4 and Algorithm A5.4.1: the step
-        scaled per component by ``max(|x_j|, typx_j)``. See
-        ``docs/references.md``.
+        scaled per component by ``max(|x_j|, typx_j)``.
+        SciPy 1.14.1, ``scipy/optimize/_nonlin.py``, ``KrylovJacobian.matvec``:
+        a directional difference whose spacing is divided by the direction's
+        length, ``omega / ||v||``, so the move is the same for any length. We
+        depart from it on purpose for directions shorter than one, which keep
+        the spacing of a unit one, so that results at unit scale are unchanged.
+        See ``docs/references.md``.
     """
 
     __slots__ = ["_epsilon", "_typical"]
@@ -187,13 +223,17 @@ class FiniteDifferenceDerivatives(DerivativeProvider):
         return sparsity.expand(np.column_stack(compressed)) / (_CENTRAL_PAIR * steps)
 
     def step(self, point: np.ndarray, direction: np.ndarray) -> float:
-        """The stencil spacing ``t`` along ``direction``, relative to ``point``."""
+        """The stencil spacing ``t`` along ``direction``, relative to ``point``.
+
+        ``t = epsilon min(1, max_j |d_j|) / max_j(|d_j| / s_j)``, so that no
+        component moves more than its own step, ``|t d_j| <= epsilon s_j``.
+        """
         size = np.abs(direction)
         scales = step_scales(np.asarray(point, dtype=float), self._typical)
         weight = float(np.max(size / scales))
         if weight == 0.0:
             return self._epsilon
-        return self._epsilon * (float(np.max(size)) / weight)
+        return self._epsilon * (min(_UNIT_LENGTH, float(np.max(size))) / weight)
 
     def _evaluate(
         self,

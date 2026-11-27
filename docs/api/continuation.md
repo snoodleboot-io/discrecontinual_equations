@@ -1652,9 +1652,71 @@ step. **A configured `finite_difference_epsilon` keeps its meaning on every
 component of size one or less** (with the default typical size of one, the step
 there is `epsilon` exactly) and grows with a component above that.
 `FiniteDifferenceDerivatives` steps a general direction `d` by
-`t = epsilon max_j |d_j| / max_j(|d_j| / max(|x_j|, typical_j))`: `epsilon` itself
-when every component it moves is of size one or less, Dennis and Schnabel's
-`epsilon max(|x_j|, typical_j)` along a unit direction.
+
+`t = epsilon min(1, max_j |d_j|) / max_j(|d_j| / s_j)`, with `s_j = max(|x_j|, typical_j)`,
+
+so that no component moves further than its own step: `|t d_j| <= epsilon s_j`
+(DEQ-163). Along a unit direction this is Dennis and Schnabel's
+`epsilon max(|x_j|, typical_j)`; for any direction with `max |d| <= 1` that
+moves only components of size one or less it is `epsilon` itself, as it was when the
+step was absolute. Before DEQ-163 the spacing kept growing with `max |d|`: at
+`x = d = 1e6` it moved the state by `1e6`, its own size, and the first Taylor
+coefficient of `x^3` came out a third too large. Now that
+coefficient is right to about `2e-11` at every size:
+
+```python
+import numpy as np
+
+from discrecontinual_equations.continuation.derivative_provider import (
+    FiniteDifferenceDerivatives,
+)
+from discrecontinual_equations.function.deterministic import DeterministicFunction
+from discrecontinual_equations.variable import Variable
+
+
+class X(Variable, name="x", abbreviation="x"):
+    pass
+
+
+class Cube(DeterministicFunction):
+    def eval(self, point, time=None):
+        return [point[0] ** 3]
+
+
+cube = Cube(variables=[X()], parameters=[], results=[X()], time=None)
+x = np.array([1.0e6])
+a1 = FiniteDifferenceDerivatives(1.0e-6).taylor(cube, x, x, 1, 0.0)[1].real[0]
+print(abs(a1 - 3.0e18) / 3.0e18)  # about 2e-11; 0.33 when the step grew with |d|
+```
+
+A long direction at unit scale (`max |d| > 1`, components of size one or less)
+now takes `epsilon / max |d|`, not `epsilon`. The library's detectors do pass
+such directions, so their results moved when they run on this provider. The
+DEQ-163 verifier measured, by instrumenting the calls:
+
+| caller | largest `max |d|` | calls with `max |d| > 1` |
+|---|---|---|
+| Bogdanov-Takens / Hopf forms (`bt_hopf`) | 1.125 | 372 of 5440 |
+| cusp | 2 | 127 of 954 |
+| Bautin (generalised Hopf) | 2.12 | 126 of 922 |
+| `MultilinearForms` polarization sums (van der Pol `l1`) | 2.74 | - |
+
+Codimension-two points keep their kind and count, and their locations move by at
+most `1.3e-6` relative. The error in the cusp coefficient `a` goes from `6.2e-7`
+to `1.3e-6`. `FiniteDifferenceDerivatives` is used only when it is chosen through
+the opt-in `derivative_provider` registry key; the default is automatic
+differentiation, which these changes do not touch.
+
+**Mixed-scale limit.** One spacing serves every component, so the components
+that bind move `epsilon s_j` and the others move less, in proportion to
+`|d_j| / s_j`. A component whose ratio is `R` times smaller than the binding
+one moves `epsilon s_j / R`, and its share of the coefficient errs by about
+`eps R / epsilon` relative (`eps` the machine epsilon): a few per cent once `R`
+passes about `1e8` at `epsilon = 1e-6`, and near `R = epsilon / eps` the move
+rounds away entirely and that share is lost. At
+`x = (1e9, 1e-3)`, `d = (1, 1e6)` the spacing is `1e-12`, `x_0` does not move, and
+the identity field's first coefficient comes back `(0, 1e6)`, not `(1, 1e6)`.
+Difference such a direction component by component (the Jacobian) instead.
 
 ```python
 import numpy as np
@@ -1684,7 +1746,7 @@ error, and a converged point can move within the Newton tolerance. The residuals
 columns (`AnalyticJacobian` over a `DifferentiableResidual`, the cusp and
 generalised-Hopf curves) still take `epsilon` as an absolute step.
 
-References: [Dennis and Schnabel 1983, SciPy `_numdiff`](../references.md#lyapunov-exponents-covariant-vectors-and-noise).
+References: [Dennis and Schnabel 1983, SciPy `_numdiff` and `_nonlin`](../references.md#lyapunov-exponents-covariant-vectors-and-noise).
 
 ::: discrecontinual_equations.continuation.jacobian
 

@@ -27,7 +27,10 @@ import numpy as np
 FORWARD_STEP = float(np.sqrt(np.finfo(float).eps))
 """``sqrt(eps)``: the relative step that balances a forward difference."""
 
-CENTRAL_STEP = float(np.cbrt(np.finfo(float).eps))
+# 6.0554544523933395e-06 = 2**(-52/3) correctly rounded. A literal, not
+# np.cbrt(eps), whose SIMD kernels may round differently on another machine;
+# SciPy's EPS**(1/3) is 4 ulps above it (0x1.965fea53d6e41p-18).
+CENTRAL_STEP = float.fromhex("0x1.965fea53d6e3dp-18")
 """``eps^(1/3)``: the relative step that balances a central difference."""
 
 _UNIT = 1.0

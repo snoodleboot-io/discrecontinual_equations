@@ -127,7 +127,13 @@ class ContinuationConfig(SolverConfig):
     )
     finite_difference_epsilon: float = Field(
         default=1e-7,
-        description="Step used for central finite-difference derivatives",
+        description=(
+            "Relative step of the central finite-difference Jacobian: state "
+            "component j steps this times max(|x_j|, typical_j) and the "
+            "parameter this times max(|lambda|, parameter_typical), both typical "
+            "sizes one by default, so on a component of size one or less the "
+            "step is this value exactly"
+        ),
     )
     jacobian_sparsity: Literal["dense", "detect"] | list[list[int]] = Field(
         default="dense",
