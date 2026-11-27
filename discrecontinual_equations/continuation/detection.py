@@ -22,7 +22,12 @@ _RELATIVE_FLOOR = 1.0e-5
 _NOISE_FACTOR = 100.0
 _OFFSET_FACTOR = 30.0
 _VERTEX_FRACTION = 0.5
+_EIGENVALUE_FRACTION = 0.125
 _NORMALIZATION_FLOOR = 1.0e-9
+_CONVERGED_CHANGE = 1.0e-3
+_USABLE_CHANGE = 0.1
+_STEP_DESCENT = 4.0
+_DESCENT_RUNGS = 16
 
 
 def _unit_null(matrix: np.ndarray) -> np.ndarray:
@@ -109,7 +114,7 @@ def _relative_change(
     return max(odd, float(np.sqrt(even)))
 
 
-def _branch_step(
+def _jacobian_step(
     context: "DetectionContext",
     null_pair: tuple[np.ndarray, np.ndarray, np.ndarray],
 ) -> float:
@@ -130,7 +135,8 @@ def _branch_step(
     The search only uses Jacobians, so it is unchanged when ``f`` is multiplied
     by a constant, and it multiplies the step by ``sigma`` when the state is.
     Limits: the change is measured against the whole Jacobian, so a stiff system
-    whose other eigenvalues dwarf the critical dynamics gets too large a step.
+    whose other eigenvalues dwarf the critical dynamics gets too large a step;
+    :func:`_branch_step` corrects that on the critical block.
 
     References:
         The relative-step idea follows the library's difference Jacobians
@@ -150,6 +156,94 @@ def _branch_step(
             factor = max(factor, _STEP_GROWTH)
         step *= factor
     return step
+
+
+def _critical_change(
+    context: "DetectionContext",
+    null_pair: tuple[np.ndarray, np.ndarray, np.ndarray],
+    step: float,
+) -> float:
+    """How much ``a`` and ``c`` move when the step is halved, on the critical block.
+
+    Over ``x +- h q`` the critical block ``<p, J(x + h q) q>`` changes by about
+    ``a h + (c / 2) h^2``. With ``(a, c)`` from step ``h`` and ``(a', c')`` from
+    ``h / 2``, the returned ratio is
+    ``(|a - a'| h + |c - c'| h^2 / 2) / (|a'| h + |c'| h^2 / 2)``: the
+    coefficients' disagreement measured in that change. Only ``p`` and ``q`` enter,
+    so a fast mode that dominates ``|J|`` does not, and the ratio is unchanged when
+    ``f`` is multiplied by a constant or the state by ``sigma`` (``a h`` and
+    ``c h^2`` are both unit-free in the state). Infinite when the critical block
+    does not change at all (a field linear along ``q``).
+    """
+    quadratic, cubic, _q, _c = _branch_expansion(context, null_pair, step)
+    half_quadratic, half_cubic, _hq, _hc = _branch_expansion(
+        context,
+        null_pair,
+        step / _STEP_BAND,
+    )
+    reference = abs(half_quadratic) * step + 0.5 * abs(half_cubic) * step * step
+    if not reference > 0.0:
+        return float("inf")
+    moved = (
+        abs(quadratic - half_quadratic) * step
+        + 0.5 * abs(cubic - half_cubic) * step * step
+    )
+    return moved / reference
+
+
+def _branch_step(
+    context: "DetectionContext",
+    null_pair: tuple[np.ndarray, np.ndarray, np.ndarray],
+) -> float:
+    """The difference step for ``a`` and ``c``: the Jacobian's, checked on the block.
+
+    :func:`_jacobian_step` scales the step to where the whole Jacobian changes by
+    :data:`_BRANCH_STEP` of itself. With a fast mode ``-K`` beside the critical one
+    (``u' = mu u + r tanh^2 u + k tanh^3 u``, ``v' = -K v + u^2``) ``|J|`` is ``K``,
+    so the step grows with ``K``: 0.41 at ``K = 1e8``, where ``tanh`` is no longer
+    close to its Taylor polynomial, and both labels were lost (DEQ-178). The step is
+    therefore accepted only when the coefficients it gives agree with those from
+    half of it to :data:`_CONVERGED_CHANGE` on the critical block
+    (:func:`_critical_change`). Otherwise it is divided by :data:`_STEP_DESCENT`
+    until they do, for at most :data:`_DESCENT_RUNGS` divisions; if none agrees,
+    the step whose coefficients agreed best is used if they agreed to
+    :data:`_USABLE_CHANGE`, and the labeller's noise test decides what it
+    resolves; a block that agrees at no rung (``a = c = 0``, where the ratio is
+    rounding over rounding, or a field linear along ``q``) keeps the Jacobian's
+    step. A step that is right on the whole Jacobian is thus
+    unchanged, and the check costs four Jacobians when it passes.
+
+    Limits: the check assumes the estimates settle as the step shrinks. Beyond
+    the field's nonlinear length (``tanh`` saturated) the block barely moves and
+    the ratio is rounding over rounding, of order one, so the descent goes on;
+    measured on the mixed stiff probe at ``K = 1e10`` the rungs read 1.3, ...,
+    0.2, 1.4e-2, 8.3e-4. Each rung costs four Jacobians, so a block that never
+    settles costs 68 more than before.
+
+    References:
+        Choosing a central-difference step from how the estimate converges as
+        the step shrinks, between truncation error for a large step and
+        rounding for a small one, is the idea of Stepleman, R. S. and
+        Winarsky, N. D., "Adaptive numerical differentiation", Mathematics of
+        Computation 33 (148), 1979, pp. 1257-1264,
+        doi:10.1090/S0025-5718-1979-0537969-8 (abstract read; the full text was
+        not retrieved). The halving test, its threshold, measuring it on the
+        critical block and starting from the Jacobian's step are this library's
+        own.
+    """
+    step = _jacobian_step(context, null_pair)
+    best, best_change = step, float("inf")
+    trial = step
+    for _ in range(_DESCENT_RUNGS + 1):
+        change = _critical_change(context, null_pair, trial)
+        if change <= _CONVERGED_CHANGE:
+            return trial
+        if change < best_change:
+            best, best_change = trial, change
+        trial /= _STEP_DESCENT
+    # A block that never settles (a = c = 0, or noise at every rung) keeps the
+    # Jacobian's step, as before DEQ-178.
+    return best if best_change <= _USABLE_CHANGE else step
 
 
 def _vertex_offset(
@@ -257,8 +351,20 @@ def _branch_label(context: "DetectionContext") -> str:
     cubic (DEQ-147): a weak transcritical located a little off its bifurcation
     was named ``pitchfork`` that way. It is a pitchfork only when the pitchfork's
     own ``a = c w0`` explains it, ``|a - c w0| <= |a| / 2`` with ``w0`` from
-    :func:`_vertex_offset`; otherwise the point is ``branch_point``. The
-    differences use the step of :func:`_branch_step`, which follows the state's
+    :func:`_vertex_offset`; otherwise the point is ``branch_point``.
+
+    That first-order test is fooled far from the vertex: a transcritical seen
+    from its nontrivial branch at ``u0 = 0.2`` gave ``|a - c w0| / |a| = 0.37``
+    and was named ``pitchfork`` (DEQ-178). The normal form fixes a second,
+    independent relation on the nontrivial branch, between the eigenvalue and
+    the offset. With ``w' = mu w + (a0 / 2) w^2 + (c / 6) w^3`` and the point at
+    ``w0`` on the branch ``mu = -(a0 / 2) w0 - (c / 6) w0^2``,
+    ``lambda = (a0 / 2) w0 + (c / 3) w0^2`` and ``a = a0 + c w0``, so
+    ``3 lambda / (a w0)`` is 1 for a pitchfork (``a0 = 0``) and 3/2 for a
+    transcritical (``c = 0``). A pitchfork must therefore also satisfy
+    ``|3 lambda - a w0| <= |a w0| / 8`` (:data:`_EIGENVALUE_FRACTION`, a quarter
+    of the gap); the far transcritical gives 1.26 and is ``branch_point``. Both
+    ratios are unit-free. The differences use the step of :func:`_branch_step`, which follows the state's
     scale.
 
     References:
@@ -287,15 +393,20 @@ def _branch_label(context: "DetectionContext") -> str:
         quadratic_error = max(quadratic_error, abs(quadratic - other_quadratic))
         cubic_error = max(cubic_error, abs(cubic - other_cubic))
     jacobian, right, left = null_pair
-    eigenvalue = abs(float((left @ jacobian @ right).real))
-    offset = _OFFSET_FACTOR * abs(cubic) * eigenvalue
+    eigenvalue = float((left @ jacobian @ right).real)
+    offset = _OFFSET_FACTOR * abs(cubic) * abs(eigenvalue)
     if _resolved(quadratic, quadratic_size, quadratic_error):
         if quadratic * quadratic > offset:
             return "transcritical"
-        # A pitchfork seen off its vertex owns its a = c w0; anything else that
-        # fails the offset test cannot be told apart and is not named (DEQ-147).
-        vertex = quadratic - cubic * _vertex_offset(context, null_pair, branch_step)
+        # A pitchfork seen off its vertex owns its a = c w0 and 3 lambda = a w0;
+        # anything else that fails the offset test cannot be told apart and is
+        # not named (DEQ-147, DEQ-178).
+        offset_estimate = _vertex_offset(context, null_pair, branch_step)
+        vertex = quadratic - cubic * offset_estimate
         if abs(vertex) > _VERTEX_FRACTION * abs(quadratic):
+            return "branch_point"
+        drift = quadratic * offset_estimate
+        if abs(3.0 * eigenvalue - drift) > _EIGENVALUE_FRACTION * abs(drift):
             return "branch_point"
     if _resolved(cubic, cubic_size, cubic_error):
         return "pitchfork"
