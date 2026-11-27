@@ -16,7 +16,7 @@ Hierarchy:
 from typing import Literal
 
 import numpy as np
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 # Refusal tolerance for a span that should be a whole number of steps: the gap
 # between ``end - start`` and ``n h``, relative to the larger of |start| and
@@ -240,6 +240,34 @@ class StochasticConfig(FixedStepConfig):
         default="ito",
         description="Calculus interpretation for SDEs",
     )
+    typical: float | list[float] | None = Field(
+        default=None,
+        description=(
+            "Typical size of each state component (one per component, or one "
+            "for all) for the central differences of the diffusion's slopes "
+            "(the Stratonovich correction, Milstein's term, the commutativity "
+            "check): component j steps eps^(1/3) * max(|x_j|, typical_j). None "
+            "for one; set it to the scale of a state that lives far below one, "
+            "or the step swamps it (DEQ-158)"
+        ),
+    )
+
+    @field_validator("typical")
+    @classmethod
+    def _positive_typical(
+        cls,
+        value: float | list[float] | None,
+    ) -> float | list[float] | None:
+        """Refuse a typical size that is not positive."""
+        if value is not None and not np.all(np.asarray(value, dtype=float) > 0.0):
+            message = "typical sizes must be positive"
+            raise ValueError(message)
+        return value
+
+    @property
+    def typical_sizes(self) -> np.ndarray | None:
+        """``typical`` as an array for the coefficient evaluators, or ``None``."""
+        return None if self.typical is None else np.asarray(self.typical, dtype=float)
 
 
 class DeterministicConfig(FixedStepConfig):

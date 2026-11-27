@@ -19,6 +19,7 @@ from abc import ABC, abstractmethod
 from math import factorial
 
 import numpy as np
+from sweet_tea.abstract_factory import AbstractFactory
 
 from discrecontinual_equations.continuation.jet import Jet
 from discrecontinual_equations.continuation.sparsity import SparsityPattern
@@ -409,6 +410,25 @@ class FiniteDifferenceDerivatives(DerivativeProvider):
             ) / step**4
         message = "finite differences support order <= 4; use automatic differentiation"
         raise NotImplementedError(message)
+
+
+def configured_provider(key: str, epsilon: float | None) -> DerivativeProvider:
+    """The registered provider ``key``, given ``epsilon`` only when one is set.
+
+    ``Codim2Config.derivative_epsilon`` reaches the finite-difference provider
+    this way; left unset, every provider is built with no configuration, as
+    before, and the finite-difference one steps each order at
+    ``eps^(1/(m+2))``.
+
+    Raises:
+        sweet_tea.sweet_tea_error.SweetTeaError: If ``key`` is not registered.
+    """
+    if epsilon is None:
+        return AbstractFactory[DerivativeProvider].create(key)
+    return AbstractFactory[DerivativeProvider].create(
+        key,
+        configuration={"epsilon": epsilon},
+    )
 
 
 def _real_point(point: np.ndarray) -> np.ndarray:

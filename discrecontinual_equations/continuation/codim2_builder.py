@@ -42,7 +42,7 @@ from discrecontinual_equations.continuation.codim2 import (
 )
 from discrecontinual_equations.continuation.codim2_config import Codim2Config
 from discrecontinual_equations.continuation.derivative_provider import (
-    DerivativeProvider,
+    configured_provider,
 )
 from discrecontinual_equations.continuation.residual import ResidualFunction
 from discrecontinual_equations.continuation.two_parameter_problem import (
@@ -147,8 +147,9 @@ class Codim2Driver:
                 "first_index": config.continuation_parameter_index,
                 "second_index": config.second_parameter_index,
                 "time": config.evaluation_time,
-                "provider": AbstractFactory[DerivativeProvider].create(
+                "provider": configured_provider(
                     config.derivative_provider,
+                    config.derivative_epsilon,
                 ),
             },
         )

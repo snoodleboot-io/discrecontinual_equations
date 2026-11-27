@@ -61,8 +61,9 @@ class DifferentiableResidual(ResidualFunction):
     most of their columns in closed form and difference only the rest. Those
     columns take ``epsilon`` as a *relative* step (DEQ-159), the rule every
     other finite difference in the package follows (DEQ-118): the unknown ``x``
-    a column moves is stepped by ``epsilon max(|x|, 1)`` and the quotient is
-    divided by the width actually stepped, which
+    a column moves is stepped by ``epsilon max(|x|, typical_x)`` - the typical
+    size one unless the caller gives one per unknown (DEQ-158) - and the
+    quotient is divided by the width actually stepped, which
     :func:`~discrecontinual_equations.finite_difference.central_column` does.
     On unknowns of size one or less the step is ``epsilon`` itself, as it was
     when it was absolute; above one it grows with the unknown, where an
@@ -82,16 +83,20 @@ class DifferentiableResidual(ResidualFunction):
         state: np.ndarray,
         parameter: float,
         epsilon: float,
+        typical: np.ndarray | None = None,
     ) -> np.ndarray:
         """Return the ``(m, m + 1)`` extended Jacobian at ``(state, parameter)``.
 
         ``epsilon`` is the relative step for any column the residual
-        differences: the moved unknown ``x`` steps ``epsilon max(|x|, 1)``.
+        differences: the moved unknown ``x`` steps ``epsilon max(|x|,
+        typical_x)``.
 
         Args:
             state: The state ``u``.
             parameter: The parameter ``lambda``.
             epsilon: Finite-difference step for any column not known analytically.
+            typical: The typical size of each unknown, the ``m`` state
+                components then the parameter, or ``None`` for one each.
 
         Returns:
             The ``(m, m + 1)`` matrix ``[df/du | df/dlambda]``.

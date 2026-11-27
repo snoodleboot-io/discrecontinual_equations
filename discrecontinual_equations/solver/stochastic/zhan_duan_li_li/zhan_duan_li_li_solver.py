@@ -168,7 +168,11 @@ class ZhanDuanLiLiSolver(Solver):
         # The calculus is applied here, not in ItoCoefficients' drift: the step
         # needs a + (kappa - theta) c, which is neither the written drift nor
         # the Ito one.
-        coefficients = ItoCoefficients(equation, "ito")
+        coefficients = ItoCoefficients(
+            equation,
+            "ito",
+            typical=self.solver_config.typical_sizes,
+        )
         kappa = 0.5 if self.solver_config.calculus == "stratonovich" else 0.0
         weight = kappa - self.theta
 

@@ -234,7 +234,11 @@ class SRK3Solver(StochasticRungeKuttaSolver):
                 no triple integrals (a plain :class:`~.wiener.BrownianPath`).
         """
         config = self._config
-        coefficients = ItoCoefficients(equation, config.calculus)
+        coefficients = ItoCoefficients(
+            equation,
+            config.calculus,
+            typical=config.typical_sizes,
+        )
         y = np.array(initial_values, dtype=float)
         diffusion = coefficients.diffusion(y, config.start_time)
         if y.size == 1 and not ItoCoefficients.is_matrix(diffusion):
