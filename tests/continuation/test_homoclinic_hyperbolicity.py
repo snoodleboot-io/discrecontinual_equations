@@ -157,6 +157,18 @@ class TestEigenvalueCountRefusal(TestCase):
         assert caught.value.found == (1, 1)
         assert "a = 0" in str(caught.value)
 
+    def test_an_iterate_that_loses_only_an_unstable_eigenvalue_is_refused(self):
+        """For ``a > 0`` the counts are one stable and two unstable; at ``a = 0``
+        the third eigenvalue is zero, so the stable count is unchanged and only
+        the unstable one drops. The boundary rows are one shorter all the same.
+        """
+        curve = _central_curve()
+        zero = np.zeros(3)
+        with pytest.raises(EigenvalueCountError) as caught:
+            curve._tail(zero, zero, zero, (0.0, 0.0), (1, 2))  # noqa: SLF001
+        assert caught.value.expected == (1, 2)
+        assert caught.value.found == (1, 1)
+
     def test_trace_stops_where_the_saddle_is_lost(self):
         """The curve keeps the points it solved, as the other curve tracers do."""
         curve, orbit, equilibrium, continuation, sweep = _seed(
