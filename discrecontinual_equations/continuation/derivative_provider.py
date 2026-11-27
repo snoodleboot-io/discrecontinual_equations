@@ -104,26 +104,40 @@ class FiniteDifferenceDerivatives(DerivativeProvider):
 
     Coefficient ``m`` along a direction ``d`` is the central difference of order
     ``m`` of ``s -> f(x + s d)`` at ``s = 0``, over the stencil ``s = k t``.
-    ``epsilon`` is a *relative* step (DEQ-118): with ``s_j = max(|x_j|,
-    typical_j)``, ``t = epsilon max_j |d_j| / max_j(|d_j| / s_j)``, so the
-    component that moves most for its size moves ``epsilon s_j`` times the
-    direction's largest entry. Along a unit direction ``e_j`` that is Dennis and
+    ``epsilon`` is a *relative* step (DEQ-118). With ``s_j = max(|x_j|,
+    typical_j)`` the spacing is
+
+        ``t = epsilon min(1, max_j |d_j|) / max_j(|d_j| / s_j)``,
+
+    so no component moves more than its own step, ``|t d_j| <= epsilon s_j``,
+    however long ``d`` is (DEQ-163): a spacing that grew with ``max |d|`` moved
+    ``x = d = 1e6`` by ``1e6`` and got the first coefficient of ``x^3`` wrong by
+    a third. Along a unit direction ``e_j`` the spacing is Dennis and
     Schnabel's per-component step ``epsilon s_j``, so the Jacobian is
-    differenced column by column at each component's scale; when every
-    component the direction moves is no larger than its typical size (one by
-    default) it is ``epsilon`` itself, bit for bit, as it was when the step was
-    absolute. A component of
-    size ``1e12`` would round an absolute ``1e-6`` away and return zero; one of
-    size ``1e-12`` needs ``typical`` - one per component, or one for all - or a
-    step floored at one swamps it. Exact only to first order in practice, and
-    the stencil is not divided by the width actually stepped, which along a
-    general direction differs per component; the rounding that leaves is the
-    same order as the field's own.
+    differenced column by column at each component's scale. A direction no
+    longer than one (``max |d| <= 1``, every eigenvector-like direction the
+    library passes) takes ``epsilon max|d| / max_j(|d_j| / s_j)``, and where
+    every component it moves is no larger than its typical size (one by
+    default) that is ``epsilon`` itself, bit for bit, as it was when the step
+    was absolute. A longer direction at unit scale takes ``epsilon / max |d|``
+    instead, which is what keeps its move to ``epsilon``.
+
+    A component of size ``1e12`` would round an absolute ``1e-6`` away and
+    return zero; one of size ``1e-12`` needs ``typical`` - one per component,
+    or one for all - or a step floored at one swamps it. Exact only to first
+    order in practice, and the stencil is not divided by the width actually
+    stepped, which along a general direction differs per component; the
+    rounding that leaves is the same order as the field's own.
 
     References:
         Dennis and Schnabel (1983), Sec. 5.4 and Algorithm A5.4.1: the step
-        scaled per component by ``max(|x_j|, typx_j)``. See
-        ``docs/references.md``.
+        scaled per component by ``max(|x_j|, typx_j)``.
+        SciPy 1.14.1, ``scipy/optimize/_nonlin.py``, ``KrylovJacobian.matvec``:
+        a directional difference whose spacing is divided by the direction's
+        length, ``omega / ||v||``, so the move is the same for any length. We
+        depart from it on purpose for directions shorter than one, which keep
+        the spacing of a unit one, so that results at unit scale are unchanged.
+        See ``docs/references.md``.
     """
 
     __slots__ = ["_epsilon", "_typical"]

@@ -1652,9 +1652,46 @@ step. **A configured `finite_difference_epsilon` keeps its meaning on every
 component of size one or less** (with the default typical size of one, the step
 there is `epsilon` exactly) and grows with a component above that.
 `FiniteDifferenceDerivatives` steps a general direction `d` by
-`t = epsilon max_j |d_j| / max_j(|d_j| / max(|x_j|, typical_j))`: `epsilon` itself
-when every component it moves is of size one or less, Dennis and Schnabel's
-`epsilon max(|x_j|, typical_j)` along a unit direction.
+
+`t = epsilon min(1, max_j |d_j|) / max_j(|d_j| / s_j)`, with `s_j = max(|x_j|, typical_j)`,
+
+so that no component moves further than its own step: `|t d_j| <= epsilon s_j`
+(DEQ-163). Along a unit direction this is Dennis and Schnabel's
+`epsilon max(|x_j|, typical_j)`; for any direction with `max |d| <= 1` that
+moves only components of size one or less it is `epsilon` itself, as it was when the
+step was absolute. Before DEQ-163 the spacing kept growing with `max |d|`: at
+`x = d = 1e6` it moved the state by `1e6`, its own size, and the first Taylor
+coefficient of `x^3` came out a third too large. Now that
+coefficient is right to about `2e-11` at every size:
+
+```python
+import numpy as np
+
+from discrecontinual_equations.continuation.derivative_provider import (
+    FiniteDifferenceDerivatives,
+)
+from discrecontinual_equations.function.deterministic import DeterministicFunction
+from discrecontinual_equations.variable import Variable
+
+
+class X(Variable, name="x", abbreviation="x"):
+    pass
+
+
+class Cube(DeterministicFunction):
+    def eval(self, point, time=None):
+        return [point[0] ** 3]
+
+
+cube = Cube(variables=[X()], parameters=[], results=[X()], time=None)
+x = np.array([1.0e6])
+a1 = FiniteDifferenceDerivatives(1.0e-6).taylor(cube, x, x, 1, 0.0)[1].real[0]
+print(abs(a1 - 3.0e18) / 3.0e18)  # about 2e-11; 0.33 when the step grew with |d|
+```
+
+A long direction at unit scale (`max |d| > 1`, components of size one or less)
+now takes `epsilon / max |d|`, not `epsilon`; the library's own callers pass
+eigenvector-like directions of length one or less, which are unaffected.
 
 ```python
 import numpy as np
@@ -1684,7 +1721,7 @@ error, and a converged point can move within the Newton tolerance. The residuals
 columns (`AnalyticJacobian` over a `DifferentiableResidual`, the cusp and
 generalised-Hopf curves) still take `epsilon` as an absolute step.
 
-References: [Dennis and Schnabel 1983, SciPy `_numdiff`](../references.md#lyapunov-exponents-covariant-vectors-and-noise).
+References: [Dennis and Schnabel 1983, SciPy `_numdiff` and `_nonlin`](../references.md#lyapunov-exponents-covariant-vectors-and-noise).
 
 ::: discrecontinual_equations.continuation.jacobian
 

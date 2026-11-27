@@ -648,6 +648,7 @@ class TestLargeDirections:
         rounding = _EPS * (size**3 + 3.0 * size**3) / (2.0 * t)
         assert abs(a1 - exact) <= _SLACK * (truncation + rounding)
 
+
 def _separable(scales, point):
     """``f_i = s_i (u_i^3 + u_i^2)``: row ``i`` reads ``x_i`` alone."""
     return [
@@ -709,7 +710,7 @@ class TestGroupedColumns:
 
 
 class TestCentralStepConstant:
-    """``CENTRAL_STEP`` is ``eps^(1/3)`` correctly rounded, on every machine (DEQ-164)."""
+    """``CENTRAL_STEP`` is ``eps^(1/3)``, correctly rounded on every machine."""
 
     def test_it_is_the_correctly_rounded_cube_root_of_eps(self):
         # Exact rational check, independent of any cbrt kernel: the cube of the
@@ -720,7 +721,8 @@ class TestCentralStepConstant:
         assert ((step + below) / 2) ** 3 <= Fraction(_EPS) < ((step + above) / 2) ** 3
 
     def test_it_is_a_literal(self):
-        assert CENTRAL_STEP == float.fromhex("0x1.965fea53d6e3dp-18")
+        # DEQ-164: a literal, not a cbrt kernel's rounding of eps.
+        assert CENTRAL_STEP.hex() == "0x1.965fea53d6e3dp-18"
 
     def test_the_configured_epsilon_is_described_as_relative(self):
         field = ContinuationConfig.model_fields["finite_difference_epsilon"]
