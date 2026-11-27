@@ -333,10 +333,12 @@ class TestSolvedInTheSubspace(TestCase):
             error = float(np.max(np.abs(orbit.solution.states - reference)))
             # Measured 3.0e-4 and 3.4e-4: 4/3 of the estimate, as E - E/4 predicts.
             assert error < 2.0 * orbit.resolution.estimate
-            # The full-space solve, from the same seed, does not find it: it
-            # diverges on a near-singular Newton matrix and returns its best
-            # iterate, which is the seed - no trajectory (residual 9e-2).
-            assert not orbit.full_space.residual.is_trajectory
+            # The full-space solve, from the same seed, finds another member
+            # of the family: a trajectory off the plane (measured 0.025 and
+            # 0.16; DEQ-175). Before, it diverged and kept the seed.
+            assert orbit.full_space.converged
+            assert orbit.full_space.residual.is_trajectory
+            assert orbit.full_space.subspace_defect > 1.0e-2
 
     def test_every_edge_agrees_with_shooting_and_converges_at_second_order(self):
         interaction, network = _sheared_kirk_silber(_SHEAR4)
