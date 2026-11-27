@@ -275,8 +275,12 @@ class TestJacobianMultipliers(TestCase):
             assert order > 3.5, gaps
 
     def test_trivial_multiplier_is_exact_on_the_equivariant_cycle(self):
+        # Exact for the exact discrete cycle; the solve stops at a residual
+        # of 1e-10, and the drift follows where it stopped: 1.7e-15 at m = 3
+        # on 8 intervals but 1.5e-11 on 16 before DEQ-106, 1.2e-12 and 1.2e-15
+        # after it, when the seed is corrected on Gauss-Legendre directly.
         _, point = self._hopf_point(3, 8)
-        assert np.min(np.abs(point.multipliers - 1.0)) < 1.0e-12
+        assert np.min(np.abs(point.multipliers - 1.0)) < 1.0e-10
 
     def _van_der_pol(self, points: int, intervals: int):
         mu = 1.0
