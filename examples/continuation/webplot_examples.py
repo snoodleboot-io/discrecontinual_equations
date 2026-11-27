@@ -232,6 +232,7 @@ try:  # python -m examples.continuation.webplot_examples
     from examples.continuation import stage_hopf_hopf as hopfhopf
     from examples.continuation import stage_lorenz_manifold as lorenz
     from examples.continuation import stage_noisy_hopf as noisy
+    from examples.continuation import stage_rossler_cascade as rossler
     from examples.continuation import stage_shilnikov as shilnikov
     from examples.continuation import stage_snic as snic
     from examples.continuation import stage_van_der_pol as vdp
@@ -246,6 +247,7 @@ except ImportError:  # run as a script path: only this directory is on sys.path
     import stage_hopf_hopf as hopfhopf
     import stage_lorenz_manifold as lorenz
     import stage_noisy_hopf as noisy
+    import stage_rossler_cascade as rossler
     import stage_shilnikov as shilnikov
     import stage_snic as snic
     import stage_van_der_pol as vdp
@@ -350,6 +352,11 @@ _EQUATIONS = {
 }
 
 
+def _rossler_cascade() -> Scene:
+    """The Rossler cascade's page, under the name the driver reads it by."""
+    return rossler.cascade_page()
+
+
 def _raw_catalogue() -> list[tuple[str, Scene]]:
     return [
         ("saddle_node.html", _saddle_node()),
@@ -406,6 +413,7 @@ def _raw_catalogue() -> list[tuple[str, Scene]]:
         ("stochastic_density.html", _density_family()),
         ("stochastic_lyapunov.html", _lyapunov()),
         ("coloured_noise_thresholds.html", _coloured_thresholds()),
+        ("rossler_cascade.html", _rossler_cascade()),
     ]
 
 
@@ -432,6 +440,11 @@ def _stages() -> tuple[tuple, ...]:
         ),
         (noisy.noisy_hopf_stage, noisy.STAGE_FILENAME, noisy.STAGE_ENTRY),
         (canard.canard_stage, canard.STAGE_FILENAME, canard.STAGE_ENTRY),
+        (
+            rossler.rossler_cascade_stage,
+            rossler.STAGE_FILENAME,
+            rossler.STAGE_ENTRY,
+        ),
     )
 
 

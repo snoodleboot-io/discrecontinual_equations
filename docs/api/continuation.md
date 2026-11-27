@@ -568,6 +568,105 @@ and `-4.912e-8` for the same Steinmetz-Larter torus. Signs agree throughout.
 The atlas page `cycle_codim2.html` draws the fold and torus curves of the turned
 Takens unfolding and their resonances.
 
+## Following a period-doubling cascade
+
+`PeriodDoublingCascade` follows a cascade of period-doublings: it traces a cycle
+branch with `CycleContinuation` until the flip multiplier passes `-1`, locates that
+doubling, switches onto the cycle born there, and traces that one on a mesh of twice
+the intervals - the period has doubled, so the same resolution per turn needs twice
+the mesh. Each doubling's parameter is the cubic in the flip multiplier through the
+four traced points nearest `-1`, evaluated at `-1` (`locate_doubling`): fourth order
+in the parameter step, where the linear estimate `classify_transition` reports is
+second. The switch seeds the doubled branch with the flow from `x_0 + eps v` over two
+periods, `v` the eigenvector of the Hermite monodromy for the multiplier nearest
+`-1`, solved just past the doubling and accepted only if its two halves differ (the
+old cycle traversed twice solves the same system). `feigenbaum_ratios` turns the
+doublings into the ratios of successive gaps.
+
+```python
+cascade = PeriodDoublingCascade(equation, 0, 20, phase_index=1, phase_value=0.0)
+levels = cascade.follow(seed, 0.5, 6)  # Gauss-Legendre, m = 4, by default
+ratios = feigenbaum_ratios([level.doubling for level in levels])
+```
+
+### Rössler and Feigenbaum's delta
+
+The Rössler system `x' = -y - z, y' = x + a y, z' = b + z (x - c)` at `a = b = 0.2`,
+continued in `c` from the period-1 cycle, doubles at the values below. The
+reference is independent of the collocation: Poincaré-map shooting on the section
+`y = 0, y' > 0` with scipy's DOP853 at `rtol = 1e-12`, the period-`2^k` cycle a
+fixed point of the `2^k`-th return map, each doubling the brentq root of its flip
+eigenvalue plus one. Its first two lie inside Wilczak and Zgliczyński's
+computer-assisted enclosures, `[2.83244, 2.832446]` and
+`[3.83735812, 3.837358168411]` (arXiv:0712.1123, §6.3-6.4, whose `a` is this `c`).
+The library column is `PeriodDoublingCascade` at twenty intervals per turn
+(`m = 4`), arclength 1, eight points per predicted gap - the test's settings,
+continued to six branches:
+
+| doubling | period | intervals | points | reference `c` | library `c` | difference | worst bound |
+|---|---|---|---|---|---|---|---|
+| 1 | 1 | 20 | 4 | 2.8324450278621 | 2.8324450911 | +6.3e-8 | 1.5e-6 |
+| 2 | 2 | 40 | 19 | 3.8373581684065 | 3.8373579477 | -2.2e-7 | 6.8e-6 |
+| 3 | 4 | 80 | 12 | 4.1242147320743 | 4.1242147771 | +4.5e-8 | 4.3e-5 |
+| 4 | 8 | 160 | 10 | 4.1869969993951 | 4.1869971520 | +1.5e-7 | 1.0e-4 |
+| 5 | 16 | 320 | 9 | 4.2005372929837 | 4.2005374443 | +1.5e-7 | 2.1e-4 |
+| 6 | 32 | 640 | 9 | 4.2034406286571 | 4.2034407797 | +1.5e-7 | 4.3e-4 |
+
+"Period" is in turns of the first cycle; "worst bound" is the largest
+`floquet_error` on the branch, every point of which `resolved_branch` keeps. The
+ratios of successive gaps:
+
+| ratio | reference | library | library − delta |
+|---|---|---|---|
+| delta_1 | 3.503190 | 3.503186 | −1.16602 |
+| delta_2 | 4.569070 | 4.569066 | −0.10014 |
+| delta_3 | 4.636699 | 4.636708 | −0.03249 |
+| delta_4 | 4.663702 | 4.663702 | −0.00550 |
+
+Feigenbaum's `delta = 4.669201609102990671853...` (Briggs, Math. Comp. 57 (1991);
+OEIS A006890 and Broadhurst's 1018 digits agree). The measured ratios approach it from below and
+each is closer than the last - 1.17, 0.100, 0.032 and 0.0055 short, the error
+falling by 11.6, 3.1 and 5.9 from one to the next - so the measured delta is
+**4.6637** from the first six doublings, 0.12% short of Feigenbaum's. The library's
+ratios agree with the reference's to 1e-5 at every depth, so that shortfall is the
+cascade's own approach to its limit, not the discretisation's.
+
+### What limits the depth
+
+Not the accuracy of the multipliers, at Gauss–Legendre `m = 4`. At a fixed number of
+intervals per turn the error in the flip multiplier against the shooting reference
+grows by about four and a half per level, and falls by `2^8` per mesh doubling, as
+the scheme's order says it should:
+
+| turns (c) | 20 per turn, `m = 4` | 40 per turn, `m = 4` | 80 per turn, Hermite–Simpson |
+|---|---|---|---|
+| 1 (2.8) | 6.8e-8 (bound 1.5e-6) | 2.6e-10 (bound 1.0e-7) | 1.4e-7 (reads 1.2e-7) |
+| 2 (3.8) | 4.0e-7 (1.5e-5) | 1.4e-9 (4.7e-7) | 1.6e-5 (reads 8.4e-6) |
+| 4 (4.1) | 1.8e-6 (3.3e-5) | 6.1e-9 (1.3e-6) | 1.7e-4 (reads 2.3e-5) |
+| 8 (4.18) | 3.3e-6 (2.2e-5) | 2.8e-8 (2.7e-6) | 8.6e-4 (reads 4.9e-5) |
+| 16 (4.198) | 1.4e-5 (6.9e-5) | 1.3e-7 (5.4e-6) | 4.2e-3 (reads 9.8e-5) |
+
+A doubling's parameter is off by the multiplier's error over the flip multiplier's
+slope in `c`, and that slope grows by about `delta` per level as the gaps shrink, so
+at twenty per turn every doubling is located to a few parts in ten million and the
+ratios to five figures; the error bound (`CyclePoint.floquet_error`) stays
+above the true error at every depth and two orders under the default tolerance at
+sixteen turns. Hermite–Simpson on the same number of unknowns (eighty nodes per
+turn) is a hundred times worse at two turns and three hundred at sixteen, and its
+error measure - the trivial multiplier's drift - reads up to 43 times *low* there:
+it is not a bound on a multi-turn orbit.
+
+What limits the depth is the cost. The mesh doubles with the period, every point
+under Gauss–Legendre re-solves itself on twice its mesh for its error bound, and
+the doubled-mesh solve and the Hermite cross-check walk all `4N + 1` states, so a
+point costs about four to five times the last level's: on this run, on a machine carrying a load of about thirty on twelve
+cores, tracing the six branches took 9, 89, 72, 68, 491 and 1650 seconds, forty
+minutes in all with the switches. At ten
+intervals per turn the bound itself becomes the limit instead, growing about nine
+times a level - 1.5e-4, 1.6e-3, 1.3e-2 on the first three branches, the third within a
+factor of two of `resolved_branch`'s default 2e-2 - and the switch onto the fourth
+branch found no seed.
+
 ## Trusting a computed connecting orbit
 
 A homoclinic or heteroclinic orbit has **two** independent resolutions, and either
@@ -825,3 +924,7 @@ The concepts, worked examples and limits are on the
 ## Slow manifolds and canards
 
 ::: discrecontinual_equations.continuation.slow_manifold
+
+## Period-doubling cascades
+
+::: discrecontinual_equations.continuation.period_doubling
