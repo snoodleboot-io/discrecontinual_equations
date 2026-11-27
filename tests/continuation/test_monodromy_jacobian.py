@@ -1,4 +1,4 @@
-"""The Hermite monodromy's ``df/dx`` is exact, or a relative central difference (DEQ-128).
+"""The monodromy's ``df/dx`` is exact, or a relative central difference (DEQ-128).
 
 The reference is closed-form, not computed by the code under test. On
 
@@ -67,7 +67,7 @@ class OpaqueKnownCycle(KnownCycle):
     Its Jacobian can only be differenced, so it exercises the fallback.
     """
 
-    def eval(self, point, time=None):
+    def eval(self, point, time=None):  # noqa: ARG002 (base signature)
         x, y, z = (float(value) for value in point[:3])
         rate = self.parameters[0].value
         radial = math.fsum([1.0, -x * x, -y * y])
@@ -225,9 +225,8 @@ class TestFallbackStep(TestCase):
         orbit = self._orbit()
         batch = orbit._jacobians(states)  # noqa: SLF001
         for row, state in zip(batch, states, strict=True):
-            np.testing.assert_allclose(
-                row, orbit._jacobian(state), rtol=1e-12
-            )  # noqa: SLF001
+            single = orbit._jacobian(state)  # noqa: SLF001
+            np.testing.assert_allclose(row, single, rtol=1e-12)
 
 
 class TestExactJacobianPaths(TestCase):

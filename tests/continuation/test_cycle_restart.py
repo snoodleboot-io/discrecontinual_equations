@@ -206,7 +206,7 @@ class TestRestartAnywhereOnTheCascade(TestCase):
             points_per_gap=8,
         )
 
-    def _worst(self, mesh_only: bool) -> tuple[float, float]:
+    def _worst(self, *, mesh_only: bool) -> tuple[float, float]:
         worst, slowest = 0.0, 0.0
         for index, level in enumerate(self.levels):
             for point in level.points:

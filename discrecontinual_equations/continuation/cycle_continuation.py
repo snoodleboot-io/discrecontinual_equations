@@ -111,6 +111,8 @@ _SEED_EXTENT_RATIO = 2.0
 # the converged ones; the other crossing the staged solve reached was 0.46
 # to 2.18 away on extents near 5.6, 8% and more.
 _RESTART_ITERATIONS = 8
+# A seed's states are a table, one state to a row.
+_TABLE = 2
 _RESTART_CONTRACTION = 0.5
 _RESTART_MOVE = 5.0e-2
 # Imaginary parts this many machine epsilons per factor of a multiplier's size
@@ -2037,10 +2039,7 @@ class CycleContinuation:
         """
         states = np.asarray(seed.states, dtype=float)
         mesh_points = self._intervals + 1
-        if states.ndim != 2 or states.shape[0] not in {
-            mesh_points,
-            nodes,
-        }:  # noqa: PLR2004 (a table of states)
+        if states.ndim != _TABLE or states.shape[0] not in {mesh_points, nodes}:
             rows = states.shape[0] if states.ndim else 0
             message = (
                 f"the seed has {rows} states; on {self._intervals} intervals of "
@@ -2395,16 +2394,7 @@ class CycleContinuation:
         limits = _step_limits(arclength, max_arclength, min_arclength)
         unknowns = self._solve_seed(seed, nodes)
         if unknowns is None:
-            warnings.warn(
-                f"no cycle found from the seed at parameter {seed.parameter} with "
-                f"period {seed.period}: neither a correction on "
-                f"{self._intervals} intervals of {self._collocation.name} nor the "
-                "trapezoidal stage reached a cycle within a factor of two of the "
-                "seed's period and extent; the trace is empty",
-                CycleSeedWarning,
-                stacklevel=2,
-            )
-            return [], []
+            return self._no_cycle(seed)
         self._set_phase_reference(unknowns, nodes)
         seed_direction = np.zeros(unknowns.size)
         seed_direction[-1] = direction
@@ -2459,6 +2449,22 @@ class CycleContinuation:
                     limits[0],
                 )
         return points, bifurcations
+
+    def _no_cycle(
+        self,
+        seed: CycleSeed,
+    ) -> tuple[list[CyclePoint], list[CycleBifurcation]]:
+        """The empty trace, with a warning that ``seed`` led nowhere (DEQ-106)."""
+        warnings.warn(
+            f"no cycle found from the seed at parameter {seed.parameter} with "
+            f"period {seed.period}: neither a correction on "
+            f"{self._intervals} intervals of {self._collocation.name} nor the "
+            "trapezoidal stage reached a cycle within a factor of two of the "
+            "seed's period and extent; the trace is empty",
+            CycleSeedWarning,
+            stacklevel=3,
+        )
+        return [], []
 
     def _point(self, unknowns: np.ndarray, nodes: int) -> CyclePoint:
         dimension = self._dimension
