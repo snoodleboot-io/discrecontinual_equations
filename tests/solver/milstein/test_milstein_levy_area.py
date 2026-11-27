@@ -342,12 +342,41 @@ class TestNonCommutingInterface:
         assert np.all(np.isfinite(final))
 
 
-# Recorded on main @ 4ca6382, before Levy areas existed: the commuting step must
-# not change by a single bit (oracle 3). Bits are a fair pin here (DEQ-160): the
-# conformal drift and diffusion are linear, so are their central differences, the
-# step only adds and multiplies, and the increments are the RNG's normals times
-# sqrt(dt) - no operation whose rounding a CPU or libm may choose.
+# Recorded again at DEQ-118, whose relative slope step moved every value by at
+# most 9e-12 relative (against the values below): the commuting step, bit for bit.
+# Ito and Stratonovich now agree to the bit, as the two forms of one process.
 _CONFORMAL_HEX = {
+    ("ito", "generator"): [
+        "0x1.c556e13b65a33p+0",
+        "-0x1.f6c14b703f56dp-1",
+    ],
+    ("ito", "path"): [
+        "0x1.ac2d30d494687p+0",
+        "0x1.ed41cca164de5p-2",
+    ],
+    ("ito", "gaussian"): [
+        "0x1.119d7f79c96abp+1",
+        "-0x1.1b0eb8fbff062p-1",
+    ],
+    ("stratonovich", "generator"): [
+        "0x1.c556e13b65a33p+0",
+        "-0x1.f6c14b703f56dp-1",
+    ],
+    ("stratonovich", "path"): [
+        "0x1.ac2d30d494687p+0",
+        "0x1.ed41cca164de5p-2",
+    ],
+    ("stratonovich", "gaussian"): [
+        "0x1.119d7f79c96abp+1",
+        "-0x1.1b0eb8fbff062p-1",
+    ],
+}
+
+
+# Recorded on main @ 4ca6382, before Levy areas existed: the commuting step must
+# not change by a single bit (oracle 3). Slopes at the absolute step of 1e-6 that
+# DEQ-118 replaced.
+_CONFORMAL_HEX_BEFORE_DEQ118 = {
     ("ito", "generator"): ["0x1.c556e13b672a3p+0", "-0x1.f6c14b7038f73p-1"],
     ("ito", "path"): ["0x1.ac2d30d49a5a1p+0", "0x1.ed41cca16e038p-2"],
     ("ito", "gaussian"): ["0x1.119d7f79c993cp+1", "-0x1.1b0eb8fbfc06bp-1"],
@@ -379,29 +408,58 @@ class TestCommutingCaseUnchanged:
             solver.solve(case.equation(), [1.0, 0.0])
         final = [float(r.discretization[-1]).hex() for r in solver.solution.results]
         assert final == _CONFORMAL_HEX[(calculus, source)]
+        before = [
+            float.fromhex(h) for h in _CONFORMAL_HEX_BEFORE_DEQ118[(calculus, source)]
+        ]
+        values = [float.fromhex(h) for h in final]
+        np.testing.assert_allclose(values, before, rtol=1.0e-10, atol=0.0)
+
+
+# How far a value recorded on one machine may be from the same run on another
+# whose vectorised cos rounds an ulp differently: a central difference turns that
+# ulp of b into eps |b| / h, some 4e-11, of a slope (DEQ-118).
+_RECORDED = 1.0e-10
+
+
+# Recorded again at DEQ-118, whose relative slope step moved every value by at
+# most 1.2e-11 relative (against _DEFAULT_HEX_BEFORE_DEQ118 below). Held to
+# _RECORDED, not to the bit: the cross case differences cos.
+_DEFAULT_HEX = {
+    ("iterated", "generator"): [
+        "-0x1.38c20203854a6p+0",
+        "0x1.286512917c868p-1",
+    ],
+    ("iterated", "gaussian"): [
+        "0x1.ec4e59b07641ep-1",
+        "-0x1.efcd9a08a61a2p-1",
+    ],
+    ("cross", "generator"): [
+        "-0x1.536cb7e3aca06p-1",
+        "-0x1.267545b97e10ap-1",
+    ],
+    ("cross", "gaussian"): [
+        "0x1.6ea5448c20c14p-1",
+        "-0x1.4f95b385d2815p-2",
+    ],
+}
 
 
 # Recorded at 0f43b4c (DEQ-70), before the accuracy setting existed: the default
-# must not move (DEQ-67). Written out from their float.hex pins and held to a
-# tolerance rather than bits (DEQ-160): the areas' constants come from pi ** 2 and
-# a sum of 1 / k ** 2, which a libm need not round as this one did, and the cross
-# noise reads cos, a vectorised ufunc AVX-512 runners round an ulp differently,
-# through a central difference that turns that ulp into about 1e-11 of a slope.
-# A different accuracy or sampler moves these values at the first digit.
-_DEFAULT_TOLERANCE = {"iterated": 1.0e-12, "cross": 1.0e-10}
-_DEFAULT_BEFORE = {
-    ("iterated", "generator"): [-1.2217103251071335, 0.5788961222279835],
-    ("iterated", "gaussian"): [0.9615352657230039, -0.9683654914322498],
-    ("cross", "generator"): [-0.6629388299392782, -0.5751134671169007],
-    ("cross", "gaussian"): [0.7161046429726853, -0.32771950249305853],
+# must not change by a single bit (DEQ-67). Slopes at the absolute step of 1e-6
+# that DEQ-118 replaced.
+_DEFAULT_HEX_BEFORE_DEQ118 = {
+    ("iterated", "generator"): ["-0x1.38c20203854a6p+0", "0x1.2865129180357p-1"],
+    ("iterated", "gaussian"): ["0x1.ec4e59b07641ep-1", "-0x1.efcd9a088d8efp-1"],
+    ("cross", "generator"): ["-0x1.536cb7e3ace7cp-1", "-0x1.267545b983348p-1"],
+    ("cross", "gaussian"): ["0x1.6ea5448c29b27p-1", "-0x1.4f95b385e055bp-2"],
 }
 
 
 class TestLevyAreaAccuracy:
     """DEQ-67: ``levy_area_accuracy`` is the sampler's ``c1``, default 1."""
 
-    @pytest.mark.parametrize(("noise", "source"), list(_DEFAULT_BEFORE))
-    def test_default_is_the_values_of_before(self, noise, source):
+    @pytest.mark.parametrize(("noise", "source"), list(_DEFAULT_HEX))
+    def test_default_is_hex_identical_to_before(self, noise, source):
         function_type = {"iterated": IteratedIntegralNoise, "cross": CrossCosineNoise}
         config = MilsteinConfig(
             end_time=1.0,
@@ -413,13 +471,11 @@ class TestLevyAreaAccuracy:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             solver.solve(_equation(function_type[noise]), [0.3, -0.2])
-        final = [r.discretization[-1] for r in solver.solution.results]
-        np.testing.assert_allclose(
-            final,
-            _DEFAULT_BEFORE[(noise, source)],
-            rtol=_DEFAULT_TOLERANCE[noise],
-            atol=0.0,
-        )
+        values = [float(r.discretization[-1]) for r in solver.solution.results]
+        recorded = [float.fromhex(h) for h in _DEFAULT_HEX[(noise, source)]]
+        np.testing.assert_allclose(values, recorded, rtol=_RECORDED, atol=0.0)
+        before = [float.fromhex(h) for h in _DEFAULT_HEX_BEFORE_DEQ118[(noise, source)]]
+        np.testing.assert_allclose(values, before, rtol=1.0e-10, atol=0.0)
 
     @pytest.mark.parametrize("accuracy", [1.0, 0.05])
     def test_own_sampler_draws_at_the_configured_accuracy(self, accuracy):

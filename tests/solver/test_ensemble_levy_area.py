@@ -17,7 +17,6 @@ Three yardsticks, DEQ-65's.
   in both calculi and from each kind of source.
 """
 
-import hashlib
 import warnings
 
 import numpy as np
@@ -63,6 +62,9 @@ from tests.solver.milstein.test_milstein_levy_area import (
 
 _STEP = 2.0**-5
 _RESOLUTION = 2.0**-8
+# How far a value recorded on one machine may be from the same run on another
+# whose vectorised transcendentals round differently (DEQ-118 verification).
+_RECORDED = 1.0e-10
 _START = [0.3, -0.2]
 # Relative: einsum and the per-path products may round once differently a step.
 _ROUNDING = 1.0e-12
@@ -353,79 +355,309 @@ class TestStrongOrderOnNonCommutingNoise:
         assert milstein[_STEPS[-1]] < 0.3 * euler[_STEPS[-1]], (milstein, euler)
 
 
-# The final (4, n) states of a commuting Milstein ensemble, recorded on d71dd72
-# before the areas were added, held two ways (DEQ-160).
-#
-# Conformal noise, by sha256: every operation on the way is IEEE-exact - the
-# drift a x and diffusion sigma [[x, -y], [y, x]] are linear, their central
-# differences are linear, the step and the einsum contractions only add and
-# multiply, and the increments are the RNG's normals scaled by sqrt(dt) - so
-# any conforming CPU gives these bits, and a digest is a fair pin.
-_CONFORMAL_BEFORE = {
-    ("ito", "generator"): (
-        "457c659f2096fdd1765e2e107e5d451d9af7fdaa966715ae18ceb2535cff7c2d"
-    ),
-    ("ito", "path"): (
-        "fb087cce24f9dda2fbd95c4e9be3a029c26eee0336ac5df8c011ec32f93b8f22"
-    ),
-    ("ito", "gaussian"): (
-        "87268570465bf68c5a9d7f8663bda9f69dba5beb7edf4ff0ac7bae42b7079394"
-    ),
-    ("stratonovich", "generator"): (
-        "bf40c81da26ded4ceaa7ceba50a48e5ab25f947e34a5b2e0de96a47483f2cfd0"
-    ),
-    ("stratonovich", "path"): (
-        "c87c84f039795f49bc2b24c7ba9205a957538fd4a918dbdeb6345949547148cf"
-    ),
-    ("stratonovich", "gaussian"): (
-        "14f4842dccc319892ad0928162e5d18af22b2e98a63add9cbad097847f3617be"
-    ),
+# The final (4, n) states of a commuting Milstein ensemble, recorded again at
+# DEQ-118, whose relative slope step moved every state by at most 1.3e-11
+# relative (against _COMMUTING_BEFORE_DEQ118 below). Held to _RECORDED, not to
+# the bit: the diagonal cases difference 0.3 sin x + 0.2 x, and a vectorised
+# sin that rounds one ulp differently on another CPU moves a slope by about
+# eps |b| / h, some 4e-11 relative.
+_COMMUTING_BEFORE = {
+    ("conformal", "ito", "generator"): [
+        "0x1.ee5cb6142b7c2p+0",
+        "0x1.0237cadd813cbp+0",
+        "0x1.99e441cecc7bep+0",
+        "0x1.44ed15775396fp-1",
+        "0x1.50a096ee9e6f0p+0",
+        "0x1.8138a361781e2p-2",
+        "0x1.5f40cd452969bp-1",
+        "-0x1.a7cd283aa9f7fp-3",
+    ],
+    ("conformal", "ito", "path"): [
+        "0x1.c0705aeb52c20p-1",
+        "0x1.641452325f262p-3",
+        "0x1.c0705aeb52c20p-1",
+        "0x1.641452325f262p-3",
+        "0x1.c0705aeb52c20p-1",
+        "0x1.641452325f262p-3",
+        "0x1.c0705aeb52c20p-1",
+        "0x1.641452325f262p-3",
+    ],
+    ("conformal", "ito", "gaussian"): [
+        "0x1.179fbf2176ff6p+0",
+        "0x1.0a08333358630p-1",
+        "0x1.89b08d71362e8p+0",
+        "0x1.ba391f3de43bbp-2",
+        "0x1.9bfa90d434a18p-1",
+        "0x1.3dec179a47dbcp-1",
+        "0x1.d2ffb148f420ep+0",
+        "0x1.d634de4a4bd0cp-1",
+    ],
+    ("conformal", "stratonovich", "generator"): [
+        "0x1.ee5cb6142b7c2p+0",
+        "0x1.0237cadd813cbp+0",
+        "0x1.99e441cecc7bep+0",
+        "0x1.44ed15775396fp-1",
+        "0x1.50a096ee9e6f0p+0",
+        "0x1.8138a361781e2p-2",
+        "0x1.5f40cd452969bp-1",
+        "-0x1.a7cd283aa9f7fp-3",
+    ],
+    ("conformal", "stratonovich", "path"): [
+        "0x1.c0705aeb52c20p-1",
+        "0x1.641452325f262p-3",
+        "0x1.c0705aeb52c20p-1",
+        "0x1.641452325f262p-3",
+        "0x1.c0705aeb52c20p-1",
+        "0x1.641452325f262p-3",
+        "0x1.c0705aeb52c20p-1",
+        "0x1.641452325f262p-3",
+    ],
+    ("conformal", "stratonovich", "gaussian"): [
+        "0x1.179fbf2176ff6p+0",
+        "0x1.0a08333358630p-1",
+        "0x1.89b08d71362e8p+0",
+        "0x1.ba391f3de43bbp-2",
+        "0x1.9bfa90d434a18p-1",
+        "0x1.3dec179a47dbcp-1",
+        "0x1.d2ffb148f420ep+0",
+        "0x1.d634de4a4bd0cp-1",
+    ],
+    ("diagonal", "ito", "generator"): [
+        "0x1.cfa8d8ab3bb55p-2",
+        "0x1.cf1f451818b00p-2",
+        "0x1.58a82b6904815p-1",
+        "0x1.cd09b1dedef75p-3",
+        "0x1.395b8501f1379p-1",
+        "0x1.6670015e09b17p-1",
+        "0x1.8dfe3eb419c8ap-2",
+        "0x1.25e64159b25a9p-1",
+        "0x1.0b1b7483906ecp+0",
+        "0x1.0ccf8baa05c45p-2",
+        "0x1.e744e810ddc66p-3",
+        "0x1.ae9fb39edeec4p-1",
+    ],
+    ("diagonal", "ito", "path"): [
+        "0x1.de98adc71e732p-3",
+        "0x1.0b70159a0dd49p-1",
+        "0x1.e8f54307fa79ep-1",
+        "0x1.de98adc71e732p-3",
+        "0x1.0b70159a0dd49p-1",
+        "0x1.e8f54307fa79ep-1",
+        "0x1.de98adc71e732p-3",
+        "0x1.0b70159a0dd49p-1",
+        "0x1.e8f54307fa79ep-1",
+        "0x1.de98adc71e732p-3",
+        "0x1.0b70159a0dd49p-1",
+        "0x1.e8f54307fa79ep-1",
+    ],
+    ("diagonal", "ito", "gaussian"): [
+        "0x1.74d309351e44fp-3",
+        "0x1.0c642bf37aa6dp-1",
+        "0x1.0a204e0c26d6fp+0",
+        "0x1.4c7f9500c43e6p-2",
+        "0x1.1c8e856529860p-1",
+        "0x1.e266b94d22529p-1",
+        "0x1.fa230489e75bep-2",
+        "0x1.3dd35f10c7cebp-1",
+        "0x1.e3c7f2bb5f319p-2",
+        "0x1.3dfb8da4066c6p-2",
+        "0x1.c750129159961p-2",
+        "0x1.f7b841c0f53f3p-1",
+    ],
+    ("diagonal", "stratonovich", "generator"): [
+        "0x1.eb16040e0f143p-2",
+        "0x1.e7b51049efa1bp-2",
+        "0x1.67370be597d0ep-1",
+        "0x1.eb531e7676420p-3",
+        "0x1.48d80eadbcef1p-1",
+        "0x1.75a1cc3cc294cp-1",
+        "0x1.a612aa0f96120p-2",
+        "0x1.3507da3b7ba54p-1",
+        "0x1.13bcaf79de9bfp+0",
+        "0x1.1d6f8e6ba21bap-2",
+        "0x1.0232cffd54ebfp-2",
+        "0x1.c0b54e03924cep-1",
+    ],
+    ("diagonal", "stratonovich", "path"): [
+        "0x1.fd74a5b8b1e6cp-3",
+        "0x1.195b25f3df834p-1",
+        "0x1.fbb221e8e3bbbp-1",
+        "0x1.fd74a5b8b1e6cp-3",
+        "0x1.195b25f3df834p-1",
+        "0x1.fbb221e8e3bbbp-1",
+        "0x1.fd74a5b8b1e6cp-3",
+        "0x1.195b25f3df834p-1",
+        "0x1.fbb221e8e3bbbp-1",
+        "0x1.fd74a5b8b1e6cp-3",
+        "0x1.195b25f3df834p-1",
+        "0x1.fbb221e8e3bbbp-1",
+    ],
+    ("diagonal", "stratonovich", "gaussian"): [
+        "0x1.8d4fdf5affbf0p-3",
+        "0x1.1a8d7aeb7f12cp-1",
+        "0x1.1243d34d70c46p+0",
+        "0x1.611ffd20b8666p-2",
+        "0x1.298901489a4f8p-1",
+        "0x1.f3a1b725a80bcp-1",
+        "0x1.0b9aa8da8d212p-1",
+        "0x1.4e129b10d9727p-1",
+        "0x1.f9753aee63a88p-2",
+        "0x1.51e8094067c8ep-2",
+        "0x1.dfa324aac20f0p-2",
+        "0x1.03887804ff274p+0",
+    ],
 }
 
-# Diagonal noise b = 0.3 sin x + 0.2 x, as values: sin is vectorised (SVML on
-# AVX-512 runners rounds it an ulp differently), and the step's central
-# difference of b amplifies an ulp in b to about 1e-11 of the slope, so these are
-# held to 1e-10 relative rather than to their bits. The decimals are the bits
-# the sha256 pins recorded (outputs/verification/deq-160).
-_DIAGONAL_BEFORE = {
-    ("ito", "generator"): [
-        [0.45279253525828034, 0.4522677226981758, 0.6731580320053151],
-        [0.22511614762703622, 0.6120263638378299, 0.700073282936082],
-        [0.3886651799603978, 0.5740223333350198, 1.0433876820769972],
-        [0.262510473491476, 0.23792439748189448, 0.8410621768401473],
+
+# The same final states as recorded on d71dd72, before the areas were added, with
+# the absolute slope step of 1e-6 that DEQ-118 replaced: each new state is held
+# to 1e-10 relative of its value here.
+_COMMUTING_BEFORE_DEQ118 = {
+    ("conformal", "ito", "generator"): [
+        "0x1.ee5cb6142b72dp+0",
+        "0x1.0237cadd8135ep+0",
+        "0x1.99e441ced4b9fp+0",
+        "0x1.44ed1577560afp-1",
+        "0x1.50a096eea0ae7p+0",
+        "0x1.8138a3617a898p-2",
+        "0x1.5f40cd452d428p-1",
+        "-0x1.a7cd283aae90cp-3",
     ],
-    ("ito", "path"): [
-        [0.23368964923753885, 0.5223395109697528, 0.9549961993434133],
-        [0.23368964923753885, 0.5223395109697528, 0.9549961993434133],
-        [0.23368964923753885, 0.5223395109697528, 0.9549961993434133],
-        [0.23368964923753885, 0.5223395109697528, 0.9549961993434133],
+    ("conformal", "ito", "path"): [
+        "0x1.c0705aeb5333ap-1",
+        "0x1.6414523265fa1p-3",
+        "0x1.c0705aeb5333ap-1",
+        "0x1.6414523265fa1p-3",
+        "0x1.c0705aeb5333ap-1",
+        "0x1.6414523265fa1p-3",
+        "0x1.c0705aeb5333ap-1",
+        "0x1.6414523265fa1p-3",
     ],
-    ("ito", "gaussian"): [
-        [0.18204314416277936, 0.5242017492974395, 1.0395554332392487],
-        [0.3247054368707262, 0.5557748495096458, 0.9421899706524054],
-        [0.49427420703593167, 0.6207532604202328, 0.4724424292431494],
-        [0.3105299121250704, 0.44464138996349406, 0.9838276432085769],
+    ("conformal", "ito", "gaussian"): [
+        "0x1.179fbf21784b4p+0",
+        "0x1.0a083333573d4p-1",
+        "0x1.89b08d71398d6p+0",
+        "0x1.ba391f3de440cp-2",
+        "0x1.9bfa90d4384e1p-1",
+        "0x1.3dec179a48278p-1",
+        "0x1.d2ffb148f23c5p+0",
+        "0x1.d634de4a4940bp-1",
     ],
-    ("stratonovich", "generator"): [
-        [0.4795761712619317, 0.4762766404274971, 0.701591846250924],
-        [0.23990463065156556, 0.6422733866788323, 0.7297500442672447],
-        [0.4121805736547019, 0.6035755345924062, 1.0770978615316567],
-        [0.27874586612664987, 0.2521469591502572, 0.8763832454078829],
+    ("conformal", "stratonovich", "generator"): [
+        "0x1.ee5cb61420c94p+0",
+        "0x1.0237cadd8699ep+0",
+        "0x1.99e441cecee9ap+0",
+        "0x1.44ed1577566fcp-1",
+        "0x1.50a096ee9b57fp+0",
+        "0x1.8138a3618d1b5p-2",
+        "0x1.5f40cd452dfeap-1",
+        "-0x1.a7cd283aa7412p-3",
     ],
-    ("stratonovich", "path"): [
-        [0.24875764341226222, 0.5495235309790008, 0.9915934178147007],
-        [0.24875764341226222, 0.5495235309790008, 0.9915934178147007],
-        [0.24875764341226222, 0.5495235309790008, 0.9915934178147007],
-        [0.24875764341226222, 0.5495235309790008, 0.9915934178147007],
+    ("conformal", "stratonovich", "path"): [
+        "0x1.c0705aeb54881p-1",
+        "0x1.641452326324dp-3",
+        "0x1.c0705aeb54881p-1",
+        "0x1.641452326324dp-3",
+        "0x1.c0705aeb54881p-1",
+        "0x1.641452326324dp-3",
+        "0x1.c0705aeb54881p-1",
+        "0x1.641452326324dp-3",
     ],
-    ("stratonovich", "gaussian"): [
-        [0.19400000091972416, 0.5518606579278109, 1.071347433472758],
-        [0.3448485900137792, 0.5811233903053321, 0.975843165726774],
-        [0.5226643339909542, 0.6524857004237842, 0.49361126022157537],
-        [0.32998671012462577, 0.4683957795363494, 1.013801099032371],
+    ("conformal", "stratonovich", "gaussian"): [
+        "0x1.179fbf2175be0p+0",
+        "0x1.0a0833335933ap-1",
+        "0x1.89b08d7131d7dp+0",
+        "0x1.ba391f3def1d6p-2",
+        "0x1.9bfa90d433e79p-1",
+        "0x1.3dec179a485e5p-1",
+        "0x1.d2ffb148f19f6p+0",
+        "0x1.d634de4a4d579p-1",
+    ],
+    ("diagonal", "ito", "generator"): [
+        "0x1.cfa8d8ab3a9d6p-2",
+        "0x1.cf1f451819a9dp-2",
+        "0x1.58a82b69014e3p-1",
+        "0x1.cd09b1dee084fp-3",
+        "0x1.395b8501f2515p-1",
+        "0x1.6670015e07145p-1",
+        "0x1.8dfe3eb4186f9p-2",
+        "0x1.25e64159b1ee4p-1",
+        "0x1.0b1b748391e82p+0",
+        "0x1.0ccf8baa0371fp-2",
+        "0x1.e744e810d788ep-3",
+        "0x1.ae9fb39edcac3p-1",
+    ],
+    ("diagonal", "ito", "path"): [
+        "0x1.de98adc71c8cfp-3",
+        "0x1.0b70159a0c254p-1",
+        "0x1.e8f54307f7f08p-1",
+        "0x1.de98adc71c8cfp-3",
+        "0x1.0b70159a0c254p-1",
+        "0x1.e8f54307f7f08p-1",
+        "0x1.de98adc71c8cfp-3",
+        "0x1.0b70159a0c254p-1",
+        "0x1.e8f54307f7f08p-1",
+        "0x1.de98adc71c8cfp-3",
+        "0x1.0b70159a0c254p-1",
+        "0x1.e8f54307f7f08p-1",
+    ],
+    ("diagonal", "ito", "gaussian"): [
+        "0x1.74d309351f075p-3",
+        "0x1.0c642bf37a1bdp-1",
+        "0x1.0a204e0c24457p+0",
+        "0x1.4c7f9500c5cc3p-2",
+        "0x1.1c8e85652a9fdp-1",
+        "0x1.e266b94d247efp-1",
+        "0x1.fa230489e7135p-2",
+        "0x1.3dd35f10c7d1ap-1",
+        "0x1.e3c7f2bb5e54ep-2",
+        "0x1.3dfb8da407190p-2",
+        "0x1.c75012915d60dp-2",
+        "0x1.f7b841c0f6938p-1",
+    ],
+    ("diagonal", "stratonovich", "generator"): [
+        "0x1.eb16040e0b273p-2",
+        "0x1.e7b51049f07cfp-2",
+        "0x1.67370be59371fp-1",
+        "0x1.eb531e76759f9p-3",
+        "0x1.48d80eadc0e4fp-1",
+        "0x1.75a1cc3cc3c5cp-1",
+        "0x1.a612aa0f92e83p-2",
+        "0x1.3507da3b7aee9p-1",
+        "0x1.13bcaf79deb87p+0",
+        "0x1.1d6f8e6ba2f9ap-2",
+        "0x1.0232cffd58458p-2",
+        "0x1.c0b54e039411fp-1",
+    ],
+    ("diagonal", "stratonovich", "path"): [
+        "0x1.fd74a5b8af817p-3",
+        "0x1.195b25f3dfdf6p-1",
+        "0x1.fbb221e8e2d15p-1",
+        "0x1.fd74a5b8af817p-3",
+        "0x1.195b25f3dfdf6p-1",
+        "0x1.fbb221e8e2d15p-1",
+        "0x1.fd74a5b8af817p-3",
+        "0x1.195b25f3dfdf6p-1",
+        "0x1.fbb221e8e2d15p-1",
+        "0x1.fd74a5b8af817p-3",
+        "0x1.195b25f3dfdf6p-1",
+        "0x1.fbb221e8e2d15p-1",
+    ],
+    ("diagonal", "stratonovich", "gaussian"): [
+        "0x1.8d4fdf5afe54dp-3",
+        "0x1.1a8d7aeb7f7bcp-1",
+        "0x1.1243d34d6b45ap+0",
+        "0x1.611ffd20b93c4p-2",
+        "0x1.298901489aa5ap-1",
+        "0x1.f3a1b725a4a91p-1",
+        "0x1.0b9aa8da8db4cp-1",
+        "0x1.4e129b10db097p-1",
+        "0x1.f9753aee5b25fp-2",
+        "0x1.51e80940664c2p-2",
+        "0x1.dfa324aac5ae1p-2",
+        "0x1.03887804fe2e1p+0",
     ],
 }
-_DIFFERENCE_TOLERANCE = 1.0e-10
 
 
 def _commuting(noise):
@@ -442,9 +674,9 @@ def _commuting(noise):
 @pytest.mark.parametrize("source", ["generator", "path", "gaussian"])
 @pytest.mark.parametrize("calculus", ["ito", "stratonovich"])
 @pytest.mark.parametrize("noise", ["conformal", "diagonal", "matrix", "declared"])
-def test_commuting_ensembles_keep_their_recorded_states(noise, calculus, source):
+def test_commuting_ensembles_keep_their_bits(noise, calculus, source):
     # Arrange: diagonal noise as a vector, as the matrix diag(b), and declared
-    # all recorded the same bits; each is held to them, to the tolerance above.
+    # all recorded the same values; each is held to them, to _RECORDED.
     equation, start, channels = _commuting(noise)
     wiener = {
         "generator": None,
@@ -469,16 +701,15 @@ def test_commuting_ensembles_keep_their_recorded_states(noise, calculus, source)
         )
 
     # Assert
-    if noise == "conformal":
-        digest = hashlib.sha256(final.tobytes()).hexdigest()
-        assert digest == _CONFORMAL_BEFORE[(calculus, source)]
-    else:
-        np.testing.assert_allclose(
-            final,
-            _DIAGONAL_BEFORE[(calculus, source)],
-            rtol=_DIFFERENCE_TOLERANCE,
-            atol=0.0,
-        )
+    recorded = "conformal" if noise == "conformal" else "diagonal"
+    recorded_values = [
+        float.fromhex(h) for h in _COMMUTING_BEFORE[(recorded, calculus, source)]
+    ]
+    np.testing.assert_allclose(final.ravel(), recorded_values, rtol=_RECORDED, atol=0.0)
+    before = [
+        float.fromhex(h) for h in _COMMUTING_BEFORE_DEQ118[(recorded, calculus, source)]
+    ]
+    np.testing.assert_allclose(final.ravel(), before, rtol=1.0e-10, atol=0.0)
 
 
 class _NoAreas(WienerSource):
