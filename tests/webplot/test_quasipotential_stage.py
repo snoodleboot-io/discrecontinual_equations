@@ -197,6 +197,7 @@ class TestNoisyHopfFilmQuasipotential(TestCase):
     ``mu = 0.025``. The radius on this 88-point grid is 8 under either rule.
     """
 
+    @pytest.mark.slow
     def test_the_marched_u_follows_the_closed_form_the_page_quotes(self):
         grid = film.quasipotential_grid()
         xs, ys, _extent = density_window(grid, film.BOX)

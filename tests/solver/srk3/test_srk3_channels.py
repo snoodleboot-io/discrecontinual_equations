@@ -170,6 +170,7 @@ def errors():
 
 
 class TestSeveralChannelsConvergence:
+    @pytest.mark.slow
     def test_strong_order_one_and_a_half_against_the_exact_solution(self, errors):
         measured = slope(errors["exact"])
         assert 1.3 < measured < 1.9, errors["exact"]

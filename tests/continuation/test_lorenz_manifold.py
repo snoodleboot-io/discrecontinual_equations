@@ -202,6 +202,8 @@ def _lorenz(distance: float, loss: float = 0.0, *, escalate: bool = True):
         )
 
 
+# setUpClass grows the manifold once, and the growth is the slow part (DEQ-144)
+@pytest.mark.slow
 class TestLorenzManifoldAsFarAsItGoes(TestCase):
     """Grown without the escalated continuation budget, which stops it at
     157.38 in about a minute; with it the growth reaches 165.25 but takes
@@ -238,6 +240,7 @@ class TestLorenzManifoldAsFarAsItGoes(TestCase):
 
 
 class TestLossyLorenzManifold(TestCase):
+    @pytest.mark.slow
     def test_the_crochet_pattern_adds_up_when_points_are_lost(self):
         # Without the escalated budget, as above: it reaches 160 with 30
         # points lost. With it, it loses none to 160 and 1 to 170, slowly.
@@ -363,6 +366,7 @@ class TestLorenzManifoldIsOnTheManifold(TestCase):
     ring it starts from is off the manifold.
     """
 
+    @pytest.mark.slow
     def test_the_ring_at_distance_twenty_converges_onto_the_manifold(self):
         coarse = _outer_ring_error(1.5)
         fine = _outer_ring_error(0.75)
@@ -371,6 +375,8 @@ class TestLorenzManifoldIsOnTheManifold(TestCase):
         assert coarse / fine > 4.0
 
 
+# setUpClass grows the manifold once, and the growth is the slow part (DEQ-144)
+@pytest.mark.slow
 class TestLorenzManifoldAtThePublishedSettings(TestCase):
     """Krauskopf and Osinga's own growth, reproduced at their settings.
 

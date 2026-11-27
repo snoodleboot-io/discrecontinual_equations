@@ -206,6 +206,7 @@ class TestLorenz(TestCase):
         assert abs(self.result.exponents.sum() - _LORENZ_TRACE) < 1.0e-3
         assert abs(self.result.covariant_exponents.sum() - _LORENZ_TRACE) < 1.0e-2
 
+    @pytest.mark.slow
     def test_covariant_growth_rates_are_benettins_up_to_the_boundary_term(self):
         # sum log gamma_j - sum log|R_jj| = log|c_jj(0)| - log|c_jj(T)|, and
         # c_jj is the cosine of an angle the record never closes to zero, so
@@ -388,6 +389,7 @@ class TestNoisyPitchfork(TestCase):
             finite.mean[0] - (0.1 - 0.5 * self._SIGMA**2)
         ) < 3.0 * expected / math.sqrt(60)
 
+    @pytest.mark.slow
     def test_the_median_crosses_zero_at_the_dynamical_threshold(self):
         exact = 0.5 * self._SIGMA**2
         median = DynamicalThreshold(

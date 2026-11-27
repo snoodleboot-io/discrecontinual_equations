@@ -163,6 +163,7 @@ class TestIteratedIntegralOracle:
                 )
         assert 0.35 < slope(euler) < 0.65, euler
 
+    @pytest.mark.slow
     def test_milstein_with_the_sampler_is_within_the_order_one_bound(self):
         # Driven by the sampler the scheme's only error is the sampler's, and the
         # truncation rule bounds it by h^(3/2) per step in L2, sqrt(T) h at T.
@@ -232,6 +233,7 @@ class CoupledSource(WienerSource):
 
 
 class TestNonCommutingConvergence:
+    @pytest.mark.slow
     def test_strong_order_one_on_cross_cosine_noise(self):
         steps = [2.0**-k for k in range(2, 7)]
         resolution = 2.0**-10

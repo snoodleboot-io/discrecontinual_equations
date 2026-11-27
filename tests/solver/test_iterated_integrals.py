@@ -346,6 +346,7 @@ class TestLaw:
     """Studentized: the products here are heavy-tailed (``I_(0,0,1)`` is about
     ``(dW_0^2 - h) dW_1 / 2``), so a fixed tolerance is either loose or flaky."""
 
+    @pytest.mark.slow
     def test_means_are_zero_and_variances_h_cubed_over_six(self, law):
         sampled, _ = law
         assert np.all(np.abs(sampled["mean"]) < 5.0 * np.sqrt(1.0 / 6.0 / _SAMPLES))

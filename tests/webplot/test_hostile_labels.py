@@ -195,8 +195,19 @@ _CHROME = next(
 )
 
 
+# The films play their scene in the browser, 10-20 s each: the PR gate loads the two
+# static pages and the nightly run loads the films too (DEQ-144)
+_FILMS = {"stage", "stochastic stage", "manifold film"}
+
+
 @pytest.mark.skipif(_CHROME is None, reason="no headless Chrome to load the page")
-@pytest.mark.parametrize("name", RENDERERS)
+@pytest.mark.parametrize(
+    "name",
+    [
+        pytest.param(name, marks=pytest.mark.slow) if name in _FILMS else name
+        for name in RENDERERS
+    ],
+)
 def test_the_browser_builds_no_planted_element(pages, name):
     with tempfile.TemporaryDirectory() as directory:
         path = Path(directory) / "page.html"

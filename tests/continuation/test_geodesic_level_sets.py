@@ -415,6 +415,7 @@ class TestFirstLanding(TestCase):
         assert np.max(np.abs(landing.points - (1.0 + delta) * ring)) < 1.0e-12
         assert budgets == [(200, 40), (4000, 6)]
 
+    @pytest.mark.slow
     def test_a_landing_the_first_guess_misses_is_retried_alone(self):
         # Two first guesses in seven are spoiled - half the ring away, which
         # Newton, a ring segment a step, cannot cross - or not a number. The
@@ -879,6 +880,7 @@ class TestCurvedGraph(TestCase):
     def test_every_vertex_is_on_the_surface(self):
         assert float(np.max(_graph_offset(self.mesh.vertices[1:]))) < 2.0e-4
 
+    @pytest.mark.slow
     def test_every_vertex_is_at_its_rings_geodesic_distance(self):
         worst = 0.0
         for ring, distance in zip(
@@ -1032,6 +1034,7 @@ class TestPaperStepControl(TestCase):
     """The rest of SIADS 2003, Sec. 3.2: the bound on Delta times alpha,
     doubling, and the warning at the smallest step."""
 
+    @pytest.mark.slow
     def test_delta_times_the_turn_is_bounded_too(self):
         # Measured: the angles alone (0.3, 0.4) accept Delta = 0.2 throughout,
         # where Delta alpha is 0.02 to 0.03; bounding it by 0.01 halves Delta
@@ -1071,6 +1074,7 @@ class TestPaperStepControl(TestCase):
         steps = np.diff(mesh.ring_distances)
         assert np.allclose(steps[:5], [0.025, 0.05, 0.1, 0.2, 0.4])
 
+    @pytest.mark.slow
     def test_a_sharp_ring_at_the_smallest_step_is_accepted_with_a_warning(self):
         # No step may shrink (the smallest is the step), and every ring of
         # the graph turns by more than 0.02: each is accepted, and said so.
@@ -1122,6 +1126,7 @@ class TestEscalationMemo(TestCase):
         assert escalated
         assert len(escalated) == len(set(escalated))
 
+    @pytest.mark.slow
     def test_the_memo_changes_nothing_where_nothing_fails(self):
         # Spoiled first guesses that the continuation does land: with the
         # memo cleared before every ring solve the mesh is the same.

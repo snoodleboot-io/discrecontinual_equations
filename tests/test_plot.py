@@ -99,6 +99,7 @@ class TestLinePlotWrites(TestCase):
             LinePlot(output_dir=out, output_format="png").plot(x, y, title="Line")
             assert _is_png(Path(out) / "Line.png")
 
+    @pytest.mark.slow
     def test_plot_3d_png_writes_a_png_and_html_writes_html(self):
         x, y = _line()
         with TemporaryDirectory() as out, patch("plotly.graph_objects.Figure.show"):

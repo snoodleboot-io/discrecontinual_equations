@@ -101,6 +101,7 @@ def test_unknown_names_are_refused(tmp_path):
         atlas.main(str(tmp_path), jobs=1, only=["no_such_page"])
 
 
+@pytest.mark.slow
 def test_parallel_serial_and_in_process_builds_are_byte_identical(tmp_path):
     serial, parallel, again = tmp_path / "s", tmp_path / "p", tmp_path / "q"
     atlas.main(str(serial), jobs=1, only=list(_SUBSET))
@@ -121,6 +122,7 @@ def test_parallel_serial_and_in_process_builds_are_byte_identical(tmp_path):
     assert old == {k: v for k, v in _digests(parallel).items() if k != "index.html"}
 
 
+@pytest.mark.slow
 def test_the_index_is_in_registry_order(tmp_path):
     chosen = ["pitchfork", "saddle_node", "hysteresis"]  # not registry order
     atlas.main(str(tmp_path), jobs=3, only=chosen)

@@ -164,6 +164,7 @@ class TestTorusCurve(TestCase):
         omega = math.sqrt(-4.0 * (1.0 + u) * u)
         return omega * 2.0 * math.pi / (1.0 + RotatedTakens.E * u)
 
+    @pytest.mark.slow
     def test_the_curve_and_kappa_are_the_reduced_hopf(self) -> None:
         for point in self.curve.points:
             b1, b2 = point.parameters
@@ -333,6 +334,7 @@ class TestFlipCurve(TestCase):
 
 
 class TestPublishedFlipTorus(TestCase):
+    @pytest.mark.slow
     def test_the_predator_prey_flip_neimark_sacker_point(self) -> None:
         # De Witte et al. (2013), section 4.2.1: PDNS at (b2, eps) = (0.277, 0.530).
         eps, b2 = 0.50, 0.277

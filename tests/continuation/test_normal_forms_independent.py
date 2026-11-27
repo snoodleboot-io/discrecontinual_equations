@@ -22,6 +22,7 @@ from typing import Any
 from unittest import TestCase
 
 import numpy as np
+import pytest
 from scipy.integrate import solve_ivp
 from scipy.optimize import brentq
 
@@ -562,6 +563,7 @@ class TestBogdanovTakensHomoclinicByShooting(TestCase):
     ``beta2^2``; with the ``K02`` term or the 49/25 wrong it would not.
     """
 
+    @pytest.mark.slow
     def test_gap_falls_faster_than_second_order(self):
         problem = _problem(_CurvedPlanarBT, 2)
         unfolding = bogdanov_takens_normal_form(

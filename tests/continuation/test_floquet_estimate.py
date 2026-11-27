@@ -104,6 +104,7 @@ def _point(mu: float, intervals: int, points: int):
 
 
 class TestSmallMultiplier(TestCase):
+    @pytest.mark.slow
     def test_van_der_pol_at_mu_5_to_its_own_relative_accuracy(self):
         """Exact 7.7385e-38; the explicit product reads it as 1e-15 noise."""
         continuation, point, exact = _point(5.0, 160, 4)
@@ -148,6 +149,7 @@ class TestEstimateIsTight(TestCase):
     def test_at_four_points(self):
         assert self._ratio(0.5, 48, 4) < 100.0
 
+    @pytest.mark.slow
     def test_no_false_refusal_at_mu_6(self):
         """Measured 4.65e-2 against a true 6.25e-3 under the old estimate."""
         _, point, exact = _point(6.0, 80, 4)
