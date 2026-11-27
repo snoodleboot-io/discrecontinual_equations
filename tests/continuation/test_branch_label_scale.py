@@ -294,7 +294,11 @@ class TestNoiseEstimate(TestCase):
     ) -> str:
         context = _context(CASES["cancelled"][0], 1.0, exact=True)
         expansion = _Expansions(values, sizes)
-        with mock.patch.object(detection, "_branch_expansion", expansion):
+        # The values are keyed by step, so the step search is held at its start.
+        with (
+            mock.patch.object(detection, "_branch_expansion", expansion),
+            mock.patch.object(detection, "_branch_step", return_value=_BRANCH_STEP),
+        ):
             return _branch_label(context)
 
     def test_each_coefficient_is_measured_against_its_own_terms(self):

@@ -210,7 +210,10 @@ Georg §9.2), not Newton on the augmented system $F = 0,\ \psi = 0$ (Kuznetsov's
 
 The fold above was found this way. Its location is accurate to the corrector and
 root-finder tolerances (`newton_tolerance`, `localization_tolerance`,
-`fraction_tolerance`).
+`fraction_tolerance`). `localization_tolerance` is relative. The localizer stops
+once $|\psi|$ is below it times the larger $|\psi|$ at the two bracketing points,
+so the located point does not depend on the units of time or state (DEQ-146; see
+[Labels that do not depend on the units](../api/continuation.md#labels-that-do-not-depend-on-the-units-end-to-end-deq-146-deq-147)).
 
 ### Limits
 

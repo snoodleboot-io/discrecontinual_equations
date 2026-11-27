@@ -1422,10 +1422,165 @@ stays within `7.3` times its error estimate, and genuine `c` exceeds it at least
 `5e4` times. Noise in `a` can exceed its estimate (by up to `1.8e4` with
 finite-difference Jacobians far from the origin); the first test is what catches it.
 
-Limits: the step `1e-4` is in the state's units, so rescaling the *state* still
-changes how much noise the differences pick up. A genuine coefficient smaller than
+Limits: the step was `1e-4` in the state's units, so rescaling the *state* still
+changed how much noise the differences picked up; since DEQ-147 the step follows the
+state (see the next section). A genuine coefficient smaller than
 `1e-5` of its terms is reported as zero. When the Jacobian is too noisy to resolve
 `c`, the point is honestly `branch_point`, not a guessed `pitchfork`.
+
+## Labels that do not depend on the units, end to end (DEQ-146, DEQ-147)
+
+**The problem.** The labeller above is unit-free, but in a real continuation it is
+handed the point the localizer stopped at, and it differences the Jacobian with a
+step. Both had units. The localizer stopped once the test function fell below an
+absolute `localization_tolerance = 1e-8`. The branch-point test function is a
+bordered determinant, which scales as `s^n` when time is rescaled by `s`, so for a
+slow three-dimensional system (`s = 1e-3`) the first midpoint already passed and
+the point was reported at `mu = -7.2e-3`. There a transcritical with `r <= 1e-2`
+fails the offset test and was called a pitchfork. The difference step `1e-4` was
+absolute too: with the state rescaled by `sigma >= 1e3` the third difference behind
+`c` moves the Jacobian by `(1e-4 / sigma)^2` of itself, below rounding, and the
+pitchfork became `branch_point`.
+
+**A relative stop.** `RootFinderSettings(..., relative=True)` reads
+`value_tolerance` as a fraction of the larger of `|psi|` at the bracket's two ends,
+and the continuation's localizer is built that way, so `localization_tolerance` is
+now relative. Multiplying `psi` by any constant leaves the stop unchanged, and near a
+simple root it places the point within about `1e-8` of the step. The secant's
+flat-chord test is scaled alike. Without `relative` the settings keep their absolute
+meaning, which the stochastic threshold finders rely on.
+
+**A step that follows the state.** The step is chosen so the Jacobian moves by
+`1e-4` of itself along the null vector `q`: the larger of
+`|J(x + h q) - J(x - h q)| / (2 |J|)` and `sqrt(|J(x + h q) - 2 J + J(x - h q)| / |J|)`.
+Both are `h` over a length on which the field is nonlinear, so the step scales with
+`sigma` and ignores `s`. It starts at `1e-4 max(1, |x|)`, as the difference
+Jacobians do (DEQ-118). Scaling by `|x|` alone would not help at a branch point on
+`x = 0`. From there the step moves by the ratio, at least ten-fold when it grows,
+and also grows ten-fold when the Jacobian does not move at all, since rounding can
+hide the change.
+
+**A resolved `a` that fails the offset test is not called a pitchfork.** Such a point
+used to fall through to the cubic test. A weak transcritical (`a = 1.7e-3`) located
+`1e-7` off the bifurcation was therefore labelled `pitchfork`. A pitchfork seen from
+its nontrivial branch at `w0` also has a resolved `a`, and that one is `c w0`. The
+labeller now recentres on the branch that persists for every `mu`. Let
+`g(w, mu)` be the reduced field with `x = x* + w q`. Then `g_mu = <p, f_mu>` and
+`g_wmu = <p, f_xmu q + B(q, h_mu)>` give `w0 = g_mu / g_wmu`, which is zero on the
+persisting branch. Here `h_mu` is how far the center manifold moves with `mu`,
+`A h_mu = -(f_mu - <p, f_mu> q)`. Without that term a parameter that reaches the
+critical variable only through another one (`u' = v u - u^3`, `v' = -v + mu`) has
+`g_wmu = 0`, and its pitchfork seen from the nontrivial branch, even `1e-3` from the
+vertex, was `branch_point`. If `|a - c w0| <= |a| / 2`, the `a` is the pitchfork's
+own and the point is a `pitchfork` (when `c` is resolved). Otherwise it is
+`branch_point`. This recentring is a Taylor shift of the normal form
+`mu w + (a/2) w^2 + (c/6) w^3`, derived here; the `w mu` coefficient with its
+`B(q, h_mu)` term is that of Bosschaert, Janssens and Kuznetsov (2019), eqs.
+(88)-(89). It checks against the verifier's cases: on the persisting branch `w0 = 0`
+exactly, and on the other branch `w0` matches `<p, x - x*>` to `1e-3` (`1e-2` when the
+parameter enters through another variable).
+
+```python
+from pathlib import Path
+
+from sweet_tea.registry import Registry
+
+import discrecontinual_equations
+from discrecontinual_equations.continuation.builder import ContinuerBuilder
+from discrecontinual_equations.continuation.continuation_config import ContinuationConfig
+from discrecontinual_equations.differential_equation import DifferentialEquation
+from discrecontinual_equations.function.deterministic import DeterministicFunction
+from discrecontinual_equations.parameter import Parameter
+from discrecontinual_equations.variable import Variable
+
+
+Registry.fill_registry(
+    path=str(Path(discrecontinual_equations.__file__).parent),
+    module="discrecontinual_equations",
+    exclude=["*.tests", "*.examples", "*.plot"],
+)
+
+
+class Rate(Parameter, name="Rate", abbreviation="mu"):
+    pass
+
+
+class Population(Variable, name="Population", abbreviation="x"):
+    pass
+
+
+class Time(Variable, name="Time", abbreviation="t"):
+    pass
+
+
+class WeakSlowTranscritical(DeterministicFunction):
+    """x' = s (mu x + r x^2 - x^3): a weak transcritical on a slow clock."""
+
+    def eval(self, point, time=None):
+        mu, x = self.parameters[0].value, point[0]
+        return [1.0e-3 * (mu * x + 1.0e-2 * x * x - x**3)]
+
+
+class WidePitchfork(DeterministicFunction):
+    """x' = mu x - (x / L)^3 L: a pitchfork whose state is measured in units L = 1e8."""
+
+    def eval(self, point, time=None):
+        mu, x = self.parameters[0].value, point[0]
+        return [mu * x - x**3 / 1.0e16]
+
+
+def labels(field):
+    parameters = [Rate(value=-0.5)]
+    variables = [Population()]
+    equation = DifferentialEquation(
+        variables=variables,
+        time=Time(),
+        parameters=parameters,
+        derivative=field(
+            variables=variables, parameters=parameters, results=[Population()], time=None
+        ),
+    )
+    config = ContinuationConfig(
+        detectors=["branch_point"],
+        initial_parameter=-0.5,
+        initial_step=0.04,
+        maximum_step=0.12,
+        parameter_lower_bound=-0.5,
+        parameter_upper_bound=0.5,
+    )
+    branch = ContinuerBuilder.build(config, equation).solve(equation, initial_values=[0.0])
+    return [(point.kind, f"{point.parameter:.0e}") for point in branch.special_points]
+
+
+print(labels(WeakSlowTranscritical))  # [('transcritical', '2e-11')]; was pitchfork at 5e-06
+print(labels(WidePitchfork))  # [('pitchfork', '2e-11')]; was branch_point
+```
+
+**Checked.** The DEQ-124/126 verifier's mixed three-dimensional field was continued
+through its branch point for transcriticals with `r = 1, 1e-2, 1e-3, 1e-4` and for
+three pitchforks. Time and state were each rescaled over `1e-6 ... 1e6`, with exact
+and with finite-difference Jacobians (`outputs/verification/deq-146/e2e.py`). Before
+the change 83 of 312 labels were wrong, and after it 1 is. The one left is a
+finite-difference pitchfork at `sigma = 1e-6`, where the difference Jacobian's
+absolute step (`1e-7` near `x = 0`) moves the critical eigenvalue to `4.6e-3`. The
+Jacobian is wrong there, not the labeller, and a step of `1e-7 sigma` labels it
+correctly. The located `|mu*|` went from up to `7.2e-3` to at most `1.8e-12` with
+exact Jacobians. At the vertex, all five reference cases are labelled correctly for
+`sigma = 1e-6 ... 1e6` with exact Jacobians: 0 of 65 wrong, against 12 before. With
+finite-difference Jacobians 3 of 65 are wrong, against 14 before. All three are at
+`sigma <= 1e-5`, which is the same Jacobian limit.
+
+**Limits.** The step search normalises by the whole Jacobian. In a stiff system
+whose other eigenvalues are much larger than the critical dynamics, it takes a step
+that is too large. A pitchfork seen far from its vertex (`|lambda|` of order
+`0.05` or more, `u0 >= 0.1` in the verifier's sweep) is no longer guaranteed its
+name and may be `branch_point`, and so is a transcritical seen there. When the
+localizer lands off the curve, as it does when continuing the cubic pitchfork's
+nontrivial branch through its vertex (`mu* = 2.9e-3`), the point is
+`branch_point`. It was `pitchfork` before only by falling through. A
+finite-difference Jacobian whose step is not small against the state still sets
+what can be resolved. See [References](../references.md) for the localization
+sources (Kuznetsov 1998, Section 10.2.2, and Allgower and Georg 1990, Section 9.2).
 
 ## Scanning a stochastic system without repeating work (DEQ-76)
 

@@ -15,9 +15,13 @@ from discrecontinual_equations.continuation.critical_forms import bordered_solve
 from discrecontinual_equations.continuation.jacobian import JacobianProvider
 
 _BRANCH_STEP = 1.0e-4
+_STEP_BAND = 2.0
+_STEP_GROWTH = 10.0
+_STEP_SEARCHES = 12
 _RELATIVE_FLOOR = 1.0e-5
 _NOISE_FACTOR = 100.0
 _OFFSET_FACTOR = 30.0
+_VERTEX_FRACTION = 0.5
 _NORMALIZATION_FLOOR = 1.0e-9
 
 
@@ -79,6 +83,121 @@ def _branch_expansion(
     )
 
 
+def _relative_change(
+    context: "DetectionContext",
+    null_pair: tuple[np.ndarray, np.ndarray, np.ndarray],
+    step: float,
+) -> float:
+    """How far the Jacobian moves over ``step`` along ``q``, as a unit-free length.
+
+    With ``J+-`` the Jacobian at ``x +- step q``, the odd part
+    ``|J+ - J-| / (2 |J|)`` is ``step |B(q, .)| / |J|`` and the square root of the
+    even part ``|J+ - 2 J + J-| / |J|`` is ``step sqrt(|C(q, q, .)| / |J|)``; both
+    are ``step`` divided by a length on which the field is nonlinear. The larger
+    is returned. Rescaling the state (``x -> sigma x``) multiplies that length by
+    ``sigma``; rescaling time multiplies ``J``, ``B`` and ``C`` alike and leaves it.
+    """
+    jacobian, right, _left = null_pair
+    size = float(np.linalg.norm(jacobian))
+    if size == 0.0:
+        return 0.0
+    state = context.continuation_state.state
+    forward = context.jacobian_at(state + step * right)
+    backward = context.jacobian_at(state - step * right)
+    odd = float(np.linalg.norm(forward - backward)) / (2.0 * size)
+    even = float(np.linalg.norm(forward - 2.0 * jacobian + backward)) / size
+    return max(odd, float(np.sqrt(even)))
+
+
+def _branch_step(
+    context: "DetectionContext",
+    null_pair: tuple[np.ndarray, np.ndarray, np.ndarray],
+) -> float:
+    """The difference step for ``a`` and ``c``, scaled to the field's nonlinearity.
+
+    A fixed step has units: once the state is rescaled by ``sigma``, the third
+    difference behind ``c`` moves the Jacobian by ``(step / sigma)^2`` of itself
+    and is lost in rounding for ``sigma`` of a few hundred (DEQ-147). Scaling it
+    by the state norm, as the finite-difference Jacobians do (DEQ-118), does not
+    help at a branch point on the trivial branch ``x = 0``. The step is instead
+    chosen so that :func:`_relative_change` is :data:`_BRANCH_STEP`: it starts at
+    ``_BRANCH_STEP max(1, |x|)``, moves by ``_BRANCH_STEP / change`` (at least
+    ten-fold when it grows, since rounding inflates a small change), and stops
+    within a factor of two or after :data:`_STEP_SEARCHES` moves. A Jacobian that
+    does not move at all grows the step ten-fold: its change was rounded away,
+    or the field is linear along ``q`` and its label is ``branch_point`` at any
+    step.
+    The search only uses Jacobians, so it is unchanged when ``f`` is multiplied
+    by a constant, and it multiplies the step by ``sigma`` when the state is.
+    Limits: the change is measured against the whole Jacobian, so a stiff system
+    whose other eigenvalues dwarf the critical dynamics gets too large a step.
+
+    References:
+        The relative-step idea follows the library's difference Jacobians
+        (DEQ-118); the target change and the search are this library's own.
+    """
+    state = context.continuation_state.state
+    step = _BRANCH_STEP * max(1.0, float(np.linalg.norm(state)))
+    for _ in range(_STEP_SEARCHES):
+        change = _relative_change(context, null_pair, step)
+        if not np.isfinite(change):
+            return step
+        # An unmoved Jacobian is a change lost in rounding, or a linear field.
+        factor = _BRANCH_STEP / change if change > 0.0 else _STEP_GROWTH
+        if 1.0 / _STEP_BAND <= factor <= _STEP_BAND:
+            return step
+        if factor > 1.0:
+            factor = max(factor, _STEP_GROWTH)
+        step *= factor
+    return step
+
+
+def _vertex_offset(
+    context: "DetectionContext",
+    null_pair: tuple[np.ndarray, np.ndarray, np.ndarray],
+    step: float,
+) -> float:
+    """How far along ``q`` the point sits from the branch the parameter leaves fixed.
+
+    On the center manifold, with ``x = x* + w q``, the reduced field ``g(w, mu)``
+    of a transcritical or pitchfork point is ``mu w + (a/2) w^2 + (c/6) w^3`` up
+    to scaling, centred on the branch ``w = 0`` that persists for every ``mu``.
+    Seen from a point ``w0`` on the other branch, ``g_mu = <p, f_mu> = w0 g_wmu``,
+    so ``w0 = g_mu / g_wmu``; it is zero on the persisting branch itself. The
+    center manifold moves with ``mu`` too, by ``h_mu`` with
+    ``A h_mu = -(f_mu - <p, f_mu> q)``, so ``g_wmu = <p, f_xmu q + B(q, h_mu)>``.
+    Without ``B(q, h_mu)`` a parameter that enters through another variable
+    (``u' = v u - u^3``, ``v' = -v + mu``) gives ``g_wmu = 0`` and the pitchfork
+    is lost. ``f_xmu q`` is the difference of ``f_mu`` over ``x +- step q``, and
+    ``B(q, h_mu)`` that of the Jacobian applied to ``h_mu``. Zero is returned
+    when ``g_wmu`` vanishes (no transversal crossing to recentre on).
+
+    References:
+        A Taylor shift of the normal form of Kuznetsov 1999, section 5, derived
+        here; checked against ``<p, x - x*>`` to leading order in
+        ``tests/continuation/test_branch_point_units.py``. The ``z beta``
+        coefficient ``p (B(q, H_0010) + A_1(q, K))`` with ``H_0010`` from the
+        parameter's linear term is Bosschaert, Janssens & Kuznetsov,
+        "Switching to nonhyperbolic cycles from codimension two bifurcations of
+        equilibria of delay differential equations", preprint 2019,
+        arXiv:1903.08276v1, eqs. (88)-(89).
+    """
+    jacobian, right, left = null_pair
+    state = context.continuation_state.state
+    derivative = context.parameter_derivative_at(state)
+    drift = float((left @ derivative).real)
+    shift = -bordered_solve(jacobian, right, left, derivative - drift * right)
+    forward = context.parameter_derivative_at(state + step * right)
+    backward = context.parameter_derivative_at(state - step * right)
+    moved = context.jacobian_at(state + step * right) - context.jacobian_at(
+        state - step * right,
+    )
+    crossing = float((left @ (forward - backward + moved @ shift)).real) / (2.0 * step)
+    if crossing == 0.0:
+        return 0.0
+    return drift / crossing
+
+
 def _branch_coefficients(
     context: "DetectionContext",
 ) -> tuple[float, float] | None:
@@ -103,7 +222,7 @@ def _branch_coefficients(
     quadratic, cubic, _quadratic_size, _cubic_size = _branch_expansion(
         context,
         null_pair,
-        _BRANCH_STEP,
+        _branch_step(context, null_pair),
     )
     return quadratic, cubic
 
@@ -133,18 +252,33 @@ def _branch_label(context: "DetectionContext") -> str:
     better. ``a`` therefore names a transcritical point only when also
     ``a^2 > 30 |c lambda|`` (:data:`_OFFSET_FACTOR`), with ``lambda = <p, A q>``.
     This test, too, is unchanged by rescaling time or the state.
+
+    A resolved ``a`` that fails the offset test no longer falls through to the
+    cubic (DEQ-147): a weak transcritical located a little off its bifurcation
+    was named ``pitchfork`` that way. It is a pitchfork only when the pitchfork's
+    own ``a = c w0`` explains it, ``|a - c w0| <= |a| / 2`` with ``w0`` from
+    :func:`_vertex_offset`; otherwise the point is ``branch_point``. The
+    differences use the step of :func:`_branch_step`, which follows the state's
+    scale.
+
+    References:
+        Kuznetsov 1999, section 5, for ``a`` and ``c`` (see
+        :func:`_branch_coefficients`). The offset test, the recentring and the
+        thresholds are this library's own, derived from the normal form above
+        and not taken from a source.
     """
     null_pair = _null_pair(context)
     if null_pair is None:
         return "branch_point"
+    branch_step = _branch_step(context, null_pair)
     quadratic, cubic, quadratic_size, cubic_size = _branch_expansion(
         context,
         null_pair,
-        _BRANCH_STEP,
+        branch_step,
     )
     quadratic_error = 0.0
     cubic_error = 0.0
-    for step in (0.5 * _BRANCH_STEP, 2.0 * _BRANCH_STEP):
+    for step in (0.5 * branch_step, 2.0 * branch_step):
         other_quadratic, other_cubic, _q, _c = _branch_expansion(
             context,
             null_pair,
@@ -155,10 +289,14 @@ def _branch_label(context: "DetectionContext") -> str:
     jacobian, right, left = null_pair
     eigenvalue = abs(float((left @ jacobian @ right).real))
     offset = _OFFSET_FACTOR * abs(cubic) * eigenvalue
-    if _resolved(quadratic, quadratic_size, quadratic_error) and (
-        quadratic * quadratic > offset
-    ):
-        return "transcritical"
+    if _resolved(quadratic, quadratic_size, quadratic_error):
+        if quadratic * quadratic > offset:
+            return "transcritical"
+        # A pitchfork seen off its vertex owns its a = c w0; anything else that
+        # fails the offset test cannot be told apart and is not named (DEQ-147).
+        vertex = quadratic - cubic * _vertex_offset(context, null_pair, branch_step)
+        if abs(vertex) > _VERTEX_FRACTION * abs(quadratic):
+            return "branch_point"
     if _resolved(cubic, cubic_size, cubic_error):
         return "pitchfork"
     return "branch_point"
@@ -195,6 +333,10 @@ class DetectionContext:
     def jacobian_at(self, state: np.ndarray) -> np.ndarray:
         """State Jacobian at an arbitrary state, holding this point's parameter."""
         return self._jacobian.state_jacobian(state, self._state.parameter)
+
+    def parameter_derivative_at(self, state: np.ndarray) -> np.ndarray:
+        """``df/dmu`` at an arbitrary state, holding this point's parameter."""
+        return self._jacobian.parameter_derivative(state, self._state.parameter)
 
 
 class BifurcationDetector(ABC):
@@ -250,8 +392,12 @@ class BranchPoint(BifurcationDetector):
     coefficient that cannot be resolved is treated as zero, so a point whose ``c``
     is lost in noise stays ``branch_point``. Since a located point sits a little
     off the bifurcation, where a pitchfork's own ``a`` is ``c w0``, ``a`` must
-    also satisfy ``a^2 > 30 |c lambda|`` with ``lambda = <p, A q>`` (see
-    :func:`_branch_label`).
+    also satisfy ``a^2 > 30 |c lambda|`` with ``lambda = <p, A q>``; a resolved
+    ``a`` that fails this is a pitchfork only if it is the pitchfork's own ``c w0``
+    seen from its other branch, and is otherwise left ``branch_point`` (see
+    :func:`_branch_label`). The difference step follows the scale of the state
+    (:func:`_branch_step`), so rescaling the state does not change the label
+    either.
 
     References:
         The coefficients are Kuznetsov's center-manifold reduction (see

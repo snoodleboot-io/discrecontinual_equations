@@ -20,6 +20,19 @@ provided:
 
 A Brent-type hybrid is not implemented.
 
+The value test ``|f(x)| < value_tolerance`` is absolute by default, which suits a
+function whose values have a known scale (a Lyapunov exponent, a probability). A
+test function of a continuation has units instead: a bordered determinant of an
+``n``-dimensional system scales as ``s^n`` when time is rescaled by ``s``, so an
+absolute tolerance of ``1e-8`` accepts the first midpoint of a slow system and
+cannot be met by a fast one. With ``relative=True`` the test reads
+``|f(x)| < value_tolerance * max(|f(low)|, |f(high)|)``, which is unchanged when
+``f`` is multiplied by any constant: near a simple root, where ``f`` is close to
+linear along the bracket, it locates the root to about ``value_tolerance`` of the
+bracket's width whatever the units. The secant's flat-chord test is scaled the
+same way. The relative stop is this library's own choice, justified only by that
+invariance; it is not taken from the references below.
+
 Limits: both assume one sign change in the bracket. A test function that touches
 zero without changing sign, or two crossings inside one continuation step, are not
 seen; and a test function that jumps (for instance when the corrector fails and the
@@ -48,19 +61,30 @@ class RootFinderSettings:
         fraction_tolerance: Stop once the bracket is narrower than this (used by
             bisection).
         max_iterations: Hard cap on iterations.
+        relative: Read ``value_tolerance`` as a fraction of the larger of
+            ``|function(low)|`` and ``|function(high)|``, so the stop does not
+            depend on the units of the function (see the module docstring).
     """
 
-    __slots__ = ["_fraction_tolerance", "_max_iterations", "_value_tolerance"]
+    __slots__ = [
+        "_fraction_tolerance",
+        "_max_iterations",
+        "_relative",
+        "_value_tolerance",
+    ]
 
     def __init__(
         self,
         value_tolerance: float,
         fraction_tolerance: float,
         max_iterations: int,
+        *,
+        relative: bool = False,
     ) -> None:
         self._value_tolerance = value_tolerance
         self._fraction_tolerance = fraction_tolerance
         self._max_iterations = max_iterations
+        self._relative = relative
 
     @property
     def value_tolerance(self) -> float:
@@ -76,6 +100,25 @@ class RootFinderSettings:
     def max_iterations(self) -> int:
         """Maximum iterations."""
         return self._max_iterations
+
+    @property
+    def relative(self) -> bool:
+        """Whether ``value_tolerance`` is relative to the bracket's end values."""
+        return self._relative
+
+    def value_scale(self, lower_value: float, upper_value: float) -> float:
+        """The size ``value_tolerance`` is measured against for this bracket.
+
+        Args:
+            lower_value: ``function(low)``.
+            upper_value: ``function(high)``.
+
+        Returns:
+            ``max(|lower_value|, |upper_value|)`` when :attr:`relative`, else 1.
+        """
+        if not self._relative:
+            return 1.0
+        return max(abs(lower_value), abs(upper_value))
 
 
 class ScalarRootFinder(ABC):
@@ -106,9 +149,10 @@ class Bisection(ScalarRootFinder):
     """Robust bracketing bisection.
 
     Keeps the half whose ends differ in sign; returns the midpoint once its value
-    is below ``value_tolerance`` or the bracket is narrower than
-    ``fraction_tolerance``. If the ends do not differ in sign the bracket slides
-    to ``high`` and the result is not a root.
+    is below ``value_tolerance`` (times the larger end value when the settings
+    are relative) or the bracket is narrower than ``fraction_tolerance``. A
+    relative stop costs one more evaluation, at ``high``. If the ends do not
+    differ in sign the bracket slides to ``high`` and the result is not a root.
 
     References:
     - Kuznetsov (1998), Section 10.2.2.
@@ -126,12 +170,17 @@ class Bisection(ScalarRootFinder):
         high: float,
     ) -> float | None:
         lower_value = function(low)
+        upper_value = function(high) if self._settings.relative else 0.0
+        tolerance = self._settings.value_tolerance * self._settings.value_scale(
+            lower_value,
+            upper_value,
+        )
         mid = _MIDPOINT * (low + high)
         for _ in range(self._settings.max_iterations):
             mid = _MIDPOINT * (low + high)
             value = function(mid)
             narrow = (high - low) < self._settings.fraction_tolerance
-            if abs(value) < self._settings.value_tolerance or narrow:
+            if abs(value) < tolerance or narrow:
                 return mid
             if lower_value * value < 0:
                 high = mid
@@ -145,7 +194,8 @@ class Secant(ScalarRootFinder):
     """Faster secant iteration, clamped to the initial bracket for safety.
 
     ``x <- x_1 - f_1 (x_1 - x_0) / (f_1 - f_0)``, clamped to ``[low, high]``; stops
-    on ``|f| < value_tolerance`` or a chord flatter than ``1e-14``. Not bracketing:
+    on ``|f| < value_tolerance`` or a chord flatter than ``1e-14`` (both times the
+    larger end value when the settings are relative). Not bracketing:
     it can settle on the clamp instead of a root.
 
     References:
@@ -166,14 +216,16 @@ class Secant(ScalarRootFinder):
     ) -> float | None:
         left, right = low, high
         value_left, value_right = function(left), function(right)
+        scale = self._settings.value_scale(value_left, value_right)
+        tolerance = self._settings.value_tolerance * scale
         current = right
         for _ in range(self._settings.max_iterations):
-            if abs(value_right - value_left) < _DEGENERATE_SLOPE:
+            if abs(value_right - value_left) < _DEGENERATE_SLOPE * scale:
                 break
             current = right - value_right * (right - left) / (value_right - value_left)
             current = min(max(current, low), high)
             value = function(current)
-            if abs(value) < self._settings.value_tolerance:
+            if abs(value) < tolerance:
                 return current
             left, value_left = right, value_right
             right, value_right = current, value
