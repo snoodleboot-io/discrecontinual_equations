@@ -223,7 +223,11 @@ class ContinuationConfig(SolverConfig):
     )
     localization_tolerance: float = Field(
         default=1e-8,
-        description="Test-function tolerance when localizing a bifurcation",
+        description=(
+            "Test-function tolerance when localizing a bifurcation, as a fraction "
+            "of the larger test value at the two bracketing points, so the "
+            "located point does not depend on the units of time or state"
+        ),
     )
     maximum_localization_iterations: int = Field(
         default=40,

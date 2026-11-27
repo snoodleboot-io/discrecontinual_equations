@@ -213,6 +213,9 @@ class ContinuerBuilder:
                         "value_tolerance": config.localization_tolerance,
                         "fraction_tolerance": config.fraction_tolerance,
                         "max_iterations": config.maximum_localization_iterations,
+                        # Test functions carry units (a bordered determinant
+                        # scales as s^n), so the value stop is relative (DEQ-146).
+                        "relative": True,
                     },
                 ),
             },
