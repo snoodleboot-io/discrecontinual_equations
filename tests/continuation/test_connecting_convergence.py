@@ -4,12 +4,12 @@ The oracle is the DEQ-81 verifier's finding (DEQ-120): Kirk-Silber in sheared
 coordinates, solved in the full space on the two edges leaving xi2. There the
 source's unstable manifold is 2-D and the target is a sink inside a 3-D
 invariant subspace, so the connections come in a one-parameter family and the
-Newton matrix is nearly rank-deficient (smallest singular value 1e-9 to
-1e-22). Gauss-Newton diverges - the residual grows from 0.6 to 1e62 in three
-steps - and the old "best iterate" rule handed back the seed, unchanged and
-unannounced. Its trapezoidal residual is 0.09; refined on twice the mesh and on
-a longer interval, both refinement solves returned their seeds too, so the
-resolution estimate came out 0.0.
+Newton matrix is singular along it. Gauss-Newton's step along the family was
+rounding divided by rounding, and the old "best iterate" rule handed back the
+seed, unchanged and unannounced, with a resolution estimate of 0.0. DEQ-120
+made that a refusal; DEQ-175 takes the minimum-norm step there, and both edges
+now converge to genuine trajectories. The refusal is pinned on xi3 -> xi2, a
+connection that does not exist.
 
 The convergence test is AUTO's and COLNEW's: an iterate is converged when its
 Newton residual is below tolerance or its Newton correction is, component by
@@ -40,6 +40,7 @@ from discrecontinual_equations.continuation.connecting_orbit import (
 )
 from discrecontinual_equations.continuation.heteroclinic_network import (
     HeteroclinicNetwork,
+    coordinate_plane,
 )
 from discrecontinual_equations.function.deterministic import DeterministicFunction
 from tests.continuation.fields import HeteroclinicField, State, _saddle
@@ -120,79 +121,142 @@ def _homoclinic_problem():
     return solver, seed, times
 
 
-class TestDivergedSolveIsRefused(TestCase):
-    """The sheared Kirk-Silber edges leaving xi2, solved in the full space."""
+def _pinv_gauss_newton(solver, seed: np.ndarray, times: np.ndarray) -> np.ndarray:
+    """Gauss-Newton with the dense SVD pseudo-inverse, not the solver's step.
 
-    def test_both_edges_leaving_xi2_refuse(self):
-        """Both solves refuse, and what they carry is measurably not converged.
+    Directions below 1e-10 sigma_max are dropped; the Newton matrices of the
+    xi2 edges have one singular value at 1e-18 to 7e-17 of sigma_max and the
+    next at 8e-3, so any cutoff between gives the same step.
+    """
+    unknowns = seed.flatten()
+    for _ in range(20):
+        residual = solver._residual(unknowns, times, seed.shape)  # noqa: SLF001
+        if np.linalg.norm(residual) < 1.0e-12:
+            break
+        jacobian = solver._jacobian(  # noqa: SLF001
+            unknowns,
+            times,
+            seed.shape,
+            residual,
+            True,  # noqa: FBT003
+        ).toarray()
+        left, values, right = np.linalg.svd(jacobian, full_matrices=False)
+        kept = values > 1.0e-10 * values[0]
+        coefficients = (left[:, kept].T @ residual) / values[kept]
+        unknowns = unknowns - right[kept].T @ coefficients
+    return unknowns.reshape(seed.shape)
 
-        The first Gauss-Newton step is mostly the Newton matrix's near-null
-        direction (sigma_min 1e-9), so it amplifies the last bit of the residual
-        by 1e9 and the iterates after it differ from machine to machine. The
-        bounds below hold over that spread, not one machine's path. Measured
-        over 40 seeds each perturbed by one ulp in 1% of entries
-        (outputs/verification/fix-120/sweep.out): xi2->xi3 always kept the
-        seed - Newton residual 0.59, correction 0.88 to 12, trapezoidal
-        residual 0.092. On xi2->xi4, 5 of 40 moved off the seed, down to a
-        Newton residual of 2.2e-4, a correction of 0.20 and a trapezoidal
-        residual of 3.1e-5; CI hit one such path, at 0.0069. Every one refused.
+
+def _no_connection(network: HeteroclinicNetwork, intervals: int = 100):
+    """xi3 -> xi2, which does not exist: Kirk-Silber's edges run xi2 -> xi3."""
+    connection = network.add_connection(
+        "xi3",
+        "xi2",
+        _SHEAR4 @ coordinate_plane(4, (2, 1)),
+    )
+    mesh = network.mesh(connection, half_length=20.0, intervals=intervals)
+    source = network.saddle("xi3")
+    target = network.saddle("xi2")
+    solver = HeteroclinicOrbit(
+        network.function,
+        Terminus(source.equilibrium, source.jacobian),
+        Terminus(target.equilibrium, target.jacobian),
+        mesh,
+    )
+    return solver, network.seed(connection, mesh), mesh
+
+
+class TestFamilyOfConnectionsConverges(TestCase):
+    """The sheared Kirk-Silber edges leaving xi2, solved in the full space.
+
+    The connections leaving xi2 come in a one-parameter family, so the Newton
+    matrix is singular along it: measured sigma_min / sigma_max 1e-18 to 7e-17
+    at every iterate, the next singular value 8e-3. The Gauss-Newton step's
+    component along the family was rounding divided by rounding, 10 to 95 long
+    and different on every BLAS kernel, and the solve refused (DEQ-120). The
+    minimum-norm step converges (DEQ-175).
+    """
+
+    def test_both_edges_leaving_xi2_converge_to_genuine_trajectories(self):
+        """Measured, n = 400: trapezoidal residual 4e-16 and 3e-14, Newton
+        residual 3e-15 and 1e-13, the path moving 0.60 and 0.27 from the seed
+        to a member 0.025 and 0.16 off the plane. The same on the Prescott,
+        Nehalem, Sandybridge, Haswell and Zen OpenBLAS kernels
+        (outputs/verification/deq-175/coretype_after.out).
         """
         _, network = _sheared_kirk_silber(_SHEAR4)
         for edge in _DIVERGING:
             solver, seed, _ = _full_space(network, edge)
-            with pytest.raises(NotConvergedError, match="did not converge") as caught:
-                solver.solve(seed)
-            error = caught.value
-            # 1e4 times the Newton tolerance (1e-9), and 22 times below the
-            # smallest residual measured (2.2e-4).
-            assert error.newton_residual > 1.0e-5
-            # 1e5 times the correction tolerance (1e-7), and 20 times below
-            # the smallest correction measured (0.20).
-            assert error.correction > 1.0e-2
-            # The best iterate travels with the refusal, measured, for diagnosis.
-            best = error.solution
-            assert isinstance(best.residual, CollocationResidual)
-            defect = float(np.max(np.abs(_trapezoid(network.function, best))))
-            assert defect == pytest.approx(best.residual.largest, rel=1e-9)
-            # 1e3 times the Newton tolerance, 31 times below the smallest
-            # measured (3.1e-5). A converged solve of these edges reaches 1e-14
-            # (the lsmr step converges on both).
-            assert defect > 1.0e-6
+            solution = solver.solve(seed)
+            # A trajectory to rounding, measured from the field directly.
+            assert float(np.max(np.abs(_trapezoid(network.function, solution)))) < 1e-12
+            assert solution.residual.is_trajectory
+            unknowns = solution.states.flatten()
+            newton = solver._residual(  # noqa: SLF001
+                unknowns,
+                solution.times,
+                seed.shape,
+            )
+            assert float(np.linalg.norm(newton)) < 1.0e-9
+            # It went somewhere: not the seed, whose residual is 0.09.
+            assert float(np.max(np.abs(solution.states - seed))) > 0.1
 
-    def test_the_xi3_edge_refuses_at_its_seed(self):
-        """xi2->xi3's first step diverged in all 40 perturbed solves.
-
-        So the best iterate is the seed, which is not a trajectory: its
-        trapezoidal residual is 0.092, 1.9e4 times what the mesh allows. A
-        refusal that kept the seed is the DEQ-120 case. Before the fix, this
-        seed came back as the answer.
-        """
-        _, network = _sheared_kirk_silber(_SHEAR4)
-        solver, seed, _ = _full_space(network, (2, 3))
-        with pytest.raises(NotConvergedError) as caught:
-            solver.solve(seed)
-        best = caught.value.solution
-        np.testing.assert_allclose(best.states, seed, rtol=0.0, atol=1.0e-12)
-        assert not best.residual.is_trajectory
-        assert float(np.max(np.abs(_trapezoid(network.function, best)))) > 1.0e-2
-
-    def test_the_refusal_is_a_runtime_error(self):
-        _, network = _sheared_kirk_silber(_SHEAR4)
-        solver, seed, _ = _full_space(network, (2, 3), intervals=200)
-        with pytest.raises(RuntimeError):
-            solver.solve(seed)
-
-    def test_an_estimate_from_diverged_refinements_is_invalid_not_zero(self):
-        """On main the seed's estimate read 0.0: both refinements returned seeds."""
+    def test_the_member_found_is_the_pseudo_inverse_iterations(self):
+        """Against Gauss-Newton with numpy's SVD pseudo-inverse, measured 7e-13
+        and 9e-13 apart: the solver takes the minimum-norm step."""
         _, network = _sheared_kirk_silber(_SHEAR4)
         for edge in _DIVERGING:
-            solver, seed, mesh = _full_space(network, edge)
+            solver, seed, mesh = _full_space(network, edge, intervals=100)
+            times = np.linspace(-mesh.half_length, mesh.half_length, seed.shape[0])
+            reference = _pinv_gauss_newton(solver, seed, times)
+            solution = solver.solve(seed)
+            np.testing.assert_allclose(solution.states, reference, rtol=0.0, atol=1e-8)
+            # Off the plane: the family's other members are genuine connections.
+            basis = network.connections[_EDGES.index(edge)].basis
+            outside = solution.states - (solution.states @ basis) @ basis.T
+            assert float(np.max(np.linalg.norm(outside, axis=1))) > 1.0e-2
+
+    def test_last_bit_changes_to_the_seed_change_nothing(self):
+        """Before, a one-ulp change in 1% of the seed's entries decided whether
+        xi2->xi4 moved at all (5 of 40 did; fix-120/sweep.out). Now every
+        perturbed solve converges, to within 5e-12 of the unperturbed member
+        (measured 20 per edge and mesh, deq-175/sweep_after.out)."""
+        _, network = _sheared_kirk_silber(_SHEAR4)
+        generator = np.random.default_rng(1)
+        for edge in _DIVERGING:
+            solver, seed, _ = _full_space(network, edge, intervals=100)
+            unperturbed = solver.solve(seed).states
+            for _ in range(3):
+                flips = generator.choice([-1.0, 1.0], seed.shape)
+                chosen = generator.random(seed.shape) < 0.01
+                perturbed = seed * (1.0 + 2.2e-16 * flips * chosen)
+                found = solver.solve(perturbed).states
+                np.testing.assert_allclose(found, unperturbed, rtol=0.0, atol=1e-8)
+
+    def test_an_estimate_from_the_seed_reports_how_far_it_is(self):
+        """On main the seed's estimate read 0.0: both refinements returned seeds.
+        Now the refinements converge, and the estimate is the seed's distance
+        from the connection they reach (measured 0.60 and 0.27)."""
+        _, network = _sheared_kirk_silber(_SHEAR4)
+        for edge in _DIVERGING:
+            solver, seed, mesh = _full_space(network, edge, intervals=100)
             times = np.linspace(-mesh.half_length, mesh.half_length, seed.shape[0])
             resolution = solver.estimate_orbit_error(OrbitSolution(times, seed))
-            assert not resolution.valid
-            assert resolution.discretisation == math.inf
-            assert resolution.estimate == math.inf
-            assert not resolution.estimate < 1.0
+            assert resolution.valid
+            assert resolution.estimate > 0.1
+
+    def test_the_converged_member_resolves_at_second_order(self):
+        """Its refinements reach the same member: the discretisation estimate
+        falls 4x per halving of h (measured 3.7e-3, 9.1e-4 on xi2->xi3)."""
+        _, network = _sheared_kirk_silber(_SHEAR4)
+        estimates = []
+        for intervals in (100, 200):
+            solver, seed, _ = _full_space(network, (2, 3), intervals=intervals)
+            resolution = solver.estimate_orbit_error(solver.solve(seed))
+            assert resolution.valid
+            estimates.append(resolution.discretisation)
+        assert estimates[0] < 1.0e-2
+        assert 3.0 < estimates[0] / estimates[1] < 5.0
 
     def test_edges_whose_full_space_solve_is_isolated_still_converge(self):
         """xi1->xi2, xi3->xi1 and xi4->xi1 leave a 1-D unstable manifold."""
@@ -203,16 +267,18 @@ class TestDivergedSolveIsRefused(TestCase):
             assert solution.residual.is_trajectory
             assert float(np.max(np.abs(_trapezoid(network.function, solution)))) < 1e-8
 
-    def test_the_network_records_the_full_space_refusal(self):
-        """The network's own solve is in the plane; its full-space check failed."""
+    def test_the_network_records_the_full_space_member(self):
+        """The network's own solve is in the plane; the full-space check now
+        converges too, to a member off it (measured 0.025)."""
         _, network = _sheared_kirk_silber(_SHEAR4)
         connection = network.connections[_EDGES.index((2, 3))]
         mesh = network.mesh(connection, half_length=20.0, intervals=200)
         orbit = network.solve(connection, mesh)
         assert orbit.residual.is_trajectory
         assert orbit.resolution.valid
-        assert not orbit.full_space.converged
-        assert not orbit.full_space.residual.is_trajectory
+        assert orbit.full_space.converged
+        assert orbit.full_space.residual.is_trajectory
+        assert orbit.full_space.subspace_defect > 1.0e-2
 
     def test_the_network_full_space_check_converges_where_isolated(self):
         _, network = _sheared_kirk_silber(_SHEAR4)
@@ -223,6 +289,49 @@ class TestDivergedSolveIsRefused(TestCase):
         assert orbit.full_space.residual.is_trajectory
 
 
+class TestAbsentConnectionIsRefused(TestCase):
+    """xi3 -> xi2 does not exist, and its solve does not converge.
+
+    Measured: Newton residual 1.15 at n = 100 and 0.82 at 200, correction
+    0.99 and 0.98 (inf on one of five OpenBLAS kernels, whose best step was
+    rank-deficient), trapezoidal residual 0.35 and 0.18, 357 and 2.3e3 times
+    what the mesh allows (outputs/verification/deq-175/no_connection.out,
+    coretype_no_connection.out).
+    """
+
+    def test_it_refuses_with_its_best_iterate(self):
+        _, network = _sheared_kirk_silber(_SHEAR4)
+        solver, seed, _ = _no_connection(network)
+        with pytest.raises(NotConvergedError, match="did not converge") as caught:
+            solver.solve(seed)
+        error = caught.value
+        # 1e7 times the Newton tolerance, 100 times below the measured 1.15.
+        assert error.newton_residual > 1.0e-2
+        # 1e5 times the correction tolerance, 100 times below the measured 0.99.
+        assert error.correction > 1.0e-2
+        best = error.solution
+        assert isinstance(best.residual, CollocationResidual)
+        assert not best.residual.is_trajectory
+        defect = float(np.max(np.abs(_trapezoid(network.function, best))))
+        assert defect == pytest.approx(best.residual.largest, rel=1e-9)
+        assert defect > 1.0e-2
+
+    def test_the_refusal_is_a_runtime_error(self):
+        _, network = _sheared_kirk_silber(_SHEAR4)
+        solver, seed, _ = _no_connection(network)
+        with pytest.raises(RuntimeError):
+            solver.solve(seed)
+
+    def test_an_estimate_from_diverged_refinements_is_invalid_not_zero(self):
+        _, network = _sheared_kirk_silber(_SHEAR4)
+        solver, seed, mesh = _no_connection(network)
+        times = np.linspace(-mesh.half_length, mesh.half_length, seed.shape[0])
+        resolution = solver.estimate_orbit_error(OrbitSolution(times, seed))
+        assert not resolution.valid
+        assert resolution.discretisation == math.inf
+        assert resolution.estimate == math.inf
+
+
 class TestNonFiniteIteratesAreRefused(TestCase):
     """An iterate that overflows ends the solve as a refusal, not a crash."""
 
@@ -230,10 +339,10 @@ class TestNonFiniteIteratesAreRefused(TestCase):
         solver, seed, _, _ = _tanh_problem()
 
         def overflow(_self, _jacobian, residual):
-            return np.full(seed.size, 1.0e300) * (1.0 + 0.0 * residual[0])
+            return np.full(seed.size, 1.0e300) * (1.0 + 0.0 * residual[0]), True
 
         with (
-            mock.patch.object(HeteroclinicOrbit, "_least_squares", overflow),
+            mock.patch.object(HeteroclinicOrbit, "_newton_step", overflow),
             warnings.catch_warnings(),
         ):
             warnings.simplefilter("ignore", RuntimeWarning)
@@ -253,10 +362,10 @@ class TestNonFiniteIteratesAreRefused(TestCase):
         )
 
         def overflow(_self, _jacobian, residual):
-            return np.full(seed.size, 1.0e200) * (1.0 + 0.0 * residual[0])
+            return np.full(seed.size, 1.0e200) * (1.0 + 0.0 * residual[0]), True
 
         with (
-            mock.patch.object(HomoclinicOrbit, "_least_squares", overflow),
+            mock.patch.object(HomoclinicOrbit, "_newton_step", overflow),
             pytest.raises(NotConvergedError),
         ):
             solver.solve(seed)
@@ -475,7 +584,8 @@ class TestFallbacksConvergeOrRefuse(TestCase):
             raise RuntimeError(message)
 
         def stuck(jacobian, *_args, **_kwargs):
-            return (np.zeros(jacobian.shape[1]), 7)
+            # lsmr's 8-tuple, stopped at its iteration limit (istop = 7).
+            return (np.zeros(jacobian.shape[1]), 7, 0, 0.0, 0.0, 0.0, 0.0, 0.0)
 
         with (
             mock.patch.object(connecting_orbit, "_factor", singular),
@@ -525,8 +635,11 @@ class TestFallbacksConvergeOrRefuse(TestCase):
         with (
             mock.patch.object(
                 HeteroclinicOrbit,
-                "_least_squares",
-                lambda _self, _jacobian, residual: np.zeros(seed.size) * residual[0],
+                "_newton_step",
+                lambda _self, _jacobian, residual: (
+                    np.zeros(seed.size) * residual[0],
+                    True,
+                ),
             ),
             pytest.raises(NotConvergedError),
         ):
@@ -539,13 +652,14 @@ class TestFallbacksConvergeOrRefuse(TestCase):
         The iterate is within the mesh's accuracy of the orbit, yet unconverged.
         """
         solver, seed, _, _ = _tanh_problem()
-        full = HeteroclinicOrbit._least_squares  # noqa: SLF001 (wrapping the step)
+        full = HeteroclinicOrbit._newton_step  # noqa: SLF001 (wrapping the step)
 
         def quarter(self, jacobian, residual):
-            return 0.25 * full(self, jacobian, residual)
+            step, resolved = full(self, jacobian, residual)
+            return 0.25 * step, resolved
 
         with (
-            mock.patch.object(HeteroclinicOrbit, "_least_squares", quarter),
+            mock.patch.object(HeteroclinicOrbit, "_newton_step", quarter),
             pytest.raises(NotConvergedError) as caught,
         ):
             solver.solve(seed)

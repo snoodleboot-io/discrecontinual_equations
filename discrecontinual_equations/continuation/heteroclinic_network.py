@@ -123,10 +123,14 @@ class FullSpaceCheck:
     ``residual`` its collocation residual under the full field. Where the
     connection is isolated in the full space this lands on the subspace solve;
     where it is not, or where the subspace is not invariant along the orbit, the
-    two disagree, and these say how. ``converged`` says whether the full-space
-    solve converged at all; where it did not - Gauss-Newton diverges on the
-    near-singular Newton matrix of a connection that is not isolated -
-    ``solution`` is its best iterate, kept for diagnosis and not an orbit.
+    two disagree, and these say how. Where the connection is one of a family,
+    the full-space Newton matrix is singular along the family and the solve
+    takes minimum-norm steps (DEQ-175), so it converges to some member of the
+    family, not necessarily the one in the subspace: on the sheared Kirk-Silber
+    edges leaving xi2 it lands 0.025 and 0.16 off the plane, a trajectory to
+    rounding. ``converged`` says whether the full-space solve converged at
+    all; where it did not, ``solution`` is its best iterate, kept for
+    diagnosis and not an orbit.
     """
 
     __slots__ = ["converged", "residual", "solution", "subspace_defect"]

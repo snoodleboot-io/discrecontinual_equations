@@ -190,8 +190,10 @@ solver returns the same near-optimal result as the uniform mesh (no regression).
   step 1e-3 as in COLNEW) still stalls on those edges. Levenberg-Marquardt, and
   lsmr in place of the factorisation, do converge, but to a *different* member of
   the family of connections leaving `xi2`, 0.025 to 0.16 off the plane. The
-  connection is not isolated in the full space. Reporting that, rather than only
-  diverging, is the open item.
+  connection is not isolated in the full space. DEQ-175 made every step the
+  minimum-norm (Levenberg-Marquardt) step, so the full-space solve now converges
+  there, to that off-plane member; DEQ-180 certifies a rank-deficient step only
+  by its residual.
 
   Headroom left:
 
