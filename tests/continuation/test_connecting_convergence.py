@@ -124,8 +124,18 @@ class TestDivergedSolveIsRefused(TestCase):
     """The sheared Kirk-Silber edges leaving xi2, solved in the full space."""
 
     def test_both_edges_leaving_xi2_refuse(self):
-        """Measured: Newton residual 0.59 and 0.57 at the best iterate, with a
-        correction 1.1 and 14 times the state's scale - far from converged.
+        """Both solves refuse, and what they carry is measurably not converged.
+
+        The first Gauss-Newton step is mostly the Newton matrix's near-null
+        direction (sigma_min 1e-9), so it amplifies the last bit of the residual
+        by 1e9 and the iterates after it differ from machine to machine. The
+        bounds below hold over that spread, not one machine's path. Measured
+        over 40 seeds each perturbed by one ulp in 1% of entries
+        (outputs/verification/fix-120/sweep.out): xi2->xi3 always kept the
+        seed - Newton residual 0.59, correction 0.88 to 12, trapezoidal
+        residual 0.092. On xi2->xi4, 5 of 40 moved off the seed, down to a
+        Newton residual of 2.2e-4, a correction of 0.20 and a trapezoidal
+        residual of 3.1e-5; CI hit one such path, at 0.0069. Every one refused.
         """
         _, network = _sheared_kirk_silber(_SHEAR4)
         for edge in _DIVERGING:
@@ -133,16 +143,38 @@ class TestDivergedSolveIsRefused(TestCase):
             with pytest.raises(NotConvergedError, match="did not converge") as caught:
                 solver.solve(seed)
             error = caught.value
-            assert error.newton_residual > 0.1
-            assert error.correction > 0.1
+            # 1e4 times the Newton tolerance (1e-9), and 22 times below the
+            # smallest residual measured (2.2e-4).
+            assert error.newton_residual > 1.0e-5
+            # 1e5 times the correction tolerance (1e-7), and 20 times below
+            # the smallest correction measured (0.20).
+            assert error.correction > 1.0e-2
             # The best iterate travels with the refusal, measured, for diagnosis.
             best = error.solution
             assert isinstance(best.residual, CollocationResidual)
-            assert not best.residual.is_trajectory
             defect = float(np.max(np.abs(_trapezoid(network.function, best))))
             assert defect == pytest.approx(best.residual.largest, rel=1e-9)
-            # Measured 0.092 and 0.088: no trajectory.
-            assert defect > 1.0e-2
+            # 1e3 times the Newton tolerance, 31 times below the smallest
+            # measured (3.1e-5). A converged solve of these edges reaches 1e-14
+            # (the lsmr step converges on both).
+            assert defect > 1.0e-6
+
+    def test_the_xi3_edge_refuses_at_its_seed(self):
+        """xi2->xi3's first step diverged in all 40 perturbed solves.
+
+        So the best iterate is the seed, which is not a trajectory: its
+        trapezoidal residual is 0.092, 1.9e4 times what the mesh allows. A
+        refusal that kept the seed is the DEQ-120 case. Before the fix, this
+        seed came back as the answer.
+        """
+        _, network = _sheared_kirk_silber(_SHEAR4)
+        solver, seed, _ = _full_space(network, (2, 3))
+        with pytest.raises(NotConvergedError) as caught:
+            solver.solve(seed)
+        best = caught.value.solution
+        np.testing.assert_allclose(best.states, seed, rtol=0.0, atol=1.0e-12)
+        assert not best.residual.is_trajectory
+        assert float(np.max(np.abs(_trapezoid(network.function, best)))) > 1.0e-2
 
     def test_the_refusal_is_a_runtime_error(self):
         _, network = _sheared_kirk_silber(_SHEAR4)
