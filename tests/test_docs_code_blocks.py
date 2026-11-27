@@ -18,7 +18,9 @@ import pytest
 _ROOT = Path(__file__).resolve().parent.parent
 _DOCS = _ROOT / "docs"
 _GUIDE = sorted([_DOCS / "index.md", *(_DOCS / "user-guide").glob("*.md")])
-_PACKAGE = sorted([_ROOT / "README.md", *(_ROOT / "discrecontinual_equations").rglob("*.md")])
+_PACKAGE = sorted(
+    [_ROOT / "README.md", *(_ROOT / "discrecontinual_equations").rglob("*.md")]
+)
 _PAGES = _GUIDE + _PACKAGE
 _FENCE = re.compile(r"^```", re.MULTILINE)
 _PYTHON = re.compile(r"^```python[^\n]*\n(.*?)^```", re.DOTALL | re.MULTILINE)
@@ -78,5 +80,8 @@ def test_the_getting_started_pages_have_examples() -> None:
 
 def test_the_readme_and_package_pages_have_examples() -> None:
     # The same guard for the pages DEQ-173 added.
-    for page in (_ROOT / "README.md", _ROOT / "discrecontinual_equations" / "plot" / "PLOT.md"):
+    for page in (
+        _ROOT / "README.md",
+        _ROOT / "discrecontinual_equations" / "plot" / "PLOT.md",
+    ):
         assert _blocks(page), f"{page.name} has no python block"

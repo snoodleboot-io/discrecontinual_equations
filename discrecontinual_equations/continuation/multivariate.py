@@ -117,11 +117,12 @@ class Multivariate:
 
     def _combine(self, other: object) -> "Multivariate":
         if isinstance(other, Multivariate):
-            if other._dimension != self._dimension:
-                raise ValueError(
+            if other.dimension != self._dimension:
+                message = (
                     f"cannot combine series in {self._dimension} and "
-                    f"{other._dimension} variables"
+                    f"{other.dimension} variables"
                 )
+                raise ValueError(message)
             return other
         if isinstance(other, Number):
             return Multivariate.constant(other, self._order, self._dimension)  # type: ignore[arg-type]

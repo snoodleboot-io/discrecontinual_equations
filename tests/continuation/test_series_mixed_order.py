@@ -35,9 +35,7 @@ def _pair_bivariate() -> tuple[Bivariate, Bivariate]:
 
 def _pair_multivariate() -> tuple[Multivariate, Multivariate]:
     low = Multivariate({(0, 0): 1.0, (1, 0): 1.0}, 1, 2)
-    high = Multivariate(
-        {(0, 0): 1.0, (1, 0): 1.0, (2, 0): 1.0, (3, 0): 1.0}, 3, 2
-    )
+    high = Multivariate({(0, 0): 1.0, (1, 0): 1.0, (2, 0): 1.0, (3, 0): 1.0}, 3, 2)
     return low, high
 
 

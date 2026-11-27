@@ -33,6 +33,7 @@ import plotly.graph_objects as go
 
 from discrecontinual_equations.variable import Variable
 
+
 def one_sided_power(signal: np.ndarray, dt: float) -> tuple[np.ndarray, np.ndarray]:
     """The one-sided power spectrum of a mean-removed signal, in amplitude².
 

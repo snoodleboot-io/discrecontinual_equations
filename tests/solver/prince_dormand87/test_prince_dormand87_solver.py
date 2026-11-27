@@ -130,7 +130,7 @@ class TestDeprecatedNames:
             656045339 / 265891186, -3867574721 / 1518517206,
             465885868 / 322736535, 53011238 / 667516719, 2 / 45, 0,
         ]  # fmt: skip
-        with pytest.warns(DeprecationWarning):
+        with pytest.warns(DeprecationWarning, match="deprecated"):
             solver = DormandPrince89Solver(DormandPrince89Config(end_time=2.0))
         with pytest.warns(DeprecationWarning, match="b7"):
             b9 = solver.b9
