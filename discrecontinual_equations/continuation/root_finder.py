@@ -156,8 +156,8 @@ class Bisection(ScalarRootFinder):
     Keeps the half whose ends differ in sign; returns the midpoint once its value
     is below ``value_tolerance`` (times the larger end value when the settings
     are relative) or the bracket is narrower than ``fraction_tolerance``. A
-    relative stop costs one more evaluation, at ``high``. If the ends do not differ in sign the bracket slides
-    to ``high`` and the result is not a root.
+    relative stop costs one more evaluation, at ``high``. If the ends do not
+    differ in sign the bracket slides to ``high`` and the result is not a root.
 
     References:
     - Kuznetsov (1998), Section 10.2.2.

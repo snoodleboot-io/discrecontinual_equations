@@ -19,7 +19,6 @@ from unittest import TestCase
 
 import numpy as np
 
-from discrecontinual_equations.continuation import detection
 from discrecontinual_equations.continuation.builder import ContinuerBuilder
 from discrecontinual_equations.continuation.continuation_config import (
     ContinuationConfig,
@@ -28,6 +27,7 @@ from discrecontinual_equations.continuation.continuation_state import (
     ContinuationState,
 )
 from discrecontinual_equations.continuation.detection import (
+    _BRANCH_STEP,
     DetectionContext,
     _branch_coefficients,
     _branch_label,
@@ -167,7 +167,7 @@ def _epsilon(sigma: float) -> float:
     return FINITE_DIFFERENCE_EPSILON * min(1.0, sigma)
 
 
-def _continued(coefficients, scale=1.0, sigma=1.0, exact=True):
+def _continued(coefficients, scale=1.0, sigma=1.0, *, exact=True):
     """Continue ``x = 0`` from ``mu = -0.3`` through ``mu = 0`` with the defaults."""
     config = ContinuationConfig(
         finite_difference_epsilon=_epsilon(sigma),
@@ -190,15 +190,13 @@ def _continued(coefficients, scale=1.0, sigma=1.0, exact=True):
     return [(point.kind, point.parameter) for point in branch.special_points]
 
 
-def _context(coefficients, sigma=1.0, exact=True, u0=0.0, mu_shift=0.0):
+def _context(coefficients, sigma=1.0, *, exact=True, u0=0.0, mu_shift=0.0):
     """A point on the branch through ``u0`` (``u0 = 0`` is the trivial branch)."""
     r, al, be, k, d = coefficients
     v, w = 1.5 * d * u0 * u0, 0.5 * d * u0 * u0
     mu = -(r * u0 + al * v + be * w + k * u0 * u0) + mu_shift
     field = _Field(coefficients, 1.0, sigma)
-    provider = (
-        field if exact else FiniteDifferenceJacobian(field, _epsilon(sigma))
-    )
+    provider = field if exact else FiniteDifferenceJacobian(field, _epsilon(sigma))
     state = sigma * (M @ np.array([u0, v, w]))
     tangent = np.array([0.0, 0.0, 0.0, 1.0])
     return DetectionContext(ContinuationState(state, mu, tangent, 0.0), provider)
@@ -208,7 +206,7 @@ class TestRelativeValueStop(TestCase):
     """A relative value stop finds the same root whatever the function's units."""
 
     @staticmethod
-    def _root(finder_class, slope: float, relative: bool) -> float:
+    def _root(finder_class, slope: float, *, relative: bool) -> float:
         settings = RootFinderSettings(1.0e-8, 1.0e-12, 60, relative=relative)
         finder = finder_class(settings)
         located = finder.locate(lambda x: slope * (x - 0.3), 0.0, 1.0)
@@ -217,14 +215,19 @@ class TestRelativeValueStop(TestCase):
 
     def test_bisection_locates_the_root_at_every_scale(self):
         for slope in (1.0e-18, 1.0e-9, 1.0, 1.0e9):
-            assert abs(self._root(Bisection, slope, True) - 0.3) < LOCATION_TOLERANCE
+            assert (
+                abs(self._root(Bisection, slope, relative=True) - 0.3)
+                < LOCATION_TOLERANCE
+            )
 
     def test_an_absolute_stop_accepts_the_first_midpoint_of_a_slow_function(self):
-        assert abs(self._root(Bisection, 1.0e-9, False) - 0.5) < LOCATION_TOLERANCE
+        assert abs(self._root(Bisection, 1.0e-9, relative=False) - 0.5) < LOCATION_TOLERANCE
 
     def test_secant_locates_the_root_at_every_scale(self):
         for slope in (1.0e-18, 1.0e-9, 1.0, 1.0e9):
-            assert abs(self._root(Secant, slope, True) - 0.3) < LOCATION_TOLERANCE
+            assert (
+                abs(self._root(Secant, slope, relative=True) - 0.3) < LOCATION_TOLERANCE
+            )
 
     def test_a_root_near_one_end_is_measured_against_the_other(self):
         # The larger end value sets the scale: measured against the small one
@@ -296,7 +299,7 @@ class TestPitchforkUnderStateRescaling(TestCase):
             for exact in (True, False):
                 for power in range(-6, 7):
                     sigma = 10.0**power
-                    label = _branch_label(_context(coefficients, sigma, exact))
+                    label = _branch_label(_context(coefficients, sigma, exact=exact))
                     assert label == "pitchfork", (name, exact, sigma, label)
 
     def test_through_continuation(self):
@@ -354,7 +357,7 @@ class TestPitchforkUnderStateRescaling(TestCase):
         context = _context(PITCHFORKS["reflection symmetric"], 1.0e6)
         pair = _null_pair(context)
         assert pair is not None
-        assert _branch_step(context, pair) > 1.0e4 * detection._BRANCH_STEP
+        assert _branch_step(context, pair) > 1.0e4 * _BRANCH_STEP
 
 
 class TestWeakTranscritical(TestCase):

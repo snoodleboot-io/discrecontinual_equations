@@ -297,7 +297,7 @@ class TestNoiseEstimate(TestCase):
         # The values are keyed by step, so the step search is held at its start.
         with (
             mock.patch.object(detection, "_branch_expansion", expansion),
-            mock.patch.object(detection, "_branch_step", lambda *_: _BRANCH_STEP),
+            mock.patch.object(detection, "_branch_step", return_value=_BRANCH_STEP),
         ):
             return _branch_label(context)
 
