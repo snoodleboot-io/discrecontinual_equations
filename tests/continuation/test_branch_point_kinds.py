@@ -14,6 +14,7 @@ import textwrap
 from pathlib import Path
 from unittest import TestCase
 
+from discrecontinual_equations.continuation import detection
 from discrecontinual_equations.continuation.branch_point_kinds import (
     BRANCH_POINT_KINDS,
     is_branch_point,
@@ -73,7 +74,11 @@ def _literal_branch_matches(tree: ast.AST) -> list[ast.Compare | ast.Match]:
 
 class TestBranchPointKinds(TestCase):
     def test_the_set_is_what_the_detector_can_report(self):
-        reported = _returned_literals(BranchPoint.refine_kind)
+        # refine_kind hands the labelling to the module's _branch_label (DEQ-126),
+        # so the kinds are the literals either one returns.
+        reported = _returned_literals(BranchPoint.refine_kind) | _returned_literals(
+            detection._branch_label,  # noqa: SLF001
+        )
         assert reported | {BranchPoint().kind} == set(BRANCH_POINT_KINDS)
 
     def test_each_classified_kind_is_a_branch_point(self):
