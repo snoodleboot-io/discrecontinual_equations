@@ -5,6 +5,33 @@
 whose fields carry sensible defaults, so a bare ``ContinuationConfig()`` traces a
 robust equilibrium branch with pseudo-arclength continuation and codim-1
 bifurcation detection. Every algorithmic choice is a field and can be overridden.
+
+The defaults assemble the classical method: Newton seed polish at
+``initial_parameter``; the tangent from the bordered system ``[F_y; v_prev^T] v =
+e_(n+1)``; an Euler tangent predictor of arclength ``initial_step``; a Newton
+corrector on ``F = 0`` plus Keller's pseudo-arclength constraint (the hyperplane
+through the prediction normal to the tangent); step control by corrector iteration
+count; fold, branch-point and Hopf test functions checked for sign changes and
+located by bisection along the chord (Kuznetsov (1998), Sections 10.2.1-10.2.2;
+Keller (1977), who introduced pseudo-arclength continuation). ``parameterization
+= "natural"`` fixes the parameter instead (Kuznetsov's (10.33) with the parameter
+as the fixed coordinate), which fails at every fold.
+
+The Jacobian is by central differences with an absolute step
+``finite_difference_epsilon`` for every column and the parameter, unless the
+residual supplies its own. An absolute step is too large for state components of
+size ``1e-8`` and too small for components of size ``1e8``; scale the problem, or
+supply analytic derivatives, when components differ greatly in size.
+
+References:
+- Kuznetsov, Yu. A. "Elements of Applied Bifurcation Theory", 2nd ed., Applied
+  Mathematical Sciences 112, Springer, 1998, doi:10.1007/b98848, Sections
+  10.2.1-10.2.2, eqs. (10.29)-(10.36).
+- Keller, H. B. "Numerical solution of bifurcation and nonlinear eigenvalue
+  problems", in P. H. Rabinowitz (ed.), Applications of Bifurcation Theory,
+  Academic Press, 1977, pp. 359-384.
+- Allgower, E. L. and Georg, K. "Numerical Continuation Methods: An Introduction",
+  Springer, 1990, doi:10.1007/978-3-642-61257-2, Chapters 2, 3 and 6.
 """
 
 from typing import Literal
@@ -20,6 +47,13 @@ class ContinuationConfig(SolverConfig):
     The continuation parameter is one of the equation's own ``Parameter`` objects,
     identified by ``continuation_parameter_index``. Its value is swept while the
     equilibrium condition ``f(u, lambda) = 0`` is tracked as a solution curve.
+
+    Every field is documented by its ``description``; registry keys name the
+    strategy classes registered with ``sweet_tea`` (for example
+    ``"newton_corrector"`` for :class:`~.corrector.NewtonCorrector`).
+
+    References:
+    - Kuznetsov (1998), Section 10.2; Keller (1977).
     """
 
     continuation_parameter_index: int = Field(

@@ -12,6 +12,11 @@ class ContinuationPointBuilder:
 
     Depends only on abstractions: the Jacobian source, the stability analyzer, and
     the measure. It performs no numerical policy of its own.
+
+    Args:
+        jacobian: Source of ``F_u`` at the point.
+        stability_analyzer: Classifies the point from ``F_u``.
+        measure: Reduces the state to the diagram's scalar.
     """
 
     __slots__ = ["_jacobian", "_measure", "_stability_analyzer"]
@@ -32,7 +37,17 @@ class ContinuationPointBuilder:
         kind: str = "regular",
         frequency: float | None = None,
     ) -> ContinuationPoint:
-        """Build a point, defaulting to a regular (non-bifurcation) record."""
+        """Build a point, defaulting to a regular (non-bifurcation) record.
+
+        Args:
+            state: The working state.
+            kind: Bifurcation label, ``"regular"`` for ordinary points.
+            frequency: The Hopf frequency, when there is one.
+
+        Returns:
+            The finished record, with the eigenvalues of ``F_u`` at the point, its
+            stability label and the diagram measure.
+        """
         jacobian = self._jacobian.state_jacobian(state.state, state.parameter)
         stability = self._stability_analyzer.analyze(jacobian)
         return ContinuationPoint(

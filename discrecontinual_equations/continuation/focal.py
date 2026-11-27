@@ -11,6 +11,47 @@ where the first vanishes, of the Bautin point).
 The field's full local Taylor expansion is obtained exactly from the
 :class:`~.bivariate.Bivariate` automatic-differentiation series, so the only
 approximation is the truncation degree, taken high enough for both quantities.
+
+The construction is the classical one for a weak focus ``x' = -y + P``,
+``y' = x + Q`` (``P, Q`` without constant or linear terms): a local Lyapunov
+function ``V`` whose orbital derivative is ``V' = eta_2 r^2 + eta_4 r^4 + ...``,
+``r^2 = x^2 + y^2``, with ``eta_(2k)`` the *k*-th focal value; the focus is stable
+(unstable) when the first non-zero focal value is negative (positive), and a
+center iff all vanish (Euzébio, Llibre and Tonon (2020), Section 2.1, attributing
+the construction to Blows and Lloyd). With the linear part exactly a rotation,
+``eta_2 = 0``. At each degree ``k`` the homogeneous part ``V_k`` solves a linear
+system with the operator ``V_k -> s V_t - t V_s`` (partial derivatives), invertible on
+odd degrees; on even degrees its range misses ``(s^2 + t^2)^(k/2)``, and the
+coefficient of that missing direction is the focal value (solved here by least
+squares on the augmented system).
+
+On the normal form ``s' = -t + a s r^2 + b s r^4``, ``t' = s + a t r^2 + b t r^4``
+the recursion returns ``(eta_4, eta_6) = (a, b)`` exactly. The field is scaled by
+``1 / omega`` so the rotation has unit frequency; the sign of ``eta_4`` is the sign
+of the first Lyapunov coefficient ``l_1`` (Kuznetsov (1998), eq. (3.20)), whose
+value depends on normalisation while its sign does not (Kuznetsov's remark after
+(3.20)). Only the signs are meant to be compared across methods.
+
+Erratum carried: the source prints the expansion as ``eta_(2k) (x^2 + y^2)^(2k)``;
+its own first terms ``eta_2 (x^2 + y^2) + eta_4 (x^2 + y^2)^2`` show the exponent is
+``k``, which is what is used here.
+
+Limits: planar systems only (reduce first, as :mod:`~.center_manifold` does); the
+field must be polynomial in the :class:`~.bivariate.Bivariate` arithmetic (no
+division); ``eta_6`` is meaningful only where ``eta_4 = 0`` (the source: ``eta_(2k)``
+is relevant only when the earlier ones vanish), i.e. at a Bautin point; and the
+eigen-decomposition assumes
+the Jacobian has a complex pair ``+-i omega`` with ``omega > 0``.
+
+References:
+- Euzébio, R. D., Llibre, J. and Tonon, D. J. "Lower bounds for the number of
+  limit cycles in a generalized Rayleigh-Liénard oscillator", arXiv:2012.13952
+  (2020), Section 2.1 (focal values from a Lyapunov function). Blows, T. R. and
+  Lloyd, N. G., Proc. Roy. Soc. Edinburgh A 98, 215-239, 1984,
+  doi:10.1017/S030821050001341X, is their source; it was not read here.
+- Kuznetsov, Yu. A. "Elements of Applied Bifurcation Theory", 2nd ed., Applied
+  Mathematical Sciences 112, Springer, 1998, doi:10.1007/b98848, Section 3.5,
+  eq. (3.20).
 """
 
 import numpy as np
@@ -24,7 +65,21 @@ _SECOND_FOCAL_DEGREE = 6
 
 
 class PlanarLyapunov:
-    """First and second Lyapunov quantities at a planar Hopf point."""
+    """First and second Lyapunov quantities at a planar Hopf point.
+
+    Args:
+        function: The planar vector field, evaluable on Bivariate series.
+        equilibrium: The Hopf equilibrium.
+        jacobian: The Jacobian there, with eigenvalues ``+-i omega``.
+        time: Time passed to the field.
+
+    Raises:
+        numpy.linalg.LinAlgError: If the real and imaginary parts of the critical
+            eigenvector are dependent (no complex pair).
+
+    References:
+    - Euzébio, Llibre and Tonon (2020), Section 2.1.
+    """
 
     __slots__ = ["_equilibrium", "_function", "_time", "_transform"]
 
@@ -41,7 +96,12 @@ class PlanarLyapunov:
         self._transform = _rotation_transform(jacobian)
 
     def quantities(self) -> tuple[float, float]:
-        """Return the first and second focal values ``(eta_4, eta_6)``."""
+        """Return the first and second focal values ``(eta_4, eta_6)``.
+
+        Returns:
+            ``(eta_4, eta_6)`` of the field transformed to a unit-frequency
+            rotation.
+        """
         transform, inverse, frequency = self._transform
         first = Bivariate({(1, 0): 1.0}, _ORDER)
         second = Bivariate({(0, 1): 1.0}, _ORDER)
@@ -70,6 +130,18 @@ def _rotation_transform(
 
 
 def recurse(field: list[Bivariate]) -> tuple[float, float]:
+    """Focal values of a planar field whose linear part is ``(s, t) -> (-t, s)``.
+
+    Args:
+        field: The two components as Bivariate series of order at least six.
+
+    Returns:
+        ``(eta_4, eta_6)``, the coefficients of ``(s^2 + t^2)^2`` and
+        ``(s^2 + t^2)^3`` in the orbital derivative of the constructed ``V``.
+
+    References:
+    - Euzébio, Llibre and Tonon (2020), Section 2.1.
+    """
     lyapunov = Bivariate({(2, 0): 0.5, (0, 2): 0.5}, _ORDER)
     focal: dict[int, float] = {}
     for degree in range(3, _ORDER + 1):

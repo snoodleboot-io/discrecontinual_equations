@@ -17,6 +17,34 @@ degeneracies. Each continuation is swept in both directions from its seed so a
 degeneracy on either side is found. Escalation reaches as far as the library has
 defining systems for - fold and Hopf curves, then cusp and generalized-Hopf curves;
 degeneracies without a continuation system yet are recorded as terminal.
+
+This automates the continuation strategy Kuznetsov (1998, Section 10.4) describes:
+continue an equilibrium in one parameter, locate fold and Hopf points, then
+"activate" a second parameter and continue those points as curves, whose codim 2
+points act as organizing centers; the same step once more takes codim 2 points
+into a third parameter. The curves are continued by the two-parameter machinery of
+:mod:`~.codim2_builder` and :mod:`~.codim3_builder` (Kuznetsov (1998), Section
+10.3), with derivatives from the Taylor-jet provider.
+
+Limits, by construction:
+
+* Only bifurcations met along the continued curves are found: a branch that never
+  reaches a bifurcation, a disconnected equilibrium branch, and every global
+  bifurcation (homoclinic orbits, cycle bifurcations) are outside the tree.
+* Each level escalates at most six points (``_MAX_BRANCHES``), and a kind found
+  more than six times on one curve is dropped as numerical noise
+  (``_MAX_POINTS_PER_KIND``); a curve with genuinely many such points loses all of
+  them.
+* Points are merged when their parameters agree to three decimals, and a cusp
+  within ``0.1`` of a Bogdanov-Takens point in every parameter is dropped as an
+  artefact; both thresholds are absolute, so rescale parameters of very different
+  size.
+* Detection is by sign changes of test functions, so two degeneracies within one
+  continuation step can cancel.
+
+References:
+- Kuznetsov, Yu. A. "Elements of Applied Bifurcation Theory", 2nd ed., Applied
+  Mathematical Sciences 112, Springer, 1998, doi:10.1007/b98848, Sections 10.3 and 10.4.
 """
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -84,7 +112,12 @@ _CODIM3 = 3
 
 
 class ExplorationConfig(BaseModel):
-    """What to explore: the ordered active parameters and their search ranges."""
+    """What to explore: the ordered active parameters and their search ranges.
+
+    ``parameters[0]`` is continued first; ``parameters[1]`` and ``parameters[2]``
+    are activated for the codim 2 and codim 3 levels, if given. Each continuation
+    stops at the bounds in ``ranges`` for its own last-activated parameter.
+    """
 
     parameters: list[int] = Field(
         description="Ordered parameter indices to activate as codimension grows",
@@ -101,7 +134,15 @@ class ExplorationConfig(BaseModel):
 
 
 class DetectedBifurcation:
-    """A single bifurcation found during exploration."""
+    """A single bifurcation found during exploration.
+
+    Args:
+        kind: The detector's label (``"fold"``, ``"cusp"``, ...).
+        codimension: 1, 2 or 3.
+        state: The equilibrium at the point.
+        parameters: The active parameters' values, in activation order.
+        frequency: The Hopf frequency, where there is one.
+    """
 
     __slots__ = ["codimension", "frequency", "kind", "parameters", "state"]
 
@@ -121,7 +162,15 @@ class DetectedBifurcation:
 
 
 class ExplorationNode:
-    """One continuation in the tree: its detected points and escalated children."""
+    """One continuation in the tree: its detected points and escalated children.
+
+    Args:
+        description: What was continued (``"equilibrium branch"``, ``"fold
+            curve"``, ...).
+        codimension: Codimension of the points found on it.
+        points: The bifurcations found.
+        children: The continuations escalated from them.
+    """
 
     __slots__ = [
         "children",
@@ -147,7 +196,11 @@ class ExplorationNode:
         self.depth: float | None = None
 
     def flatten(self) -> list[DetectedBifurcation]:
-        """All bifurcations in this subtree, depth-first."""
+        """All bifurcations in this subtree, depth-first.
+
+        Returns:
+            This node's points followed by each child's, recursively.
+        """
         found = list(self.points)
         for child in self.children:
             found.extend(child.flatten())
@@ -155,7 +208,11 @@ class ExplorationNode:
 
 
 class BifurcationExplorer:
-    """Continue an equilibrium and recursively escalate every degeneracy found."""
+    """Continue an equilibrium and recursively escalate every degeneracy found.
+
+    References:
+    - Kuznetsov (1998), Section 10.4.
+    """
 
     @staticmethod
     def explore(
@@ -163,7 +220,19 @@ class BifurcationExplorer:
         equation: DifferentialEquation,
         seed: list[float],
     ) -> ExplorationNode:
-        """Return the tree of continuations rooted at the equilibrium branch."""
+        """Return the tree of continuations rooted at the equilibrium branch.
+
+        Args:
+            config: Active parameters, their ranges and step settings.
+            equation: The system. Its parameter values are changed during the run
+                and left at the last continuation's values; snapshot them if they
+                matter.
+            seed: An equilibrium (or a close guess) at ``initial_parameter`` and the
+                equation's current values of the other parameters.
+
+        Returns:
+            The root node, the equilibrium branch.
+        """
         base = _snapshot(equation, config.parameters)
         points = BifurcationExplorer._equilibrium_points(config, equation, seed)
         children = [

@@ -1,4 +1,10 @@
-"""Scalar measures plotted against the parameter on a bifurcation diagram."""
+"""Scalar measures plotted against the parameter on a bifurcation diagram.
+
+A one-parameter bifurcation diagram plots one number per equilibrium against the
+parameter. :class:`Norm` uses ``||u||``, which separates branches but cannot tell
+``u`` from ``-u`` (the two halves of a pitchfork overlap); :class:`Component` uses
+one coordinate, which keeps the sign.
+"""
 
 from abc import ABC, abstractmethod
 
@@ -10,7 +16,14 @@ class Measure(ABC):
 
     @abstractmethod
     def of(self, state: np.ndarray) -> float:
-        """Return the scalar measure of ``state``."""
+        """Return the scalar measure of ``state``.
+
+        Args:
+            state: The equilibrium state.
+
+        Returns:
+            The value plotted on the diagram.
+        """
         raise NotImplementedError
 
 
@@ -22,7 +35,11 @@ class Norm(Measure):
 
 
 class Component(Measure):
-    """A single chosen component of the state vector."""
+    """A single chosen component of the state vector.
+
+    Args:
+        index: The component plotted.
+    """
 
     __slots__ = ["_index"]
 

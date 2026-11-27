@@ -6,6 +6,14 @@ concrete strategy. Every collaborator is named by a registry key in the
 ``AbstractFactory[Interface].create(key, configuration=...)``. Adding or swapping
 an implementation is a config change plus a registered class; this file does not
 change.
+
+What is assembled is documented with each piece: :mod:`~.predictor`,
+:mod:`~.corrector`, :mod:`~.tangent`, :mod:`~.step_controller`,
+:mod:`~.localizer` and :mod:`~.switching`; the method as a whole on the
+"Numerical continuation" user-guide page. The builder adds one thing of its own:
+every collaborator shares a single memoizing Jacobian provider, so the Jacobian at
+an accepted point is computed once and read by the tangent, the detectors and the
+stability classification.
 """
 
 from typing import Any
@@ -44,7 +52,15 @@ class ContinuerBuilder:
         config: ContinuationConfig,
         equation: DifferentialEquation,
     ) -> Continuer:
-        """Resolve the equation residual by key, then assemble the continuer."""
+        """Resolve the equation residual by key, then assemble the continuer.
+
+        Args:
+            config: The continuation configuration.
+            equation: The equation whose equilibria are continued.
+
+        Returns:
+            A wired :class:`~.continuer.Continuer`; call ``solve`` with a seed.
+        """
         residual = AbstractFactory[ResidualFunction].create(
             config.residual,
             configuration={
@@ -64,6 +80,13 @@ class ContinuerBuilder:
 
         Reused by two-parameter continuation, where ``residual`` is an augmented
         bifurcation-curve system rather than the plain equation residual.
+
+        Args:
+            config: The continuation configuration.
+            residual: The residual to continue.
+
+        Returns:
+            A wired :class:`~.continuer.Continuer`.
         """
         linear_solver = AbstractFactory[LinearSolver].create(config.linear_solver)
         # Every collaborator shares one memoizing wrapper, so the Jacobian at a

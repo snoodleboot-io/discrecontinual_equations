@@ -6,6 +6,21 @@ seeded multivariate series gives its full local Taylor expansion in the split
 (center, hyperbolic) coordinates; substituting the center manifold back in - by
 evaluating that expansion at :class:`~.bivariate.Bivariate` arguments - yields the
 reduced field on the center coordinates.
+
+The arithmetic is Taylor-mode algorithmic differentiation (Griewank and Walther
+(2008), Chapter 13) carried as a full multivariate polynomial: each product is the
+convolution of the two coefficient tables with every term above the total degree
+``order`` dropped. The number of monomials of degree at most ``order`` in ``d``
+variables is ``C(order + d, d)``, and a product touches every pair, so the cost
+grows like ``C(order + d, d)^2``; this suits the low-dimensional, low-order
+expansions of a center manifold reduction, not large systems. As in
+:mod:`~.bivariate`, only ``+ - * **`` (non-negative integer powers) are
+implemented: a field that divides, even by a number, must be rewritten.
+
+References:
+- Griewank, A. and Walther, A. "Evaluating Derivatives: Principles and
+  Techniques of Algorithmic Differentiation", 2nd ed., SIAM, 2008,
+  doi:10.1137/1.9780898717761, Chapter 13 ("Taylor and Tensor Coefficients").
 """
 
 from numbers import Number
@@ -17,7 +32,17 @@ _LINEAR_DEGREE = 2
 
 
 class Multivariate:
-    """A truncated power series in several variables to a fixed total degree."""
+    """A truncated power series in several variables to a fixed total degree.
+
+    Args:
+        coefficients: Map from exponent tuple to coefficient; terms above
+            ``order`` and zero terms are dropped.
+        order: Maximum retained total degree.
+        dimension: Number of variables.
+
+    References:
+    - Griewank and Walther (2008), Chapter 13.
+    """
 
     __slots__ = ["_coefficients", "_dimension", "_order"]
 
@@ -63,7 +88,17 @@ class Multivariate:
         order: int,
         dimension: int,
     ) -> "Multivariate":
-        """The series ``value + x_axis``."""
+        """The series ``value + x_axis``.
+
+        Args:
+            axis: Which variable to seed.
+            value: The constant term.
+            order: Maximum retained total degree.
+            dimension: Number of variables.
+
+        Returns:
+            The seeded independent variable.
+        """
         key = tuple(1 if i == axis else 0 for i in range(dimension))
         return cls({(0,) * dimension: value, key: 1.0}, order, dimension)
 
@@ -152,7 +187,15 @@ class Multivariate:
         )
 
     def compose(self, arguments: list[Bivariate], order: int) -> Bivariate:
-        """Evaluate the series with each variable replaced by a Bivariate."""
+        """Evaluate the series with each variable replaced by a Bivariate.
+
+        Args:
+            arguments: One :class:`~.bivariate.Bivariate` per variable.
+            order: Truncation degree of the result.
+
+        Returns:
+            The composed two-variable series.
+        """
         result = Bivariate({}, order)
         for key, value in self._coefficients.items():
             term = Bivariate.constant(value, order)

@@ -703,6 +703,92 @@ simulation), so that the test function is a deterministic function of the parame
 
 ::: discrecontinual_equations.continuation
 
+## Numerical continuation
+
+The predictor-corrector machinery, its Jacobians and the drivers built on it. The
+[Numerical continuation guide](../user-guide/continuation-core.md) explains each
+piece with a runnable example, its limits and its sources.
+
+### Driver, configuration and assembly
+
+::: discrecontinual_equations.continuation.continuer
+
+::: discrecontinual_equations.continuation.continuation_config
+
+::: discrecontinual_equations.continuation.builder
+
+::: discrecontinual_equations.continuation.components
+
+::: discrecontinual_equations.continuation.point_builder
+
+### Predictor, corrector, tangent and step
+
+::: discrecontinual_equations.continuation.predictor
+
+::: discrecontinual_equations.continuation.corrector
+
+::: discrecontinual_equations.continuation.tangent
+
+::: discrecontinual_equations.continuation.step_controller
+
+::: discrecontinual_equations.continuation.seed_refiner
+
+::: discrecontinual_equations.continuation.residual
+
+::: discrecontinual_equations.continuation.linear_solver
+
+::: discrecontinual_equations.continuation.bordered
+
+### Locating bifurcations and switching branches
+
+::: discrecontinual_equations.continuation.localizer
+
+::: discrecontinual_equations.continuation.root_finder
+
+::: discrecontinual_equations.continuation.switching
+
+### Jacobians and derivatives
+
+::: discrecontinual_equations.continuation.jacobian
+
+::: discrecontinual_equations.continuation.sparsity
+
+::: discrecontinual_equations.continuation.derivative_provider
+
+::: discrecontinual_equations.continuation.jet
+
+::: discrecontinual_equations.continuation.bivariate
+
+::: discrecontinual_equations.continuation.multivariate
+
+### Deflation, symmetry, focal values and regions
+
+::: discrecontinual_equations.continuation.deflation
+
+::: discrecontinual_equations.continuation.symmetry
+
+::: discrecontinual_equations.continuation.focal
+
+::: discrecontinual_equations.continuation.region_analysis
+
+### Branches, diagrams, families and exploration
+
+::: discrecontinual_equations.continuation.branch
+
+::: discrecontinual_equations.continuation.continuation_point
+
+::: discrecontinual_equations.continuation.continuation_state
+
+::: discrecontinual_equations.continuation.measure
+
+::: discrecontinual_equations.continuation.diagram
+
+::: discrecontinual_equations.continuation.family_config
+
+::: discrecontinual_equations.continuation.family_builder
+
+::: discrecontinual_equations.continuation.exploration
+
 ## Periodic orbits
 
 ::: discrecontinual_equations.continuation.periodic_orbit
