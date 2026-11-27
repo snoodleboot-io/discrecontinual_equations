@@ -5,7 +5,8 @@ critical point. The symmetric second- and third-order forms ``B`` and ``C`` are
 recovered from directional Taylor coefficients by polarization, so they are exact
 whenever the derivative provider is automatic differentiation.
 
-- ``cusp_coefficient`` is the quadratic fold coefficient ``a`` (zero at a cusp).
+- ``cusp_coefficient`` is the quadratic fold coefficient ``a`` (zero at a cusp),
+  with the null vector's sign fixed by an orientation (``fold_null_vectors``).
 - ``first_lyapunov`` is the first Lyapunov coefficient ``l1`` at a Hopf point
   (Kuznetsov's invariant formula; zero at a generalized Hopf / Bautin point).
 - ``cubic_fold_coefficient`` is the next fold coefficient ``b`` on the center
@@ -17,6 +18,10 @@ import math
 import numpy as np
 
 from discrecontinual_equations.continuation.codim2_normal_form import cusp_normal_form
+from discrecontinual_equations.continuation.critical_forms import (
+    right_null,
+    unit_phase,
+)
 from discrecontinual_equations.continuation.two_parameter_problem import (
     TwoParameterProblem,
 )
@@ -193,20 +198,44 @@ def bogdanov_takens_coefficient(
     return float((_HALF * (left_null @ form)).real)
 
 
+def fold_null_vectors(
+    jacobian: np.ndarray,
+    orientation: np.ndarray | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Unit right null vector ``q`` and left null vector ``p`` with ``<p, q> = 1``.
+
+    The SVD fixes ``q`` only up to sign, and with ``<p, q> = 1`` the fold
+    coefficient ``a = (1/2) <p, B(q, q)>`` is odd in ``q`` (``p`` turns with it), so
+    ``<p, q> > 0`` alone leaves the sign of ``a`` to LAPACK. The sign of ``q`` is
+    therefore chosen: ``orientation . q > 0`` when an orientation is given (the
+    previous point's ``q``, or the fold curve's own null vector, as MatCont's
+    bordered ``v_bor^T v = 1`` does), and otherwise the largest component of ``q``
+    positive, which is repeatable but not continuous along a curve.
+    """
+    right = unit_phase(right_null(jacobian).real.astype(complex)).real
+    if orientation is not None and float(np.real(orientation) @ right) < 0.0:
+        right = -right
+    left = right_null(jacobian.T).real
+    return right, left / (left @ right)
+
+
 def cusp_coefficient(
     problem: TwoParameterProblem,
     state: np.ndarray,
     parameter_a: float,
     parameter_b: float,
+    orientation: np.ndarray | None = None,
 ) -> float:
-    """Quadratic fold coefficient ``a = (1/2) <p, B(q, q)>``."""
+    """Quadratic fold coefficient ``a = (1/2) <p, B(q, q)>`` (Kuznetsov 1999, (2.3)).
+
+    ``|q| = 1`` and ``<p, q> = 1``; the sign of ``q``, on which the sign of ``a``
+    depends, follows ``orientation`` as in :func:`fold_null_vectors`.
+    """
     jacobian = problem.state_jacobian(state, parameter_a, parameter_b)
-    right_null = _null_vector(jacobian)
-    left_null = _null_vector(jacobian.T)
-    left_null = left_null / (left_null @ right_null)
+    right_null_vector, left_null_vector = fold_null_vectors(jacobian, orientation)
     forms = MultilinearForms(problem, state, parameter_a, parameter_b)
-    form = forms.bilinear(right_null, right_null)
-    return float((_HALF * (left_null @ form)).real)
+    form = forms.bilinear(right_null_vector, right_null_vector)
+    return float((_HALF * (left_null_vector @ form)).real)
 
 
 def cubic_fold_coefficient(

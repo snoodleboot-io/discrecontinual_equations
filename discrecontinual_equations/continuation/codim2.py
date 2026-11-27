@@ -26,6 +26,7 @@ from discrecontinual_equations.continuation.codim2_normal_form import classify
 from discrecontinual_equations.continuation.normal_form import (
     cusp_coefficient,
     first_lyapunov,
+    fold_null_vectors,
 )
 from discrecontinual_equations.continuation.residual import ResidualFunction
 from discrecontinual_equations.continuation.two_parameter_problem import (
@@ -78,6 +79,9 @@ class Codim2TestFunction(ABC):
     def value(self, problem: TwoParameterProblem, decoded: CurveDecoded) -> float:
         """Scalar whose sign change brackets the bifurcation."""
         raise NotImplementedError
+
+    def reset(self) -> None:
+        """Forget anything carried from point to point, before a new curve."""
 
 
 class BogdanovTakens(Codim2TestFunction):
@@ -150,18 +154,43 @@ class FoldBogdanovTakens(Codim2TestFunction):
 
 
 class Cusp(Codim2TestFunction):
-    """On the fold curve, the quadratic coefficient ``a`` vanishes at a cusp."""
+    """On the fold curve, the quadratic coefficient ``a`` vanishes at a cusp.
+
+    ``a`` is odd in the null vector ``q``, so its sign is only meaningful once
+    ``q`` is oriented the same way from point to point. The fold curve's own
+    ``q`` (normalised by ``c . q = 1``) does that; without one, ``q`` is turned
+    towards the previous point's.
+    """
+
+    __slots__ = ["_previous"]
+
+    def __init__(self) -> None:
+        self._previous: np.ndarray | None = None
 
     @property
     def kind(self) -> str:
         return "cusp"
 
+    def reset(self) -> None:
+        self._previous = None
+
     def value(self, problem: TwoParameterProblem, decoded: CurveDecoded) -> float:
-        return cusp_coefficient(
-            problem,
-            decoded.state.real,
+        state = decoded.state.real
+        orientation = (
+            self._previous if decoded.null_vector is None else decoded.null_vector
+        )
+        jacobian = problem.state_jacobian(
+            state,
             decoded.parameter_a,
             decoded.parameter_b,
+        )
+        self._previous, _left = fold_null_vectors(jacobian, orientation)
+        return cusp_coefficient(
+            problem,
+            state,
+            decoded.parameter_a,
+            decoded.parameter_b,
+            orientation=self._previous,
         )
 
 
@@ -233,6 +262,7 @@ class Codim2Analyzer:
         found: list[Codim2Point] = []
         previous_value = None
         previous_point = None
+        test_function.reset()
         for current in decoded:
             value = test_function.value(problem, current)
             if not math.isfinite(value):

@@ -11,6 +11,7 @@ import numpy as np
 
 from discrecontinual_equations.continuation.bialternate import bialternate_test_value
 from discrecontinual_equations.continuation.continuation_state import ContinuationState
+from discrecontinual_equations.continuation.critical_forms import bordered_solve
 from discrecontinual_equations.continuation.jacobian import JacobianProvider
 
 _BRANCH_STEP = 1.0e-4
@@ -29,10 +30,18 @@ def _branch_coefficients(
 ) -> tuple[float, float] | None:
     """Quadratic ``a`` and cubic ``c`` normal-form coefficients at a branch point.
 
-    Both are directional derivatives of ``J(x) q`` along the kernel ``q``: with a
-    simple zero eigenvalue, ``B(q, q) = d/de [J(x + e q) q]`` and
-    ``C(q, q, q) = d^2/de^2 [J(x + e q) q]``, projected onto the left null vector
-    ``p`` normalized so ``<p, q> = 1``. This needs only the Jacobian, no forms.
+    On the center manifold at the critical parameter the field reads
+    ``w' = (a / 2) w^2 + (c / 6) w^3 + ...`` with (Kuznetsov 1999, section 5)
+
+        ``a = <p, B(q, q)>``,  ``c = <p, C(q, q, q) + 3 B(q, h2)>``,
+
+    ``h2 = -A^INV [B(q, q) - a q]`` with ``<p, h2> = 0`` and ``<p, q> = 1``. The
+    ``3 B(q, h2)`` share is the center manifold's curvature: it vanishes in one
+    dimension, but once the critical mode drives another one it can make a
+    pitchfork out of a vanishing ``<p, C(q, q, q)>``, or cancel one that does not.
+    All three forms are directional derivatives of ``J(x) q`` along ``q``:
+    ``B(q, y) = d/de [J(x + e q) y]`` and ``C(q, q, q) = d^2/de^2 [J(x + e q) q]``,
+    so only the Jacobian is needed. Both are even in the sign of ``q``.
     """
     jacobian = context.state_jacobian()
     right = _unit_null(jacobian)
@@ -43,12 +52,23 @@ def _branch_coefficients(
     left = left / denominator
     state = context.continuation_state.state
     step = _BRANCH_STEP
-    forward = context.jacobian_at(state + step * right) @ right
-    backward = context.jacobian_at(state - step * right) @ right
+    forward_jacobian = context.jacobian_at(state + step * right)
+    backward_jacobian = context.jacobian_at(state - step * right)
+    forward = forward_jacobian @ right
+    backward = backward_jacobian @ right
     centre = jacobian @ right
     quadratic = (forward - backward) / (2.0 * step)
-    cubic = (forward - 2.0 * centre + backward) / (step * step)
-    return float((left @ quadratic).real), float((left @ cubic).real)
+    quadratic_coefficient = left @ quadratic
+    correction = bordered_solve(
+        jacobian,
+        right,
+        left,
+        quadratic - quadratic_coefficient * right,
+    )
+    curvature = -correction
+    along = (forward_jacobian - backward_jacobian) @ curvature / (2.0 * step)
+    cubic = (forward - 2.0 * centre + backward) / (step * step) + 3.0 * along
+    return float(quadratic_coefficient.real), float((left @ cubic).real)
 
 
 class DetectionContext:
@@ -126,7 +146,8 @@ class BranchPoint(BifurcationDetector):
     A simple branch point is refined into a *transcritical* bifurcation when the
     quadratic normal-form coefficient ``a = <p, B(q, q)>`` is non-zero, or a
     *pitchfork* when that quadratic coefficient vanishes (as forced by a reflection
-    symmetry) while the cubic coefficient ``c = <p, C(q, q, q)>`` does not.
+    symmetry) while the center-manifold cubic ``c = <p, C(q, q, q) + 3 B(q, h2)>``
+    does not.
     """
 
     @property

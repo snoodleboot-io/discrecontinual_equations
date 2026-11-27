@@ -8,7 +8,9 @@ Two-parameter continuation of a fold uses the Moore-Spence system
 
 with unknowns ``(u, q, p_a)`` and the continuation coordinate ``p_b``. Its zero
 set is a one-dimensional curve of folds, continued by the ordinary
-pseudo-arclength engine. ``q`` is the null vector of ``f_u`` along the curve.
+pseudo-arclength engine. ``q`` is the null vector of ``f_u`` along the curve;
+``c . q = 1`` fixes its sign, so it turns continuously along the whole curve and
+orients the cusp test function there (as MatCont's bordered ``v_bor^T v = 1``).
 """
 
 import numpy as np
@@ -61,4 +63,5 @@ class FoldCurveResidual(ResidualFunction):
             parameter_a=float(state[2 * n]),
             parameter_b=float(parameter),
             omega=None,
+            null_vector=state[n : 2 * n],
         )

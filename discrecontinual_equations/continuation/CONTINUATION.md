@@ -201,6 +201,13 @@ crosses at a detected branch point, using the second null direction of the
 extended Jacobian (with a transverse fallback for pitchforks, where both branches
 share a tangent). Continue from that seed to trace the bifurcating branch.
 
+A detected branch point is labelled `transcritical` when `a = <p, B(q, q)>` is
+nonzero, and otherwise `pitchfork` when the center-manifold cubic
+`c = <p, C(q, q, q) + 3 B(q, h2)>` (Kuznetsov 1999, section 5) is nonzero; with
+both zero it stays `branch_point`. The `3 B(q, h2)` share matters as soon as the
+critical mode drives another one: `x' = mu x + x y`, `y' = -y + x^2` is a
+pitchfork although `<p, C(q, q, q)> = 0`.
+
 ## Example
 
 ```python
