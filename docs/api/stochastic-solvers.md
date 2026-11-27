@@ -112,10 +112,68 @@ print(coefficients.diagonal_slopes(np.array([3.0e12]), 0.0))  # [0.6], exact
 
 An absolute step of `1e-6` returned `[0.]` here.
 
-**Limits.** The solvers build their coefficients with the defaults, so `typical`
-is reachable only by constructing `ItoCoefficients` or `BatchedCoefficients`
-directly; a state whose components live far below one is differenced at a step
-floored at one. No step fixes the rounding of the diffusion itself: a slope is
+**Small states: `typical` in the config (DEQ-158).** Every stochastic solver
+config takes `typical` and hands it to the coefficients it builds, so a state that
+lives far below one is differenced at its own scale. Without it, a state of
+`5e-13` is moved by `6e-6`, ten million times itself, and the slope is a chord
+across the whole nonlinearity:
+
+```python
+from discrecontinual_equations.differential_equation import DifferentialEquation
+from discrecontinual_equations.function.stochastic import StochasticFunction
+from discrecontinual_equations.solver.stochastic.euler_maruyama.euler_maruyama_config import (
+    EulerMaruyamaConfig,
+)
+from discrecontinual_equations.solver.stochastic.euler_maruyama.euler_maruyama_solver import (
+    EulerMaruyamaSolver,
+)
+from discrecontinual_equations.solver.stochastic.wiener import BrownianPath
+from discrecontinual_equations.variable import Variable
+
+S = 1.0e-12
+
+
+class Cubic(StochasticFunction):
+    """dX = (X^3 / S^2) o dW: noise that is nonlinear at the state's own scale."""
+
+    def eval(self, point, time=None):
+        return [0.0]
+
+    def diffusion(self, point, time=None):
+        return [point[0] ** 3 / S**2]
+
+
+def final(typical):
+    variables = [Variable(name="X", discretization=[])]
+    time = Variable(name="t", discretization=[])
+    equation = DifferentialEquation(
+        variables=variables,
+        time=time,
+        parameters=[],
+        derivative=Cubic(variables, [], [Variable(name="dX", discretization=[])], time),
+    )
+    config = EulerMaruyamaConfig(
+        end_time=0.25, step_size=2.0**-6, calculus="stratonovich", typical=typical
+    )
+    path = BrownianPath.sample(0.0, 0.25, 2.0**-8, 1, seed=7)
+    solver = EulerMaruyamaSolver(config, wiener=path)
+    try:
+        solver.solve(equation, [0.5 * S])
+    except OverflowError:
+        return float("inf")
+    return solver.solution.results[0].discretization[-1]
+
+
+print(final(S))     # 4.17519379573...e-13: the Ito form with b b'/2 by hand agrees to 8e-13
+print(final(None))  # inf: the correction read off a 6e-6 chord blows the path up
+```
+
+The same holds for Milstein, SRK2, SRK3, SRK4, the theta scheme of
+`ZhanDuanLiLiSolver` and `StochasticEnsemble` (measured agreement `8.4e-13` at
+worst over the six). `SRK5Solver` and `GottwaldMelbourneSolver` read no slopes, so
+`typical` does not change them.
+
+**Limits.** No step fixes the rounding of the diffusion itself: a slope is
 resolved only to about `eps^(2/3) |b_i| / max(|x_j|, typical_j)`, so a weak
 coupling in a large row comes back with that error. Seeded paths at ordinary
 scales move by the difference between the old and new slopes, about `1e-10`

@@ -80,11 +80,15 @@ def order_step(order: int) -> float:
     References:
         Dennis and Schnabel (1983), Sec. 5.4 and Algorithm A5.4.1: the step
         that balances truncation against rounding, ``eps^(1/3)`` for a central
-        slope. Mikulski and Uhl (2026), arXiv:2608.11020: the error model
-        ``a_k r^2 + b_k eps / r^k`` of a second-order central stencil for the
-        ``k``-th derivative and its minimiser ``r ~ eps^(1/(k+2))``. Fornberg
-        (1988): the stencils' weights and their order of accuracy. See
-        ``docs/references.md``.
+        slope. Mikulski and Uhl (2026), arXiv:2608.11020, Sec. 3.2 and
+        Appendix B: the error ``E^(k) ~ a_k r^2 + b_k eps / r^k`` of a
+        second-order central stencil for the ``k``-th derivative and its
+        minimiser ``r_opt = C_k eps^(1/(k+2))``, ``C_k = (k b_k / (2
+        a_k))^(1/(k+2))``; we take ``C_k = 1``, as their Fig. 2a does, since
+        ``C_k`` depends on the field. Fornberg (1988): the central stencils of
+        accuracy two for orders one to four (read in the table that
+        reproduces them, Wikipedia, "Finite difference coefficient"; the AMS
+        copy was not retrievable). See ``docs/references.md``.
     """
     if not 1 <= order <= len(ORDER_STEPS):
         message = f"central steps are tabulated for orders 1 to 4, not {order}"

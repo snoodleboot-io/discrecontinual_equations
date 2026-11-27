@@ -118,8 +118,12 @@ configuration key:
 - `automatic_differentiation` (default) evaluates the field on truncated Taylor
   jets, giving **exact** derivatives to any order over real or complex directions.
   This makes the augmented curve Jacobian and every coefficient below exact.
-- `finite_difference_derivatives` is a fallback (central differences, first order
-  in practice, real directions only).
+- `finite_difference_derivatives` is a fallback for fields that cannot take jets:
+  central differences, each order `m` at its own relative step `eps^(1/(m+2))`
+  (`derivative_epsilon` imposes one step for all), complex directions split into
+  real ones, orders up to four. Its normal-form coefficients agree with automatic
+  differentiation to about `2.4e-7` relative on the test suite's scenarios
+  (DEQ-167).
 
 Automatic differentiation supports any field written in arithmetic
 (`+ - * / **`), which covers all polynomial and rational vector fields. A field
