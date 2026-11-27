@@ -386,11 +386,13 @@ class TestContinuationJacobian:
             1.0e-7,
             **_typical(scales, typical),
         )
-        derivative = provider.parameter_derivative(_state(scales), _PARAMETER)
         step = 1.0e-7 * _PARAMETER
         magnitude = _magnitude(scales, _state(scales)) + _PARAMETER**2
         allowance = _SLACK * _EPS * magnitude / step
-        assert np.all(np.abs(derivative - 2.0 * _PARAMETER) <= allowance)
+        # The step follows |lambda|: a negative parameter is as large as a positive.
+        for parameter in (_PARAMETER, -_PARAMETER):
+            derivative = provider.parameter_derivative(_state(scales), parameter)
+            assert np.all(np.abs(derivative - 2.0 * parameter) <= allowance), parameter
 
 
 @pytest.mark.parametrize(("scales", "typical"), _CASES)
