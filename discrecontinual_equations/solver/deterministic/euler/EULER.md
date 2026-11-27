@@ -26,22 +26,22 @@ EulerSolver
 ### EulerConfig
 
 ```python
-class EulerConfig(SolverConfig):
-    """Configuration for Euler method."""
+from discrecontinual_equations.solver.solver_config import DeterministicConfig
+from discrecontinual_equations.solver.deterministic.euler.euler_config import EulerConfig
 
-    start_time: float = 0.0
-    end_time: float = 1.0
-    step_size: float = 0.01
+config = EulerConfig(start_time=0.0, end_time=1.0, step_size=0.25)
+assert isinstance(config, DeterministicConfig)
+print(config.times.tolist())  # [0.0, 0.25, 0.5, 0.75, 1.0]
 ```
 
 ### EulerSolver
 
 ```python
-class EulerSolver(Solver):
-    """First-order explicit Euler method."""
+from discrecontinual_equations.solver.solver import Solver
+from discrecontinual_equations.solver.deterministic.euler.euler_solver import EulerSolver
 
-    def solve(self, equation: DifferentialEquation, initial_values: list[float]):
-        """Solve ODE using explicit Euler method."""
+# Built from an EulerConfig; solve(equation, initial_values) returns a Curve.
+assert issubclass(EulerSolver, Solver)
 ```
 
 ## UML Class Diagram
@@ -99,7 +99,13 @@ euler/
 ### Exponential Decay
 
 ```python
-from discrecontinual_equations.solver.deterministic.euler import EulerConfig, EulerSolver
+import math
+
+from discrecontinual_equations.differential_equation import DifferentialEquation
+from discrecontinual_equations.function.deterministic import DeterministicFunction
+from discrecontinual_equations.parameter import Parameter
+from discrecontinual_equations.variable import Variable
+
 
 # dy/dt = -k*y
 class ExponentialDecay(DeterministicFunction):
@@ -108,9 +114,16 @@ class ExponentialDecay(DeterministicFunction):
         k = self.parameters[0].value
         return [-k * y]
 
+
+y, t, k = Variable(name="y"), Variable(name="t"), Parameter(value=1.0, name="k")
+decay = ExponentialDecay([y], [k], [Variable(name="dy")], t)
+equation = DifferentialEquation(variables=[y], time=t, parameters=[k], derivative=decay)
+
 config = EulerConfig(start_time=0, end_time=5, step_size=0.1)
 solver = EulerSolver(config)
 solver.solve(equation, [1.0])  # y(0) = 1
+final = solver.solution.results[0].discretization[-1]
+print(f"y(5) = {final:.5f}, exact {math.exp(-5):.5f}")  # y(5) = 0.00515, exact 0.00674
 ```
 
 ### Harmonic Oscillator
@@ -123,9 +136,16 @@ class HarmonicOscillator(DeterministicFunction):
         omega = self.parameters[0].value
         return [v, -omega**2 * x]  # [dx/dt, dv/dt]
 
+
+x, v, omega = Variable(name="x"), Variable(name="v"), Parameter(value=1.0, name="omega")
+oscillator = HarmonicOscillator([x, v], [omega], [Variable(name="dx"), Variable(name="dv")], t)
+equation = DifferentialEquation(variables=[x, v], time=t, parameters=[omega], derivative=oscillator)
+
 config = EulerConfig(start_time=0, end_time=10, step_size=0.01)
 solver = EulerSolver(config)
 solver.solve(equation, [1.0, 0.0])  # x=1, v=0
+x10, v10 = (r.discretization[-1] for r in solver.solution.results)
+print(f"energy {0.5 * (x10**2 + v10**2):.4f}, exact 0.5")  # 0.5526: Euler gains energy
 ```
 
 ## Functionality Explanation
@@ -149,7 +169,7 @@ Where `h` is the step size and `t_{n+1} = t_n + h`.
 
 ### Stability Analysis
 
-- **Region of Stability**: Left half-plane for `|1 + hλ| ≤ 1`
+- **Region of Stability**: the disc `|1 + hλ| ≤ 1`, centred at `hλ = -1` with radius 1 (only part of the left half-plane)
 - **Dahlquist Barrier**: Cannot be A-stable beyond order 2
 - **Practical Stability**: Requires small step sizes for stiff problems
 
@@ -158,31 +178,26 @@ Where `h` is the step size and `t_{n+1} = t_n + h`.
 ### Single Time Step
 
 ```python
-def _euler_step(self, y, t, h, equation):
-    """Perform one Euler step."""
-    # Evaluate derivative
-    derivative = equation.derivative.eval(y, t)
+import numpy as np
 
-    # Euler update
-    y_new = y + h * np.array(derivative)
 
-    return y_new
+def euler_step(y, t, h, equation):
+    """One Euler step: the field at the start of the step, (t_n, y_n)."""
+    derivative = equation.derivative.eval(point=list(y), time=t)
+    return y + h * np.array(derivative)
 ```
 
 ### Complete Solving Process
 
 ```python
-def solve(self, equation, initial_values):
-    # Initialize
-    t = self.start_time
-    y = np.array(initial_values)
-    self.solution = Curve(...)
+# The whole solve on the decay equation, by hand: step along the config's grid.
+decay_equation = DifferentialEquation(variables=[y], time=t, parameters=[k], derivative=decay)
+grid = EulerConfig(start_time=0, end_time=5, step_size=0.1).times
+state = np.array([1.0])
+for t_n, t_next in zip(grid[:-1], grid[1:]):
+    state = euler_step(state, t_n, t_next - t_n, decay_equation)
 
-    # Time stepping
-    while t < self.end_time:
-        y = self._euler_step(y, t, self.step_size, equation)
-        t += self.step_size
-        self.solution.append([t, [], y.tolist()])
+print(f"{state[0]:.5f}")  # 0.00515, as EulerSolver gave
 ```
 
 ## Error Analysis

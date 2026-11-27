@@ -338,38 +338,41 @@ sequenceDiagram
 ## Quick Start
 
 ```python
-from discrecontinual_equations import DifferentialEquation, Variable, Parameter
-from discrecontinual_equations.function import DeterministicFunction
-from discrecontinual_equations.solver.euler import EulerConfig, EulerSolver
+import math
+
+from discrecontinual_equations.differential_equation import DifferentialEquation
+from discrecontinual_equations.function.deterministic import DeterministicFunction
+from discrecontinual_equations.parameter import Parameter
+from discrecontinual_equations.solver.deterministic.euler.euler_config import EulerConfig
+from discrecontinual_equations.solver.deterministic.euler.euler_solver import EulerSolver
+from discrecontinual_equations.variable import Variable
 
 # Define variables and parameters
 x = Variable(name="Position", abbreviation="x")
 t = Variable(name="Time", abbreviation="t")
-k = Parameter(name="Spring constant", value=1.0)
+k = Parameter(name="Decay constant", value=1.0)
 
-# Define the ODE: dx/dt = -k*x (harmonic oscillator)
-class HarmonicOscillator(DeterministicFunction):
+
+# Define the ODE: dx/dt = -k*x (exponential decay)
+class Decay(DeterministicFunction):
     def eval(self, point, time=None):
-        x_val = point[0]
-        return [-self.parameters[0].value * x_val]
+        return [-self.parameters[0].value * point[0]]
+
 
 # Create the differential equation
-oscillator = HarmonicOscillator(variables=[x], parameters=[k])
-equation = DifferentialEquation(
-    variables=[x],
-    time=t,
-    parameters=[k],
-    derivative=oscillator
-)
+decay = Decay(variables=[x], parameters=[k], results=[Variable(name="x'")], time=t)
+equation = DifferentialEquation(variables=[x], time=t, parameters=[k], derivative=decay)
 
 # Solve using Euler method
-config = EulerConfig(start_time=0, end_time=10, step_size=0.01)
-solver = EulerSolver(config)
-solver.solve(equation, [1.0])  # Initial condition x=1
+config = EulerConfig(start_time=0.0, end_time=10.0, step_size=0.01)
+solution = EulerSolver(config).solve(equation, [1.0])  # Initial condition x=1
 
 # Access results
-print(f"Final position: {solver.solution.results[0].discretization[-1]}")
+final = solution.results[0].discretization[-1]
+print(f"x(10) = {final:.4e}, exact {math.exp(-10.0):.4e}")
 ```
+
+prints `x(10) = 4.3171e-05, exact 4.5400e-05`: Euler's method is first order.
 
 ## Key Features
 

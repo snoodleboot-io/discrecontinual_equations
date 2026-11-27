@@ -28,23 +28,24 @@ SRK2Solver
 ### SRK2Config
 
 ```python
-class SRK2Config(StochasticConfig):
-    start_time: float = 0.0
-    end_time: float = 1.0
-    step_size: float = 0.01
-    random_seed: int | None = None
-    calculus: Literal["ito", "stratonovich"] = "ito"
+import inspect
+
+from discrecontinual_equations.solver.solver_config import StochasticConfig
+from discrecontinual_equations.solver.stochastic.runge_kutta import StochasticRungeKuttaSolver
+from discrecontinual_equations.solver.stochastic.srk2.srk2_config import SRK2Config
+from discrecontinual_equations.solver.stochastic.srk2.srk2_solver import SRK2Solver
+
+assert issubclass(SRK2Config, StochasticConfig)  # start_time, end_time, step_size, random_seed, calculus
+# The base class owns the stepping loop and the Wiener source; SRK2 supplies _step.
+assert issubclass(SRK2Solver, StochasticRungeKuttaSolver)
+print(inspect.signature(SRK2Solver.__init__))  # (self, solver_config, wiener=None)
 ```
 
 ### SRK2Solver
 
 ```python
-class SRK2Solver(StochasticRungeKuttaSolver):
-    def __init__(self, solver_config: SRK2Config, wiener: WienerSource | None = None): ...
-
-    @staticmethod
-    def _step(y, t, h, coefficients, increments) -> np.ndarray:
-        """One step of Kloeden-Platen (11.1.7)."""
+# One step of Kloeden-Platen (11.1.7): a static method of the solver.
+print(list(inspect.signature(SRK2Solver._step).parameters))
 ```
 
 `wiener` defaults to a `GaussianWienerSource` seeded from `random_seed`; a
@@ -73,8 +74,25 @@ stochastic/
 ## Example
 
 ```python
-from discrecontinual_equations.solver.stochastic.srk2.srk2_config import SRK2Config
-from discrecontinual_equations.solver.stochastic.srk2.srk2_solver import SRK2Solver
+from discrecontinual_equations.differential_equation import DifferentialEquation
+from discrecontinual_equations.function.stochastic import StochasticFunction
+from discrecontinual_equations.variable import Variable
+
+
+class GBM(StochasticFunction):
+    """dX = mu X dt + sigma X dW with mu = 1, sigma = 0.5."""
+
+    def eval(self, point, time=None):
+        return [1.0 * point[0]]
+
+    def diffusion(self, point, time=None):
+        return [0.5 * point[0]]
+
+
+x, t = Variable(name="x"), Variable(name="t")
+equation = DifferentialEquation(
+    variables=[x], time=t, parameters=[], derivative=GBM([x], [], [Variable(name="dx")], t)
+)
 
 # dX = mu X dt + sigma X dW
 config = SRK2Config(start_time=0.0, end_time=1.0, step_size=0.01, random_seed=42)

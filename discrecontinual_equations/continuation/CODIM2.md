@@ -44,20 +44,67 @@ See `codim2_normal_form.py` and `docs/api/center-manifold.md`.
 
 ## Usage
 
+The Bogdanov-Takens normal form `x' = y`, `y' = b1 + b2 y + x^2 - x y` has a Hopf
+curve `b1 = -b2^2`, `x = -sqrt(-b1)`, with frequency `sqrt(2 |b2|)`, that ends at the
+Bogdanov-Takens point `(b1, b2) = (0, 0)`. Continue it from the Hopf point at
+`b2 = -0.5`:
+
 ```python
-seed = CurveSeed(state=[...], parameter_a=..., frequency=...)  # a codim-1 point
+from pathlib import Path
+
+from sweet_tea.registry import Registry
+
+import discrecontinual_equations
+from discrecontinual_equations.continuation.codim2_builder import Codim2Driver, CurveSeed
+from discrecontinual_equations.continuation.codim2_config import Codim2Config
+from discrecontinual_equations.differential_equation import DifferentialEquation
+from discrecontinual_equations.function.deterministic import DeterministicFunction
+from discrecontinual_equations.parameter import Parameter
+from discrecontinual_equations.variable import Variable
+
+# The builders resolve their strategies by name: fill the registry once.
+Registry.fill_registry(
+    path=str(Path(discrecontinual_equations.__file__).parent),
+    module="discrecontinual_equations",
+    exclude=["*.tests", "*.examples", "*.plot"],
+)
+
+
+class BogdanovTakens(DeterministicFunction):
+    def eval(self, point, time=None):
+        b1, b2 = self.parameters[0].value, self.parameters[1].value
+        x, y = point
+        return [y, b1 + b2 * y + x * x - x * y]
+
+
+parameters = [Parameter(name="b1", value=-0.25), Parameter(name="b2", value=-0.5)]
+state = [Variable(name="x"), Variable(name="y")]
+equation = DifferentialEquation(
+    variables=state,
+    time=Variable(name="t"),
+    parameters=parameters,
+    derivative=BogdanovTakens(state, parameters, [Variable(name="x'"), Variable(name="y'")]),
+)
+
+seed = CurveSeed(state=[-0.5, 0.0], parameter_a=-0.25, frequency=1.0)  # a Hopf point
 config = Codim2Config(
     continuation_parameter_index=0,
     second_parameter_index=1,
     curve="hopf",
     codim2_detectors=["bogdanov_takens"],
-    initial_parameter=...,
+    initial_parameter=-0.5,
     direction=1,
+    parameter_lower_bound=-0.6,
+    parameter_upper_bound=0.05,
 )
 result = Codim2Driver.run(config, equation, seed)
-result.points  # detected Codim2Point objects
-result.curve  # the continued curve as an augmented Branch
+for point in result.points:  # detected Codim2Point objects
+    print(point.kind, f"b1={point.parameter_a:+.1e}, b2={point.parameter_b:+.1e}")
+print(len(result.curve), "points on the curve")  # the continued, augmented Branch
 ```
+
+prints `bogdanov_takens b1=-1.6e-07, b2=-4.0e-04` and `49 points on the curve`: the
+point is located on the curve `b1 = -b2^2`, within `4e-4` of the exact `(0, 0)`.
 
 The seed is a codim-1 fold or Hopf point (found by ordinary continuation); the
 driver builds the eigen/null vector, continues the curve, and analyzes it.

@@ -28,15 +28,18 @@ SRK4Solver
 ## Core Classes
 
 ```python
-class SRK4Config(StochasticConfig): ...
+import inspect
 
-class SRK4Solver(StochasticRungeKuttaSolver):
-    def __init__(self, solver_config: SRK4Config, wiener: WienerSource | None = None): ...
-    def _check_dimension(self, dimension: int) -> None: ...  # raises for dimension != 1
+from discrecontinual_equations.solver.solver_config import StochasticConfig
+from discrecontinual_equations.solver.stochastic.runge_kutta import StochasticRungeKuttaSolver
+from discrecontinual_equations.solver.stochastic.srk4.srk4_config import SRK4Config
+from discrecontinual_equations.solver.stochastic.srk4.srk4_solver import SRK4Solver
 
-    @staticmethod
-    def _step(y, t, h, coefficients, increments) -> np.ndarray:
-        """One step of Kloeden-Platen (15.1.4)."""
+assert issubclass(SRK4Config, StochasticConfig)  # start_time, end_time, step_size, random_seed, calculus
+# The base class owns the stepping loop and the Wiener source; SRK4 supplies _step.
+assert issubclass(SRK4Solver, StochasticRungeKuttaSolver)
+print(inspect.signature(SRK4Solver.__init__))  # (self, solver_config, wiener=None)
+print(list(inspect.signature(SRK4Solver._step).parameters))
 ```
 
 ## Folder Structure
@@ -52,8 +55,27 @@ srk4/
 ## Example
 
 ```python
-from discrecontinual_equations.solver.stochastic.srk4.srk4_config import SRK4Config
-from discrecontinual_equations.solver.stochastic.srk4.srk4_solver import SRK4Solver
+from discrecontinual_equations.differential_equation import DifferentialEquation
+from discrecontinual_equations.function.stochastic import StochasticFunction
+from discrecontinual_equations.variable import Variable
+
+
+class GBM(StochasticFunction):
+    """dX = mu X dt + sigma X dW with mu = 1, sigma = 0.5."""
+
+    def eval(self, point, time=None):
+        return [1.0 * point[0]]
+
+    def diffusion(self, point, time=None):
+        return [0.5 * point[0]]
+
+
+x, t = Variable(name="x"), Variable(name="t")
+equation = DifferentialEquation(
+    variables=[x], time=t, parameters=[], derivative=GBM([x], [], [Variable(name="dx")], t)
+)
+
+scalar_equation = equation
 
 # Choose SRK4 when the quantity of interest is an expectation E[g(X_T)].
 config = SRK4Config(start_time=0.0, end_time=1.0, step_size=0.01, random_seed=42)

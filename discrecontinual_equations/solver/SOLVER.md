@@ -32,29 +32,31 @@ Solver (Abstract Base)
 ### Solver (Abstract Base Class)
 
 ```python
-class Solver:
-    """Abstract base class for numerical differential equation solvers."""
+import inspect
 
-    solution: Curve | None = None
+from discrecontinual_equations.solver.solver import Solver
 
-    def __init__(self, solver_config: SolverConfig):
-        """Initialize with solver configuration."""
-
-    @property
-    def solver_config(self) -> SolverConfig:
-        """Get solver configuration."""
-
-    def solve(self, equation: DifferentialEquation, initial_values: list[float]):
-        """Solve the differential equation."""
-        raise NotImplementedError()
+# Built from a configuration; one entry point, which returns a Curve.
+print(inspect.signature(Solver.__init__))  # (self, solver_config: ...SolverConfig)
+print(inspect.signature(Solver.solve))  # (self, equation: ..., initial_values: list[float])
 ```
 
 ### SolverConfig (Abstract Base Class)
 
 ```python
-class SolverConfig(BaseModel):
-    """Abstract base class for solver configuration objects."""
-    pass
+from pydantic import BaseModel
+
+from discrecontinual_equations.solver.solver_config import (
+    AdaptiveConfig,
+    FixedStepConfig,
+    SolverConfig,
+    StochasticConfig,
+)
+
+# SolverConfig is a pydantic model; the three families derive from it.
+assert issubclass(SolverConfig, BaseModel)
+assert all(issubclass(c, SolverConfig) for c in (FixedStepConfig, AdaptiveConfig))
+assert issubclass(StochasticConfig, FixedStepConfig)
 ```
 
 ## Deterministic Solvers (ODEs)
@@ -161,14 +163,14 @@ the derivations are in Kloeden and Platen (1992).
 - No drift correction needed
 
 **Stratonovich SDEs**: `dX = μ(X,t)dt + σ(X,t) ∘ dW`
-- Equivalent to Ito with modified drift: `μ_corrected = μ - (1/2)σ∂σ/∂x`
+- Equivalent to Ito with modified drift: `μ_corrected = μ + (1/2)σ∂σ/∂x`
 - Natural interpretation for physical systems
 - Symmetric integration of stochastic terms
 
 ### Automatic Conversion
 
 Stochastic solvers automatically handle calculus conversion:
-- For Stratonovich input: Apply drift correction `μ_corrected = μ - (1/2)σ∂σ/∂x`
+- For Stratonovich input: Apply drift correction `μ_corrected = μ + (1/2)σ∂σ/∂x`
 - For Ito input: Use formulas as specified
 - Numerical differentiation used for Jacobian computation
 
@@ -198,39 +200,68 @@ Stochastic solvers automatically handle calculus conversion:
 ### Deterministic ODE
 
 ```python
-from discrecontinual_equations.solver.deterministic.euler import EulerConfig, EulerSolver
+from discrecontinual_equations.differential_equation import DifferentialEquation
+from discrecontinual_equations.function.deterministic import DeterministicFunction
+from discrecontinual_equations.solver.deterministic.euler.euler_config import EulerConfig
+from discrecontinual_equations.solver.deterministic.euler.euler_solver import EulerSolver
+from discrecontinual_equations.variable import Variable
+
+
+class Decay(DeterministicFunction):
+    def eval(self, point, time=None):
+        return [-point[0]]  # y' = -y
+
+
+y, t = Variable(name="y"), Variable(name="t")
+equation = DifferentialEquation(
+    variables=[y], time=t, parameters=[], derivative=Decay([y], [], [Variable(name="dy")], t)
+)
 
 config = EulerConfig(start_time=0, end_time=10, step_size=0.01)
-solver = EulerSolver(config)
-solver.solve(equation, [1.0])
+curve = EulerSolver(config).solve(equation, [1.0])
 ```
 
 ### Adaptive ODE
 
 ```python
-from discrecontinual_equations.solver.deterministic.dormand_prince import DormandPrinceConfig, DormandPrinceSolver
+from discrecontinual_equations.solver.deterministic.dormand_prince.dormand_prince_config import DormandPrinceConfig
+from discrecontinual_equations.solver.deterministic.dormand_prince.dormand_prince_solver import DormandPrinceSolver
 
 config = DormandPrinceConfig(
     start_time=0, end_time=10,
     initial_step_size=0.1,
     absolute_tolerance=1e-8,
-    relative_tolerance=1e-6
+    relative_tolerance=1e-6,
 )
-solver = DormandPrinceSolver(config)
-solver.solve(equation, [1.0])
+curve = DormandPrinceSolver(config).solve(equation, [1.0])
 ```
 
 ### Stochastic SDE
 
 ```python
-from discrecontinual_equations.solver.stochastic.srk2 import SRK2Config, SRK2Solver
+from discrecontinual_equations.function.stochastic import StochasticFunction
+from discrecontinual_equations.solver.stochastic.srk2.srk2_config import SRK2Config
+from discrecontinual_equations.solver.stochastic.srk2.srk2_solver import SRK2Solver
 
+
+class Multiplicative(StochasticFunction):
+    def eval(self, point, time=None):  # drift
+        return [0.0]
+
+    def diffusion(self, point, time=None):
+        return [0.5 * point[0]]
+
+
+x = Variable(name="x")
+stochastic_equation = DifferentialEquation(
+    variables=[x], time=t, parameters=[],
+    derivative=Multiplicative([x], [], [Variable(name="dx")], t),
+)
 config = SRK2Config(
     start_time=0, end_time=1, step_size=0.001,
-    calculus="stratonovich", random_seed=42
+    calculus="stratonovich", random_seed=42,
 )
-solver = SRK2Solver(config)
-solver.solve(stochastic_equation, [0.0])
+curve = SRK2Solver(config).solve(stochastic_equation, [1.0])
 ```
 
 ## Algorithm Selection Guide
@@ -281,30 +312,32 @@ solver.solve(stochastic_equation, [0.0])
 
 ### Adaptive Step Size Control
 
-```python
-error_estimate = ||y_{higher} - y_{lower}||
-scaled_error = error_estimate / (atol + rtol * ||y||)
+```text
+ratio = sqrt(mean((err_i / (atol + rtol * max(|y_i|, |y_new_i|)))^2))   # RMS norm
+alpha = 1/q - 0.75 * beta          # q = order of the error estimate + 1
 
-if scaled_error <= 1:
+if ratio <= 1:
     accept_step()
-    new_h = h * safety * (scaled_error)^(-1/(min_order+1))
+    new_h = h * clip(safety * ratio^(-alpha) * ratio_old^beta, 0.2, 10)   # PI control
 else:
     reject_step()
-    new_h = h * safety * (scaled_error)^(-1/(min_order+1))
+    new_h = h * max(0.2, safety * ratio^(-alpha))
 ```
 
 ### Stochastic Calculus Conversion
 
 For Stratonovich → Ito conversion:
 ```python
-# Numerical differentiation for drift correction
-eps = 1e-8
-sigma_plus = diffusion(x + eps)
-sigma_minus = diffusion(x - eps)
-dsigma_dx = (sigma_plus - sigma_minus) / (2 * eps)
+import numpy as np
 
-# Apply correction
-mu_corrected = mu - 0.5 * diffusion * dsigma_dx
+# Stratonovich -> Ito for scalar noise: add half of sigma * dsigma/dx.
+def ito_drift(mu, sigma, x, eps=1e-6):
+    dsigma_dx = (sigma(x + eps) - sigma(x - eps)) / (2 * eps)
+    return mu(x) + 0.5 * sigma(x) * dsigma_dx
+
+
+# dX = 0 dt + 0.5 X o dW has Ito drift 0.125 X: at X = 2 that is 0.25.
+print(round(ito_drift(lambda x: 0.0, lambda x: 0.5 * x, 2.0), 6))  # 0.25
 ```
 
 ## References
@@ -350,8 +383,7 @@ classDiagram
     class FixedStepConfig {
         +start_time: float
         +end_time: float
-        +number_of_steps: int | None
-        +step_size: float | None
+        +step_size: float
     }
 
     class AdaptiveConfig {
@@ -404,31 +436,37 @@ classDiagram
 ### Basic ODE Solving
 
 ```python
-from discrecontinual_equations.solver.euler import EulerConfig, EulerSolver
-from discrecontinual_equations import DifferentialEquation, Variable, Parameter
-from discrecontinual_equations.function import DeterministicFunction
+from discrecontinual_equations.solver.deterministic.euler.euler_config import EulerConfig
+from discrecontinual_equations.solver.deterministic.euler.euler_solver import EulerSolver
+from discrecontinual_equations.differential_equation import DifferentialEquation
+from discrecontinual_equations.function.deterministic import DeterministicFunction
+from discrecontinual_equations.variable import Variable
+
 
 # Define ODE: dy/dt = -y
 class ExponentialDecay(DeterministicFunction):
     def eval(self, point, time=None):
         return [-point[0]]
 
+
 # Setup
-y = Variable(name="y")
-equation = DifferentialEquation(variables=[y], derivative=ExponentialDecay(variables=[y]))
+y, t = Variable(name="y"), Variable(name="t")
+decay = ExponentialDecay([y], [], [Variable(name="dy")], t)
+equation = DifferentialEquation(variables=[y], time=t, parameters=[], derivative=decay)
 
 # Solve
 config = EulerConfig(start_time=0, end_time=5, step_size=0.1)
 solver = EulerSolver(config)
 solver.solve(equation, [1.0])  # y(0) = 1
 
-print(f"Final value: {solver.solution.results[0].discretization[-1]}")
+print(f"Final value: {solver.solution.results[0].discretization[-1]:.5f}")  # 0.00515
 ```
 
 ### Adaptive Solving with Error Control
 
 ```python
-from discrecontinual_equations.solver.dormand_prince import DormandPrinceConfig, DormandPrinceSolver
+from discrecontinual_equations.solver.deterministic.dormand_prince.dormand_prince_config import DormandPrinceConfig
+from discrecontinual_equations.solver.deterministic.dormand_prince.dormand_prince_solver import DormandPrinceSolver
 
 # Adaptive solver with error tolerances
 config = DormandPrinceConfig(
@@ -436,7 +474,7 @@ config = DormandPrinceConfig(
     end_time=10,
     initial_step_size=0.1,
     absolute_tolerance=1e-8,
-    relative_tolerance=1e-6
+    relative_tolerance=1e-6,
 )
 
 solver = DormandPrinceSolver(config)
@@ -446,8 +484,9 @@ solver.solve(equation, [1.0])
 ### Stochastic Differential Equations
 
 ```python
-from discrecontinual_equations.solver.stochastic.euler_maruyama import EulerMaruyamaConfig, EulerMaruyamaSolver
-from discrecontinual_equations.function import StochasticFunction
+from discrecontinual_equations.function.stochastic import StochasticFunction
+from discrecontinual_equations.solver.stochastic.euler_maruyama.euler_maruyama_config import EulerMaruyamaConfig
+from discrecontinual_equations.solver.stochastic.euler_maruyama.euler_maruyama_solver import EulerMaruyamaSolver
 
 
 class BrownianMotion(StochasticFunction):
@@ -463,11 +502,13 @@ config = EulerMaruyamaConfig(
     start_time=0,
     end_time=1,
     step_size=0.01,
-    random_seed=42
+    random_seed=42,
 )
 
+x = Variable(name="x")
+brownian = BrownianMotion([x], [], [Variable(name="dx")], t)
 solver = EulerMaruyamaSolver(config)
-solver.solve(DifferentialEquation(variables=[x], derivative=BrownianMotion(variables=[x])), [0.0])
+solver.solve(DifferentialEquation(variables=[x], time=t, parameters=[], derivative=brownian), [0.0])
 ```
 
 ## Configuration Parameters
@@ -479,8 +520,7 @@ solver.solve(DifferentialEquation(variables=[x], derivative=BrownianMotion(varia
 
 ### Fixed-Step Parameters
 
-- `step_size`: Fixed integration step size
-- `number_of_steps`: Alternative to step_size
+- `step_size`: Fixed integration step size (default 0.01); the interval must be a whole number of steps
 
 ### Adaptive Parameters
 
@@ -515,7 +555,7 @@ solver.solve(DifferentialEquation(variables=[x], derivative=BrownianMotion(varia
 
 ## Error Control
 
-Adaptive methods use embedded Runge-Kutta pairs to estimate local truncation error:
+Adaptive methods use embedded Runge-Kutta pairs to estimate local truncation error (see *Adaptive Step Size Control* above for the PI controller):
 
 ```
 error_estimate = ||y_{higher} - y_{lower}||

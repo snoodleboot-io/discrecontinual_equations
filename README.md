@@ -51,59 +51,106 @@ uv add discrecontinual-equations
 
 ### Solving ODEs
 
+A harmonic oscillator, $x'' = -kx$, written as the first-order system
+$x' = v$, $v' = -kx$ and solved with the forward Euler method:
+
 ```python
+import math
+
+from discrecontinual_equations.differential_equation import DifferentialEquation
 from discrecontinual_equations.function.deterministic import DeterministicFunction
 from discrecontinual_equations.parameter import Parameter
 from discrecontinual_equations.solver.deterministic.euler.euler_config import EulerConfig
 from discrecontinual_equations.solver.deterministic.euler.euler_solver import EulerSolver
 from discrecontinual_equations.variable import Variable
 
-# Define variables and parameters
-x = Variable(name="Position", abbreviation="x")
-t = Variable(name="Time", abbreviation="t")
-k = Parameter(name="Spring Constant", value=1.0)
 
-# Create harmonic oscillator function
 class HarmonicOscillator(DeterministicFunction):
     def eval(self, point, time=None):
-        x_val, v_val = point  # position and velocity
-        return [v_val, -self.parameters[0].value * x_val]  # [dx/dt, dv/dt]
+        position, velocity = point
+        return [velocity, -self.parameters[0].value * position]  # [dx/dt, dv/dt]
 
-# Set up and solve
-config = EulerConfig(start_time=0, end_time=10, step_size=0.01)
-solver = EulerSolver(config)
-# ... solve equation
+
+x = Variable(name="Position", abbreviation="x")
+v = Variable(name="Velocity", abbreviation="v")
+t = Variable(name="Time", abbreviation="t")
+k = Parameter(name="Spring Constant", value=1.0)
+oscillator = HarmonicOscillator(
+    variables=[x, v], parameters=[k], results=[Variable(name="x'"), Variable(name="v'")], time=t
+)
+equation = DifferentialEquation(variables=[x, v], time=t, parameters=[k], derivative=oscillator)
+
+config = EulerConfig(start_time=0.0, end_time=10.0, step_size=0.01)
+solution = EulerSolver(config).solve(equation, [1.0, 0.0])  # x(0) = 1, v(0) = 0
+position = solution.results[0].discretization
+print(f"x(10) = {position[-1]:.4f}, exact {math.cos(10.0):.4f}")
 ```
+
+prints `x(10) = -0.8823, exact -0.8391`: forward Euler is first order, and on an
+oscillator it slowly gains energy.
 
 ### Solving SDEs
 
+Geometric Brownian motion $dX = \mu X\,dt + \sigma X \circ dW$ in the
+Stratonovich sense, with the two-stage stochastic Runge-Kutta scheme:
+
 ```python
+from discrecontinual_equations.function.stochastic import StochasticFunction
 from discrecontinual_equations.solver.stochastic.srk2.srk2_config import SRK2Config
 from discrecontinual_equations.solver.stochastic.srk2.srk2_solver import SRK2Solver
 
-# Geometric Brownian motion with Stratonovich calculus
-config = SRK2Config(
-    start_time=0, end_time=1, step_size=0.001,
-    calculus="stratonovich", random_seed=42
+
+class GeometricBrownianMotion(StochasticFunction):
+    def eval(self, point, time=None):  # the drift
+        return [self.parameters[0].value * point[0]]
+
+    def diffusion(self, point, time=None):  # the noise coefficient
+        return [self.parameters[1].value * point[0]]
+
+
+X = Variable(name="Price", abbreviation="X")
+mu, sigma = Parameter(name="mu", value=0.1), Parameter(name="sigma", value=0.2)
+gbm = GeometricBrownianMotion(
+    variables=[X], parameters=[mu, sigma], results=[Variable(name="dX")], time=t
 )
-solver = SRK2Solver(config)
-# ... solve stochastic equation
+sde = DifferentialEquation(variables=[X], time=t, parameters=[mu, sigma], derivative=gbm)
+
+config = SRK2Config(
+    start_time=0.0, end_time=1.0, step_size=0.001,
+    calculus="stratonovich", random_seed=42,
+)
+path = SRK2Solver(config).solve(sde, [1.0])
+print(f"X(1) = {path.results[0].discretization[-1]:.4f}")
 ```
 
+prints `X(1) = 0.7036`. Run again with the same `random_seed` and the
+path repeats.
+
 ### Advanced Plotting
+
+Continuing the ODE example: the oscillator's phase portrait, and the power
+spectrum of its position.
 
 ```python
 from discrecontinual_equations.plot.phase_plot import PhasePlot
 from discrecontinual_equations.plot.spectrum_plot import SpectrumPlot
 
-# Phase space analysis
-phase_plot = PhasePlot(output_dir="./plots")
-phase_plot.plot(x_variable, y_variable, title="Phase Portrait")
+# Phase space analysis: position against velocity
+phase_plot = PhasePlot(output_dir="./plots", output_format="html")
+phase_plot.plot(solution.results[0], solution.results[1], title="Phase Portrait")
 
-# Frequency analysis
-spectrum_plot = SpectrumPlot(output_dir="./plots")
-spectrum_plot.plot_fft(signal, dt=0.01, title="Power Spectrum")
+# Frequency analysis: one-sided power spectrum, in squared signal units
+spectrum_plot = SpectrumPlot(output_dir="./plots", output_format="html")
+spectrum_plot.plot_fft(solution.results[0], dt=0.01, title="Power Spectrum")
+peak = max(spectrum_plot.figure.data[0].y)
+print(f"peak power {peak:.3f}")
 ```
+
+writes both figures as HTML under `./plots` (the default `output_format="png"`
+needs kaleido), prints where it saved the spectrum, then `peak power 0.355`. A sine
+of amplitude $A$ on a frequency bin would peak at its mean square $A^2/2$, about
+0.5 here; the oscillator's $1/2\pi \approx 0.159$ Hz falls between bins 0.1 Hz
+apart, so its power spreads over the neighbours.
 
 ## Architecture
 
@@ -136,7 +183,7 @@ Solver (base)
 - No drift correction needed
 
 **Stratonovich SDEs**: `dX = μ(X,t)dt + σ(X,t) ∘ dW`
-- Equivalent to Ito with modified drift: `μ_corrected = μ - (1/2)σ ∂σ/∂x`
+- Equivalent to Ito with modified drift: `μ_Ito = μ + (1/2)σ ∂σ/∂x`
 - Natural for physical systems
 
 ## Examples

@@ -26,27 +26,24 @@ EulerMaruyamaSolver
 ### EulerMaruyamaConfig
 
 ```python
-class EulerMaruyamaConfig(SolverConfig):
-    """Configuration for Euler-Maruyama method."""
+from discrecontinual_equations.solver.solver_config import StochasticConfig
+from discrecontinual_equations.solver.stochastic.euler_maruyama.euler_maruyama_config import EulerMaruyamaConfig
 
-    start_time: float = 0.0
-    end_time: float = 1.0
-    step_size: float = 0.01
-    random_seed: int | None = None
-    calculus: Literal["ito", "stratonovich"] = "ito"
+# start_time, end_time, step_size, random_seed and calculus ("ito" by default).
+config = EulerMaruyamaConfig(end_time=1.0, step_size=0.25, random_seed=0)
+assert isinstance(config, StochasticConfig)
+print(config.calculus, config.times.tolist())  # ito [0.0, 0.25, 0.5, 0.75, 1.0]
 ```
 
 ### EulerMaruyamaSolver
 
 ```python
-class EulerMaruyamaSolver(Solver):
-    """Euler-Maruyama method for SDEs."""
+from discrecontinual_equations.solver.solver import Solver
+from discrecontinual_equations.solver.stochastic.euler_maruyama.euler_maruyama_solver import EulerMaruyamaSolver
 
-    def solve(self, equation: DifferentialEquation, initial_values: list[float]):
-        """Solve SDE using Euler-Maruyama method."""
-
-    def _apply_calculus_correction(self, drift, diffusion, point):
-        """Apply Ito ↔ Stratonovich conversion."""
+# solve(equation, initial_values) returns a Curve. The Stratonovich correction is
+# applied by ItoCoefficients (solver/stochastic/coefficients.py).
+assert issubclass(EulerMaruyamaSolver, Solver)
 ```
 
 ## UML Class Diagram
@@ -104,7 +101,10 @@ euler_maruyama/
 ### Basic Brownian Motion
 
 ```python
-from discrecontinual_equations.solver.stochastic.euler_maruyama import EulerMaruyamaConfig, EulerMaruyamaSolver
+from discrecontinual_equations.differential_equation import DifferentialEquation
+from discrecontinual_equations.function.stochastic import StochasticFunction
+from discrecontinual_equations.variable import Variable
+
 
 # dX = μ dt + σ dW (Brownian motion with drift)
 class BrownianMotion(StochasticFunction):
@@ -114,9 +114,15 @@ class BrownianMotion(StochasticFunction):
     def diffusion(self, point, time=None):
         return [0.2]  # Constant volatility σ = 0.2
 
+
+x, t = Variable(name="x"), Variable(name="t")
+equation = DifferentialEquation(
+    variables=[x], time=t, parameters=[],
+    derivative=BrownianMotion([x], [], [Variable(name="dx")], t),
+)
 config = EulerMaruyamaConfig(
     start_time=0, end_time=10, step_size=0.01,
-    calculus="ito", random_seed=42
+    calculus="ito", random_seed=42,
 )
 
 solver = EulerMaruyamaSolver(config)
@@ -134,15 +140,20 @@ class GeometricBM(StochasticFunction):
 
     def diffusion(self, point, time=None):
         x = point[0]
-        return [0.2 * x]   # Volatility: 20%
+        return [0.2 * x]  # Volatility: 20%
 
+
+equation = DifferentialEquation(
+    variables=[x], time=t, parameters=[],
+    derivative=GeometricBM([x], [], [Variable(name="dx")], t),
+)
 config = EulerMaruyamaConfig(
     start_time=0, end_time=1, step_size=0.001,
-    calculus="ito", random_seed=123
+    calculus="ito", random_seed=123,
 )
 
 solver = EulerMaruyamaSolver(config)
-solver.solve(equation, [100.0])  # Start with $100
+curve = solver.solve(equation, [100.0])  # Start with $100
 ```
 
 ## Functionality Explanation
@@ -191,38 +202,39 @@ rotating Ornstein-Uhlenbeck process with coupled constant noise.
 ### Single Time Step
 
 ```python
-def _euler_maruyama_step(self, y, t, dt, equation):
-    # Evaluate drift and diffusion
-    drift = equation.derivative.eval(y, t)
-    diffusion = equation.derivative.diffusion(y, t)
+import numpy as np
 
-    # Apply calculus correction if needed
-    if self.calculus == "stratonovich":
-        drift = self._apply_stratonovich_correction(drift, diffusion, y)
 
-    # Generate Wiener increment
-    dW = np.random.normal(0, np.sqrt(dt), len(y))
+def euler_maruyama_step(y, t, dt, drift, diffusion, generator):
+    """One step: drift and diffusion frozen at (t_n, y_n), one N(0, dt) per driver."""
+    delta_w = generator.normal(0, np.sqrt(dt), size=len(y))
+    return y + np.array(drift(y, t)) * dt + np.array(diffusion(y, t)) * delta_w
 
-    # Euler-Maruyama update
-    y_new = y + np.array(drift) * dt + np.array(diffusion) * dW
 
-    return y_new
+# The whole Ito solve by hand: the solver draws from default_rng(random_seed) too,
+# so the path is the solver's.
+gbm = equation.derivative
+generator = np.random.default_rng(123)
+y = np.array([100.0])
+for t_n in config.times[:-1]:
+    y = euler_maruyama_step(y, t_n, config.dt, gbm.eval, gbm.diffusion, generator)
+print(y[0] == curve.results[0].discretization[-1])  # True
 ```
 
 ### Stratonovich Correction
 
 ```python
-def _apply_stratonovich_correction(self, drift, diffusion, point):
-    """Convert Ito to Stratonovich calculus."""
-    eps = 1e-8
-    # Numerical differentiation
-    diff_plus = equation.derivative.diffusion(point + eps, t)
-    diff_minus = equation.derivative.diffusion(point - eps, t)
-    dsigma_dx = (diff_plus - diff_minus) / (2 * eps)
-
+def stratonovich_drift(drift, diffusion, y, t, eps=1e-6):
+    """The Ito drift of a Stratonovich equation with diagonal noise."""
+    dsigma_dx = (np.array(diffusion(y + eps, t)) - np.array(diffusion(y - eps, t))) / (2 * eps)
     # Apply correction: added, never subtracted (DEQ-27)
-    corrected_drift = drift + 0.5 * diffusion * dsigma_dx
-    return corrected_drift
+    return np.array(drift(y, t)) + 0.5 * np.array(diffusion(y, t)) * dsigma_dx
+
+
+# Read as Stratonovich, the same equation has Ito drift 0.05 x + 0.02 x = 0.07 x.
+print(np.round(stratonovich_drift(gbm.eval, gbm.diffusion, np.array([100.0]), 0.0), 6))  # [7.]
+strat = EulerMaruyamaSolver(config.model_copy(update={"calculus": "stratonovich"}))
+print(f"{strat.solve(equation, [100.0]).results[0].discretization[-1]:.4f}")  # 120.8041, same path
 ```
 
 ## Performance Characteristics
