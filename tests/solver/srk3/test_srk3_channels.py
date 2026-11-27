@@ -13,12 +13,12 @@
   analytic derivatives, on a time-dependent full-matrix noise: the difference
   must fall like ``h^2``. A coefficient off by a constant factor gives ``h`` (an
   ``I_(j,k)`` term) or ``h^(3/2)`` (an ``I_(j,k,l)`` or ``I_(j,0)`` one).
-* **Done when, single channel.** A scalar run is the run on main, bit for bit
-  (hashes recorded on main @ 8a76b6a), and a ``1 x 1`` matrix noise through the
-  several-channel step agrees with it to rounding.
+* **Done when, single channel.** A scalar run is the run on main (recorded on
+  main @ 8a76b6a as hashes; since DEQ-118 held as values to 1e-10, as the
+  Stratonovich runs read a central-difference slope), and a ``1 x 1`` matrix
+  noise through the several-channel step agrees with it to rounding.
 """
 
-import hashlib
 import warnings
 
 import numpy as np
@@ -304,30 +304,46 @@ class TestDeterministicPart:
         assert slope(table) > 2.7, table
 
 
-# sha256 prefixes of scalar geometric Brownian motion runs on main. Bits are a fair
-# pin here (DEQ-160): the drift mu x and diffusion sigma x are linear, the scalar
-# step (Kloeden-Platen (11.2.1)) only adds, multiplies, divides and takes sqrt(h),
-# and dW, dZ are the RNG's normals times sqrt(h) and h sqrt(h) - each operation
-# IEEE-exact, so no CPU or libm can round them differently.
-_MAIN_HASHES = [
-    "f0e077d20d0f39df",
-    "9954679e7aaca142",
-    "ec87e4889b1ff8ae",
-    "301a0800658f76f1",
-    "ef2356cbd7d83e49",
-    "ded78480fe1f6bfb",
-    "7090d4873835f78d",
+# The final values of scalar geometric Brownian motion runs, three Ito and three
+# Stratonovich seeds and one on a given path, held to _RECORDED rather than to
+# their bits. The Ito runs never read a slope and have not moved since main. The
+# Stratonovich runs take the Ito drift (mu + (1/2) sigma b') x, and b' is a
+# central difference (ItoCoefficients.diagonal_slopes), so they move with the
+# slope step: DEQ-118's relative step eps^(1/3) max(|x|, 1), over the width
+# actually stepped, moved them by at most 1e-11 relative against
+# _MAIN_BEFORE_DEQ118 (the old step's 2 h divisor cost the linear b' up to 1.4e-10
+# of rounding; the new one recovers sigma exactly). That step comes from np.cbrt,
+# which no standard requires to be correctly rounded, so the values are not
+# IEEE-exact on every machine. A change to the scheme moves them by far more: a
+# drift or diffusion scaled by 1 + 1e-8 fails every run it touches.
+_RECORDED = 1.0e-10
+_SLOPE_STEP_CHANGE = 1.0e-10
+_MAIN = [
+    1.3125377431258414,
+    0.6686415808793448,
+    2.2648889496592957,
+    1.4876872763911837,
+    0.75771939362538,
+    2.5662053692638938,
+    2.813586711970758,
 ]
-
-
-def _digest(solver):
-    values = np.array(solver.solution.results[0].discretization)
-    return hashlib.sha256(values.tobytes()).hexdigest()[:16]
+# Recorded on main (the sha256 pins of DEQ-66, #54) with the absolute slope step
+# of 1e-6 that DEQ-118 replaced.
+_MAIN_BEFORE_DEQ118 = [
+    1.3125377431258414,
+    0.6686415808793448,
+    2.2648889496592957,
+    1.487687276376754,
+    0.7577193936231255,
+    2.5662053692747233,
+    2.813586711970758,
+]
+_POINTS = [21] * 6 + [17]
 
 
 class TestSingleChannelUnchanged:
-    def test_scalar_runs_are_bit_identical_to_main(self):
-        digests = []
+    def test_scalar_runs_are_the_values_of_main(self):
+        paths = []
         for calculus in ["ito", "stratonovich"]:
             for seed in [0, 7, 12345]:
                 solver = SRK3Solver(
@@ -342,15 +358,23 @@ class TestSingleChannelUnchanged:
                     GeometricBrownianMotionCase(calculus=calculus).equation(),
                     [1.0],
                 )
-                digests.append(_digest(solver))
+                paths.append(solver.solution.results[0].discretization)
         path = BrownianPath.sample(0.0, 1.0, 2**-8, 1, seed=3)
         solver = SRK3Solver(
             SRK3Config(end_time=1.0, step_size=2**-4, random_seed=1),
             wiener=path,
         )
         solver.solve(GeometricBrownianMotionCase().equation(), [1.0])
-        digests.append(_digest(solver))
-        assert digests == _MAIN_HASHES
+        paths.append(solver.solution.results[0].discretization)
+        assert [len(values) for values in paths] == _POINTS
+        final = [values[-1] for values in paths]
+        np.testing.assert_allclose(final, _MAIN, rtol=_RECORDED, atol=0.0)
+        np.testing.assert_allclose(
+            final,
+            _MAIN_BEFORE_DEQ118,
+            rtol=_SLOPE_STEP_CHANGE,
+            atol=0.0,
+        )
 
     def test_one_by_one_matrix_noise_is_the_scalar_step_to_rounding(self):
         class MatrixGeometric(StochasticFunction):
