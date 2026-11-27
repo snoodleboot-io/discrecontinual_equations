@@ -8,7 +8,7 @@ code under test: closed-form coefficients of ``1 / (1 - s - t)`` and of
 factor does not change.
 """
 
-from math import comb
+from math import comb, factorial
 from unittest import TestCase
 
 import numpy as np
@@ -69,6 +69,23 @@ class TestDivisionBySeries(TestCase):
         for a in range(_ORDER + 1):
             assert quotient.coefficient(a, 0) == pytest.approx((-1) ** a * (a + 1))
         assert all(b == 0 for (_, b) in quotient.coefficients)
+
+    def test_terms_of_the_top_degree_enter_the_quotient(self):
+        # e^s / (1 + t) = sum s^a / a! * sum (-t)^b: the coefficient of s^a t^b is
+        # (-1)^b / a!. The numerator's s^order term must reach the quotient, and so
+        # must the denominator's top-degree part (here through 1 / (1 + t^order)).
+        exp_s = Bivariate(
+            {(a, 0): 1.0 / factorial(a) for a in range(_ORDER + 1)},
+            _ORDER,
+        )
+        quotient = exp_s / (1 + _t())
+        for a in range(_ORDER + 1):
+            for b in range(_ORDER + 1 - a):
+                assert quotient.coefficient(a, b) == pytest.approx(
+                    (-1) ** b / factorial(a),
+                )
+        top = 1 / (1 + _t() ** _ORDER)
+        assert top.coefficient(0, _ORDER) == pytest.approx(-1.0)
 
     def test_quotient_times_denominator_recovers_numerator(self):
         numerator = 2 + 3 * _s() - _t() * _s() + _t() ** 4
