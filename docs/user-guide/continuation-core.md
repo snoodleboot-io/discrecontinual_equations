@@ -228,82 +228,91 @@ API: [`RefiningLocalizer`](../api/continuation.md#discrecontinual_equations.cont
 
 ## Switching branches
 
+Continuation follows one curve of equilibria. Where two curves cross - a transcritical or a pitchfork bifurcation, or a symmetry-breaking point in a larger system - the detector `branch_point` marks the crossing, and the curve you were following carries on through it. To follow the *other* curve you need a starting point on it. `Continuer.seed_secondary_branch(point)` returns one.
+
 ### The idea
 
-At a simple branch point two curves cross, and $F_y$ has a two-dimensional kernel
-$K$ containing both tangents (Kuznetsov 1998, §10.2.4, eq. (10.57), Definition
-10.3, Lemma 10.1). `Continuer.seed_secondary_branch` takes the right singular
-vector of the smallest singular value of $F_y$, removes its component along the
-primary tangent $q_1$, and steps a distance `kick` along the result $q_2$ — a seed
-off the primary branch from which a new continuation can start (switching by
-perturbation, Allgower and Georg 1990, §8.2). The exact secondary tangent would
-need the algebraic branching equation $\langle\phi, B(v, v)\rangle = 0$
-(Kuznetsov's (10.60)), which takes second derivatives; it is not used. When $q_2$
-vanishes numerically the switcher falls back to the fixed seed
-$(x_0 + k, \lambda + k)$ with $k$ the `kick`, which suits a pitchfork off a
-trivial branch $u = 0$.
+At a simple branch point the extended Jacobian `[F_x | F_mu]` has a two-dimensional kernel that holds both curves' tangents. Which two directions in that plane are tangents is decided by the second derivatives of `F`: projected onto the left null vector `phi`, every tangent `v` satisfies the *algebraic branching equation* `<phi, F''[v, v]> = 0`. In a basis `q1, q2` of the kernel, with `q1` the tangent of the curve you followed, this is a quadratic in two unknowns whose two root directions are the two tangents ([Kuznetsov1998] §10.2.4; [AllgowerGeorg1990] §8.3). The switcher:
+
+1. finds `phi` and `q2` as minimal singular vectors of the extended Jacobian, the latter bordered by `q1`;
+2. approximates the quadratic's coefficients by second differences of `phi . F`;
+3. takes the root farther from `q1` as the secondary tangent `v2`;
+4. steps `initial_step` along `v2` and corrects with Newton's method on the hyperplane normal to `v2`.
+
+It then checks the result is on a different curve: off the primary tangent line, with a tangent closer to `v2` than to `q1`, and within one kick of the prediction. If not, it tries the other side and larger kicks (up to 8 times `initial_step`), and if none passes it raises `BranchSwitchError`. It never returns a point on the curve it started from. Where the secondary curve crosses the parameter, the returned point is on the side that continuation in the configured `direction` leaves by.
 
 ### Example
 
-$\dot x = \mu x - x^3$: the trivial branch $x = 0$ meets $x = \pm\sqrt\mu$ at the
-origin. The kick is the configuration's `initial_step`.
+The pitchfork `x' = mu x - x^3`, followed along `x = 0`, switched onto `mu = x^2` at the default settings:
 
 ```python
+from pathlib import Path
+
+from sweet_tea.registry import Registry
+
+import discrecontinual_equations
+from discrecontinual_equations.continuation.builder import ContinuerBuilder
+from discrecontinual_equations.continuation.continuation_config import (
+    ContinuationConfig,
+)
+from discrecontinual_equations.differential_equation import DifferentialEquation
+from discrecontinual_equations.function.deterministic import DeterministicFunction
+from discrecontinual_equations.parameter import Parameter
+from discrecontinual_equations.variable import Variable
+
+
 class Pitchfork(DeterministicFunction):
-    """x' = mu x - x^3: a pitchfork at the origin."""
-
     def eval(self, point, time=None):
-        mu, x = self.parameters[0].value, point[0]
-        return [mu * x - x**3]
+        mu = self.parameters[0].value
+        return [mu * point[0] - point[0] ** 3]
 
 
-equation = build(Pitchfork)
+# The builders resolve their parts by name, so fill the registry once.
+Registry.fill_registry(
+    path=str(Path(discrecontinual_equations.__file__).parent),
+    module="discrecontinual_equations",
+    exclude=["*.tests", "*.examples", "*.plot"],
+)
+
+x = Variable(name="x", abbreviation="x")
+mu = Parameter(value=0.0, name="mu", abbreviation="mu")
+pitchfork = DifferentialEquation(
+    variables=[x],
+    time=Variable(name="t", abbreviation="t"),
+    parameters=[mu],
+    derivative=Pitchfork(
+        variables=[x],
+        parameters=[mu],
+        results=[Variable(name="x'", abbreviation="dx")],
+        time=None,
+    ),
+)
+
 config = ContinuationConfig(
-    initial_parameter=-1.0,
-    initial_step=0.2,  # also the branch-switching kick
     detectors=["branch_point"],
-    measure="component",
-    parameter_lower_bound=-1.0,
-    parameter_upper_bound=1.0,
+    initial_parameter=-2.0,
+    parameter_lower_bound=-2.0,
+    parameter_upper_bound=2.0,
 )
-continuer = ContinuerBuilder.build(config, equation)
-trivial = continuer.solve(equation, [0.0])
-point = trivial.special_points[0]
-print(point.kind, abs(round(point.parameter, 6)))
+continuer = ContinuerBuilder.build(config, pitchfork)
+trivial = continuer.solve(pitchfork, initial_values=[0.0])
 
-seed, parameter = continuer.seed_secondary_branch(point)
-secondary = ContinuationConfig(
-    initial_parameter=parameter,
-    detectors=[],
-    measure="component",
-    parameter_lower_bound=-1.0,
-    parameter_upper_bound=1.0,
-)
-broken = ContinuerBuilder.build(secondary, equation).solve(equation, list(seed))
-first = broken.points[0]
-print(round(first.parameter, 3), round(first.state[0], 3))  # on x = sqrt(mu)
-```
+state, seed_mu = continuer.seed_secondary_branch(trivial.special_points[0])
+print(state, seed_mu)  # [0.05] 0.0025: on mu = x^2, not polished back to x = 0
 
-prints
-
-```text
-pitchfork 0.0
-0.2 0.447
+secondary = ContinuerBuilder.build(
+    config.model_copy(update={"initial_parameter": seed_mu}),
+    pitchfork,
+).solve(pitchfork, initial_values=list(state))
+print(max(point.state[0] for point in secondary.points))  # about 1.4
 ```
 
 ### Limits
 
-- **The kick matters.** Here $F_y = [\mu - 3x^2 \mid x]$ vanishes at the origin,
-  the SVD returns the primary tangent, and the fallback seed $(0.2, 0.2)$ is used.
-  The seed is then polished by Newton at $\mu = 0.2$, which lands on
-  $\sqrt{0.2} = 0.447$. With the default `initial_step=0.05` the polish returns to
-  $x = 0$, and the "secondary" branch is the trivial one again (measured). Check
-  which branch the new continuation is on.
-- The fallback seed is a guess for any geometry other than a symmetric pitchfork
-  off $u = 0$.
-- $q_2$ is a basis vector of $K$, not the secondary tangent, so for a
-  transcritical crossing the seed lies off both branches and relies on the
-  polish.
+- Only *simple* branch points are handled: two curves crossing transversally, a two-dimensional kernel. Where the second derivatives vanish on the kernel (three or more curves crossing, as at `x' = x^3 - x mu^2`), the quadratic is degenerate; the switcher steps along the kernel vector orthogonal to `q1` and, if Newton does not converge there, refuses.
+- The tangent `q1` is the one recorded on the located point. In one dimension any error in it does not matter (the kernel is the whole plane); in higher dimensions it tilts the kernel estimate, and the larger retry kicks are what still find the branch.
+- The located point must be close to the true crossing compared with `initial_step`: the result is accepted only within one kick of its prediction. A point far from any crossing is refused.
+- Before this change the switcher kicked state component 0 and the parameter by `initial_step` and let a fixed-parameter Newton polish the seed. At the pitchfork with the default step of 0.05 that returned the trivial branch `x = 0`; it now returns `(x, mu) = (0.05, 0.0025)`.
 
 Sources: [Kuznetsov1998, AllgowerGeorg1990](../references.md#numerical-continuation-predictor-corrector-jacobians-step-control).
 API: [`NullSpaceBranchSwitcher`](../api/continuation.md#discrecontinual_equations.continuation.switching.NullSpaceBranchSwitcher).

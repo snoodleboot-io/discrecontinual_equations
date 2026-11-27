@@ -169,9 +169,19 @@ class ContinuerBuilder:
             branch_switcher=AbstractFactory[BranchSwitcher].create(
                 config.branch_switcher,
                 configuration={
+                    "residual": residual,
                     "jacobian": jacobian,
+                    "linear_solver": linear_solver,
                     "kick": config.initial_step,
                     "singular_tolerance": config.singular_direction_tolerance,
+                    "settings": Factory.create(
+                        "newton_settings",
+                        configuration={
+                            "tolerance": config.newton_tolerance,
+                            "max_iterations": config.maximum_newton_iterations,
+                        },
+                    ),
+                    "direction": config.direction,
                 },
             ),
         )

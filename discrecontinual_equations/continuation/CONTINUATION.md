@@ -196,10 +196,14 @@ between evaluations. `eval` should be free of side effects.
 
 ## Branch switching
 
-`Continuer.seed_secondary_branch(branch_point)` returns a seed on the branch that
-crosses at a detected branch point, using the second null direction of the
-extended Jacobian (with a transverse fallback for pitchforks, where both branches
-share a tangent). Continue from that seed to trace the bifurcating branch.
+`Continuer.seed_secondary_branch(branch_point)` returns a converged point on the
+branch that crosses at a detected branch point. The secondary tangent is the second
+root of the algebraic branching equation on the kernel of the extended Jacobian
+(Allgower-Georg 1990, section 8.3; Kuznetsov 1998, section 10.2.4); the point is
+corrected on the hyperplane normal to it and accepted only if it is off the primary
+branch in both point and tangent. Otherwise the other side and larger kicks are
+tried, and `BranchSwitchError` is raised if none succeeds. Continue from the
+returned point to trace the bifurcating branch.
 
 A detected branch point is labelled `transcritical` when `a = <p, B(q, q)>` is
 nonzero, and otherwise `pitchfork` when the center-manifold cubic
