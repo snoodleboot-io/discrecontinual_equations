@@ -129,6 +129,12 @@ def _branch_step(
     step.
     The search only uses Jacobians, so it is unchanged when ``f`` is multiplied
     by a constant, and it multiplies the step by ``sigma`` when the state is.
+    Limits: the change is measured against the whole Jacobian, so a stiff system
+    whose other eigenvalues dwarf the critical dynamics gets too large a step.
+
+    References:
+        The relative-step idea follows the library's difference Jacobians
+        (DEQ-118); the target change and the search are this library's own.
     """
     state = context.continuation_state.state
     step = _BRANCH_STEP * max(1.0, float(np.linalg.norm(state)))
@@ -161,6 +167,11 @@ def _vertex_offset(
     the persisting branch itself. ``g_wmu`` is the difference of ``f_mu`` over
     ``x +- step q``. Zero is returned when ``g_wmu`` vanishes (no transversal
     crossing to recentre on).
+
+    References:
+        A Taylor shift of the normal form of Kuznetsov 1999, section 5, derived
+        here (not taken from a source); checked against ``<p, x - x*>`` to
+        leading order in ``tests/continuation/test_branch_point_units.py``.
     """
     _jacobian, right, left = null_pair
     state = context.continuation_state.state
@@ -227,6 +238,20 @@ def _branch_label(context: "DetectionContext") -> str:
     better. ``a`` therefore names a transcritical point only when also
     ``a^2 > 30 |c lambda|`` (:data:`_OFFSET_FACTOR`), with ``lambda = <p, A q>``.
     This test, too, is unchanged by rescaling time or the state.
+
+    A resolved ``a`` that fails the offset test no longer falls through to the
+    cubic (DEQ-147): a weak transcritical located a little off its bifurcation
+    was named ``pitchfork`` that way. It is a pitchfork only when the pitchfork's
+    own ``a = c w0`` explains it, ``|a - c w0| <= |a| / 2`` with ``w0`` from
+    :func:`_vertex_offset`; otherwise the point is ``branch_point``. The
+    differences use the step of :func:`_branch_step`, which follows the state's
+    scale.
+
+    References:
+        Kuznetsov 1999, section 5, for ``a`` and ``c`` (see
+        :func:`_branch_coefficients`). The offset test, the recentring and the
+        thresholds are this library's own, derived from the normal form above
+        and not taken from a source.
     """
     null_pair = _null_pair(context)
     if null_pair is None:
@@ -353,8 +378,12 @@ class BranchPoint(BifurcationDetector):
     coefficient that cannot be resolved is treated as zero, so a point whose ``c``
     is lost in noise stays ``branch_point``. Since a located point sits a little
     off the bifurcation, where a pitchfork's own ``a`` is ``c w0``, ``a`` must
-    also satisfy ``a^2 > 30 |c lambda|`` with ``lambda = <p, A q>`` (see
-    :func:`_branch_label`).
+    also satisfy ``a^2 > 30 |c lambda|`` with ``lambda = <p, A q>``; a resolved
+    ``a`` that fails this is a pitchfork only if it is the pitchfork's own ``c w0``
+    seen from its other branch, and is otherwise left ``branch_point`` (see
+    :func:`_branch_label`). The difference step follows the scale of the state
+    (:func:`_branch_step`), so rescaling the state does not change the label
+    either.
 
     References:
         The coefficients are Kuznetsov's center-manifold reduction (see

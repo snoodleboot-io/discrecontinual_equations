@@ -30,9 +30,8 @@ cannot be met by a fast one. With ``relative=True`` the test reads
 ``f`` is multiplied by any constant: near a simple root, where ``f`` is close to
 linear along the bracket, it locates the root to about ``value_tolerance`` of the
 bracket's width whatever the units. The secant's flat-chord test is scaled the
-same way. This is the usual mixed absolute/relative stopping rule of Dennis and
-Schnabel (1996, Section 7.2), applied to the residual with the bracket's end
-values as the typical size.
+same way. The relative stop is this library's own choice, justified only by that
+invariance; it is not taken from the references below.
 
 Limits: both assume one sign change in the bracket. A test function that touches
 zero without changing sign, or two crossings inside one continuation step, are not
@@ -45,10 +44,6 @@ References:
   eqs. (10.35)-(10.36).
 - Allgower, E. L. and Georg, K. "Numerical Continuation Methods: An Introduction",
   Springer, 1990, doi:10.1007/978-3-642-61257-2, Section 9.2, eq. (9.2.1).
-- Dennis, J. E. and Schnabel, R. B. "Numerical Methods for Unconstrained
-  Optimization and Nonlinear Equations", Classics in Applied Mathematics 16,
-  SIAM, 1996, doi:10.1137/1.9781611971200, Section 7.2 (stopping criteria scaled
-  by the typical size of the function).
 """
 
 from abc import ABC, abstractmethod
