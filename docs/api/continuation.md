@@ -662,6 +662,43 @@ the window exponent is exactly `a - s^2/2 + s W(T)/T`: the measured spread is
 `DynamicalThreshold`, sits at the same `s^2 / 2` as the exponent's. The noisy Hopf
 stage draws this distribution behind the exponent.
 
+## Counting modes from a grid or from samples
+
+`TopologicalModes` counts the modes of a density as the components of its superlevel
+sets whose persistence exceeds the density's own uncertainty (arXiv:2305.03118). On a
+grid density that uncertainty is round-off, and the count is the local-maximum count
+of `DensityModes`. From samples, `KernelDensity` estimates the density on a
+`DensityGrid` together with its pointwise standard error, and a mode counts when its
+persistence clears three standard errors. `ModeCountThreshold` locates where the
+count reaches two, with any `ScalarRootFinder`; `PersistenceProbe` hands the same test
+to `PhenomenologicalThreshold` for a solved Fokker-Planck grid.
+
+### The route to recorded data
+
+The sample path needs no model. Recorded states from a device or an experiment go
+straight into `KernelDensity`, one array per parameter setting, and the count and the
+threshold follow as they do for simulated paths. Three things are the caller's to get
+right, because the estimate cannot check them:
+
+- **Independence.** The standard error assumes independent samples. A time series
+  sampled faster than it decorrelates is worth its length divided by twice its
+  integrated autocorrelation time; pass that as `effective_samples`, or thin the
+  record.
+- **Bandwidth.** What is counted is the mode structure of the density smoothed by the
+  kernel. For the multiplicative pitchfork the smoothing moves the P-threshold from
+  `s^2/2` to `s^2/2 + h^2` exactly, and a peak narrower than `h` - such as the
+  integrable spike a multiplicative noise leaves at an invariant point - is not seen.
+  Locate at two bandwidths if the shift matters.
+- **Detection lag.** A new mode is counted once its persistence clears the bar, which
+  happens a little after it exists: for the pitchfork with 40,000 samples and
+  `h = 0.08`, about 0.01 in the parameter past `s^2/2 + h^2`. The lag falls as the
+  samples grow.
+
+Across parameter settings, use common random numbers where you control the noise (a
+simulation), so that the test function is a deterministic function of the parameter.
+
+::: discrecontinual_equations.continuation.topological_modes
+
 ## Continuation
 
 ::: discrecontinual_equations.continuation

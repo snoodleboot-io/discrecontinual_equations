@@ -188,6 +188,11 @@ except ImportError:  # run as a script path: only this directory is on sys.path
     )
 
 try:  # python -m examples.continuation.webplot_examples
+    from examples.continuation.pages_coloured import _coloured_thresholds
+except ImportError:  # run as a script path: only this directory is on sys.path
+    from pages_coloured import _coloured_thresholds
+
+try:  # python -m examples.continuation.webplot_examples
     from examples.continuation.pages_stochastic import (
         _density_family,
         _dynamical_bifurcation,
@@ -291,6 +296,8 @@ _EQUATIONS = {
     "adaptive_mesh.html": r"\dot{x}=y,\quad \dot{y}=\mu(1-x^2)y - x",
     "stochastic_attractor.html": r"dx = f_{\mathrm{Lorenz}}(x)\,dt + \sigma\,dW",
     "stochastic_bifurcation.html": r"dx = \alpha x\,dt + \sigma x\,dW",
+    "coloured_noise_thresholds.html": r"dx = (a x - x^3)\,dt + s x\,\eta\,dt,\ "
+    r"d\eta = -\eta/\tau\,dt + dW/\tau",
     "snic_period_divergence.html": r"\dot{r} = r(1-r^2),\quad "
     r"\dot{\theta} = \mu - \sin\theta",
     "bogdanov_takens.html": r"\dot{x} = y,\quad \dot{y} = \beta_1 + \beta_2 y "
@@ -377,6 +384,7 @@ def _raw_catalogue() -> list[tuple[str, Scene]]:
         *_network_entries(),
         ("stochastic_density.html", _density_family()),
         ("stochastic_lyapunov.html", _lyapunov()),
+        ("coloured_noise_thresholds.html", _coloured_thresholds()),
     ]
 
 
