@@ -257,4 +257,4 @@ Where T is the total integration time.
 
 **Related Modules:**
 - [ADAMS_BASHFORTH2](../adams_bashforth2/ADAMS_BASHFORTH2.md) - Higher-order multistep method
-- [CASH_KARP](../cash_karp/CASH_KARP.md) - Adaptive Runge-Kutta method
+- [`CashKarpSolver`](../cash_karp/cash_karp_solver.py) - Adaptive Runge-Kutta method

@@ -211,4 +211,4 @@ def eval(self, point: list[float], time: float | None = None) -> list[float]:
 **Parent Module:** [DISCRECONTINUAL_EQUATIONS](../DISCRECONTINUAL_EQUATIONS.md)
 
 **Related Modules:**
-- [SOLVER](../SOLVER.md) - Uses functions for derivative evaluation
+- [SOLVER](../solver/SOLVER.md) - Uses functions for derivative evaluation

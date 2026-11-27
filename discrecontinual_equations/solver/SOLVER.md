@@ -550,4 +550,4 @@ The implementations are based on the original research papers and established nu
 **Parent Module:** [DISCRECONTINUAL_EQUATIONS](../DISCRECONTINUAL_EQUATIONS.md)
 
 **Related Modules:**
-- [FUNCTION](../FUNCTION.md) - Provides function evaluation for solvers
+- [FUNCTION](../function/FUNCTION.md) - Provides function evaluation for solvers

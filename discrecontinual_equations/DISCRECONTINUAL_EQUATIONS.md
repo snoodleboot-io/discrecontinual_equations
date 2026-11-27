@@ -398,7 +398,7 @@ This library is released under the MIT License.
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for development guidelines.
+See [the contributing guide](../docs/development/contributing.md) for development guidelines.
 
 ## Algorithm Sources
 
@@ -420,6 +420,6 @@ The library implements numerical algorithms based on original research papers an
 ---
 
 **Submodules:**
-- [FUNCTION](FUNCTION.md) - Function definitions and equation types
-- [SOLVER](SOLVER.md) - Numerical algorithms and solvers
-- [PLOT](PLOT.md) - Visualization utilities
+- [FUNCTION](function/FUNCTION.md) - Function definitions and equation types
+- [SOLVER](solver/SOLVER.md) - Numerical algorithms and solvers
+- [PLOT](plot/PLOT.md) - Visualization utilities

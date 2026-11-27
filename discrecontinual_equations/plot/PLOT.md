@@ -325,4 +325,4 @@ Plots are automatically saved with safe filenames:
 **Parent Module:** [DISCRECONTINUAL_EQUATIONS](../DISCRECONTINUAL_EQUATIONS.md)
 
 **Related Modules:**
-- [SOLVER](../SOLVER.md) - Provides solution data for plotting
+- [SOLVER](../solver/SOLVER.md) - Provides solution data for plotting

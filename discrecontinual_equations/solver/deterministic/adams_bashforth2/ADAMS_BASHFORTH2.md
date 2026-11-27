@@ -265,4 +265,4 @@ Where C depends on the problem's smoothness.
 
 **Related Modules:**
 - [EULER](../euler/EULER.md) - Single-step method for startup
-- [ADAMS_BASHFORTH3](../adams_bashforth3/ADAMS_BASHFORTH3.md) - Higher-order Adams method
+- [`AdamsBashforth3Solver`](../adams_bashforth3/adams_bashforth3_solver.py) - Higher-order Adams method

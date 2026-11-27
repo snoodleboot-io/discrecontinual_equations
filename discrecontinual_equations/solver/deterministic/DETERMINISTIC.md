@@ -243,8 +243,12 @@ else:
 **Child Modules:**
 - [EULER](euler/EULER.md)
 - [ADAMS_BASHFORTH2](adams_bashforth2/ADAMS_BASHFORTH2.md)
-- [ADAMS_BASHFORTH3](adams_bashforth3/ADAMS_BASHFORTH3.md)
-- [CASH_KARP](cash_karp/CASH_KARP.md)
-- [FEHLBERG](fehlberg/FEHLBERG.md)
-- [DORMAND_PRINCE](dormand_prince/DORMAND_PRINCE.md)
-- [PRINCE_DORMAND87](prince_dormand87/PRINCE_DORMAND87.md)
+- [`AdamsBashforth3Solver`](adams_bashforth3/adams_bashforth3_solver.py)
+- [`CashKarpSolver`](cash_karp/cash_karp_solver.py)
+- [`FehlbergSolver`](fehlberg/fehlberg_solver.py)
+- [`DormandPrinceSolver`](dormand_prince/dormand_prince_solver.py)
+- [`PrinceDormand87Solver`](prince_dormand87/prince_dormand87_solver.py)
+
+The solvers with no design page of their own link to their source; their
+docstrings, and the [deterministic solvers guide](../../../docs/user-guide/deterministic-solvers.md),
+document them.
