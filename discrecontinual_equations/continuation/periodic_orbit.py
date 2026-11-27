@@ -21,14 +21,21 @@ import numpy as np
 from scipy.sparse import coo_matrix, csc_matrix
 from scipy.sparse.linalg import MatrixRankWarning, spsolve
 
-from discrecontinual_equations.continuation.batched_field import field_values
+from discrecontinual_equations.continuation.batched_field import (
+    field_jacobians,
+    field_values,
+)
 from discrecontinual_equations.continuation.derivative_provider import (
     AutomaticDifferentiation,
 )
+from discrecontinual_equations.continuation.noise import jacobian_at
 from discrecontinual_equations.function.function import Function
 
 _TOLERANCE = 1.0e-11
 _ITERATIONS = 60
+# The Newton Jacobian's absolute forward step (:meth:`PeriodicOrbit.
+# _difference_jacobian`). The monodromy no longer uses it (DEQ-128); making
+# this one relative is DEQ-171.
 _STEP = 1.0e-7
 # Runge-Kutta substeps per mesh interval in the monodromy. The interpolant, not
 # the substep, sets the order; this count sets the Runge-Kutta error under it.
@@ -521,14 +528,32 @@ class PeriodicOrbit:
         return PeriodicOrbitSolution(states, float(unknowns[-1]))
 
     def _jacobian(self, state: np.ndarray) -> np.ndarray:
-        base = self._field(state)
-        dimension = state.size
-        columns = np.empty((dimension, dimension))
-        for j in range(dimension):
-            shifted = state.copy()
-            shifted[j] += _STEP
-            columns[:, j] = (self._field(shifted) - base) / _STEP
-        return columns
+        """``df/dx`` at one state for the monodromy: exact where the field allows.
+
+        Taylor jets give the Jacobian exactly (:class:`.AutomaticDifferentiation`)
+        for a field of ``+ - * /`` and integer powers. A field the jets cannot
+        pass - one that calls :mod:`math`, branches on its state, or takes a
+        fractional power - is differenced centrally instead, each component
+        moved by ``eps^(1/3) max(|x_j|, 1)`` and the difference divided by the
+        width actually stepped (:func:`.noise.jacobian_at`, the rules of
+        :mod:`discrecontinual_equations.finite_difference`). That errs by about
+        ``eps^(2/3)``, ``4e-11`` relative, where the forward difference at the
+        absolute step ``1e-7`` it replaces (DEQ-128) erred by ``h f''/2``: a
+        bias of ``1e-5`` on the forced Duffing cycle, the same on every mesh,
+        under which the doubled-mesh estimate read up to four times low.
+
+        References:
+            AUTO-07p, ``src/interfaces.f90``, subroutine ``FUNI``: without a
+            user Jacobian AUTO differences the field centrally at
+            ``EP = 1e-7 (1 + max|u|)``. COLNEW (Bader and Ascher 1987) asks the
+            user for the Jacobian outright (``DFSUB``). Dennis and Schnabel
+            (1983), Sec. 5.4 and Algorithm A5.4.1, for the relative step. See
+            ``docs/references.md``.
+        """
+        try:
+            return _AUTODIFF.jacobian(self._function, state, 0.0)
+        except (TypeError, ValueError, AttributeError):
+            return jacobian_at(self._function, state, central=True)
 
     def _values(self, states: np.ndarray) -> np.ndarray:
         """``f`` at every row of ``states``, in one call where the field allows."""
@@ -540,27 +565,15 @@ class PeriodicOrbit:
     def _jacobians(self, states: np.ndarray) -> np.ndarray:
         """:meth:`_jacobian` at every row of ``states``, shape ``(n, d, d)``.
 
-        The same forward differences, with each column's shifted fields taken
-        in one call where the field takes arrays (:mod:`.batched_field`) and a
-        state at a time where it does not. The fields agree to rounding, not
-        always to the last bit; a difference quotient with step ``1e-7`` turns
-        an ulp of ``f`` into about ``2e-9`` of the entry, which the monodromy
-        carries into the multipliers. On a field of ``+ - *`` only, the two are
-        identical.
+        One pass of dual numbers carrying every direction over every state at
+        once where the field takes arrays (:func:`.field_jacobians`), checked
+        at the first and last states against :meth:`_jacobian`; otherwise a
+        state at a time, exactly or by the central difference.
         """
-        base = field_values(self._function, states, self._field)
-        if base is None:
-            return np.array([self._jacobian(state) for state in states])
-        dimension = states.shape[1]
-        jacobians = np.empty((states.shape[0], dimension, dimension))
-        for j in range(dimension):
-            shifted = states.copy()
-            shifted[:, j] += _STEP
-            moved = field_values(self._function, shifted, self._field)
-            if moved is None:
-                return np.array([self._jacobian(state) for state in states])
-            jacobians[:, :, j] = (moved - base) / _STEP
-        return jacobians
+        batched = field_jacobians(self._function, states, self._jacobian)
+        if batched is not None:
+            return batched
+        return np.array([self._jacobian(state) for state in states])
 
     def monodromy(self, solution: PeriodicOrbitSolution) -> np.ndarray:
         """Integrate the variational equation over one period, returning ``Y(1)``.
@@ -589,9 +602,22 @@ class PeriodicOrbit:
         nodes): the order of the Hermite-Simpson orbit it walks. The substep
         count is the Runge-Kutta error's lever, not the interpolant's; two
         substeps match eight on a Hopf cycle but lose a factor of 20 on the
-        Bogdanov-Takens orbit nearest the homoclinic. The Jacobian is not the
-        floor: an autodiff Jacobian in place of the forward differences moved
-        the Bogdanov-Takens drift by less than its own size.
+        Bogdanov-Takens orbit nearest the homoclinic.
+
+        ``Df`` itself is exact where the field allows, and a relative central
+        difference where it does not (see :meth:`_jacobian`). A forward
+        difference here was a floor of its own that no mesh lowered: on the
+        forced Duffing cycle the multipliers' error stayed at 5.9e-6 from 160
+        to 640 exact nodes while with the exact Jacobian it fell to 5.8e-10,
+        and the doubled-mesh estimate, blind to a bias both meshes share, read
+        up to four times low under it (DEQ-128).
+
+        References:
+            Kuznetsov, *Continuation of codim 1 bifurcations of limit cycles
+            in ODEs*, lecture 8, Utrecht, 2014, slide 4: the monodromy
+            ``Phi' - T f_x(x(t)) Phi = 0``, ``Phi(0) = I``, whose eigenvalues
+            are the multipliers, one of them exactly one. See
+            ``docs/references.md``.
         """
         states = solution.states
         period = solution.period

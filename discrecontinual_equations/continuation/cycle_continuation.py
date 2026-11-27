@@ -624,28 +624,6 @@ def _product_multipliers(transfers: np.ndarray) -> tuple[np.ndarray, str]:
     return values, _PERIODIC_QR
 
 
-class _DifferentiatedOrbit(PeriodicOrbit):
-    """The Hermite monodromy with ``df/dx`` by automatic differentiation.
-
-    Falls back to the parent's forward difference for a field that automatic
-    differentiation rejects, as :meth:`CycleContinuation._state_jacobian` does.
-    """
-
-    __slots__ = []
-
-    def _jacobian(self, state: np.ndarray) -> np.ndarray:
-        try:
-            return _AUTODIFF.jacobian(self._function, state, 0.0)
-        except (TypeError, ValueError, AttributeError):
-            return super()._jacobian(state)
-
-    def _jacobians(self, states: np.ndarray) -> np.ndarray:
-        batched = field_jacobians(self._function, states, self._jacobian)
-        if batched is not None:
-            return batched
-        return np.array([self._jacobian(state) for state in states])
-
-
 class CycleSeed:
     """Initial guess for a cycle branch: node states, period, and parameter."""
 
@@ -1810,22 +1788,19 @@ class CycleContinuation:
     ) -> np.ndarray:
         """The Hermite monodromy's multipliers of the states (DEQ-29).
 
-        Under the one-wide schemes this is exactly the monodromy the films have
-        always used, forward-difference Jacobian and all. Under Gauss-Legendre it
-        is the cross-check, and takes ``df/dx`` analytically where the field
-        allows (:class:`_DifferentiatedOrbit`): the forward difference is a
-        floor there. On the Bogdanov-Takens orbit at b1 = -0.4554 under ``m = 4``
-        its trivial drift sat at 3.0e-5 on 80, 160 and 320 intervals alike, and
+        Under the one-wide schemes these are the point's multipliers; under
+        Gauss-Legendre, the cross-check. Either way ``df/dx`` is exact where
+        the field allows and a relative central difference where it does not
+        (:meth:`PeriodicOrbit._jacobian`). A forward difference is a floor
+        here: on the Bogdanov-Takens orbit at b1 = -0.4554 under ``m = 4`` its
+        trivial drift sat at 3.0e-5 on 80, 160 and 320 intervals alike, and
         with the analytic Jacobian falls 1.9e-7, 1.1e-8, 7.1e-10 - sixteen per
-        doubling, the interpolant's own order.
+        doubling, the interpolant's own order. Under Hermite-Simpson the
+        one-wide schemes kept the forward difference until DEQ-128, and the
+        doubled-mesh estimate read up to four times low under its floor.
         """
         self._equation.derivative.parameters[self._parameter_index].value = parameter
-        kind = (
-            _DifferentiatedOrbit
-            if self._collocation.jacobian_monodromy
-            else PeriodicOrbit
-        )
-        orbit = kind(
+        orbit = PeriodicOrbit(
             self._equation.derivative,
             states.shape[0] - 1,
             self._phase_index,
