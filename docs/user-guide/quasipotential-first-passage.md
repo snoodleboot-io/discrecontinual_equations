@@ -119,7 +119,7 @@ Each update integrates the geometric action of a straight segment, $\lVert x - a
 !!! warning "Departure: how the default triangle update finds $s$"
     Dahiya and Cameron minimise each triangle's action over the point $x_s$ on its base exactly. They solve the full derivative, their Eq. (23) of the Physica D paper, which includes the change of $f$ and $A$ along the base, by Wilkinson's hybrid secant and bisection method. The default straight base here does not. It holds $f$ and $A$ fixed at the current $s$, where the derivative is a quadratic with a closed-form root, and refines that root twice from the middle of the base. The exact root was built and measured (DEQ-116; maximum error at 41, 81 and 161 points, radius 8). On linear drifts it was better: on the rotating Ornstein-Uhlenbeck process, 1.90e-3, 7.53e-4 and 4.10e-4 against the frozen step's 2.89e-3, 1.23e-3 and 6.14e-4. On every nonlinear drift it was worse, by 1.1 to 1.7 times: on the double well, 0.210, 0.0524 and 0.0135 against 0.153, 0.0420 and 0.0113. The frozen step stops short of the least value, and that partly offsets the midpoint rule's underestimate of a convex integrand. So the default keeps the frozen step, and its results are unchanged. The opt-in parabolic update below solves Eq. (23).
 
-Next to the attractor, $U$ is set exactly where it can be. Near a stable equilibrium (`EquilibriumAttractor`), the quadratic quasipotential of the linearisation is used. Near a limit cycle (`CycleAttractor`), the paper's Simpson-rule start from the nearest point of the cycle is used.
+Next to the attractor, $U$ is set exactly where it can be. Near a stable equilibrium (`EquilibriumAttractor`), the quadratic quasipotential of the linearisation is used. Near a limit cycle (`CycleAttractor`), the expansion of $U$ across the cycle is used (see *Starting beside a limit cycle* below).
 
 **Example.** This continues the example above, on the same process.
 
@@ -173,14 +173,16 @@ On a nonlinear drift the parabola does not help. It was 1.2 to 1.45 times worse 
 
 `OrderedLineIntegral.check(field, indices)` estimates the error point by point. At each chosen point it relaxes a `GeometricMinimumAction` chain from a small surface around the attractor, which needs no grid. It reports the gap to the grid value plus the reference's own estimated error. That estimate compares the value from the surface with values from a surface at twice the distance and from a chain of half the nodes. With a `tolerance`, points whose estimate exceeds it are replaced by the reference. Each point costs of the order of a second, against well under a millisecond for the march, so ask for it where it matters.
 
-The reference's estimate is not a bound everywhere. Where the minimum action path winds round the attractor faster than a chain of nodes can follow, the value gets worse as the surface shrinks, not better. Inside the verification's fast elliptic cycle the reference at $(0.3, 0)$ was 1.66 off, with an estimate of only 1.47. So `check` also relaxes a chain from a third surface, at half the distance, and treats the estimate as no bound in two cases: where that third value moves by more than the estimate, or where the two outer values differ by more than half of $U$ on the outer surface. A single point never stops the check:
+The reference's estimate is not a bound everywhere. Where the minimum action path winds round the attractor faster than a chain of nodes can follow, the value gets worse as the surface shrinks, not better. Inside the verification's fast elliptic cycle the reference at $(0.3, 0)$ was once 1.66 off, with an estimate of only 1.47. So `check` also relaxes a chain from a third surface, at half the distance, and treats the estimate as no bound in two cases: where that third value moves by more than the estimate, or where the two outer values differ by more than half of $U$ on the outer surface. Otherwise the surface's part of the estimate is the larger of the two moves, outer to inner and inner to third. A single point never stops the check:
 
 - a point with no bound gets status `UNBOUNDED` and an error of `inf`;
 - a point where no reference could be computed, because the chain would not stay finite, gets status `FAILED` and an error of `nan`;
 - neither is refined, whatever the `tolerance`, and both keep the grid's value;
 - `field.unbounded` lists both kinds by flat index, and a `UserWarning` names them once the check is done, adding "and they were not refined" when a `tolerance` was given.
 
-On 73 references at 81 points on ten systems, 16 of them beside or inside the elliptic cycle, every finite estimate bounded the reference's error. All 16 cycle points were labelled, along with 8 elsewhere whose estimate did in fact hold; that is the price of the test. The third relaxation costs up to a third more per point.
+**Winding paths (DEQ-152).** The chain must be able to follow the winding. The path it starts from is the one traced on the grid, and that trace stops where a step would raise $U$. Round a fast rotation that happens almost at once, since the path runs nearly along the level sets. So the trace is carried on into the start surface whatever $U$ does, with the attractor's own expansion for $\nabla U$ once it is inside the attractor's band. Each chain then gets 320 nodes for every turn its trace makes, and at least the 81 asked for: with the exact path into the elliptic cycle as the start, 3.6 turns, the chain was off by 0.26, 2.1e-2, 1.7e-3 and 1.3e-4 at 81, 321, 641 and 1281 nodes. When the start slides along the surface, the whole chain moves with it rather than its first node alone.
+
+On 77 references at 81 points on ten systems, 20 of them beside or inside the elliptic cycle, every finite estimate bounded the reference's error. Before DEQ-151 and DEQ-152 all 20 cycle points were labelled or failed; now each has a bound, for example 4.7e-4 off with an estimate of 6.7e-3 at $(0.3, 0)$, where the grid is 9.3e-3 off. The strongly rotating equilibria gained too: on SDE (21) the references went from 2.1e-2 to 4.3e-2 off to under 3e-5. The price is time. Inside the cycle, where the path winds three to five times, a point costs 21 to 230 seconds at 81 points, against 0.4 to 16 seconds on the other systems. Five references away from the cycle are still labelled, against 24 before; one of them, on the rotating Ornstein-Uhlenbeck process, had a bound before.
 
 ```python
 from discrecontinual_equations.continuation.quasipotential import default_radius
@@ -202,9 +204,81 @@ print(f"at {point}: grid {U.values.ravel()[index]:.5f}, "
 print("points without a bound:", checked.unbounded.tolist())
 ```
 
-This continues the example above. It prints a radius of `14` and a parabolic $U$ of `0.9990` against the exact `0.9986`. The parabola is exact at grid points; what is left at the target, which lies between them, is the bilinear interpolation of `at`. At the grid point `(0.7875, -0.3)` it prints a grid value of `0.97241`, a parabolic value of `0.97223`, and the exact `0.97223`, with an estimated error of `3.0e-04` that bounds the grid's true `1.8e-4`. No point lacks a bound here, so the last line prints an empty list.
+This continues the example above. It prints a radius of `14` and a parabolic $U$ of `0.9990` against the exact `0.9986`. The parabola is exact at grid points; what is left at the target, which lies between them, is the bilinear interpolation of `at`. At the grid point `(0.7875, -0.3)` it prints a grid value of `0.97241`, a parabolic value of `0.97223`, and the exact `0.97223`, with an estimated error of `1.8e-04` (1.797e-4) that bounds the grid's true 1.771e-4. Before DEQ-152 the estimate there was `3.0e-04`; the reference's own estimate is smaller now. No point lacks a bound here, so the last line prints an empty list.
 
-**Sources.** [FreidlinWentzell2012](../references.md#quasipotential-minimum-action-paths-fokker-planck-and-first-passage) for the action and the quasipotential. [DahiyaCameron2018a](../references.md#quasipotential-minimum-action-paths-fokker-planck-and-first-passage) for OLIM-MID: the geometric action, eq. (2); the Hamilton-Jacobi equation, eq. (3); the cycle start, eqs. (9)-(12); the test systems, SDEs (21) and (24); and the radius rule, eq. (28). [DahiyaCameron2018b](../references.md#quasipotential-minimum-action-paths-fokker-planck-and-first-passage) for the midpoint metric $A = D^{-1}$ and its linear interpolation along a triangle's base with a variable $D$, eqs. (19), (21) and (22), and for the exact triangle minimisation, eq. (23), solved by a hybrid secant and bisection method. API: [`OrderedLineIntegral`](../api/continuation.md#discrecontinual_equations.continuation.quasipotential.OrderedLineIntegral), [`EquilibriumAttractor`](../api/continuation.md#discrecontinual_equations.continuation.quasipotential.EquilibriumAttractor), [`CycleAttractor`](../api/continuation.md#discrecontinual_equations.continuation.quasipotential.CycleAttractor), [`GridQuasipotential`](../api/continuation.md#discrecontinual_equations.continuation.quasipotential.GridQuasipotential).
+**Starting beside a limit cycle.** On a stable cycle $U = 0$ and $\nabla U = 0$, so near it $U$ grows like the square of the distance $z$ along the cycle's normal: $U = \tfrac{1}{2} G(\tau) z^2 + \tfrac{1}{6} C(\tau) z^3 + O(z^4)$, with $\tau$ the time along the cycle. Lin, Yu and Zhou show that $G$ solves a periodic Riccati equation along the orbit, their Eq. (30). In the plane it is scalar,
+
+$$
+\dot G = -2 M G - A G^2, \qquad M = n^\top J n, \quad A = n^\top D n,
+$$
+
+with $J$ the drift's Jacobian and $n$ the unit normal on the cycle. Its inverse $H = 1/G$ solves the linear equation $\dot H = 2 M H + A$, whose periodic solution their Eq. (37) gives in closed form. It is positive exactly when the cycle is stable and the noise reaches across it somewhere. The cubic coefficient $C$ comes from the next order of the same expansion of the Hamilton-Jacobi equation. It is derived in the library, not taken from the paper, and also solves a linear periodic equation. Both are solved once round the cycle, and the band of points within a cell and a half of the cycle starts from them.
+
+!!! warning "Departure: the start beside a cycle (DEQ-151)"
+    Dahiya and Cameron's start (their Sec. 2.1.2) splits the drift as $f = -\tfrac{1}{2} D \nabla U + l$ and takes $l$ parallel to $f$ at the nearest point of the cycle. That is exact when the rotation keeps its direction across the cycle, as on their SDE (24)'s circle. Where it turns, as on an ellipse run round fast, it is wrong at leading order: $l$ is large and its direction changes with $z$, so $\nabla U$ is off by about as much as itself. On the verification's elliptic cycle, with $U = \tfrac{1}{2}(x^2 + 2y^2 - 1)^2$ and rotation three times the approach, that start left the band off by 0.117, 0.0289 and 0.0082 at 41, 81 and 161 points, and $U$ below zero inside the cycle. From the expansion the band is off by 2.9e-4, 2.5e-5 and 1.8e-6, $U$ is nowhere negative, and the largest error falls from 0.472, 0.119 and 0.0188 to 0.372, 0.0911 and 0.0119. On SDE (24) both starts are good; the largest error is unchanged to four digits.
+
+**Example.** The verification's fast elliptic cycle, with a correlated noise. This example stands alone:
+
+```python
+import numpy as np
+
+from discrecontinual_equations.continuation.fokker_planck import DensityGrid
+from discrecontinual_equations.continuation.noise import NoiseMatrix
+from discrecontinual_equations.continuation.quasipotential import (
+    CycleAttractor,
+    OrderedLineIntegral,
+)
+from discrecontinual_equations.function.deterministic import DeterministicFunction
+from discrecontinual_equations.variable import Variable
+
+
+class State(Variable, name="State", abbreviation="s"):
+    pass
+
+
+class Ellipse(DeterministicFunction):
+    """f = -(1/2) D grad U + 3 R grad q with q = x^2 + 2 y^2: U = (q - 1)^2 / 2."""
+
+    def eval(self, point, time=None):
+        x, y = point
+        D = G @ G.T
+        rise = (x * x + 2 * y * y - 1) * np.array([2 * x, 4 * y])
+        return list(-0.5 * D @ rise + 3.0 * np.array([-4 * y, 2 * x]))
+
+
+class Column(DeterministicFunction):
+    def __init__(self, index):
+        super().__init__([State(), State()], [], [State(), State()])
+        self._column = list(G[:, index])
+
+    def eval(self, point, time=None):
+        return self._column
+
+
+G = np.array([[0.8, 0.0], [0.3, 0.6]])
+drift = Ellipse([State(), State()], [], [State(), State()])
+noise = NoiseMatrix([Column(0), Column(1)])
+angle = np.linspace(0.0, 2.0 * np.pi, 800, endpoint=False)
+cycle = CycleAttractor(np.column_stack([np.cos(angle), np.sqrt(0.5) * np.sin(angle)]))
+
+grid = DensityGrid.box([-2.0, -1.6], [2.0, 1.6], [81, 81])
+solver = OrderedLineIntegral(drift, noise, grid)
+U = solver.solve(cycle)
+
+points = grid.points()
+exact = 0.5 * (points[:, 0] ** 2 + 2 * points[:, 1] ** 2 - 1) ** 2
+print(f"least U {np.min(U.values):.1e}")
+index = np.ravel_multi_index(grid.nearest([1.4, 0.32]), grid.shape)
+value, error = solver.reference(U, points[index])
+print(f"at {points[index]}: grid {U.values.ravel()[index]:.4f}, "
+      f"reference {value:.4f} +- {error:.1e}, exact {exact[index]:.4f}")
+```
+
+It prints a least $U$ of `0.0e+00`, and at the grid point `(1.4, 0.32)`, outside the cycle, a grid value of `0.6597`, a reference of `0.6783` with an estimated error of `2.5e-04`, and the exact `0.6784`. With the old start the grid was 0.0187 off there and the reference was labelled `UNBOUNDED`. The drift above is evaluated one point at a time, so the example takes a few minutes; a field that also defines `eval_batch` with array arithmetic takes seconds.
+
+**Limits of the start.** What is left beside a fast cycle is the march's own error. The drift's rotation-to-gradient ratio grows without bound towards the cycle, where $\nabla U$ vanishes, so no fixed radius reaches far enough back along the front just outside the band (see *The update radius* below). On the elliptic cycle the largest error within $|q - 1| < 0.2$ is 3.6e-3 and 4.7e-3 at 81 and 161 points, and neither a band of three cells nor a radius of 16 lowers it. Inside the cycle at 161 points the error is now 5.2e-3 to 8.7e-3 where it was 1.4e-3 to 6.2e-3: the old start's error, below the true $U$, had offset the march's, above it. The cycle's states should lie on it to well within a cell; they are joined by a periodic spline, not a polygon.
+
+**Sources.** [FreidlinWentzell2012](../references.md#quasipotential-minimum-action-paths-fokker-planck-and-first-passage) for the action and the quasipotential. [DahiyaCameron2018a](../references.md#quasipotential-minimum-action-paths-fokker-planck-and-first-passage) for OLIM-MID: the geometric action, eq. (2); the Hamilton-Jacobi equation, eq. (3); the cycle start it used to take, Sec. 2.1.2; the test systems, SDEs (21) and (24); and the radius rule, eq. (28). [LinYuZhou2019](../references.md#quasipotential-minimum-action-paths-fokker-planck-and-first-passage) for the expansion of $U$ about a cycle, eq. (23), its periodic Riccati equation, eq. (30), and the planar solution, eqs. (36) and (37). [DahiyaCameron2018b](../references.md#quasipotential-minimum-action-paths-fokker-planck-and-first-passage) for the midpoint metric $A = D^{-1}$ and its linear interpolation along a triangle's base with a variable $D$, eqs. (19), (21) and (22), and for the exact triangle minimisation, eq. (23), solved by a hybrid secant and bisection method. API: [`OrderedLineIntegral`](../api/continuation.md#discrecontinual_equations.continuation.quasipotential.OrderedLineIntegral), [`EquilibriumAttractor`](../api/continuation.md#discrecontinual_equations.continuation.quasipotential.EquilibriumAttractor), [`CycleAttractor`](../api/continuation.md#discrecontinual_equations.continuation.quasipotential.CycleAttractor), [`GridQuasipotential`](../api/continuation.md#discrecontinual_equations.continuation.quasipotential.GridQuasipotential).
 
 ## Minimum action paths
 
