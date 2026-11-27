@@ -500,6 +500,26 @@ class TestFallbacksConvergeOrRefuse(TestCase):
         ):
             solver.solve(seed)
 
+    def test_a_slowly_converging_solve_short_of_tolerance_refuses(self):
+        """Steps cut to a quarter converge linearly, at 3/4 a step: after the
+        iteration cap the residual is 1e-8 (measured), above the tolerance, and
+        a cut step is not the least-squares step, so its size certifies nothing.
+        The iterate is within the mesh's accuracy of the orbit, yet unconverged.
+        """
+        solver, seed, _, _ = _tanh_problem()
+        full = HeteroclinicOrbit._least_squares  # noqa: SLF001 (wrapping the step)
+
+        def quarter(self, jacobian, residual):
+            return 0.25 * full(self, jacobian, residual)
+
+        with (
+            mock.patch.object(HeteroclinicOrbit, "_least_squares", quarter),
+            pytest.raises(NotConvergedError) as caught,
+        ):
+            solver.solve(seed)
+        assert 1.0e-9 < caught.value.newton_residual < 1.0e-6
+        assert caught.value.correction == math.inf
+
     def test_a_curve_step_that_overflows_refuses_rather_than_crashes(self):
         curve, _, unknowns, sweep = _bogdanov_takens_problem(40)
         orbit = unknowns[:-3].reshape(-1, 2)
