@@ -814,6 +814,127 @@ else:
 References: [Doedel2007](../references.md) (AUTO-07p manual, `EPSU`, `ITNW`);
 [Bader1987](../references.md) (COLNEW, subroutine `CONTRL`).
 
+### Continuing a homoclinic curve, and where it stops (DEQ-112)
+
+A homoclinic orbit to a saddle exists only on a curve in a two-parameter plane.
+`HomoclinicCurve` continues it: one parameter is swept, the other is solved for
+together with the orbit and the saddle, using the defining system of
+HomCont ([ChampneysKuznetsovSandstede1996](../references.md)) with
+projection boundary conditions ([Beyn1990](../references.md)).
+
+Those boundary conditions give one row per stable and one per unstable
+eigenvalue of the saddle. With `N` nodes in `n` dimensions the Newton system has
+`N n + s + u + 1` rows and `N n + n + 1` unknowns, so it is square only while
+`s + u = n` (the saddle is hyperbolic), and a homoclinic orbit needs `s, u >= 1`.
+The counts are read at the seed and held:
+
+- a seed that is not a hyperbolic saddle is refused before Newton starts;
+- an iterate, or one of the Jacobian's finite-difference shifts, at which the
+  counts change is refused too.
+
+Both raise `EigenvalueCountError`, a `ValueError` whose message names the
+required and found counts and both parameter values, and which carries them as
+`expected`, `found`, `continuation` and `sweep`. `trace` stops at such a point,
+returns the points it solved, as the other curve tracers do, and issues a
+`RuntimeWarning` with the same message.
+
+```python
+import math
+import warnings
+
+import numpy as np
+
+from discrecontinual_equations.continuation.connecting_orbit import MeshSpec
+from discrecontinual_equations.continuation.homoclinic_curve import (
+    EigenvalueCountError,
+    HomoclinicCurve,
+)
+from discrecontinual_equations.differential_equation import DifferentialEquation
+from discrecontinual_equations.function.deterministic import DeterministicFunction
+from discrecontinual_equations.parameter import Parameter
+from discrecontinual_equations.variable import Variable
+
+
+class State(Variable, name="State", abbreviation="v"):
+    pass
+
+
+class Time(Variable, name="Time", abbreviation="t"):
+    pass
+
+
+class BetaOne(Parameter, name="beta_one", abbreviation="b1"):
+    pass
+
+
+class BetaTwo(Parameter, name="beta_two", abbreviation="b2"):
+    pass
+
+
+class BogdanovTakens(DeterministicFunction):
+    """x' = y, y' = b1 + b2 y + x^2 + x y."""
+
+    def eval(self, point, time=None):
+        b1, b2 = self.parameters[0].value, self.parameters[1].value
+        x, y = point
+        return [y, b1 + b2 * y + x * x + x * y]
+
+
+parameters = [BetaOne(value=0.0), BetaTwo(value=0.0)]
+equation = DifferentialEquation(
+    variables=[State(), State()],
+    time=Time(),
+    parameters=parameters,
+    derivative=BogdanovTakens(
+        variables=[State(), State()],
+        parameters=parameters,
+        results=[State(), State()],
+        time=None,
+    ),
+)
+
+# The Bogdanov-Takens asymptotics: b1 ~ -eps^4 at b2 = 5 eps^2 / 7.
+eps, intervals = 0.25, 30
+half = 5.0 * math.sqrt(2.0) / eps
+t = np.linspace(-half, half, intervals + 1)
+profile = 1.0 / np.cosh(eps * t / math.sqrt(2.0)) ** 2
+orbit = np.column_stack(
+    [
+        eps**2 * (1.0 - 3.0 * profile),
+        eps**3 * 3.0 * math.sqrt(2.0) * profile * np.tanh(eps * t / math.sqrt(2.0)),
+    ],
+)
+saddle = np.array([eps**2, 0.0])
+
+# Free b1, sweep b2 towards the Bogdanov-Takens point.
+curve = HomoclinicCurve(equation, 0, 1, MeshSpec(half, intervals, 1, 0.0))
+points = curve.trace([5.0 / 7.0 * eps**2, 0.04], orbit, saddle, -(eps**4))
+print([(round(p.sweep, 4), round(p.continuation, 6)) for p in points])
+
+# Free b2 from a seed off the curve: b1 > 0 has no equilibrium at all.
+free_b2 = HomoclinicCurve(equation, 1, 0, MeshSpec(half, intervals, 1, 0.0))
+try:
+    free_b2.solve_point(5.0 / 7.0 * eps**2, orbit, saddle, -(eps**4))
+except EigenvalueCountError as refusal:
+    print(refusal.expected, refusal.found, f"{refusal.continuation:.3g}")
+```
+
+This prints the two solved points, then `(1, 1) (2, 0) -0.46`: freeing `b2`
+from a seed with `b1 > 0`, where the field has no equilibrium at all, Newton
+moves `b2` until the "saddle" is a stable node.
+
+Limits:
+
+- The counts come from a finite-difference Jacobian and a `1e-9` threshold on
+  the real parts, so a saddle within about `1e-7` of a fold or of a zero real
+  part may be read with the wrong counts.
+- A refusal only says the counts changed. Whether the curve really ends there
+  (for instance at a Bogdanov-Takens point, where the saddle merges with
+  another equilibrium) or Newton just wandered off from a poor seed is for the
+  caller to judge; a better seed or a smaller sweep step tells them apart.
+- Natural-parameter continuation cannot pass a fold of the curve in the swept
+  parameter.
+
 ## Covariant Lyapunov vectors and finite-time exponents
 
 `lyapunov_spectrum` gives rates; `covariant_lyapunov_vectors` gives the directions

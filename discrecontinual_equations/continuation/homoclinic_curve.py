@@ -12,6 +12,11 @@ boundary conditions onto the (recomputed) stable and unstable eigenspaces of the
 saddle, and a phase condition. The square system is solved by Newton's method, and
 each swept point is seeded from the previous one.
 
+The boundary conditions give one row per stable and one per unstable eigenvalue
+of the saddle, so the system is square only while the saddle keeps the counts it
+was seeded with. Newton refuses an iterate, or a finite-difference shift, at which
+they change (:class:`EigenvalueCountError`), and a traced curve stops there.
+
 The Newton matrix is block-banded in the nodes and bordered by the equilibrium,
 boundary and phase rows and the parameter column - HomCont's structure (Champneys,
 Kuznetsov & Sandstede, IJBC 6, 1996) - so it is assembled sparse and factored with
@@ -46,6 +51,54 @@ _HALF = 0.5
 # Column ordering for the sparse LU; see ``connecting_orbit._factor`` for why.
 _ORDERING = "COLAMD"
 _AUTODIFF = AutomaticDifferentiation()
+
+
+class EigenvalueCountError(ValueError):
+    """The saddle's stable and unstable eigenvalue counts are not the ones required.
+
+    The projection boundary conditions put the departure off the stable
+    eigenspace and the arrival off the unstable one: one row per stable and one
+    per unstable eigenvalue (a complex pair gives its real and imaginary part).
+    With ``N`` nodes in ``n`` dimensions the system has ``N n + s + u + 1`` rows
+    against ``N n + n + 1`` unknowns, so it is square only when ``s + u = n`` -
+    a hyperbolic equilibrium - and a homoclinic orbit needs ``s, u >= 1``. When
+    Newton, or one of its finite-difference shifts, reaches a point where the
+    counts differ from the seed's, the rows no longer line up and the point is
+    refused with this error rather than solved as a different problem.
+
+    Attributes:
+        expected: ``(stable, unstable)`` counts the solve requires, those of the
+            seed; ``None`` when the seed itself is not a hyperbolic saddle.
+        found: ``(stable, unstable)`` counts where the solve was refused.
+        continuation: Value of the active continuation parameter there.
+        sweep: Value of the swept parameter there.
+
+    References:
+        Champneys, A. R., Kuznetsov, Yu. A. & Sandstede, B. (1996). A numerical
+            toolbox for homoclinic bifurcation analysis. *International Journal
+            of Bifurcation and Chaos* 6(5), 867-887. DOI 10.1142/S0218127496000485.
+            The defining system continued here.
+        Beyn, W.-J. (1990). The numerical computation of connecting orbits in
+            dynamical systems. *IMA Journal of Numerical Analysis* 10(3),
+            379-405. DOI 10.1093/imanum/10.3.379. Projection boundary
+            conditions at the truncated ends.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        expected: tuple[int, int] | None,
+        found: tuple[int, int],
+        parameters: tuple[float, float],
+    ) -> None:
+        super().__init__(message)
+        self.expected = expected
+        self.found = found
+        self.continuation, self.sweep = parameters
+
+
+def _describe(counts: tuple[int, int]) -> str:
+    return f"{counts[0]} stable and {counts[1]} unstable"
 
 
 def _continuous_phases(values: np.ndarray, left: np.ndarray) -> np.ndarray:
@@ -169,13 +222,65 @@ class HomoclinicCurve:
             columns[:, j] = (self._field(shifted, continuation, sweep) - base) / _STEP
         return columns
 
-    def _residual(
+    def _label(self, index: int) -> str:
+        parameter = self._equation.derivative.parameters[index]
+        return parameter.abbreviation or parameter.name or f"parameter {index}"
+
+    def _counts(
+        self,
+        equilibrium: np.ndarray,
+        continuation: float,
+        sweep: float,
+    ) -> tuple[int, int]:
+        """The saddle's ``(stable, unstable)`` eigenvalue counts."""
+        _, _, stable, unstable = _split_eigenspaces(
+            self._field_jacobian(equilibrium, continuation, sweep),
+        )
+        return len(stable), len(unstable)
+
+    def _refuse(
+        self,
+        reason: str,
+        found: tuple[int, int],
+        parameters: tuple[float, float],
+        expected: tuple[int, int] | None = None,
+    ) -> EigenvalueCountError:
+        continuation, sweep = parameters
+        required = (
+            "a hyperbolic saddle (some stable and some unstable, none central)"
+            if expected is None
+            else f"{_describe(expected)}, as at the seed"
+        )
+        message = (
+            f"{reason}: the equilibrium has {_describe(found)} eigenvalues at "
+            f"{self._label(self._continuation_index)} = {continuation:.6g} "
+            f"({self._label(self._sweep_index)} = {sweep:.6g}), and the projection "
+            f"boundary conditions need {required}"
+        )
+        return EigenvalueCountError(message, expected, found, parameters)
+
+    def _seed_counts(
+        self,
+        equilibrium: np.ndarray,
+        continuation: float,
+        sweep: float,
+    ) -> tuple[int, int]:
+        """The seed's counts, refused unless it is a hyperbolic saddle."""
+        counts = self._counts(equilibrium, continuation, sweep)
+        stable, unstable = counts
+        if stable == 0 or unstable == 0 or stable + unstable != equilibrium.size:
+            reason = "the seed equilibrium is not a hyperbolic saddle"
+            raise self._refuse(reason, counts, (continuation, sweep))
+        return counts
+
+    def _residual(  # noqa: PLR0913 (the Newton state plus the saddle's counts)
         self,
         unknowns: np.ndarray,
         times: np.ndarray,
         nodes: int,
         dimension: int,
         sweep: float,
+        counts: tuple[int, int] | None = None,
     ) -> np.ndarray:
         states = unknowns[: nodes * dimension].reshape(nodes, dimension)
         equilibrium = unknowns[nodes * dimension : nodes * dimension + dimension]
@@ -187,7 +292,13 @@ class HomoclinicCurve:
             ahead = self._field(states[i + 1], continuation, sweep)
             blocks.append(states[i + 1] - states[i] - 0.5 * step * (here + ahead))
         blocks.append(
-            self._tail(states[0], states[-1], equilibrium, continuation, sweep),
+            self._tail(
+                states[0],
+                states[-1],
+                equilibrium,
+                (continuation, sweep),
+                counts,
+            ),
         )
         centre = nodes // 2
         phase = states[centre, self._mesh.phase_index] - self._mesh.phase_value
@@ -199,8 +310,8 @@ class HomoclinicCurve:
         departure_state: np.ndarray,
         arrival_state: np.ndarray,
         equilibrium: np.ndarray,
-        continuation: float,
-        sweep: float,
+        parameters: tuple[float, float],
+        counts: tuple[int, int] | None = None,
     ) -> np.ndarray:
         """The equilibrium condition and the projection boundary conditions.
 
@@ -212,10 +323,18 @@ class HomoclinicCurve:
         as for a single connecting orbit: the real parts of a conjugate pair's
         two projections are the same number, so one row per eigenvalue would
         make the Newton matrix singular.
+
+        With ``counts`` given, a saddle whose ``(stable, unstable)`` counts differ
+        is refused: its rows would not line up with the rows they are compared to.
         """
+        continuation, sweep = parameters
         values, left, stable, unstable = _split_eigenspaces(
             self._field_jacobian(equilibrium, continuation, sweep),
         )
+        found = (len(stable), len(unstable))
+        if counts is not None and found != counts:
+            reason = "the saddle's eigenvalue counts changed during the solve"
+            raise self._refuse(reason, found, parameters, counts)
         left = _continuous_phases(values, left)
         departure = departure_state - equilibrium
         arrival = arrival_state - equilibrium
@@ -251,11 +370,20 @@ class HomoclinicCurve:
 
         The dense finite-difference matrix it replaces took one full residual per
         unknown: ``O(N^2)`` field evaluations and ``O(N^2)`` memory per iteration.
+
+        Each differenced tail must keep the saddle's eigenvalue counts at
+        ``unknowns``; a shift across a change in them raises
+        :class:`EigenvalueCountError` instead of differencing rows of two lengths.
         """
         size = unknowns.size
         nodes = times.size
         states = unknowns[: nodes * dimension].reshape(nodes, dimension)
         continuation = float(unknowns[-1])
+        counts = self._counts(
+            unknowns[nodes * dimension : nodes * dimension + dimension],
+            continuation,
+            sweep,
+        )
         derivatives = self._node_jacobians(states, continuation, sweep)
         row, column, value = _collocation_triplets(derivatives, times)
         bands = (nodes - 1) * dimension
@@ -279,8 +407,8 @@ class HomoclinicCurve:
                 shifted[:dimension],
                 shifted[bands : bands + dimension],
                 shifted[nodes * dimension : nodes * dimension + dimension],
-                float(shifted[-1]),
-                sweep,
+                (float(shifted[-1]), sweep),
+                counts,
             )
             rows.append(tail_rows)
             columns.append(np.full(tail_rows.size, index))
@@ -383,8 +511,22 @@ class HomoclinicCurve:
         dimension: int,
         sweep: float,
     ) -> np.ndarray | None:
+        nodes = times.size
+        counts = self._seed_counts(
+            unknowns[nodes * dimension : nodes * dimension + dimension],
+            float(unknowns[-1]),
+            sweep,
+        )
         for _ in range(_ITERATIONS):
-            norm, residual = self._residual_norm(unknowns, times, dimension, sweep)
+            # Refuses an iterate whose counts are not the seed's, so the counts
+            # the Jacobian holds its shifts to are the seed's as well.
+            norm, residual = self._residual_norm(
+                unknowns,
+                times,
+                dimension,
+                sweep,
+                counts,
+            )
             if norm < _TOLERANCE:
                 return unknowns
             if not np.isfinite(norm):
@@ -397,7 +539,7 @@ class HomoclinicCurve:
                 residual,
             )
             unknowns = unknowns + self._step(jacobian, residual)
-        norm, _ = self._residual_norm(unknowns, times, dimension, sweep)
+        norm, _ = self._residual_norm(unknowns, times, dimension, sweep, counts)
         if norm < _TOLERANCE:
             return unknowns
         return None
@@ -408,14 +550,25 @@ class HomoclinicCurve:
         times: np.ndarray,
         dimension: int,
         sweep: float,
+        counts: tuple[int, int] | None = None,
     ) -> tuple[float, np.ndarray]:
         """The residual and its norm, ``inf`` once a diverging iterate overflows.
+
+        ``counts``, when given, are the saddle's eigenvalue counts the residual
+        holds the iterate to; a change raises :class:`EigenvalueCountError`.
 
         Overflow surfaces as Python's ``OverflowError`` from the field, or as
         numpy's refusal to decompose the saddle's non-finite Jacobian.
         """
         try:
-            residual = self._residual(unknowns, times, times.size, dimension, sweep)
+            residual = self._residual(
+                unknowns,
+                times,
+                times.size,
+                dimension,
+                sweep,
+                counts,
+            )
         except (OverflowError, np.linalg.LinAlgError):
             return np.inf, np.empty(0)
         with np.errstate(over="ignore", invalid="ignore"):
@@ -435,16 +588,34 @@ class HomoclinicCurve:
         least-squares fallback - got it there; a diverging iterate that overflows
         is a ``None`` too. The orbit carries its collocation residual.
 
+        Newton's method on the bordered collocation system: orbit nodes, saddle
+        and the continuation parameter are unknowns, the swept parameter is held.
+        The saddle must keep the seed's stable and unstable eigenvalue counts
+        throughout, since the boundary rows are counted from them.
+
         Args:
             sweep: Value of the swept parameter.
-            orbit_seed: Initial path, shape ``(intervals + 1, dimension)``.
-            equilibrium_seed: Initial saddle position.
+            orbit_seed: ``(intervals + 1, n)`` initial orbit on the mesh.
+            equilibrium_seed: Initial saddle.
             continuation_seed: Initial value of the continuation parameter.
 
         Returns:
             The converged point, or ``None``.
 
+        Raises:
+            EigenvalueCountError: The seed is not a hyperbolic saddle, or an
+                iterate or a finite-difference shift changes its stable and
+                unstable eigenvalue counts.
+
         References:
+            Champneys, A. R., Kuznetsov, Yu. A. & Sandstede, B. (1996). A numerical
+                toolbox for homoclinic bifurcation analysis. *International Journal
+                of Bifurcation and Chaos* 6(5), 867-887. DOI 10.1142/S0218127496000485.
+                The defining system continued here.
+            Beyn, W.-J. (1990). The numerical computation of connecting orbits in
+                dynamical systems. *IMA Journal of Numerical Analysis* 10(3),
+                379-405. DOI 10.1093/imanum/10.3.379. Projection boundary
+                conditions at the truncated ends.
             Bader and Ascher 1987 (docs/references.md, ``Bader1987``), COLNEW
             subroutine ``CONTRL``: a Newton iteration that fails returns no
             solution (``IFLAG = -2``), as this returns ``None``.
@@ -486,15 +657,49 @@ class HomoclinicCurve:
     ) -> list[HomoclinicCurvePoint]:
         """Trace the curve across ``sweep_values``, seeding each from the last.
 
-        Stops at the first value whose point does not converge, so the list can
-        be shorter than ``sweep_values``; every point in it converged.
+        Natural-parameter continuation: each value is solved by
+        :meth:`solve_point` from the previous point's orbit, saddle and
+        parameter. It stops at the first value it cannot solve and returns the
+        points before it, as the other curve tracers do; every point in it
+        converged. A stop because the
+        saddle's eigenvalue counts changed - it lost hyperbolicity, or stopped
+        being a saddle - is announced with a ``RuntimeWarning`` carrying the
+        :class:`EigenvalueCountError` message, which names both counts and the
+        parameter values.
+
+        Args:
+            sweep_values: Swept-parameter values, in order.
+            orbit_seed: Initial orbit for the first value.
+            equilibrium_seed: Initial saddle for the first value.
+            continuation_seed: Initial continuation parameter for the first value.
+
+        Returns:
+            The solved points, up to the first value that could not be solved.
+
+        References:
+            Champneys, A. R., Kuznetsov, Yu. A. & Sandstede, B. (1996). A numerical
+                toolbox for homoclinic bifurcation analysis. *International Journal
+                of Bifurcation and Chaos* 6(5), 867-887. DOI 10.1142/S0218127496000485.
+                The defining system continued here.
+            Beyn, W.-J. (1990). The numerical computation of connecting orbits in
+                dynamical systems. *IMA Journal of Numerical Analysis* 10(3),
+                379-405. DOI 10.1093/imanum/10.3.379. Projection boundary
+                conditions at the truncated ends.
         """
         points: list[HomoclinicCurvePoint] = []
         orbit = orbit_seed.astype(float)
         equilibrium = np.asarray(equilibrium_seed, dtype=float)
         continuation = float(continuation_seed)
         for sweep in sweep_values:
-            point = self.solve_point(sweep, orbit, equilibrium, continuation)
+            try:
+                point = self.solve_point(sweep, orbit, equilibrium, continuation)
+            except EigenvalueCountError as refusal:
+                warnings.warn(
+                    f"homoclinic curve stopped after {len(points)} points: {refusal}",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+                break
             if point is None:
                 break
             points.append(point)
