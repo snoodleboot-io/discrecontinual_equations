@@ -120,9 +120,10 @@ def van_der_pol_stage() -> StageScene:
             "The origin's branch and its Hopf come from ContinuerBuilder; the "
             "cycle from CycleContinuation, seeded just past the Hopf as the "
             "circle of radius two the normal form predicts. The Floquet "
-            "readout carries its own error - one multiplier is exactly 1 along "
-            "the orbit, so how far the computed one sits from 1 is how far all "
-            "of them are off, and it grows with mu as the fixed mesh loses the "
+            "readout carries its own error - the larger of how far the "
+            "multiplier that is exactly 1 along the orbit sits from 1, and "
+            "twice how far the multipliers move when the cycle is re-solved on "
+            "twice the nodes - and it grows with mu as the fixed mesh loses the "
             "jump layers."
         ),
     )

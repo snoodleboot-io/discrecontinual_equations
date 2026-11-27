@@ -343,6 +343,70 @@ branch costs 3.7x (Bogdanov–Takens, 86 s against 23 s) and 4.5x (ring, 287 s a
 offered beside the default rather than in place of it, and the films still ship
 under Hermite–Simpson.
 
+### Hermite–Simpson's Floquet error on multi-turn orbits (DEQ-105)
+
+Under Hermite–Simpson the trivial drift alone is not a bound. A multiplier's
+error has two sources: the monodromy's quadrature along the interpolant, and the
+orbit, which is the exact cycle of a field `O(h^4)` away. The trivial multiplier is
+one for every cycle of every field, so the drift sees only the quadrature: walked
+along the *exact* Rössler orbit's nodes it equals the quadrature's whole error. The
+orbit's share is the multipliers' sensitivity to the field times that `O(h^4)`, and
+on a period-doubled orbit that sensitivity grows by about Feigenbaum's 4.67 per
+doubling, while the drift grows only with the number of turns. Rössler
+(`a = b = 0.2`) at 80 nodes a turn, against Poincaré-map shooting with DOP853 at
+`rtol = 1e-12`:
+
+| turns | c | `|dmu/dc|` | true error | drift (over-read) | estimate (over-read) |
+|---|---|---|---|---|---|
+| 1 | 2.8 | 0.67 | 1.42e-7 | 1.20e-7 (0.84) | 2.63e-7 (1.85) |
+| 2 | 3.8 | 1.7 | 1.58e-5 | 8.44e-6 (0.53) | 2.96e-5 (1.87) |
+| 4 | 4.1 | 7.3 | 1.66e-4 | 2.29e-5 (0.14) | 3.11e-4 (1.87) |
+| 8 | 4.18 | 34 | 8.64e-4 | 4.85e-5 (0.056) | 1.62e-3 (1.87) |
+| 16 | 4.198 | 155 | 4.24e-3 | 9.82e-5 (0.023) | 7.95e-3 (1.87) |
+
+Both sources are fourth order (15.8-15.9 per doubling of the nodes), so a
+Hermite–Simpson point now carries Gauss–Legendre's estimate: the larger of the
+drift and twice the gap to the same cycle re-solved on twice the nodes, started
+from the cubic Hermite interpolant. Each gap is scaled by the smaller of the pair's
+sizes: scaled by the coarse reading alone, a monodromy that lost the trivial
+multiplier and read 1540 (van der Pol at `mu = 5` on 12 nodes) was "off by one".
+
+On the cascade at 1 to 16 turns, three parameters in each period's window and 40,
+80 and 160 nodes a turn (45 cycles), it never read low, and read 1.11 to 2.3 times
+the true error (median 1.87, the `2 (1 - 2^-4)` order four predicts). The drift had
+read low on 41 of them, by up to 45 times, and passed three 16-turn cycles whose
+true errors were 6.2-6.7%. On the DEQ-55 verifier's grid under Hermite–Simpson (van
+der Pol at `mu` 0.5-6, the Brusselator at `b` 2.5, 3, 4, the fold-of-cycles normal
+form at eight points, 3 to 96 nodes; 182 converged cycles) it read low on 6, every
+one a cycle whose multipliers are wrong in the leading digit (true errors 0.79 to
+773, estimates 0.031 to 523, all refused); six more had a failed doubled solve and
+read infinite. No cycle with a true error above 2e-2 passed anywhere, where the
+drift had passed one. Over all 227 converged cycles the over-read was 1.0 to 3 on
+207 and the median 1.87.
+
+The price is a re-solve on the doubled mesh per point, and a gate about twice as
+strict: 13 cycles on the grid that the drift passed with true errors under 2% are
+now refused, twelve of them between 1.1% and 2% and one, van der Pol at `mu = 2`
+on 12 nodes, at 0.50% (read 16.7%, a 33-fold over-read). Every film keeps all its cycles: the worst error over each film's branch
+roughly doubles (0.089% to 0.17% on Bogdanov–Takens, 0.088% to 0.165% on the ring)
+and stays far under the gate.
+
+The bound has two limits, both found by an independent verification against
+Radau shooting on Lorenz, forced Duffing and Langford cycles:
+
+- It bounds the error of the cycle *actually computed*. A seed can converge to
+  another cycle, and in a forced system, where the period cannot tell them apart,
+  to a lower-period orbit traversed `k` times. Seeded from a four-turn Duffing
+  cycle, or a twelve-turn Lorenz cycle at `r = 99.6`, the solve landed on a two-,
+  six- or three-turn orbit traversed two or four times, and passed with errors of
+  1 to 68 against the cycle seeded. The estimate bounded the error against the
+  orbit it found. Detecting the repetition is tracked as DEQ-127.
+- The monodromy's forward-difference Jacobian biases both meshes alike, so
+  neither the gap nor the drift sees it. Below a floor of about `1e-5` the
+  estimate can read up to about four times low (a 5.9e-6 floor on Duffing),
+  still orders of magnitude under the gate. Switching to an automatic-
+  differentiation Jacobian is tracked as DEQ-128.
+
 ### Equidistributing the mesh, measured again
 
 The adaptive mesh rejected above was rejected under trapezoidal collocation, where

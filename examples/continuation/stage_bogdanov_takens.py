@@ -108,7 +108,9 @@ BOX = ((-1.25, 0.9), (-0.85, 0.85))
 # top and did not help (1.4e-5% worst over the stretch both covered, with and
 # without it), so it was left out. This film still ships under the default:
 # switching it changes the page, which is a decision about the film and not a
-# side effect of the scheme.
+# side effect of the scheme. Since DEQ-105 a Hermite-Simpson point reports the
+# doubled-mesh estimate rather than the trivial drift alone, and the worst on the
+# branch reads 0.173% where the drift read 0.089%.
 INTERVALS = 80
 GRID = 36
 # The cycle continuation is seeded this far below the Hopf, where the cycle is
@@ -264,9 +266,10 @@ def bogdanov_takens_stage() -> StageScene:
             "field sampled on a 36\u00d736 grid per frame. The cycle continuation "
             "stops where the fixed 80-node mesh can no longer resolve the orbit "
             "hugging the saddle; the manifolds carry the homoclinic the rest of "
-            "the way. The Floquet readout carries its own error: one multiplier "
-            "is exactly 1 along the orbit, and how far the computed one sits from "
-            "1 is how far all of them are off."
+            "the way. The Floquet readout carries its own error: the larger of "
+            "how far the multiplier that is exactly 1 along the orbit sits from "
+            "1, and twice how far the multipliers move when the cycle is "
+            "re-solved on twice the nodes."
         ),
     )
     scene = stage_scene(

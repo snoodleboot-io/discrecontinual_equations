@@ -80,14 +80,16 @@ _AUTODIFF = AutomaticDifferentiation()
 # cycle this sits between what 160 and 320 trapezoidal nodes buy (8.9% at 80, 2.5%
 # at 160, 0.6% at 320); Hermite-Simpson is under it on the whole branch at 80.
 _FLOQUET_TOLERANCE = 2.0e-2
-# What a Gauss-Legendre point's gap to the same cycle on the doubled mesh is
-# multiplied by to bound its own error. If doubling the mesh at least halves the
-# error, then e_N <= |mu_N - mu_2N| + e_2N <= |mu_N - mu_2N| + e_N / 2, so
-# e_N <= 2 |mu_N - mu_2N|. Any convergent order gives that once resolved; order
-# 2m gives it with room to spare (the gap is then (1 - 4^-m) e_N, read 2/(1 -
-# 4^-m) ~ 2.1 times high at m = 2). The fourth-order Hermite cross-check could
-# not bound the error at m = 2, where both readings cancel, and over-read it by
-# orders of magnitude at m = 4; since DEQ-55 it is not part of the estimate.
+# What a Gauss-Legendre or Hermite-Simpson point's gap to the same cycle on the
+# doubled mesh is multiplied by to bound its own error. If doubling the mesh at
+# least halves the error, then e_N <= |mu_N - mu_2N| + e_2N <= |mu_N - mu_2N| +
+# e_N / 2, so e_N <= 2 |mu_N - mu_2N|. Any convergent order gives that once
+# resolved; order p gives it with room to spare (the gap is then (1 - 2^-p) e_N,
+# so the estimate reads 2 (1 - 2^-p) = 1.875 times the error at p = 4:
+# Gauss-Legendre at m = 2, and Hermite-Simpson, measured 1.87 on the Rossler
+# cascade). The fourth-order Hermite cross-check could not bound the
+# error at m = 2, where both readings cancel, and over-read it by orders of
+# magnitude at m = 4; since DEQ-55 it is not part of the estimate.
 _DOUBLING_SAFETY = 2.0
 # How far a solved seed's period may stray from the seed's own, either way,
 # before it is refused as another cycle or none (see
@@ -183,6 +185,10 @@ class _Collocation:
     # Whether the Floquet multipliers are read off this scheme's own Jacobian
     # (:func:`_jacobian_monodromy`) rather than the Hermite monodromy.
     jacobian_monodromy = False
+    # Whether a point's error is estimated against the same cycle re-solved on
+    # the doubled mesh, rather than read off the trivial multiplier alone (see
+    # :attr:`CyclePoint.floquet_error`).
+    doubled_error = False
 
     def residual(
         self,
@@ -306,6 +312,7 @@ class _HermiteSimpson(_Collocation):
     """
 
     name = "hermite_simpson"
+    doubled_error = True
 
     def _midpoints(
         self,
@@ -421,6 +428,7 @@ class _GaussLegendre(_Collocation):
 
     name = "gauss_legendre"
     jacobian_monodromy = True
+    doubled_error = True
 
     def __init__(self, points: int) -> None:
         self.width = points
@@ -538,11 +546,16 @@ def _multiplier_disagreement(first: np.ndarray, second: np.ndarray) -> float:
     of one and the multiplier's size: the trivial multiplier is compared in
     absolute terms, as :attr:`CyclePoint.floquet_error` always has, and a
     multiplier of 140 is not called wrong for being off by 1e-3.
+
+    The size is the smaller of the pair's two (DEQ-105), so neither reading can
+    shrink the gap by being wrong. Relative to ``first`` alone, a coarse mesh
+    whose monodromy has lost the trivial multiplier and reads 1540 where the
+    cycle's multipliers are one and 1e-30 - van der Pol at ``mu = 5`` on 12
+    Hermite-Simpson nodes - is "wrong by one" however far off it is, and twice
+    that is 2 against a true error of 1540.
     """
-    gaps = np.abs(first[:, None] - second[None, :]) / np.maximum(
-        1.0,
-        np.abs(first)[:, None],
-    )
+    sizes = np.minimum(np.abs(first)[:, None], np.abs(second)[None, :])
+    gaps = np.abs(first[:, None] - second[None, :]) / np.maximum(1.0, sizes)
     rows, columns = linear_sum_assignment(gaps)
     return float(np.max(gaps[rows, columns]))
 
@@ -755,6 +768,45 @@ class CyclePoint:
         single sampled point to decide whether a branch's multipliers can be
         believed.
 
+        Under Hermite-Simpson the drift alone is not a bound, and since DEQ-105
+        that scheme's points carry the same two-reading estimate as
+        Gauss-Legendre's below. A multiplier's error has two sources: the
+        monodromy's quadrature along the interpolant, and the orbit itself,
+        which is the exact cycle of a field ``O(h^4)`` away. The trivial
+        multiplier is one for *every* cycle of *every* field, so the second
+        source cannot move it; the drift sees the quadrature alone. Walked
+        along the exact Rossler cycle's nodes, at 80 a turn, the quadrature's
+        error *is* the drift (2.36e-5 and 2.36e-5 on the four-turn cycle). The
+        orbit's share is the multipliers' sensitivity to the field times that
+        ``O(h^4)``, and on a period-doubled orbit the sensitivity grows with
+        each doubling: the multiplier sweeps from one to minus one across a
+        parameter window that shrinks by Feigenbaum's 4.67 every time.
+        ``|dmu/dc|`` read 0.67, 1.7, 7.3, 34, 155 at 1 to 16 turns, and the
+        error divided by it stayed near 2.6e-5 from four turns on, while the
+        drift grew only with the turns: it read low by 1.2, 1.9, 7.2, 18 and
+        43 times on those cycles. Both sources are
+        fourth order - the error fell 15.8-15.9 times per doubling of the
+        nodes from two turns up - so the doubled mesh's gap sees both, and
+        twice it is the bound ``_DOUBLING_SAFETY`` derives. On that cascade at
+        1 to 16 turns and 40 to 160 nodes a turn (45 cycles) it never read
+        low, and read 1.11 to 2.3 times the true error, median 1.87. On the
+        verifier's grid below under Hermite-Simpson (182 cycles) it read low
+        on 6, all cycles wrong in the leading digit (true errors 0.79 to 773)
+        and all refused; no cycle above the default gate passed.
+
+        The bound has two limits. It is a bound for the cycle actually
+        computed, and a seed can converge to a different one: in a forced
+        system, where the period cannot tell them apart, a lower-period orbit
+        traversed ``k`` times. Seeded from a four-turn forced Duffing cycle, or
+        a twelve-turn Lorenz cycle at ``r = 99.6``, the solve landed on the
+        two-, six- or three-turn orbit traversed two or four times and passed
+        with errors of 1 to 68 against the cycle seeded; the estimate bounded
+        the error against the orbit it found (DEQ-127). And the monodromy's
+        forward-difference ``df/dx`` biases both meshes alike, so neither the
+        gap nor the drift sees it. Below a floor of about ``1e-5`` the
+        estimate can read up to about four times low (5.9e-6 true on the
+        Duffing cycle), still orders of magnitude under the gate (DEQ-128).
+
         Under Gauss-Legendre collocation the trivial multiplier stops being a
         measure, and the point carries its error explicitly instead. Those
         multipliers are read off the collocation Jacobian, which is the
@@ -819,13 +871,17 @@ class CyclePoint:
         """Whether this cycle's multipliers are accurate enough to be believed.
 
         The counterpart of :meth:`AdaptivePeriodicOrbit.continue_to_resolved` for a
-        cycle, and far cheaper for the same reason ``floquet_error`` is: the period
-        has to be re-solved on a doubled mesh before anyone can say how wrong it is,
-        whereas the trivial multiplier's exact value is known in advance, so this
-        measurement arrives with the point. Under the one-wide schemes it costs
-        nothing more. Under Gauss-Legendre it costs a re-solve on the doubled
-        mesh for every point, and it is conservative: no cycle measured passed
-        with a true error above the tolerance (see :attr:`floquet_error`).
+        cycle. Under trapezoidal it costs nothing more: the trivial multiplier's
+        exact value is known in advance, so its drift arrives with the point.
+        Under Hermite-Simpson and Gauss-Legendre the drift is not enough, and
+        the point has already paid for a re-solve on the doubled mesh; the
+        test is conservative there for the cycle actually computed: no cycle
+        measured passed with a true error above the tolerance against the
+        orbit the solve found. A seed that lands on a lower-period orbit
+        traversed several times is judged against that orbit, not the one
+        seeded (DEQ-127), and below a forward-difference floor of about
+        ``1e-5`` the estimate can read up to about four times low (DEQ-128);
+        see :attr:`floquet_error`.
         """
         return self.floquet_error < tolerance
 
@@ -1834,31 +1890,51 @@ class CycleContinuation:
     ) -> np.ndarray:
         """The same cycle's multipliers re-solved on twice the intervals.
 
-        The Gauss-Legendre error estimate's second reading (see
-        :data:`_DOUBLING_SAFETY`). Each interval's polynomial is evaluated at
-        the doubled mesh's points, which puts the start within the coarse
-        solution's own error of the fine one, and the cycle is corrected there
-        with the parameter held fixed, as :meth:`_solve_seed` does. A fine
+        The error estimate's second reading (see :data:`_DOUBLING_SAFETY`),
+        under Gauss-Legendre and Hermite-Simpson. The doubled mesh's points are
+        taken off the coarse solution's own curve - each Gauss-Legendre
+        interval's polynomial, or the cubic Hermite interpolant through the
+        nodes and their slopes ``T f(x)``, the curve the Hermite-Simpson
+        midpoint condition and the Hermite monodromy both use - which puts the
+        start within the coarse solution's own error of the fine one. The cycle
+        is corrected there with the parameter held fixed, as :meth:`_solve_seed`
+        does, and its multipliers read the way the scheme reads its own. A fine
         solve that fails returns ``nan``, which the caller's disagreement turns
         into an infinite error, so the point is refused rather than believed.
         """
-        width = self._collocation.width
-        if not isinstance(self._collocation, _GaussLegendre):
-            message = "the doubled-mesh reading is for Gauss-Legendre only"
+        collocation = self._collocation
+        if not collocation.doubled_error:
+            message = f"the doubled-mesh reading is not used under {collocation.name}"
             raise TypeError(message)
-        basis = self._collocation.basis(np.arange(2 * width) / (2 * width))
-        pieces = [
-            basis @ states[i * width : (i + 1) * width + 1]
-            for i in range(self._intervals)
-        ]
+        width = collocation.width
+        if isinstance(collocation, _GaussLegendre):
+            basis = collocation.basis(np.arange(2 * width) / (2 * width))
+            pieces = [
+                basis @ states[i * width : (i + 1) * width + 1]
+                for i in range(self._intervals)
+            ]
+        else:
+            slopes = period * np.array(
+                [self._field(state, parameter) for state in states],
+            )
+            halves = np.array([0.0, _HALF])
+            pieces = [
+                _hermite_positions(
+                    states[i : i + 2],
+                    slopes[i : i + 2],
+                    1.0 / self._intervals,
+                    halves,
+                )
+                for i in range(self._intervals)
+            ]
         fine = CycleContinuation(
             self._equation,
             self._parameter_index,
             2 * self._intervals,
             self._phase_index,
             self._phase_value,
-            collocation=_GaussLegendre.name,
-            collocation_points=width,
+            collocation=collocation.name,
+            collocation_points=width if collocation.jacobian_monodromy else None,
             phase=self._phase,
         )
         fine._dimension = self._dimension
@@ -1872,7 +1948,33 @@ class CycleContinuation:
         corrected = fine._correct(unknowns, nodes, _Arc(unknowns, fixed_parameter, 0.0))
         if corrected is None:
             return np.full(self._dimension, np.nan)
-        return fine._jacobian_multipliers(corrected, nodes)[0]
+        if collocation.jacobian_monodromy:
+            return fine._jacobian_multipliers(corrected, nodes)[0]
+        return fine._multipliers(
+            corrected[: nodes * self._dimension].reshape(nodes, self._dimension),
+            float(corrected[nodes * self._dimension]),
+            parameter,
+        )
+
+    def _estimated_error(
+        self,
+        multipliers: np.ndarray,
+        states: np.ndarray,
+        period: float,
+        parameter: float,
+    ) -> float:
+        """The larger of the trivial drift and twice the doubled-mesh gap.
+
+        See :attr:`CyclePoint.floquet_error` for why both, and
+        :data:`_DOUBLING_SAFETY` for why twice.
+        """
+        doubled = self._doubled_multipliers(states, period, parameter)
+        refinement = (
+            _DOUBLING_SAFETY * _multiplier_disagreement(multipliers, doubled)
+            if np.all(np.isfinite(doubled))
+            else float("inf")
+        )
+        return max(float(np.min(np.abs(multipliers - 1.0))), refinement)
 
     def _solve_seed(self, seed: CycleSeed, nodes: int) -> np.ndarray | None:
         """The first point on the branch, or ``None`` if no believable one is found.
@@ -2226,23 +2328,25 @@ class CycleContinuation:
         parameter = float(unknowns[-1])
         if not self._collocation.jacobian_monodromy:
             multipliers = self._multipliers(states, period, parameter)
+            estimate = None
+            if self._collocation.doubled_error:
+                estimate = (
+                    self._estimated_error(multipliers, states, period, parameter)
+                    if np.all(np.isfinite(multipliers))
+                    else float("inf")
+                )
             return CyclePoint(
                 parameter,
                 PeriodicOrbitSolution(states, period),
                 multipliers,
+                error=estimate,
             )
         # The point keeps every point of the solution, interior ones included,
         # with where each sits: the Hermite cross-check, asked for, walks them.
         positions = self._collocation.grid(self._mesh)
         multipliers, method = self._jacobian_multipliers(unknowns, nodes)
         if np.all(np.isfinite(multipliers)):
-            doubled = self._doubled_multipliers(states, period, parameter)
-            refinement = (
-                _DOUBLING_SAFETY * _multiplier_disagreement(multipliers, doubled)
-                if np.all(np.isfinite(doubled))
-                else float("inf")
-            )
-            error = max(float(np.min(np.abs(multipliers - 1.0))), refinement)
+            error = self._estimated_error(multipliers, states, period, parameter)
         else:
             # An interval block too singular to solve: no multipliers to read,
             # so the point is reported and refused rather than the trace lost.
