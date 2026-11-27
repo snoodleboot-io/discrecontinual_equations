@@ -26,6 +26,7 @@ _SECOND_ORDER = 2
 _THIRD_ORDER = 3
 _FOURTH_ORDER = 4
 _CENTRAL_PAIR = 2.0
+_UNIT_LENGTH = 1.0
 
 
 class DerivativeProvider(ABC):
@@ -187,13 +188,17 @@ class FiniteDifferenceDerivatives(DerivativeProvider):
         return sparsity.expand(np.column_stack(compressed)) / (_CENTRAL_PAIR * steps)
 
     def step(self, point: np.ndarray, direction: np.ndarray) -> float:
-        """The stencil spacing ``t`` along ``direction``, relative to ``point``."""
+        """The stencil spacing ``t`` along ``direction``, relative to ``point``.
+
+        ``t = epsilon min(1, max_j |d_j|) / max_j(|d_j| / s_j)``, so that no
+        component moves more than its own step, ``|t d_j| <= epsilon s_j``.
+        """
         size = np.abs(direction)
         scales = step_scales(np.asarray(point, dtype=float), self._typical)
         weight = float(np.max(size / scales))
         if weight == 0.0:
             return self._epsilon
-        return self._epsilon * (float(np.max(size)) / weight)
+        return self._epsilon * (min(_UNIT_LENGTH, float(np.max(size))) / weight)
 
     def _evaluate(
         self,

@@ -22,6 +22,9 @@ from typing import ClassVar
 import numpy as np
 import pytest
 
+from discrecontinual_equations.continuation.continuation_config import (
+    ContinuationConfig,
+)
 from discrecontinual_equations.continuation.derivative_provider import (
     FiniteDifferenceDerivatives,
 )
@@ -571,15 +574,72 @@ class TestDirectionalStep:
         assert FiniteDifferenceDerivatives(1.0e-3).step(point, direction) == 1.0e-3
 
     def test_the_step_follows_the_component_the_direction_moves_most(self):
-        # d = (2, 1e-12): x1 = 4e12 moves eps s_1 per unit of max|d| = 2.
+        # d = (2, 1e-12): max |d_j| / s_j is 2 / 1 against 1e-12 / 4e12, so x0
+        # binds, and it moves epsilon s_0 = 1e-6, not 2e-6 (DEQ-163).
         point = np.array([0.5, 4.0e12])
         direction = np.array([2.0, 1.0e-12])
         step = FiniteDifferenceDerivatives(1.0e-6).step(point, direction)
-        # max |d_j| / s_j: 2 / 1 against 1e-12 / 4e12; the first wins.
-        assert step == 1.0e-6
+        assert step == 0.5e-6
+        # d = (0, 2): x1 binds and moves epsilon s_1 = 4e6, not 8e6.
         step = FiniteDifferenceDerivatives(1.0e-6).step(point, np.array([0.0, 2.0]))
+        assert step == pytest.approx(1.0e-6 * 4.0e12 / 2.0, rel=1.0e-15)
+
+    def test_a_short_direction_keeps_the_step_of_a_unit_one(self):
+        # max |d| <= 1: t = epsilon max|d| / max_j(|d_j| / s_j), as before.
+        point = np.array([0.5, 4.0e12])
+        direction = np.array([0.0, 0.25])
+        step = FiniteDifferenceDerivatives(1.0e-6).step(point, direction)
         assert step == pytest.approx(1.0e-6 * 4.0e12, rel=1.0e-15)
 
+    @pytest.mark.parametrize("seed", range(4))
+    def test_no_component_moves_more_than_its_own_step(self, seed):
+        # |t d_j| <= epsilon s_j on every component, with equality on the one
+        # that binds whenever max|d| >= 1, at any length and scale of d and x.
+        rng = np.random.default_rng(seed)
+        point = rng.standard_normal(5) * 10.0 ** rng.uniform(-3.0, 13.0, 5)
+        direction = rng.standard_normal(5) * 10.0 ** rng.uniform(0.0, 13.0, 5)
+        epsilon = 1.0e-6
+        step = FiniteDifferenceDerivatives(epsilon).step(point, direction)
+        scales = np.maximum(np.abs(point), 1.0)
+        relative = np.abs(step * direction) / (epsilon * scales)
+        assert np.all(relative <= 1.0 + 4.0 * _EPS)
+        assert np.max(relative) == pytest.approx(1.0, rel=1.0e-10)
+
+
+class _Cube(DeterministicFunction):
+    """``f(x) = x^3`` in one dimension."""
+
+    @classmethod
+    def make(cls) -> "_Cube":
+        return cls(variables=[_X()], parameters=[], results=[_X()], time=None)
+
+    def eval(self, point, time=None):  # noqa: ARG002 (base signature)
+        return [point[0] ** 3]
+
+
+@pytest.mark.parametrize("size", [1.0, 1.0e3, 1.0e6, 1.0e12])
+@pytest.mark.parametrize("epsilon", [1.0e-6, CENTRAL_STEP])
+class TestLargeDirections:
+    """The first Taylor coefficient of ``x^3`` along ``d = x`` (DEQ-163).
+
+    ``g(s) = (x + s d)^3`` has ``g'(0) = 3 x^2 d`` and ``g''' = 6 d^3``, so the
+    central difference at spacing ``t`` errs by the truncation ``t^2 d^3`` plus
+    the rounding ``~ eps (|x|^3 + 3 x^2 |x|) / (2 t)`` of the field and of the
+    moved state. With the displacement ``t d`` held to ``epsilon |x|`` that is
+    ``epsilon^2 / 3 + O(eps / epsilon)`` relative at every size; a step that grew
+    with ``|d|`` moved ``x = d = 1e6`` by ``1e6`` and erred by a third.
+    """
+
+    def test_first_coefficient_of_a_cube(self, size, epsilon):
+        point = np.array([size])
+        provider = FiniteDifferenceDerivatives(epsilon)
+        a1 = provider.taylor(_Cube.make(), point, point, 1, 0.0)[1].real[0]
+        exact = 3.0 * size**3
+        # The error model at the displacement the rule promises, epsilon |x|.
+        t = epsilon
+        truncation = t**2 * size**3
+        rounding = _EPS * (size**3 + 3.0 * size**3) / (2.0 * t)
+        assert abs(a1 - exact) <= _SLACK * (truncation + rounding)
 
 def _separable(scales, point):
     """``f_i = s_i (u_i^3 + u_i^2)``: row ``i`` reads ``x_i`` alone."""
@@ -639,3 +699,22 @@ class TestGroupedColumns:
         assert np.array_equal(provider.jacobian(field, state, 0.0, pattern), dense)
         error = np.abs(np.diag(dense) - _separable_slopes(scales, state))
         assert np.all(error <= _separable_allowance(scales, state, CENTRAL_STEP))
+
+
+class TestCentralStepConstant:
+    """``CENTRAL_STEP`` is ``eps^(1/3)`` correctly rounded, on every machine (DEQ-164)."""
+
+    def test_it_is_the_correctly_rounded_cube_root_of_eps(self):
+        # Exact rational check, independent of any cbrt kernel: the cube of the
+        # half-way points either side of CENTRAL_STEP brackets eps.
+        below = Fraction(np.nextafter(CENTRAL_STEP, 0.0))
+        above = Fraction(np.nextafter(CENTRAL_STEP, 1.0))
+        step = Fraction(CENTRAL_STEP)
+        assert ((step + below) / 2) ** 3 <= Fraction(_EPS) < ((step + above) / 2) ** 3
+
+    def test_it_is_a_literal(self):
+        assert CENTRAL_STEP == float.fromhex("0x1.965fea53d6e3dp-18")
+
+    def test_the_configured_epsilon_is_described_as_relative(self):
+        field = ContinuationConfig.model_fields["finite_difference_epsilon"]
+        assert "Relative step" in str(field.description)
