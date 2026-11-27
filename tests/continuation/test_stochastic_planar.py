@@ -400,7 +400,8 @@ class TestDynamicalThreshold(TestCase):
         # that displaces each located threshold is identical and cancels in the
         # difference. That difference is s^2 / 2 exactly, and is by far the most
         # accurate statement available about an absolute threshold located this way.
-        sigma, horizon = 1.0, 15000
+        # It holds to 1e-10 at any horizon, so a short one serves (DEQ-144).
+        sigma, horizon = 1.0, 3000
         ito = _dynamical(sigma, Ito(), horizon, (7,)).locate(-1.0, 1.5)
         stratonovich = _dynamical(sigma, Stratonovich(), horizon, (7,)).locate(
             -1.0,
