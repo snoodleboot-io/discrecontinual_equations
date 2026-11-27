@@ -138,6 +138,11 @@ def lyapunov_spectrum(
 ) -> LyapunovSpectrum:
     """Estimate the Lyapunov spectrum of ``function`` along an orbit from ``start``.
 
+    Complexity: ``O(T C_f + H (n C_f + n^2 k))`` for ``T`` transient and ``H``
+    horizon steps and ``k`` directions: a transient step advances the state alone
+    (four field evaluations), a horizon step takes ``4(n + 2)``; plus a QR every
+    tenth step; ``O(n^2)`` memory.
+
     ``count`` tangent directions are tracked (all of them by default). The orbit is
     advanced through the transient first so it settles onto the attractor, then the
     exponents are accumulated over the horizon with periodic QR renewal. The
@@ -275,6 +280,11 @@ def stochastic_lyapunov(
 ) -> LyapunovSpectrum:
     """Estimate the Lyapunov spectrum of a scalar-noise stochastic flow.
 
+    Complexity: per horizon step ``O(n (C_f + C_g) + n^2 k)`` plus, under
+    Stratonovich only, the ``O(n^3)`` product ``g_x g_x``; a transient step
+    advances the state alone, ``O(C_f + C_g)`` under Ito and ``O(C_f + n C_g)``
+    under Stratonovich. ``O(n^2)`` memory.
+
     The ``system`` carries ``dx = f(x) dt + g(x) dW`` and its noise convention.
     Reference and tangent frame are advanced together by Euler-Maruyama with a shared
     Brownian increment; the frame is re-orthonormalised by periodic QR. For the linear
@@ -411,6 +421,11 @@ def matrix_noise_lyapunov(
     settings: StochasticLyapunovSettings | None = None,
 ) -> LyapunovSpectrum:
     """Estimate the Lyapunov spectrum of a flow driven by ``K`` independent noises.
+
+    Complexity: per horizon step ``O(K n C_g + n C_f + K n^2 + n^2 k)`` (the
+    tangent noise contracts the increments first), plus the ``O(K n^3)``
+    variational shift under Stratonovich only; a transient step advances the
+    state alone. ``O(K n^2)`` memory for the column Jacobians.
 
     This is :func:`stochastic_lyapunov` with the single Brownian increment replaced by
     one per driver, and it exists because the scalar-noise estimator and the planar

@@ -40,6 +40,10 @@ class BorderedTangentComputer(TangentComputer):
         linear_solver: Solves the bordered system.
         direction: ``+1`` or ``-1``, the seed's orientation in the parameter.
         state_scale: The state size ``S`` that one unit of arclength stands for.
+
+    Complexity:
+        One extended Jacobian (``2n + 2`` residual evaluations by finite
+        differences) and one dense ``O(n^3)`` solve; ``O(n^2)`` memory.
     """
 
     __slots__ = ["_direction", "_jacobian", "_linear_solver", "_state_weight"]

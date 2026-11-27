@@ -487,6 +487,14 @@ class StationaryFokkerPlanck:
         Raises:
             ValueError: If ``G G^T`` is singular anywhere on the grid - scalar noise,
                 or noise on only some of the components.
+
+        Complexity:
+            For ``M`` cells in ``d`` dimensions and ``K`` noise drivers,
+            ``O(d M (C_f + K C_g))`` field work, evaluated a face family at a
+            time through ``eval_batch`` where the field offers it, to assemble an
+            operator with ``O(d^2 M)`` non-zeros; then one SuperLU factorisation
+            whose fill measured about ``M^1.2`` in 2-D and ``M^1.6`` in 3-D,
+            which dominates in 3-D from about ``10^4`` cells.
         """
         grid = self._grid
         points = grid.points()

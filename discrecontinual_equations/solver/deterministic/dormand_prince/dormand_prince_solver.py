@@ -84,6 +84,10 @@ class DormandPrinceSolver(EmbeddedRungeKuttaSolver):
         Dormand and Prince (1980), the seven-stage tableau; Hairer and Wanner
         (1996), ``DOPRI5``. See ``docs/references.md`` (DormandPrince1980,
         HairerWanner1996).
+
+    Complexity:
+        Per attempted step, seven field evaluations and ``O(49 n)`` array work;
+        ``O(K n)`` memory for ``K`` accepted steps.
     """
 
     tableau = DORMAND_PRINCE_54

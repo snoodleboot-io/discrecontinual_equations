@@ -314,7 +314,20 @@ def _hermite_positions(
 
 
 class PeriodicOrbit:
-    """Solve for a limit cycle by a periodic boundary-value problem."""
+    """Solve for a limit cycle by a periodic boundary-value problem.
+
+    Complexity:
+        ``solve`` differences the residual one column group at a time: per
+        Newton iteration a few residuals per state component plus one for the
+        period, independent of ``N``, each of ``N + 1`` field evaluations, so
+        ``O(N n C_f)``; then a sparse LU of the ``O(N n^2)`` non-zeros, with the
+        dense ``O((N n)^3)`` least squares only where the LU is singular.
+        Measured (DEQ-49, ``n = 2``, ``N`` 40 to 640): time slope 1.05 against
+        2.35 for the dense difference it replaced, memory slope 0.93 against
+        1.81. ``monodromy`` takes ``9N`` Jacobians (batched where the field
+        allows) and ``4N`` RK4 propagators, ``O(N (n C_f + n^3))`` time and
+        ``O(N n^2)`` memory for the stored stage Jacobians.
+    """
 
     __slots__ = ["_function", "_intervals", "_mesh", "_phase_index", "_phase_value"]
 
@@ -801,6 +814,14 @@ class AnalyticPeriodicOrbit(PeriodicOrbit):
     the Jacobian is exact, which is the prerequisite for an affordable adaptive
     mesh and for analytic Floquet analysis. The field must be analytic (polynomial or
     rational); transcendental fields should use the base solver.
+
+    Complexity:
+        Per Newton iteration ``N + 1`` autodiff Jacobians (``O(N n C_f)``), COO
+        assembly of ``O(N n^2)`` non-zeros and one SuperLU solve whose fill stays
+        ``O(N n^2)`` (measured: ``nnz(L + U) / nnz(A)`` constant in ``N``), so
+        ``O(N)`` time and memory in ``N`` (measured slopes 1.1 and 1.0 for ``N``
+        100 to 3200). The dense least-squares fallback, taken only where the
+        sparse LU is singular, is ``O((N n)^3)``.
     """
 
     __slots__ = ()

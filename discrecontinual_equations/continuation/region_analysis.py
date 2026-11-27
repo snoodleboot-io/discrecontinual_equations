@@ -45,7 +45,11 @@ def find_equilibria(
     field: Function,
     seeds: list[np.ndarray],
 ) -> list[np.ndarray]:
-    """Locate distinct equilibria by Newton iteration from each seed."""
+    """Locate distinct equilibria by Newton iteration from each seed.
+
+    Complexity: ``O(S I ((n + 1) C_f + n^3))`` for ``S`` seeds and at most
+    ``I = 80`` Newton iterations each (forward-difference Jacobian, dense solve).
+    """
     found: list[np.ndarray] = []
     for seed in seeds:
         state = np.asarray(seed, dtype=float).copy()

@@ -545,6 +545,11 @@ class Hopf(BifurcationDetector):
 
     The determinant is read through its eigenvalues (see :mod:`.bialternate`), so
     the test costs one eigenvalue solve and cannot overflow.
+
+    Complexity:
+        One state Jacobian (shared with the point's other users when the provider
+        is memoized) plus :func:`~.bialternate.bialternate_test_value`, an
+        ``O(n^3)`` eigenvalue solve per test value.
     """
 
     @property

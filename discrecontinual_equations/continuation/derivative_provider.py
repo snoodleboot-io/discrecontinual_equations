@@ -81,7 +81,14 @@ class DerivativeProvider(ABC):
 
 
 class AutomaticDifferentiation(DerivativeProvider):
-    """Exact derivatives by evaluating the field on Taylor jets."""
+    """Exact derivatives by evaluating the field on Taylor jets.
+
+    Complexity:
+        ``taylor`` is one field evaluation on jets, ``O(C_f)`` jet operations of
+        ``O(k)`` to ``O(k^2)`` each for order ``k``; ``jacobian`` is ``n``
+        order-one passes, ``O(n C_f)``, or one pass per column group, ``O(g C_f)``,
+        when a sparsity pattern is given.
+    """
 
     def taylor(
         self,
