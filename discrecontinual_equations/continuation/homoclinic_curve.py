@@ -14,12 +14,16 @@ each swept point is seeded from the previous one.
 
 The boundary conditions give one row per stable and one per unstable eigenvalue
 of the saddle, so the system is square only while the saddle keeps the counts it
-was seeded with. Newton refuses an iterate at which they change
-(:class:`EigenvalueCountError`), and a traced curve stops there. The counts and
-the projections are read from the saddle's exact (automatic-differentiation)
-Jacobian, so a saddle whose eigenvalue is far smaller than a difference step is
-still counted correctly; the finite-difference shifts that build the Newton
-matrix keep the iterate's partition of the eigenvalues rather than re-counting.
+was seeded with. The counts are read at the seed and then followed from iterate
+to iterate by eigenvector, so a step far from convergence that briefly moves a
+small eigenvalue across zero does not stop the solve; a point is accepted only
+where the saddle has the seed's counts, and one that converges with other counts
+is refused (:class:`EigenvalueCountError`), where a traced curve stops. The
+counts, the projections and the equilibrium rows' derivative are read from the
+saddle's exact (automatic-differentiation) Jacobian, so a saddle whose
+eigenvalue is far smaller than a difference step is still counted, and solved,
+correctly; the finite-difference shifts that build the boundary rows keep the
+iterate's partition of the eigenvalues rather than re-counting.
 
 The Newton matrix is block-banded in the nodes and bordered by the equilibrium,
 boundary and phase rows and the parameter column - HomCont's structure (Champneys,
@@ -66,11 +70,14 @@ class EigenvalueCountError(ValueError):
     per unstable eigenvalue (a complex pair gives its real and imaginary part).
     With ``N`` nodes in ``n`` dimensions the system has ``N n + s + u + 1`` rows
     against ``N n + n + 1`` unknowns, so it is square only when ``s + u = n`` -
-    a hyperbolic equilibrium - and a homoclinic orbit needs ``s, u >= 1``. When
-    a Newton iterate reaches a point where the counts differ from the seed's,
-    the rows no longer line up and the point is refused with this error rather
-    than solved as a different problem. The counts are read from the exact
-    Jacobian at the saddle, so only a genuine change is refused.
+    a hyperbolic equilibrium - and a homoclinic orbit needs ``s, u >= 1``. Newton
+    follows the seed's split from iterate to iterate, so an iterate far from
+    convergence may cross a count change and come back. But a point the solve
+    converges on whose counts differ from the seed's is refused with this error
+    rather than returned as a solution of a different problem, and so is a solve
+    that runs out of iterations after an iterate with other counts. The counts
+    are read from the exact Jacobian at the saddle, so only a genuine change is
+    refused.
 
     Attributes:
         expected: ``(stable, unstable)`` counts the solve requires, those of the
@@ -351,6 +358,7 @@ class HomoclinicCurve:
         dimension: int,
         sweep: float,
         counts: tuple[int, int] | None = None,
+        partition: tuple[np.ndarray, list[int], list[int]] | None = None,
     ) -> np.ndarray:
         """The collocation, equilibrium, projection and phase rows at ``unknowns``.
 
@@ -361,6 +369,10 @@ class HomoclinicCurve:
         converging would report lost hyperbolicity where the iteration merely
         diverged; the count check (:class:`EigenvalueCountError`) applies only to
         finite iterates.
+
+        ``counts`` and ``partition`` are passed to :meth:`_tail`: the first
+        refuses a saddle with other counts, the second follows a reference
+        partition by eigenvector instead of re-counting.
         """
         states = unknowns[: nodes * dimension].reshape(nodes, dimension)
         equilibrium = unknowns[nodes * dimension : nodes * dimension + dimension]
@@ -383,6 +395,7 @@ class HomoclinicCurve:
                 equilibrium,
                 (continuation, sweep),
                 counts,
+                partition,
             ),
         )
         centre = nodes // 2
@@ -437,13 +450,14 @@ class HomoclinicCurve:
             [self._field(equilibrium, continuation, sweep), np.array(boundary)],
         )
 
-    def _jacobian(
+    def _jacobian(  # noqa: PLR0913 (the Newton state plus the partition it holds)
         self,
         unknowns: np.ndarray,
         times: np.ndarray,
         dimension: int,
         sweep: float,
         residual: np.ndarray,
+        partition: tuple[np.ndarray, list[int], list[int]] | None = None,
     ) -> csr_matrix:
         """Assemble the bordered block-banded Newton matrix, in O(N) field work.
 
@@ -459,7 +473,11 @@ class HomoclinicCurve:
           the equilibrium and the parameter, and whose dependence on the saddle's
           eigenvectors is differenced - as HomCont does - in ``3n + 1``
           evaluations that do not grow with the mesh, each taking the
-          eigenvectors of the exact Jacobian at the shifted saddle;
+          eigenvectors of the exact Jacobian at the shifted saddle. The
+          equilibrium rows' block in the saddle's own columns is that exact
+          Jacobian itself: differenced, it reads an eigenvalue ``lam`` as
+          ``lam + c dx``, which is zero at ``lam = -c dx`` and made the matrix
+          singular (DEQ-172);
         * the phase row, a single unit entry.
 
         The dense finite-difference matrix it replaces took one full residual per
@@ -469,19 +487,25 @@ class HomoclinicCurve:
         ``unknowns`` (:func:`_held_partition`): a shift of ``dx`` moves an
         eigenvalue by about ``c dx``, and one with ``|lam| < c dx`` would
         otherwise be re-counted on the other side and give rows of two lengths,
-        though the iterate itself is a saddle with the seed's counts.
+        though the iterate itself is a saddle with the seed's counts. That
+        partition is ``partition`` - the iterate's left eigenvectors and the
+        stable and unstable indices Newton follows (:meth:`_follow`) - when
+        given, and otherwise the iterate's own counted one.
         """
         size = unknowns.size
         nodes = times.size
         states = unknowns[: nodes * dimension].reshape(nodes, dimension)
         continuation = float(unknowns[-1])
-        _, reference_left, stable, unstable = _split_eigenspaces(
-            self._saddle_jacobian(
-                unknowns[nodes * dimension : nodes * dimension + dimension],
-                continuation,
-                sweep,
-            ),
+        first = nodes * dimension
+        saddle = self._saddle_jacobian(
+            unknowns[first : first + dimension],
+            continuation,
+            sweep,
         )
+        if partition is None:
+            _, reference_left, stable, unstable = _split_eigenspaces(saddle)
+        else:
+            reference_left, stable, unstable = partition
         derivatives = self._node_jacobians(states, continuation, sweep)
         row, column, value = _collocation_triplets(derivatives, times)
         bands = (nodes - 1) * dimension
@@ -510,7 +534,14 @@ class HomoclinicCurve:
             )
             rows.append(tail_rows)
             columns.append(np.full(tail_rows.size, index))
-            values.append((moved - base) / _STEP)
+            column = (moved - base) / _STEP
+            if first <= index < first + dimension:
+                # The equilibrium rows are f(saddle): their derivative in the
+                # saddle is the field Jacobian there, taken exactly. Differenced,
+                # it reads an eigenvalue lam as lam + c dx and, at lam = -c dx,
+                # makes the matrix singular (DEQ-172).
+                column[:dimension] = saddle[:, index - first]
+            values.append(column)
         rows.append(np.array([residual.size - 1]))
         columns.append(
             np.array([(nodes // 2) * dimension + self._mesh.phase_index]),
@@ -609,38 +640,144 @@ class HomoclinicCurve:
         dimension: int,
         sweep: float,
     ) -> np.ndarray | None:
+        """Newton's method on the bordered system, its saddle partition followed.
+
+        The boundary rows need the saddle's eigenvalues split into stable and
+        unstable ones. They are counted once, at the seed, and then followed
+        from iterate to iterate by eigenvector (:meth:`_follow`), not re-counted.
+        An iterate far from convergence can move the saddle by more than a
+        small eigenvalue's distance from zero - one near-singular step moved it
+        by ``1e-4`` against an eigenvalue of ``-1e-7`` (DEQ-172) - and a
+        re-count there would refuse a genuine saddle mid-solve. Following the
+        partition keeps the system square and lets Newton come back.
+
+        The counts are enforced where they mean something. A point is accepted
+        only if its residual has converged and its saddle has the seed's
+        counts; a converged residual whose saddle has other counts is a
+        solution of a different problem - the rows built for the seed's split
+        happen to vanish there - and raises :class:`EigenvalueCountError`. A
+        solve that runs out of iterations after any iterate with other counts
+        raises it too, naming the last such iterate, since that is the
+        likeliest reason it failed. An iterate that diverges to non-finite
+        values returns ``None``, as before: it says nothing about the saddle.
+
+        References:
+            Champneys, A. R., Kuznetsov, Yu. A. & Sandstede, B. (1996). A
+                numerical toolbox for homoclinic bifurcation analysis.
+                *International Journal of Bifurcation and Chaos* 6(5), 867-887.
+                DOI 10.1142/S0218127496000485. The defining system.
+            Bindel, D., Demmel, J. & Friedman, M. (2008). Continuation of
+                invariant subspaces in large bifurcation problems. *SIAM Journal
+                on Scientific Computing* 30(2), 637-656. DOI 10.1137/060654219.
+                Sec. 3.2: an invariant subspace followed by eigenvector overlap
+                from one matrix to the next.
+        """
         nodes = times.size
+        equilibrium = slice(nodes * dimension, nodes * dimension + dimension)
         counts = self._seed_counts(
-            unknowns[nodes * dimension : nodes * dimension + dimension],
+            unknowns[equilibrium],
             float(unknowns[-1]),
             sweep,
         )
+        _, left, stable, unstable = _split_eigenspaces(
+            self._saddle_jacobian(unknowns[equilibrium], float(unknowns[-1]), sweep),
+        )
+        partition = (left, stable, unstable)
+        lost: tuple[tuple[int, int], tuple[float, float]] | None = None
         for _ in range(_ITERATIONS):
-            # Refuses an iterate whose counts are not the seed's, so the counts
-            # the Jacobian holds its shifts to are the seed's as well.
             norm, residual = self._residual_norm(
                 unknowns,
                 times,
                 dimension,
                 sweep,
-                counts,
+                partition,
             )
-            if norm < _TOLERANCE:
-                return unknowns
             if not np.isfinite(norm):
                 return None
+            accepted, lost = self._check_counts(
+                unknowns, dimension, sweep, counts, norm, lost
+            )
+            if accepted:
+                return unknowns
+            partition = self._follow(
+                unknowns[equilibrium],
+                float(unknowns[-1]),
+                sweep,
+                partition,
+            )
             jacobian = self._jacobian(
                 unknowns,
                 times,
                 dimension,
                 sweep,
                 residual,
+                partition,
             )
             unknowns = unknowns + self._step(jacobian, residual)
-        norm, _ = self._residual_norm(unknowns, times, dimension, sweep, counts)
-        if norm < _TOLERANCE:
+        norm, _ = self._residual_norm(unknowns, times, dimension, sweep, partition)
+        if not np.isfinite(norm):
+            return None
+        accepted, lost = self._check_counts(
+            unknowns, dimension, sweep, counts, norm, lost
+        )
+        if accepted:
             return unknowns
+        if lost is not None:
+            reason = (
+                "Newton did not converge, and the saddle's eigenvalue counts "
+                "changed during the solve"
+            )
+            raise self._refuse(reason, *lost, counts)
         return None
+
+    def _check_counts(  # noqa: PLR0913 (the iterate, its norm and what it is held to)
+        self,
+        unknowns: np.ndarray,
+        dimension: int,
+        sweep: float,
+        counts: tuple[int, int],
+        norm: float,
+        lost: tuple[tuple[int, int], tuple[float, float]] | None,
+    ) -> tuple[bool, tuple[tuple[int, int], tuple[float, float]] | None]:
+        """Whether a finite iterate is accepted, and the last one that lost the counts.
+
+        Accepted when its residual has converged and its saddle has the seed's
+        counts. A converged residual with other counts raises
+        :class:`EigenvalueCountError`; an unconverged iterate with other counts
+        is only recorded, and Newton goes on.
+        """
+        nodes = (unknowns.size - dimension - 1) // dimension
+        equilibrium = unknowns[nodes * dimension : nodes * dimension + dimension]
+        parameters = (float(unknowns[-1]), sweep)
+        found = self._counts(equilibrium, *parameters)
+        if found == counts:
+            return norm < _TOLERANCE, lost
+        if norm < _TOLERANCE:
+            reason = (
+                "the solve converged where the saddle's eigenvalue counts are "
+                "not the seed's"
+            )
+            raise self._refuse(reason, found, parameters, counts)
+        return False, (found, parameters)
+
+    def _follow(
+        self,
+        equilibrium: np.ndarray,
+        continuation: float,
+        sweep: float,
+        reference: tuple[np.ndarray, list[int], list[int]],
+    ) -> tuple[np.ndarray, list[int], list[int]]:
+        """The saddle's partition at an iterate, matched to the previous one's.
+
+        Returns the iterate's left eigenvectors with the stable and unstable
+        indices that :func:`_held_partition` matches to ``reference``: the same
+        counts, whatever the signs of the eigenvalues at the iterate.
+        """
+        _, left, _, _ = _split_eigenspaces(
+            self._saddle_jacobian(equilibrium, float(continuation), sweep),
+        )
+        stable, unstable = _held_partition(np.linalg.inv(left), reference)
+        return left, stable, unstable
 
     def _residual_norm(
         self,
@@ -648,12 +785,12 @@ class HomoclinicCurve:
         times: np.ndarray,
         dimension: int,
         sweep: float,
-        counts: tuple[int, int] | None = None,
+        partition: tuple[np.ndarray, list[int], list[int]] | None = None,
     ) -> tuple[float, np.ndarray]:
         """The residual and its norm, ``inf`` once a diverging iterate overflows.
 
-        ``counts``, when given, are the saddle's eigenvalue counts the residual
-        holds the iterate to; a change raises :class:`EigenvalueCountError`.
+        ``partition``, when given, is the saddle partition the boundary rows
+        follow (see :meth:`_newton`); it never raises on a count change.
 
         Overflow surfaces as Python's ``OverflowError`` from the field, or as
         numpy's refusal to decompose the saddle's non-finite Jacobian.
@@ -665,7 +802,7 @@ class HomoclinicCurve:
                 times.size,
                 dimension,
                 sweep,
-                counts,
+                partition=partition,
             )
         except (OverflowError, np.linalg.LinAlgError):
             return np.inf, np.empty(0)
@@ -688,10 +825,13 @@ class HomoclinicCurve:
 
         Newton's method on the bordered collocation system: orbit nodes, saddle
         and the continuation parameter are unknowns, the swept parameter is held.
-        The saddle must keep the seed's stable and unstable eigenvalue counts
-        throughout, since the boundary rows are counted from them. They are read
-        from the exact (Taylor-jet) Jacobian at the saddle, with a forward
-        difference only for a field that cannot be evaluated on jets.
+        The boundary rows are counted from the seed's stable and unstable
+        eigenvalues, and Newton follows that split by eigenvector, so an
+        iterate far from convergence may cross a count change. The returned
+        point has the seed's counts: a point that converges with other counts is
+        refused. The counts are read from the exact (Taylor-jet) Jacobian at
+        the saddle, with a forward difference only for a field that cannot be
+        evaluated on jets.
 
         Args:
             sweep: Value of the swept parameter.
@@ -703,8 +843,10 @@ class HomoclinicCurve:
             The converged point, or ``None``.
 
         Raises:
-            EigenvalueCountError: The seed is not a hyperbolic saddle, or an
-                iterate changes its stable and unstable eigenvalue counts.
+            EigenvalueCountError: The seed is not a hyperbolic saddle; the
+                point Newton converges on has other stable and unstable
+                eigenvalue counts than the seed; or Newton runs out of
+                iterations after an iterate with other counts.
 
         References:
             Champneys, A. R., Kuznetsov, Yu. A. & Sandstede, B. (1996). A numerical
