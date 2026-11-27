@@ -556,6 +556,11 @@ class TestCountsAreEnforcedAtTheAcceptedPoint(TestCase):
         row = (nodes - 1) * 3 + 2
         column = nodes * 3 + 2
         assert abs(matrix[row, column] - lam) < 1.0e-20
+        # every column of the block is exact, not only the small eigenvalue's:
+        # differenced, the x column reads (1 + b) - dx (verify-deq-172)
+        exact = curve._saddle_jacobian(np.zeros(3), _LOOP_SEED_A, 0.0)  # noqa: SLF001
+        block = matrix[row - 2 : row + 1, column - 2 : column + 1].toarray()
+        assert np.max(np.abs(block - exact)) < 1.0e-14
 
     def test_an_iterate_that_loses_the_counts_and_regains_them_is_not_refused(self):
         """``z' = (-1e-5 - a) z``: stable at the seed and on the curve (``a = 0``).
