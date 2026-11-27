@@ -181,11 +181,11 @@ class RefiningLocalizer(Localizer):
         distance: float,
         fraction: float,
     ) -> ContinuationState | None:
-        predicted, direction = _hermite(lower, upper, distance, fraction)
+        predicted = _hermite(lower, upper, distance, fraction)
         result = self._corrector.correct(
             predicted[:-1],
             float(predicted[-1]),
-            direction,
+            lower.tangent,
         )
         if not result.converged:
             return None
@@ -212,30 +212,21 @@ def _hermite(
     upper: ContinuationState,
     distance: float,
     fraction: float,
-) -> tuple[np.ndarray, np.ndarray]:
-    """The cubic through both points with both tangents, and its unit direction.
+) -> np.ndarray:
+    """The cubic through both points with both tangents, at ``fraction`` of the step.
 
     ``y(s) = h00 y_k + h10 L t_k + h01 y_(k+1) + h11 L t_(k+1)`` with the cubic
     Hermite basis ``h00 = 2s^3 - 3s^2 + 1``, ``h10 = s^3 - 2s^2 + s``,
-    ``h01 = -2s^3 + 3s^2``, ``h11 = s^3 - s^2`` and ``L`` the chord's length, at
-    ``s = fraction``; the direction is ``y'(s)`` normalised. The cubic follows the
-    branch to third order in the step, where the chord is off it by the
-    curvature times the step squared, and at ``s = 0`` and ``s = 1`` it and its
-    direction are the accepted points and their tangents.
+    ``h01 = -2s^3 + 3s^2``, ``h11 = s^3 - s^2`` and ``L`` the chord's length. It
+    follows the branch to third order in the step, where the chord is off it by
+    the curvature times the step squared, and is the accepted points at ``s = 0``
+    and ``s = 1``.
     """
     square = fraction * fraction
     cube = square * fraction
-    start, end = _augmented(lower), _augmented(upper)
-    start_slope, end_slope = distance * lower.tangent, distance * upper.tangent
-    point = (
-        (2.0 * cube - 3.0 * square + 1.0) * start
-        + (cube - 2.0 * square + fraction) * start_slope
-        + (-2.0 * cube + 3.0 * square) * end
-        + (cube - square) * end_slope
+    return (
+        (2.0 * cube - 3.0 * square + 1.0) * _augmented(lower)
+        + (cube - 2.0 * square + fraction) * distance * lower.tangent
+        + (-2.0 * cube + 3.0 * square) * _augmented(upper)
+        + (cube - square) * distance * upper.tangent
     )
-    slope = (
-        (6.0 * square - 6.0 * fraction) * (start - end)
-        + (3.0 * square - 4.0 * fraction + 1.0) * start_slope
-        + (3.0 * square - 2.0 * fraction) * end_slope
-    )
-    return point, slope / float(np.linalg.norm(slope))
