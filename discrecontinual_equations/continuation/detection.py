@@ -162,25 +162,39 @@ def _vertex_offset(
     On the center manifold, with ``x = x* + w q``, the reduced field ``g(w, mu)``
     of a transcritical or pitchfork point is ``mu w + (a/2) w^2 + (c/6) w^3`` up
     to scaling, centred on the branch ``w = 0`` that persists for every ``mu``.
-    Seen from a point ``w0`` on the other branch, ``g_mu = <p, f_mu> = w0 g_wmu``
-    with ``g_wmu = <p, (d f_mu / dx) q>``, so ``w0 = g_mu / g_wmu``; it is zero on
-    the persisting branch itself. ``g_wmu`` is the difference of ``f_mu`` over
-    ``x +- step q``. Zero is returned when ``g_wmu`` vanishes (no transversal
-    crossing to recentre on).
+    Seen from a point ``w0`` on the other branch, ``g_mu = <p, f_mu> = w0 g_wmu``,
+    so ``w0 = g_mu / g_wmu``; it is zero on the persisting branch itself. The
+    center manifold moves with ``mu`` too, by ``h_mu`` with
+    ``A h_mu = -(f_mu - <p, f_mu> q)``, so ``g_wmu = <p, f_xmu q + B(q, h_mu)>``.
+    Without ``B(q, h_mu)`` a parameter that enters through another variable
+    (``u' = v u - u^3``, ``v' = -v + mu``) gives ``g_wmu = 0`` and the pitchfork
+    is lost. ``f_xmu q`` is the difference of ``f_mu`` over ``x +- step q``, and
+    ``B(q, h_mu)`` that of the Jacobian applied to ``h_mu``. Zero is returned
+    when ``g_wmu`` vanishes (no transversal crossing to recentre on).
 
     References:
         A Taylor shift of the normal form of Kuznetsov 1999, section 5, derived
-        here (not taken from a source); checked against ``<p, x - x*>`` to
-        leading order in ``tests/continuation/test_branch_point_units.py``.
+        here; checked against ``<p, x - x*>`` to leading order in
+        ``tests/continuation/test_branch_point_units.py``. The ``z beta``
+        coefficient ``p (B(q, H_0010) + A_1(q, K))`` with ``H_0010`` from the
+        parameter's linear term is Bosschaert, Janssens & Kuznetsov,
+        "Switching to nonhyperbolic cycles from codimension two bifurcations of
+        equilibria of delay differential equations", preprint 2019,
+        arXiv:1903.08276v1, eqs. (88)-(89).
     """
-    _jacobian, right, left = null_pair
+    jacobian, right, left = null_pair
     state = context.continuation_state.state
+    derivative = context.parameter_derivative_at(state)
+    drift = float((left @ derivative).real)
+    shift = -bordered_solve(jacobian, right, left, derivative - drift * right)
     forward = context.parameter_derivative_at(state + step * right)
     backward = context.parameter_derivative_at(state - step * right)
-    crossing = float((left @ (forward - backward)).real) / (2.0 * step)
+    moved = context.jacobian_at(state + step * right) - context.jacobian_at(
+        state - step * right,
+    )
+    crossing = float((left @ (forward - backward + moved @ shift)).real) / (2.0 * step)
     if crossing == 0.0:
         return 0.0
-    drift = float((left @ context.parameter_derivative_at(state)).real)
     return drift / crossing
 
 

@@ -33,13 +33,17 @@ from discrecontinual_equations.continuation.detection import (
     _branch_label,
     _branch_step,
     _null_pair,
+    _relative_change,
     _vertex_offset,
 )
 from discrecontinual_equations.continuation.jacobian import (
     FiniteDifferenceJacobian,
     JacobianProvider,
 )
-from discrecontinual_equations.continuation.residual import DifferentiableResidual
+from discrecontinual_equations.continuation.residual import (
+    DifferentiableResidual,
+    ResidualFunction,
+)
 from discrecontinual_equations.continuation.root_finder import (
     Bisection,
     RootFinderSettings,
@@ -399,3 +403,139 @@ class TestWeakTranscritical(TestCase):
             expected = float(left @ context.continuation_state.state)
             offset = _vertex_offset(context, pair, 1.0e-4 * sigma)
             assert abs(offset - expected) <= OFFSET_TOLERANCE * abs(expected)
+
+
+class _SlavedPitchfork(ResidualFunction, JacobianProvider):
+    """``u' = (v + b mu) u - u^3``, ``v' = -v + (1 - b) mu``: a pitchfork at ``mu = 0``.
+
+    With ``b < 1`` part of the parameter reaches ``u`` only through ``v``, so
+    ``f_mu`` has a component off ``q`` and the center manifold moves with ``mu``.
+    The nontrivial branch is ``u^2 = mu``, ``v = (1 - b) mu``.
+    """
+
+    def __init__(self, share: float) -> None:
+        self._share = share
+
+    def evaluate(self, state, parameter):
+        u, v = state
+        b = self._share
+        return np.array([(v + b * parameter) * u - u**3, -v + (1.0 - b) * parameter])
+
+    def state_jacobian(self, state, parameter):
+        u, v = state
+        return np.array([[v + self._share * parameter - 3.0 * u * u, u], [0.0, -1.0]])
+
+    def parameter_derivative(self, state, parameter):
+        _ = parameter
+        return np.array([self._share * state[0], 1.0 - self._share])
+
+
+def _slaved_context(share, u0, *, exact=True):
+    field = _SlavedPitchfork(share)
+    provider = field if exact else FiniteDifferenceJacobian(field, 1.0e-7)
+    mu = u0 * u0
+    state = np.array([u0, (1.0 - share) * mu])
+    tangent = np.array([0.0, 0.0, 1.0])
+    return DetectionContext(ContinuationState(state, mu, tangent, 0.0), provider)
+
+
+class TestParameterThroughAnotherVariable(TestCase):
+    """The recentring includes the center manifold's own drift, ``B(q, h_mu)``.
+
+    Without it ``g_wmu = <p, f_xmu q>`` is zero for ``b = 0`` and half its value
+    for ``b = 1/2``, so the offset ``w0`` comes out 0 or ``2 u0`` and a pitchfork
+    seen from its nontrivial branch, even ``1e-3`` from its vertex, was named
+    ``branch_point``.
+    """
+
+    def test_a_pitchfork_seen_from_its_other_branch_stays_a_pitchfork(self):
+        for share in (0.0, 0.5, 1.0):
+            for u0 in (1.0e-3, 1.0e-2, 3.0e-2):
+                for exact in (True, False):
+                    label = _branch_label(_slaved_context(share, u0, exact=exact))
+                    assert label == "pitchfork", (share, u0, exact, label)
+
+    def test_the_offset_is_the_distance_along_q_from_the_persisting_branch(self):
+        # Independent of the reduction: the persisting branch is (0, (1 - b) mu),
+        # so to leading order w0 = <p, x - x*> with <p, q> = 1.
+        for share in (0.0, 0.5):
+            u0 = 1.0e-3
+            context = _slaved_context(share, u0)
+            pair = _null_pair(context)
+            assert pair is not None
+            _jacobian, _right, left = pair
+            state = context.continuation_state.state
+            expected = float(left @ (state - np.array([0.0, state[1]])))
+            offset = _vertex_offset(context, pair, 1.0e-4)
+            assert abs(offset - expected) <= 1.0e-2 * abs(expected), (share, offset)
+
+
+class _CountedField(_Field):
+    """The reference field, counting its Jacobian evaluations."""
+
+    def __init__(self, coefficients, scale=1.0, sigma=1.0) -> None:
+        super().__init__(coefficients, scale, sigma)
+        self.jacobians = 0
+
+    def state_jacobian(self, state, parameter):
+        self.jacobians += 1
+        return super().state_jacobian(state, parameter)
+
+
+class TestStopAndStepEdges(TestCase):
+    """Edges of the relative stop and the step search the tests above leave open."""
+
+    def test_a_root_near_the_upper_end_is_measured_against_the_lower(self):
+        # Mirror of the test above: the small value is now f(high). Measured
+        # against it alone, the stop waits for the bracket to close.
+        calls = []
+
+        def function(x: float) -> float:
+            calls.append(x)
+            return 1.0e-9 * (x - (1.0 - 1.0e-6))
+
+        settings = RootFinderSettings(1.0e-8, 1.0e-12, 60, relative=True)
+        located = Bisection(settings).locate(function, 0.0, 1.0)
+        assert located is not None
+        assert abs(located - (1.0 - 1.0e-6)) < 1.0e-7
+        assert len(calls) <= 32
+
+    def test_secant_follows_a_steep_function_to_its_root(self):
+        # Values of order 1e12: the flat-chord test must scale with the end
+        # values once, not with their square, or the secant stops early.
+        def function(x: float) -> float:
+            shift = x - 0.3
+            return 1.0e12 * (shift + 5.0 * shift**3)
+
+        settings = RootFinderSettings(1.0e-8, 1.0e-12, 60, relative=True)
+        located = Secant(settings).locate(function, 0.0, 1.0)
+        assert located is not None
+        assert abs(located - 0.3) < LOCATION_TOLERANCE
+
+    def test_the_change_is_the_step_over_the_nonlinear_length(self):
+        # A quadratic field's Jacobian is linear in x, so the odd part is exact:
+        # |J(x + h q) - J(x - h q)| / (2 |J|) = h |J(x + q) - J(x)| / |J|.
+        coefficients = (1.0, 1.0, -2.0, 0.0, 1.0)
+        context = _context(coefficients)
+        pair = _null_pair(context)
+        assert pair is not None
+        jacobian, right, _left = pair
+        state = context.continuation_state.state
+        slope = np.linalg.norm(context.jacobian_at(state + right) - jacobian)
+        expected = 1.0e-3 * float(slope / np.linalg.norm(jacobian))
+        change = _relative_change(context, pair, 1.0e-3)
+        assert abs(change - expected) <= 1.0e-9 * expected
+
+    def test_the_search_grows_the_step_in_few_moves(self):
+        # At sigma = 1e6 the step must grow by about 1e6: at least ten-fold per
+        # move it takes a few, not one per decade capped at ten.
+        coefficients = PITCHFORKS["through the curvature"]
+        field = _CountedField(coefficients, 1.0, 1.0e6)
+        state = 1.0e6 * (M @ np.zeros(3))
+        tangent = np.array([0.0, 0.0, 0.0, 1.0])
+        context = DetectionContext(ContinuationState(state, 0.0, tangent, 0.0), field)
+        pair = _null_pair(context)
+        assert pair is not None
+        field.jacobians = 0
+        _branch_step(context, pair)
+        assert field.jacobians <= 8, field.jacobians

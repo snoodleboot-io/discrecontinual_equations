@@ -1466,13 +1466,19 @@ used to fall through to the cubic test. A weak transcritical (`a = 1.7e-3`) loca
 its nontrivial branch at `w0` also has a resolved `a`, and that one is `c w0`. The
 labeller now recentres on the branch that persists for every `mu`. Let
 `g(w, mu)` be the reduced field with `x = x* + w q`. Then `g_mu = <p, f_mu>` and
-`g_wmu = <p, (d f_mu / dx) q>` give `w0 = g_mu / g_wmu`, which is zero on the
-persisting branch. If `|a - c w0| <= |a| / 2`, the `a` is the pitchfork's own and
-the point is a `pitchfork` (when `c` is resolved). Otherwise it is `branch_point`.
-This recentring is a Taylor shift of the normal form
-`mu w + (a/2) w^2 + (c/6) w^3`, derived here and not taken from a source. It checks
-against the verifier's cases: on the persisting branch `w0 = 0` exactly, and on the
-other branch `w0` matches `<p, x - x*>` to `1e-3`.
+`g_wmu = <p, f_xmu q + B(q, h_mu)>` give `w0 = g_mu / g_wmu`, which is zero on the
+persisting branch. Here `h_mu` is how far the center manifold moves with `mu`,
+`A h_mu = -(f_mu - <p, f_mu> q)`. Without that term a parameter that reaches the
+critical variable only through another one (`u' = v u - u^3`, `v' = -v + mu`) has
+`g_wmu = 0`, and its pitchfork seen from the nontrivial branch, even `1e-3` from the
+vertex, was `branch_point`. If `|a - c w0| <= |a| / 2`, the `a` is the pitchfork's
+own and the point is a `pitchfork` (when `c` is resolved). Otherwise it is
+`branch_point`. This recentring is a Taylor shift of the normal form
+`mu w + (a/2) w^2 + (c/6) w^3`, derived here; the `w mu` coefficient with its
+`B(q, h_mu)` term is that of Bosschaert, Janssens and Kuznetsov (2019), eqs.
+(88)-(89). It checks against the verifier's cases: on the persisting branch `w0 = 0`
+exactly, and on the other branch `w0` matches `<p, x - x*>` to `1e-3` (`1e-2` when the
+parameter enters through another variable).
 
 ```python
 from pathlib import Path
