@@ -18,6 +18,7 @@ stability classification.
 
 from typing import Any
 
+import numpy as np
 from sweet_tea.abstract_factory import AbstractFactory
 from sweet_tea.factory import Factory
 
@@ -200,6 +201,12 @@ class ContinuerBuilder:
         }
         if config.jacobian_sparsity != "dense":
             configuration["sparsity"] = config.jacobian_sparsity
+        # Likewise the typical sizes (DEQ-158), so that both registered
+        # providers, and any written before them, are built as before unless set.
+        if config.typical is not None:
+            configuration["typical"] = np.asarray(config.typical, dtype=float)
+        if config.parameter_typical is not None:
+            configuration["parameter_typical"] = config.parameter_typical
         return configuration
 
     @staticmethod

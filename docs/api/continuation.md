@@ -2116,8 +2116,8 @@ print(jacobian.extended_jacobian(np.array([2.0, 2.0e12]), 4.0))
 ```
 
 **Limits.** A component that lives far below one needs `typical` (one per
-component, or one for all) or its step is floored at one; the builder passes
-only `epsilon`, so `typical` is reachable by constructing the provider yourself.
+component, or one for all) or its step is floored at one; `ContinuationConfig`
+passes it since DEQ-158 (below).
 Continuation states and parameters of size above one now take larger steps than
 before, so the Jacobian Newton is handed changes by the change in the difference
 error, and a converged point can move within the Newton tolerance. The residuals
@@ -2167,12 +2167,226 @@ generalized-Hopf curves) are unchanged: the same number of points, every
 coordinate within `5.4e-14`, and the same located swallowtails and degenerate
 Bautin points.
 
-**Limits.** The typical size is one for every unknown: a parameter that lives far
-below one is stepped as if it were of size one. `Codim2Config.curve_epsilon` is not
-read by any curve; the step is `finite_difference_epsilon`.
+**Limits.** The typical size is one for every unknown unless the config sets
+`typical` and `parameter_typical` (DEQ-158, below). The Jacobian the
+generalized-Hopf curve uses only to rank its pairs of `G` entries keeps a typical
+size of one. `Codim2Config.curve_epsilon` was never read by any curve and is now
+refused with a `DeprecationWarning` (DEQ-166); the step is
+`finite_difference_epsilon`.
 
 References: [Dennis and Schnabel 1983, SciPy `_numdiff`](../references.md#lyapunov-exponents-covariant-vectors-and-noise);
 the curves themselves: [Govaerts, Kuznetsov and Sijnave 2000, MatCont manual 2019](../references.md#normal-forms-centre-manifolds-and-bifurcation-detection).
+
+### One step per derivative order in the derivative fallback (DEQ-167)
+
+**The problem.** `FiniteDifferenceDerivatives`, the opt-in
+`derivative_provider="finite_difference_derivatives"`, took one relative step,
+`1e-6`, for every derivative order. A central difference of order `m` at relative
+step `r` errs by a truncation `c_m r^2` and a rounding `w_m eps / r^m`; at
+`r = 1e-6` the rounding of a third difference is `eps / 1e-18`, about `200`
+relative, so the third derivatives that `l1`, the cusp coefficient and the Hopf
+forms are built from were noise. Van der Pol's `l1`
+(`x' = y - x^3/3 + x`, `y' = 0.2 (a - x)` at its Hopf point) came back `+21.06`
+against an exact `-0.9317`: the wrong sign, and a supercritical Hopf reported as
+subcritical. It also cast complex directions - the Hopf eigenvectors - to real
+with a `ComplexWarning`, dropping their imaginary parts.
+
+**The step.** Each order now takes the step that balances its own two errors,
+`r_m = eps^(1/(m+2))` (`finite_difference.order_step`): `6.1e-6` for the slope,
+`1.2e-4`, `7.4e-4` and `2.5e-3` for orders two to four, written as correctly
+rounded literals. The per-component rule of DEQ-118 and DEQ-163 is unchanged, with
+`r_m` in place of the single `epsilon`. `FiniteDifferenceDerivatives(epsilon)` and
+`Codim2Config.derivative_epsilon` still impose one step on every order.
+
+**Complex directions.** `P_m(d) = D^m f(d, ..., d) / m!` is a homogeneous
+polynomial of degree `m`, so along a complex `d = u + i v` it is recovered from
+`m + 1` real directions `d_k = cos(theta_k) u + sin(theta_k) v`,
+`theta_k = pi k / (m + 1)`:
+`P_m(u + i v) = 2^m / (m + 1) sum_k exp(i m theta_k) P_m(d_k)`, exactly (writing
+`d_k = (exp(-i theta_k) d + exp(i theta_k) conj d) / 2` and summing over `k`
+leaves only the `d^m` term). The field is evaluated at real points only; a point
+with a nonzero imaginary part is refused.
+
+```python
+import numpy as np
+
+from discrecontinual_equations.continuation.derivative_provider import (
+    AutomaticDifferentiation,
+    FiniteDifferenceDerivatives,
+)
+from discrecontinual_equations.continuation.normal_form import first_lyapunov
+from discrecontinual_equations.continuation.two_parameter_problem import (
+    TwoParameterProblem,
+)
+from discrecontinual_equations.differential_equation import DifferentialEquation
+from discrecontinual_equations.function.deterministic import DeterministicFunction
+from discrecontinual_equations.parameter import Parameter
+from discrecontinual_equations.variable import Variable
+
+
+class Xv(Variable, name="x", abbreviation="x"):
+    pass
+
+
+class Tv(Variable, name="t", abbreviation="t"):
+    pass
+
+
+class A(Parameter, name="a", abbreviation="a"):
+    pass
+
+
+class Eps(Parameter, name="eps", abbreviation="e"):
+    pass
+
+
+class VanDerPol(DeterministicFunction):
+    def eval(self, point, time=None):
+        a, eps = (p.value for p in self.parameters)
+        x, y = point
+        return [y - x * x * x / 3.0 + x, eps * (a - x)]
+
+
+def problem(provider):
+    parameters = [A(value=1.0), Eps(value=0.2)]
+    field = VanDerPol(
+        variables=[Xv(), Xv()], parameters=parameters, results=[Xv(), Xv()], time=None
+    )
+    equation = DifferentialEquation(
+        variables=[Xv(), Xv()], time=Tv(), parameters=parameters, derivative=field
+    )
+    return TwoParameterProblem(equation, 0, 1, 0.0, provider)
+
+
+hopf = np.array([1.0, -2.0 / 3.0])
+for provider in (AutomaticDifferentiation(), FiniteDifferenceDerivatives()):
+    print(first_lyapunov(problem(provider), hopf, 1.0, 0.2, np.sqrt(0.2)))
+# -0.93169499062491  (exact: -1 / (2 sqrt(0.2) 1.2))
+# -0.93169560206786  (6.6e-7 relative; +21.06 with one step of 1e-6)
+```
+
+On the codim-2 scenarios of the test suite (Bogdanov-Takens on its Hopf and fold
+curves, zero-Hopf, double Hopf, cusp, Bautin), on van der Pol and on the embedded
+normal forms behind random similarity transforms, every normal-form coefficient
+computed with this provider agrees with automatic differentiation to `2.4e-7` of
+its record's largest coefficient, and the codim-2 points the driver locates agree
+to `1.1e-10` in the parameters.
+
+**Limits.** Orders above four are refused; use automatic differentiation. The
+steps assume a field whose derivatives are of the size of its values at the
+component's scale (Dennis and Schnabel's assumption); a field far from that wants
+`derivative_epsilon`. A complex direction costs `m + 1` real ones at order `m`.
+
+References: [Dennis and Schnabel 1983, Mikulski and Uhl 2026, Fornberg 1988](../references.md#lyapunov-exponents-covariant-vectors-and-noise).
+
+### Typical sizes and steps through the configs (DEQ-158, DEQ-166)
+
+**The problem.** The finite differences step `r max(|x_j|, typical_j)`, but
+`typical` could be set only by building the difference classes by hand, so a
+continuation whose state lives near `1e-12` was stepped by `1e-7`, a hundred
+thousand times the state. On the DEQ-146 reference field (a pitchfork, a
+transcritical point and a cancelled branch point, mixed by a fixed matrix) scaled
+to `1e-6` the pitchforks came back `transcritical`; scaled to `1e-12` no branch
+point was found at all.
+
+**The settings.**
+
+- `ContinuationConfig.typical` (one per state unknown, or one for all) and
+  `parameter_typical` reach the continuation Jacobian, `FiniteDifferenceJacobian`
+  or `AnalyticJacobian`. `AnalyticJacobian` hands the cusp and generalized-Hopf
+  residuals one typical size per unknown through
+  `DifferentiableResidual.extended_jacobian(..., typical=)`; a residual written
+  before this keyword is still called with `epsilon` alone when no size is set.
+  On a codim-2 or codim-3 curve the unknowns are the augmented system's.
+- Every stochastic solver config takes `typical` for the slopes of the diffusion
+  ([stochastic solvers](stochastic-solvers.md)).
+- `Codim2Config.derivative_epsilon` sets one step for every order of the
+  finite-difference derivative provider (refused with automatic differentiation).
+  `Codim2Config.curve_epsilon`, never read since the first commit, warns and is
+  dropped. `finite_difference_epsilon` is the relative step of the curve's
+  augmented system.
+
+```python
+from pathlib import Path
+
+import numpy as np
+from sweet_tea.registry import Registry
+
+import discrecontinual_equations
+from discrecontinual_equations.continuation.builder import ContinuerBuilder
+from discrecontinual_equations.continuation.continuation_config import (
+    ContinuationConfig,
+)
+from discrecontinual_equations.continuation.residual import ResidualFunction
+from discrecontinual_equations.differential_equation import DifferentialEquation
+from discrecontinual_equations.function.deterministic import DeterministicFunction
+from discrecontinual_equations.parameter import Parameter
+from discrecontinual_equations.variable import Variable
+
+# The builder resolves its strategies by name: fill the registry once.
+Registry.fill_registry(
+    path=str(Path(discrecontinual_equations.__file__).parent),
+    module="discrecontinual_equations",
+    exclude=["*.tests", "*.examples", "*.plot"],
+)
+SIGMA = 1.0e-12
+
+
+class Pitchfork(ResidualFunction):
+    """u' = mu u - u^3 in a state of size SIGMA: x = SIGMA u."""
+
+    def evaluate(self, state, parameter):
+        u = state[0] / SIGMA
+        return np.array([SIGMA * (parameter * u - u**3)])
+
+
+class Mu(Parameter, name="mu", abbreviation="mu"):
+    pass
+
+
+class Xs(Variable, name="x", abbreviation="x"):
+    pass
+
+
+class Unused(DeterministicFunction):
+    def eval(self, point, time=None):
+        return [0.0]
+
+
+parameters = [Mu(value=-0.3)]
+equation = DifferentialEquation(
+    variables=[Xs()],
+    time=Xs(),
+    parameters=parameters,
+    derivative=Unused(variables=[Xs()], parameters=parameters, results=[Xs()], time=None),
+)
+for typical in (None, SIGMA):
+    config = ContinuationConfig(
+        initial_parameter=-0.3,
+        detectors=["branch_point"],
+        maximum_points=40,
+        parameter_upper_bound=0.3,
+        typical=typical,
+    )
+    branch = ContinuerBuilder.assemble(config, Pitchfork()).solve(equation, [0.0])
+    print(typical, [point.kind for point in branch.special_points])
+# None []              - the branch point at mu = 0 is not seen
+# 1e-12 ['pitchfork']
+```
+
+At `1e-12` with `typical = 1e-12` every case of the reference field gets its
+label, and the continuation Jacobian is right to `7.1e-10` relative where it was
+off by `1.8e9`. With the typical sizes unset (or one) nothing changes.
+
+**SciPy.** A central difference of ours at relative step `EPS**(1/3)` (4 ulps
+above our `CENTRAL_STEP`) is bit for bit SciPy's
+`approx_derivative(method="3-point")` at its default step, `rel_step=None`, which
+is `EPS**(1/3) max(1, |x|)`: 204 of 204 points from `1e-6` to `1e6`. A `rel_step`
+you pass to SciPy drops the `max(1, .)` floor (SciPy 1.18.1,
+`_compute_absolute_step`), so it agrees only where `|x| >= 1` (101 of the 204) and
+is not our `finite_difference_epsilon` at the same value.
+
+References: [Dennis and Schnabel 1983, SciPy `_numdiff`](../references.md#lyapunov-exponents-covariant-vectors-and-noise).
 
 The finite-difference Jacobian and derivative classes these steps drive are
 documented once, under [`continuation.jacobian`][discrecontinual_equations.continuation.jacobian]

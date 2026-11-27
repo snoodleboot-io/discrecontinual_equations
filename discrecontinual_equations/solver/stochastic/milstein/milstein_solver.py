@@ -221,7 +221,11 @@ class MilsteinSolver(Solver):
         """
         self.solution = self._new_solution(equation)
 
-        coefficients = ItoCoefficients(equation, self.solver_config.calculus)
+        coefficients = ItoCoefficients(
+            equation,
+            self.solver_config.calculus,
+            typical=self.solver_config.typical_sizes,
+        )
         ito = self.solver_config.calculus == "ito"
 
         # Initialize

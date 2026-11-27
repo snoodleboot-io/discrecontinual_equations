@@ -17,11 +17,13 @@ Keller (1977), who introduced pseudo-arclength continuation). ``parameterization
 = "natural"`` fixes the parameter instead (Kuznetsov's (10.33) with the parameter
 as the fixed coordinate), which fails at every fold.
 
-The Jacobian is by central differences with an absolute step
-``finite_difference_epsilon`` for every column and the parameter, unless the
-residual supplies its own. An absolute step is too large for state components of
-size ``1e-8`` and too small for components of size ``1e8``; scale the problem, or
-supply analytic derivatives, when components differ greatly in size.
+The Jacobian is by central differences, unless the residual supplies its own,
+with a *relative* step: component ``j`` steps ``finite_difference_epsilon
+max(|x_j|, typical_j)`` and the parameter ``finite_difference_epsilon
+max(|lambda|, parameter_typical)`` (Dennis and Schnabel 1983, Sec. 5.4). The
+typical sizes are one by default, so a component of size ``1e8`` is stepped in
+proportion to itself, but one that lives near ``1e-8`` is stepped as if it were
+of size one unless ``typical`` says otherwise (DEQ-158).
 
 References:
 - Kuznetsov, Yu. A. "Elements of Applied Bifurcation Theory", 2nd ed., Applied
@@ -32,12 +34,17 @@ References:
   Academic Press, 1977, pp. 359-384.
 - Allgower, E. L. and Georg, K. "Numerical Continuation Methods: An Introduction",
   Springer, 1990, doi:10.1007/978-3-642-61257-2, Chapters 2, 3 and 6.
+- Dennis, J. E. and Schnabel, R. B. "Numerical Methods for Unconstrained
+  Optimization and Nonlinear Equations", Prentice-Hall, 1983, Sec. 5.4 and
+  Algorithm A5.4.1: the step ``r max(|x_j|, typx_j)``.
 """
 
 from typing import Literal
 
-from pydantic import ConfigDict, Field
+import numpy as np
+from pydantic import ConfigDict, Field, field_validator
 
+from discrecontinual_equations.finite_difference import typical_sizes
 from discrecontinual_equations.solver.solver_config import SolverConfig
 
 
@@ -133,6 +140,25 @@ class ContinuationConfig(SolverConfig):
             "parameter this times max(|lambda|, parameter_typical), both typical "
             "sizes one by default, so on a component of size one or less the "
             "step is this value exactly"
+        ),
+    )
+    typical: float | list[float] | None = Field(
+        default=None,
+        description=(
+            "Typical size of each state component (one per component, or one "
+            "for all) for the finite-difference Jacobian's step "
+            "finite_difference_epsilon * max(|x_j|, typical_j); None for one. "
+            "Set it to the scale of a component that lives far below one, "
+            "near zero or in small units, or the step swamps it"
+        ),
+    )
+    parameter_typical: float | None = Field(
+        default=None,
+        gt=0.0,
+        description=(
+            "Typical size of the continuation parameter for the parameter "
+            "column's step finite_difference_epsilon * max(|lambda|, "
+            "parameter_typical); None for one"
         ),
     )
     jacobian_sparsity: Literal["dense", "detect"] | list[list[int]] = Field(
@@ -244,3 +270,15 @@ class ContinuationConfig(SolverConfig):
     )
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    @field_validator("typical")
+    @classmethod
+    def _positive_typical(
+        cls,
+        value: float | list[float] | None,
+    ) -> float | list[float] | None:
+        """Refuse a typical size that is not positive."""
+        if value is not None:
+            sizes = np.atleast_1d(np.asarray(value, dtype=float))
+            typical_sizes(sizes, sizes.size)
+        return value

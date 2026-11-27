@@ -87,7 +87,11 @@ class StochasticRungeKuttaSolver(Solver):
         """
         self.solution = self._new_solution(equation)
         config = self.solver_config
-        coefficients = ItoCoefficients(equation, config.calculus)
+        coefficients = ItoCoefficients(
+            equation,
+            config.calculus,
+            typical=config.typical_sizes,
+        )
 
         y = np.array(initial_values, dtype=float)
         self._check_dimension(len(y))

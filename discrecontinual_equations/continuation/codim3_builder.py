@@ -46,7 +46,7 @@ from discrecontinual_equations.continuation.codim3 import (
 )
 from discrecontinual_equations.continuation.codim3_config import Codim3Config
 from discrecontinual_equations.continuation.derivative_provider import (
-    DerivativeProvider,
+    configured_provider,
 )
 from discrecontinual_equations.continuation.residual import ResidualFunction
 from discrecontinual_equations.differential_equation import DifferentialEquation
@@ -151,8 +151,9 @@ class Codim3Driver:
                 "first_index": config.continuation_parameter_index,
                 "second_index": config.second_parameter_index,
                 "time": config.evaluation_time,
-                "provider": AbstractFactory[DerivativeProvider].create(
+                "provider": configured_provider(
                     config.derivative_provider,
+                    config.derivative_epsilon,
                 ),
             },
         )

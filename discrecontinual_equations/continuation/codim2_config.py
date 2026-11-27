@@ -12,13 +12,18 @@ References:
   8.2.2: the codim-2 points detected along fold and Hopf curves.
 """
 
-from typing import Literal
+import warnings
+from pathlib import Path
+from typing import Any, Literal
 
-from pydantic import Field
+import pydantic
+from pydantic import Field, model_validator
 
 from discrecontinual_equations.continuation.continuation_config import (
     ContinuationConfig,
 )
+
+_PYDANTIC_DIRECTORY = str(Path(pydantic.__file__).parent)
 
 
 class Codim2Config(ContinuationConfig):
@@ -42,18 +47,31 @@ class Codim2Config(ContinuationConfig):
         default_factory=lambda: ["bogdanov_takens", "zero_hopf", "hopf_hopf"],
         description="Registry keys of the codim-2 test functions to scan",
     )
-    curve_epsilon: float = Field(
-        default=1e-5,
-        description="Directional finite-difference step for the inner Jacobian",
-    )
     derivative_provider: str = Field(
         default="automatic_differentiation",
         description="Registry key of the state-derivative provider",
     )
+    derivative_epsilon: float | None = Field(
+        default=None,
+        gt=0.0,
+        description=(
+            "Relative step of every order of the finite_difference_derivatives "
+            "provider; None (the default) steps an order-m difference by "
+            "eps^(1/(m+2)), which balances its truncation against its rounding "
+            "(DEQ-167). Refused with automatic_differentiation, which takes no "
+            "step"
+        ),
+    )
 
     finite_difference_epsilon: float = Field(
         default=1e-5,
-        description="Outer finite-difference step for the augmented Jacobian",
+        description=(
+            "Relative step of the central differences of the curve's augmented "
+            "system: the finite-difference Jacobian's columns, and the columns "
+            "the cusp and generalized-Hopf residuals difference themselves. An "
+            "unknown x steps this times max(|x|, typical_x), the typical sizes "
+            "set by typical and parameter_typical (one by default)"
+        ),
     )
     newton_tolerance: float = Field(
         default=1e-8,
@@ -71,3 +89,40 @@ class Codim2Config(ContinuationConfig):
         default=0.08,
         description="Largest arclength step along the curve",
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _retire_curve_epsilon(cls, data: Any) -> Any:
+        """Warn about, and drop, ``curve_epsilon`` (DEQ-166).
+
+        It was never read: since the first commit the curves' columns have
+        stepped ``finite_difference_epsilon``, and the derivative provider has
+        its own ``derivative_epsilon``.
+        """
+        if isinstance(data, dict) and "curve_epsilon" in data:
+            warnings.warn(
+                "Codim2Config.curve_epsilon is deprecated and ignored: no curve "
+                "ever read it. The augmented system's columns step "
+                "finite_difference_epsilon, and the finite-difference derivative "
+                "provider's step is derivative_epsilon (DEQ-166).",
+                DeprecationWarning,
+                # Attribute it to the caller, past pydantic's own frames: Python
+                # shows a DeprecationWarning by default only from __main__.
+                skip_file_prefixes=(_PYDANTIC_DIRECTORY, __file__),
+            )
+            data = {key: value for key, value in data.items() if key != "curve_epsilon"}
+        return data
+
+    @model_validator(mode="after")
+    def _derivative_epsilon_needs_differences(self) -> "Codim2Config":
+        """Refuse a derivative step for a provider that takes none."""
+        if (
+            self.derivative_epsilon is not None
+            and self.derivative_provider == "automatic_differentiation"
+        ):
+            message = (
+                "derivative_epsilon sets the step of the finite_difference_derivatives "
+                "provider; automatic_differentiation takes no step"
+            )
+            raise ValueError(message)
+        return self

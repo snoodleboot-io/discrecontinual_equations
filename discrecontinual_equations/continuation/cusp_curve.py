@@ -138,6 +138,7 @@ class CuspCurveResidual(DifferentiableResidual):
         state: np.ndarray,
         parameter: float,
         epsilon: float,
+        typical: np.ndarray | None = None,
     ) -> np.ndarray:
         state = np.asarray(state, dtype=float)
         n = self._dimension
@@ -149,7 +150,13 @@ class CuspCurveResidual(DifferentiableResidual):
         jacobian[n, :n] = fold_row
         jacobian[n + 1, :n] = cusp_row
         for column in range(n, size + 1):
-            jacobian[:, column] = self._difference(state, parameter, column, epsilon)
+            scale = 1.0 if typical is None else float(typical[column])
+            jacobian[:, column] = self._difference(
+                state,
+                parameter,
+                column,
+                (epsilon, scale),
+            )
         return jacobian
 
     def _state_rows(self, point: _CuspLinearization) -> tuple[np.ndarray, np.ndarray]:
@@ -193,9 +200,18 @@ class CuspCurveResidual(DifferentiableResidual):
         state: np.ndarray,
         parameter: float,
         column: int,
-        epsilon: float,
+        step: tuple[float, float],
     ) -> np.ndarray:
-        difference = central_column(self.evaluate, state, parameter, column, epsilon)
+        """Column ``column`` at relative step and typical size ``step``."""
+        epsilon, typical = step
+        difference = central_column(
+            self.evaluate,
+            state,
+            parameter,
+            column,
+            epsilon,
+            typical,
+        )
         self._third.value = float(parameter)
         return difference
 

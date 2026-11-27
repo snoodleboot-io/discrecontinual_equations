@@ -192,27 +192,60 @@ class AnalyticJacobian(JacobianProvider):
 
     ``epsilon`` is handed to the residual for the columns it still differences,
     as a *relative* step (DEQ-159): the unknown ``x`` such a column moves steps
-    ``epsilon max(|x|, 1)``, as in :class:`FiniteDifferenceJacobian`. The
-    builder passes ``finite_difference_epsilon``, so on unknowns of size one or
-    less nothing changes, and on a curve whose parameters are of size ``1e12``
-    the differenced columns are still resolved.
+    ``epsilon max(|x|, typical_x)``, as in :class:`FiniteDifferenceJacobian`.
+    The builder passes ``finite_difference_epsilon``, so on unknowns of size
+    one or less nothing changes, and on a curve whose parameters are of size
+    ``1e12`` the differenced columns are still resolved.
+
+    ``typical`` (one per state unknown, or one for all) and
+    ``parameter_typical`` are the typical sizes of the residual's unknowns, as
+    in :class:`FiniteDifferenceJacobian` (DEQ-158): on a cusp or
+    generalized-Hopf curve whose parameters live near ``1e-8`` a typical size
+    of one steps them by ``epsilon``, which swamps them. When either is set the
+    residual is handed the ``m + 1`` sizes as ``typical=``; when neither is,
+    it is called with ``epsilon`` alone, as before, so a
+    :class:`~.residual.DifferentiableResidual` written before DEQ-158 still
+    works.
 
     References:
         Dennis and Schnabel (1983), Sec. 5.4 and Algorithm A5.4.1: the step
-        scaled per unknown. See ``docs/references.md``.
+        scaled per unknown by ``max(|x_j|, typx_j)``. See
+        ``docs/references.md``.
     """
 
-    __slots__ = ["_epsilon", "_residual"]
+    __slots__ = ["_epsilon", "_parameter_typical", "_residual", "_typical"]
 
-    def __init__(self, residual: ResidualFunction, epsilon: float) -> None:
+    def __init__(
+        self,
+        residual: ResidualFunction,
+        epsilon: float,
+        typical: float | np.ndarray | None = None,
+        parameter_typical: float | None = None,
+    ) -> None:
         if not isinstance(residual, DifferentiableResidual):
             message = "AnalyticJacobian needs a DifferentiableResidual"
             raise TypeError(message)
         self._residual = residual
         self._epsilon = epsilon
+        if parameter_typical is not None:
+            typical_sizes(parameter_typical, 1)
+        self._typical = typical
+        self._parameter_typical = parameter_typical
 
     def extended_jacobian(self, state: np.ndarray, parameter: float) -> np.ndarray:
-        return self._residual.extended_jacobian(state, parameter, self._epsilon)
+        if self._typical is None and self._parameter_typical is None:
+            return self._residual.extended_jacobian(state, parameter, self._epsilon)
+        point = np.asarray(state, dtype=float)
+        sizes = np.append(
+            typical_sizes(self._typical, point.size),
+            typical_sizes(self._parameter_typical, 1),
+        )
+        return self._residual.extended_jacobian(
+            point,
+            parameter,
+            self._epsilon,
+            typical=sizes,
+        )
 
     def state_jacobian(self, state: np.ndarray, parameter: float) -> np.ndarray:
         return self.extended_jacobian(state, parameter)[:, :-1]

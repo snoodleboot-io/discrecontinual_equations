@@ -330,7 +330,11 @@ class StochasticEnsemble:
         elif paths is not None and paths != states.shape[0]:
             message = f"initial has {states.shape[0]} rows but paths = {paths}"
             raise ValueError(message)
-        coefficients = BatchedCoefficients(equation, self._config.calculus)
+        coefficients = BatchedCoefficients(
+            equation,
+            self._config.calculus,
+            typical=self._config.typical_sizes,
+        )
         count = states.shape[0]
         time = float(self._config.start_time)
         drivers = coefficients.drivers(states, time)

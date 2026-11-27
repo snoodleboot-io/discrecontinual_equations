@@ -210,6 +210,7 @@ class GeneralizedHopfCurveResidual(DifferentiableResidual):
         state: np.ndarray,
         parameter: float,
         epsilon: float,
+        typical: np.ndarray | None = None,
     ) -> np.ndarray:
         """Return the ``(n + 3) x (n + 4)`` Jacobian in ``(u, kappa, p_a, p_b, p_c)``.
 
@@ -217,8 +218,10 @@ class GeneralizedHopfCurveResidual(DifferentiableResidual):
             state: ``(u, kappa, p_a, p_b)``.
             parameter: The continuation coordinate ``p_c``.
             epsilon: The relative central-difference step for the three
-                parameter columns: ``p`` steps ``epsilon max(|p|, 1)``. The
-                state and ``kappa`` columns are analytic.
+                parameter columns: ``p`` steps ``epsilon max(|p|, typical_p)``.
+                The state and ``kappa`` columns are analytic.
+            typical: The typical size of each of the ``n + 4`` unknowns, in
+                the order above, or ``None`` for one each (DEQ-158).
 
         Returns:
             The extended Jacobian.
@@ -226,7 +229,7 @@ class GeneralizedHopfCurveResidual(DifferentiableResidual):
         return self._jacobian(
             np.asarray(state, dtype=float),
             parameter,
-            epsilon,
+            (epsilon, typical),
             self._entries,
         )
 
@@ -234,10 +237,11 @@ class GeneralizedHopfCurveResidual(DifferentiableResidual):
         self,
         state: np.ndarray,
         parameter: float,
-        epsilon: float,
+        step: tuple[float, np.ndarray | None],
         entries: list[tuple[int, int]],
     ) -> np.ndarray:
         n = self._dimension
+        epsilon, typical = step
         point = self._linearize(state, parameter)
         rows = n + len(entries) + 1
         jacobian = np.zeros((rows, state.size + 1))
@@ -249,11 +253,12 @@ class GeneralizedHopfCurveResidual(DifferentiableResidual):
             jacobian[row, n] = schur_kappa[i, j]
         jacobian[-1, : n + 1] = _lyapunov_gradient(point)
         for column in range(n + 1, state.size + 1):
+            scale = 1.0 if typical is None else float(typical[column])
             jacobian[:, column] = self._difference(
                 state,
                 parameter,
                 column,
-                epsilon,
+                (epsilon, scale),
                 entries,
             )
         return jacobian
@@ -281,13 +286,16 @@ class GeneralizedHopfCurveResidual(DifferentiableResidual):
         state: np.ndarray,
         parameter: float,
         column: int,
-        epsilon: float,
+        step: tuple[float, float],
         entries: list[tuple[int, int]],
     ) -> np.ndarray:
+        """Column ``column`` at relative step and typical size ``step``."""
+
         def rows(point: np.ndarray, coordinate: float) -> np.ndarray:
             return self._rows(self._linearize(point, coordinate), entries)
 
-        difference = central_column(rows, state, parameter, column, epsilon)
+        epsilon, typical = step
+        difference = central_column(rows, state, parameter, column, epsilon, typical)
         self._third.value = float(parameter)
         return difference
 
@@ -307,7 +315,7 @@ class GeneralizedHopfCurveResidual(DifferentiableResidual):
         self._right_border = np.linalg.qr(point.right)[0]
         self._left_border = np.linalg.qr(point.left)[0]
         self._cache = None
-        full = self._jacobian(state, parameter, _SELECTION_EPSILON, _ENTRIES)
+        full = self._jacobian(state, parameter, (_SELECTION_EPSILON, None), _ENTRIES)
         n = self._dimension
         best = -1.0
         for first, second in itertools.combinations(range(len(_ENTRIES)), 2):
