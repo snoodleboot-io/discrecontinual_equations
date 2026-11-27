@@ -22,7 +22,11 @@ The state columns of the Jacobian are analytic. ``G_z = -W^T (f_u^2)_z V`` with
 through the eigenvalue problem: the eigenvector derivative comes from one bordered
 solve per column and the adjoint eigenvector's from a single adjoint solve, so a
 column costs ``O(n^2)`` after one factorisation, plus a fixed number of
-multilinear-form evaluations. Only the three parameter columns are differenced.
+multilinear-form evaluations. Only the three parameter columns are differenced,
+centrally, at the relative step ``epsilon max(|p|, 1)`` and over the width actually
+stepped (:func:`~discrecontinual_equations.finite_difference.central_column`,
+DEQ-159); the Jacobian that picks the pair of ``G`` entries at an accepted point
+uses the same rule at ``epsilon = 1e-6``.
 Borders are frozen through a Newton solve and adapted at accepted points, where
 the pair of ``G`` entries is also re-chosen to keep the system best conditioned.
 A degenerate Bautin point is where the second Lyapunov quantity ``l2`` changes
@@ -212,8 +216,9 @@ class GeneralizedHopfCurveResidual(DifferentiableResidual):
         Args:
             state: ``(u, kappa, p_a, p_b)``.
             parameter: The continuation coordinate ``p_c``.
-            epsilon: The central-difference step for the three parameter
-                columns; the state and ``kappa`` columns are analytic.
+            epsilon: The relative central-difference step for the three
+                parameter columns: ``p`` steps ``epsilon max(|p|, 1)``. The
+                state and ``kappa`` columns are analytic.
 
         Returns:
             The extended Jacobian.

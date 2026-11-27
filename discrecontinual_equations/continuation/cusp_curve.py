@@ -18,7 +18,11 @@ MatCont's cusp test function ``w^T f_uu[v, v]`` up to the factor one half.
 Each row costs one LU of the bordered matrix. The state columns of the Jacobian
 are analytic: ``g_u = -w^T B(v, e_k)`` (Govaerts' ``g_z = -w^T (f_u)_z v``), and
 the derivative of ``a`` uses two more solves with the same factors in place of the
-derivatives of ``v`` and ``w``. Only the three parameter columns are differenced.
+derivatives of ``v`` and ``w``. Only the three parameter columns are differenced,
+centrally, at the relative step ``epsilon max(|p|, 1)`` and over the width actually
+stepped (:func:`~discrecontinual_equations.finite_difference.central_column`,
+DEQ-159), so the columns stay resolved on a curve whose parameters are of size
+``1e12``; an absolute step there rounds away and returns zero columns.
 The borders are frozen through a Newton solve and moved to the normalised ``v``
 and ``w`` at every accepted point (MatCont's adaptation); the cusp curve itself
 does not depend on them. A swallowtail is where the cubic coefficient vanishes

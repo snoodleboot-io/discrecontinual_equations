@@ -254,8 +254,18 @@ def _assert_rows_agree(computed: np.ndarray, expected: np.ndarray) -> None:
     assert np.all(error <= _AGREEMENT), error
 
 
+def _moved_steps(field: _Scaled, point: tuple[float, ...]) -> list[set[float]]:
+    """Every distance each of the three parameters was moved from ``point``."""
+    moved: list[set[float]] = [set(), set(), set()]
+    for seen in field.seen:
+        for index in range(3):
+            if seen[index] != point[index]:
+                moved[index].add(abs(seen[index] - point[index]))
+    return moved
+
+
 _CURVES = {
-    "cusp": (_cusp, _cusp_rows, lambda s, x, p: _cusp_columns(s, x)),
+    "cusp": (_cusp, _cusp_rows, lambda s, x, _p: _cusp_columns(s, x)),
     "generalized_hopf": (_bautin, _bautin_rows, _bautin_columns),
 }
 
@@ -264,7 +274,7 @@ _CURVES = {
 class TestReference:
     """The hand-written rows and columns are what the residuals compute."""
 
-    @pytest.mark.parametrize("scale", (1.0, *_SCALES))
+    @pytest.mark.parametrize("scale", [1.0, *_SCALES])
     def test_rows_are_the_residual(self, curve, scale):
         build, rows, _columns = _CURVES[curve]
         residual, state, parameter, _field = build(scale)
@@ -322,32 +332,25 @@ class TestAnalyticJacobianAtScale:
 class TestSteps:
     """Each parameter steps ``epsilon max(|p|, 1)``: ``epsilon`` itself below one."""
 
-    @staticmethod
-    def _steps(field: _Scaled, point: tuple[float, ...]) -> list[set[float]]:
-        moved: list[set[float]] = [set(), set(), set()]
-        for seen in field.seen:
-            for index in range(3):
-                if seen[index] != point[index]:
-                    moved[index].add(abs(seen[index] - point[index]))
-        return moved
-
-    @pytest.mark.parametrize("scale", (1.0, *_SCALES))
+    @pytest.mark.parametrize("scale", [1.0, *_SCALES])
     def test_jacobian_steps(self, curve, scale):
         build, _rows, _columns = _CURVES[curve]
         residual, state, parameter, field = build(scale)
         AnalyticJacobian(residual, _STEP).extended_jacobian(state, parameter)
         point = _parameters(scale)
-        for moved, value in zip(self._steps(field, point), point, strict=True):
+        for moved, value in zip(_moved_steps(field, point), point, strict=True):
             expected = _STEP * max(abs(value), 1.0)
             assert moved, value
-            assert all(abs(step - expected) <= 4.0 * _EPS * abs(value) for step in moved)
+            assert all(
+                abs(step - expected) <= 4.0 * _EPS * abs(value) for step in moved
+            )
 
     def test_at_unit_scale_the_step_is_epsilon(self, curve):
         build, _rows, _columns = _CURVES[curve]
         residual, state, parameter, field = build(1.0)
         AnalyticJacobian(residual, _STEP).extended_jacobian(state, parameter)
         point = _parameters(1.0)
-        for moved in self._steps(field, point):
+        for moved in _moved_steps(field, point):
             assert all(abs(step - _STEP) <= 4.0 * _EPS for step in moved)
 
 
@@ -359,11 +362,13 @@ class TestGeneralizedHopfSelection:
         residual, state, parameter, field = _bautin(scale)
         residual.adapt(state, parameter)
         point = _parameters(scale)
-        steps = TestSteps._steps(field, point)
+        steps = _moved_steps(field, point)
         for moved, value in zip(steps, point, strict=True):
             expected = 1.0e-6 * abs(value)
             assert moved, value
-            assert all(abs(step - expected) <= 4.0 * _EPS * abs(value) for step in moved)
+            assert all(
+                abs(step - expected) <= 4.0 * _EPS * abs(value) for step in moved
+            )
 
 
 class TestCentralColumn:

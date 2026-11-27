@@ -1742,11 +1742,59 @@ component, or one for all) or its step is floored at one; the builder passes
 only `epsilon`, so `typical` is reachable by constructing the provider yourself.
 Continuation states and parameters of size above one now take larger steps than
 before, so the Jacobian Newton is handed changes by the change in the difference
-error, and a converged point can move within the Newton tolerance. The residuals that difference their own
-columns (`AnalyticJacobian` over a `DifferentiableResidual`, the cusp and
-generalised-Hopf curves) still take `epsilon` as an absolute step.
+error, and a converged point can move within the Newton tolerance. The residuals
+that difference their own columns follow the same rule since DEQ-159 (next section).
 
 References: [Dennis and Schnabel 1983, SciPy `_numdiff` and `_nonlin`](../references.md#lyapunov-exponents-covariant-vectors-and-noise).
+
+### The cusp and generalized-Hopf curves at scale (DEQ-159)
+
+**The problem.** `Codim3Driver` continues the cusp and generalized-Hopf curves
+with `AnalyticJacobian`, which asks the curve residual for its own Jacobian. The
+state columns are analytic; the three parameter columns are differenced, and they
+used to step `finite_difference_epsilon` (`1e-5`) absolutely. On a curve whose
+parameters are of size `3e11`, where an ulp is `6e-5`, that step is no move at
+all: the three columns came back as zero. At `3e7` they were off by `3.5e-4`
+relative.
+
+**The rule.** The columns now take the step every other finite difference in the
+package takes, centrally: the unknown `p` a column moves steps
+`epsilon * max(|p|, 1)`, and the quotient is divided by the width actually
+stepped, `(p + h) - (p - h)`. `epsilon` is therefore relative, and on parameters of
+size one or less the step is `epsilon` exactly, as before. The same rule sets the
+step of the Jacobian the generalized-Hopf curve uses at each accepted point to
+choose its pair of `G` entries. `finite_difference.central_column` is the shared
+difference; a `DifferentiableResidual` of your own can use it for any column it
+does not know in closed form:
+
+```python
+import numpy as np
+
+from discrecontinual_equations.finite_difference import central_column
+
+
+def rows(state, parameter):
+    return np.array([state[0] * parameter, state[1] ** 2 / 1.0e24])
+
+
+state = np.array([2.0, 3.0e11])
+print(central_column(rows, state, 5.0, 2, 1.0e-5))  # d rows / d parameter
+# [2. 0.]
+print(central_column(rows, state, 5.0, 1, 1.0e-5))  # d rows / d state[1]
+# [0.e+00 6.e-13]; an absolute 1e-5 returned [0. 0.]
+```
+
+At ordinary scales the four codim-3 curves of the test suite (two cusp curves, two
+generalized-Hopf curves) are unchanged: the same number of points, every
+coordinate within `5.4e-14`, and the same located swallowtails and degenerate
+Bautin points.
+
+**Limits.** The typical size is one for every unknown: a parameter that lives far
+below one is stepped as if it were of size one. `Codim2Config.curve_epsilon` is not
+read by any curve; the step is `finite_difference_epsilon`.
+
+References: [Dennis and Schnabel 1983, SciPy `_numdiff`](../references.md#lyapunov-exponents-covariant-vectors-and-noise);
+the curves themselves: [Govaerts, Kuznetsov and Sijnave 2000, MatCont manual 2019](../references.md#normal-forms-centre-manifolds-and-bifurcation-detection).
 
 ::: discrecontinual_equations.continuation.jacobian
 

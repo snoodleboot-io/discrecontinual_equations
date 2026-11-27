@@ -20,6 +20,10 @@ it the step grows with the component.
 The quotient is divided by the width the machine actually stepped,
 ``(x_j + h_j) - (x_j - h_j)``, rather than by ``2 h_j``; the two differ by the
 rounding of the moved state, which is up to ``eps |x_j| / h_j`` relative.
+
+:func:`central_column` is that central difference for one unknown of a
+``(state, parameter)`` pair, for the residuals that difference only some of their
+columns (the cusp and generalized-Hopf curves, DEQ-159).
 """
 
 from collections.abc import Callable
