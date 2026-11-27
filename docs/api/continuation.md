@@ -995,7 +995,13 @@ least-squares fallback moved the saddle by `2e-5` and `1e-4` in `z`, far past
   On `z' = (1e-3 - a) z`, seeded at `a = 0.01` where `z` is stable, the rows
   converge at `a = 0`, where it is unstable: refused at `a = 0`, not at an
   iterate on the way. A solve that runs out of iterations after an iterate with
-  other counts is refused too, naming the last such iterate.
+  other counts is refused too, naming the last such iterate. Matching is used
+  only at an iterate whose counts differ from the seed's; one with the seed's
+  counts takes its own split by sign. Otherwise a stable and an unstable
+  eigenvalue that both cross zero during the solve keep the counts and swap
+  the rows: on `z' = (5e-3 - a) z + x^2, w' = (a - 5e-3) w + x^2`, seeded at
+  `a = 0.01`, the accepted orbit had `z(-T) = 0, w(T) = 0` instead of
+  `z(T) = 0, w(-T) = 0`, 6.4 away from the right one (verify-deq-172).
 
 The probe now solves and traces all 20 of its saddles with `|lam| > 1e-9`; the
 four at `|lam| = 1e-9`, at the hyperbolicity threshold, are refused by design.

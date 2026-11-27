@@ -14,9 +14,10 @@ each swept point is seeded from the previous one.
 
 The boundary conditions give one row per stable and one per unstable eigenvalue
 of the saddle, so the system is square only while the saddle keeps the counts it
-was seeded with. The counts are read at the seed and then followed from iterate
-to iterate by eigenvector, so a step far from convergence that briefly moves a
-small eigenvalue across zero does not stop the solve; a point is accepted only
+was seeded with. The counts are read at the seed; an iterate with other counts
+follows the previous iterate's split by eigenvector, so a step far from
+convergence that briefly moves a small eigenvalue across zero does not stop the
+solve, and one with the seed's counts is split by sign; a point is accepted only
 where the saddle has the seed's counts, and one that converges with other counts
 is refused (:class:`EigenvalueCountError`), where a traced curve stops. The
 counts, the projections and the equilibrium rows' derivative are read from the
@@ -704,6 +705,7 @@ class HomoclinicCurve:
                 float(unknowns[-1]),
                 sweep,
                 partition,
+                counts,
             )
             jacobian = self._jacobian(
                 unknowns,
@@ -766,16 +768,24 @@ class HomoclinicCurve:
         continuation: float,
         sweep: float,
         reference: tuple[np.ndarray, list[int], list[int]],
+        counts: tuple[int, int],
     ) -> tuple[np.ndarray, list[int], list[int]]:
         """The saddle's partition at an iterate, matched to the previous one's.
 
-        Returns the iterate's left eigenvectors with the stable and unstable
-        indices that :func:`_held_partition` matches to ``reference``: the same
-        counts, whatever the signs of the eigenvalues at the iterate.
+        Where the iterate's saddle has the seed's ``counts``, its own split by
+        sign is returned. Elsewhere the iterate's left eigenvectors are returned
+        with the stable and unstable indices that :func:`_held_partition`
+        matches to ``reference``: the same counts, whatever the signs of the
+        eigenvalues at the iterate. Matching alone is not enough: a stable and
+        an unstable eigenvalue that both cross zero during the solve leave the
+        counts unchanged, and the matched rows would then converge on the
+        projection conditions of the other split (verify-deq-172).
         """
-        _, left, _, _ = _split_eigenspaces(
+        _, left, stable, unstable = _split_eigenspaces(
             self._saddle_jacobian(equilibrium, float(continuation), sweep),
         )
+        if (len(stable), len(unstable)) == counts:
+            return left, stable, unstable
         stable, unstable = _held_partition(np.linalg.inv(left), reference)
         return left, stable, unstable
 

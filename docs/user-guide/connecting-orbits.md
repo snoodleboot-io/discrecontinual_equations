@@ -449,7 +449,10 @@ at $T = 12$.
   into stable and unstable ones. They are counted once, at the seed, and then
   followed from Newton iterate to iterate by eigenvector, not re-counted: one
   near-singular step can move the saddle further than a small eigenvalue is from
-  zero, and the next brings it back. The counts are enforced at the accepted
+  zero, and the next brings it back. An iterate whose saddle has the seed's
+  counts takes its own split by sign: two eigenvalues that cross zero in
+  opposite directions leave the counts unchanged, and the followed split would
+  then converge on the other split's boundary rows. The counts are enforced at the accepted
   point: a point whose residual has converged but whose saddle has other counts
   is refused with an `EigenvalueCountError`, and so is a solve that runs out of
   iterations after an iterate with other counts. `trace` stops at such a

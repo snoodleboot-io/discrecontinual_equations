@@ -497,13 +497,13 @@ class _RecordingCurve(HomoclinicCurve):
 
     __slots__ = ["iterates"]
 
-    def _follow(self, equilibrium, continuation, sweep, reference):
+    def _follow(self, equilibrium, continuation, sweep, reference, counts):
         if not hasattr(self, "iterates"):
             self.iterates = []
         self.iterates.append(
             (self._counts(equilibrium, float(continuation), sweep), continuation),
         )
-        return super()._follow(equilibrium, continuation, sweep, reference)
+        return super()._follow(equilibrium, continuation, sweep, reference, counts)
 
 
 class TestCountsAreEnforcedAtTheAcceptedPoint(TestCase):
@@ -596,3 +596,69 @@ class TestCountsAreEnforcedAtTheAcceptedPoint(TestCase):
                 _LOOP_SEED_A,
             )
         assert points == []
+
+
+class _SwappingPair(DeterministicFunction):
+    """A saddle loop with a stable and an unstable direction that swap sides.
+
+    ``x' = y, y' = (1 + b) x - x^2 + a y, z' = (k - a) z + x^2,
+    w' = (a - k) w + x^2``: the loop of :class:`_SaddleLoop` at ``a = 0``, with
+    two directions it forces.
+    At the seed ``a = 0.01`` the ``z`` eigenvalue ``k - a`` is stable and the
+    ``w`` one ``a - k`` unstable; on the curve ``a = 0`` they have swapped, and
+    the counts, two stable and two unstable, are the same at both.
+    """
+
+    k = 5.0e-3
+
+    def eval(
+        self,
+        point: list[float],
+        time: float | None = None,  # noqa: ARG002 (base signature)
+    ) -> list[float]:
+        a = self.parameters[0].value
+        b = self.parameters[1].value
+        x, y, z, w = point
+        return [
+            y,
+            (1 + b) * x - x * x + a * y,
+            (self.k - a) * z + x * x,
+            (a - self.k) * w + x * x,
+        ]
+
+
+class TestFollowedPartitionAtTheAcceptedPoint(TestCase):
+    """The rows at the accepted point split its saddle by sign (verify-deq-172).
+
+    Following the seed's partition by eigenvector through the solve kept ``z``
+    stable and ``w`` unstable after both eigenvalues had crossed zero. The
+    counts were the seed's, so the point was accepted, but it solved the
+    projection conditions of the other split: ``z(-T) = 0`` and ``w(T) = 0``,
+    an orbit up to 6.4 away from the one a seed on the curve converges to.
+    """
+
+    def test_two_eigenvalues_that_swap_sides_do_not_swap_the_rows(self):
+        parameters = [Alpha(value=0.0), BetaOne(value=0.0)]
+        variables = [State() for _ in range(4)]
+        equation = DifferentialEquation(
+            variables=variables,
+            time=Time(),
+            parameters=parameters,
+            derivative=_SwappingPair(
+                variables=variables,
+                parameters=parameters,
+                results=[State() for _ in range(4)],
+                time=None,
+            ),
+        )
+        curve = HomoclinicCurve(equation, 0, 1, MeshSpec(12.0, 120, 1, 0.0))
+        loop = _perturbed_loop()
+        seed = np.column_stack([loop[:, :2], np.zeros((loop.shape[0], 2))])
+        crossed = curve.solve_point(0.0, seed, np.zeros(4), _LOOP_SEED_A)
+        on_curve = curve.solve_point(0.0, seed, np.zeros(4), 0.0)
+        assert crossed is not None
+        assert on_curve is not None
+        # z is unstable on the curve, so it vanishes at the arrival end.
+        assert abs(on_curve.orbit.states[-1, 2]) < 1.0e-9
+        assert abs(on_curve.orbit.states[0, 3]) < 1.0e-9
+        assert np.max(np.abs(crossed.orbit.states - on_curve.orbit.states)) < 1.0e-8
