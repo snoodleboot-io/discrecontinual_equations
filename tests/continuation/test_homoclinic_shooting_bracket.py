@@ -21,6 +21,7 @@ import pytest
 from discrecontinual_equations.continuation.homoclinic_shooting import (
     Departure,
     HomoclinicShooting,
+    ReturnSettings,
 )
 from tests.continuation.fields import Alpha, DampedWellField, State
 
@@ -41,6 +42,8 @@ class _Scripted(HomoclinicShooting):
 
     def __init__(self, root: float, holes: tuple[tuple[float, float], ...]) -> None:
         self.root, self.holes, self.calls = root, holes, []
+        # locate reads its jump tolerance from the settings (DEQ-174)
+        self._settings = ReturnSettings()
 
     def gap(self, parameter: float) -> float:
         self.calls.append(parameter)
@@ -100,6 +103,7 @@ class _Wave(HomoclinicShooting):
 
     def __init__(self, edge: float) -> None:
         self.edge = edge
+        self._settings = ReturnSettings()
         self._function = SimpleNamespace(
             parameters=[SimpleNamespace(value=0.0), SimpleNamespace(value=0.0)],
         )
