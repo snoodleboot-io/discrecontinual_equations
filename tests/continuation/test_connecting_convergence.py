@@ -219,7 +219,7 @@ class TestFamilyOfConnectionsConverges(TestCase):
     def test_last_bit_changes_to_the_seed_change_nothing(self):
         """Before, a one-ulp change in 1% of the seed's entries decided whether
         xi2->xi4 moved at all (5 of 40 did; fix-120/sweep.out). Now every
-        perturbed solve converges, to within 1e-12 of the unperturbed member
+        perturbed solve converges, to within 5e-12 of the unperturbed member
         (measured 20 per edge and mesh, deq-175/sweep_after.out)."""
         _, network = _sheared_kirk_silber(_SHEAR4)
         generator = np.random.default_rng(1)
@@ -293,8 +293,10 @@ class TestAbsentConnectionIsRefused(TestCase):
     """xi3 -> xi2 does not exist, and its solve does not converge.
 
     Measured: Newton residual 1.15 at n = 100 and 0.82 at 200, correction
-    0.99 and 0.98, trapezoidal residual 0.35 and 0.18, 357 and 2.3e3 times
-    what the mesh allows (outputs/verification/deq-175/no_connection.out).
+    0.99 and 0.98 (inf on one of five OpenBLAS kernels, whose best step was
+    rank-deficient), trapezoidal residual 0.35 and 0.18, 357 and 2.3e3 times
+    what the mesh allows (outputs/verification/deq-175/no_connection.out,
+    coretype_no_connection.out).
     """
 
     def test_it_refuses_with_its_best_iterate(self):
