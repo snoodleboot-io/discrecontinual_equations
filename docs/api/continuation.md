@@ -829,8 +829,7 @@ eigenvalue of the saddle. With `N` nodes in `n` dimensions the Newton system has
 The counts are read at the seed and held:
 
 - a seed that is not a hyperbolic saddle is refused before Newton starts;
-- an iterate, or one of the Jacobian's finite-difference shifts, at which the
-  counts change is refused too.
+- an iterate at which the counts change is refused too.
 
 Both raise `EigenvalueCountError`, a `ValueError` whose message names the
 required and found counts and both parameter values, and which carries them as
@@ -923,11 +922,99 @@ This prints the two solved points, then `(1, 1) (2, 0) -0.46`: freeing `b2`
 from a seed with `b1 > 0`, where the field has no equilibrium at all, Newton
 moves `b2` until the "saddle" is a stable node.
 
+#### Reading the counts exactly (DEQ-154)
+
+The counts, and the eigenvectors the boundary rows project onto, come from the
+saddle's exact Jacobian, computed by evaluating the field on Taylor jets
+([Griewank2008](../references.md), ch. 13) - the same automatic differentiation
+the node Jacobians use. A forward difference with step `dx = 1e-7` would read an
+eigenvalue `lam` as about `lam + c dx`, where `c` is the field's curvature in
+that direction, so a genuine saddle with `|lam| < c dx` would be refused as
+non-hyperbolic or, worse, counted on the wrong side and solved with the wrong
+rows. On `x' = x, y' = -y, z' = lam z + c z^2` (eigenvalues `1, -1, lam`) the
+difference got 13 of 39 cases with `|lam|` from `2e-9` to `1e-6` and `c` up to 10
+wrong; the exact Jacobian gets all 39 right.
+
+The Newton matrix still differences the boundary rows in the end nodes, the
+saddle and the parameter (as HomCont does). A shift of the saddle by `dx` moves
+`lam` by about `2 c dx`, which can carry a small eigenvalue across zero although
+the iterate is a perfectly good saddle. So a shifted saddle's eigenvalues are not
+re-counted: each shifted eigenvector is matched to the iterate's eigenvector it
+most nearly lies along - a maximum-overlap assignment on `|W_iterate V_shifted|`
+([Bindel2008](../references.md), sec. 3.2; [Crouse2016](../references.md)) - and
+keeps that eigenvector's side and row. Matching the eigenvalues by distance
+instead would fail when a stable and an unstable eigenvalue are both closer to
+zero than the shift moves them: each shifted one then lies nearer the other's
+unshifted value, and their rows swap. Eigenvectors are only as well defined as
+the eigenvalues are separated, so a repeated eigenvalue with no preferred basis
+cannot be followed this way either. Only an iterate is ever refused, and an
+iterate that strays far enough from the saddle to change its counts is refused
+even though the converged point would be a saddle.
+
+```python
+import numpy as np
+
+from discrecontinual_equations.continuation.connecting_orbit import MeshSpec
+from discrecontinual_equations.continuation.homoclinic_curve import HomoclinicCurve
+from discrecontinual_equations.differential_equation import DifferentialEquation
+from discrecontinual_equations.function.deterministic import DeterministicFunction
+from discrecontinual_equations.parameter import Parameter
+from discrecontinual_equations.variable import Variable
+
+
+class Coordinate(Variable, name="Coordinate", abbreviation="v"):
+    pass
+
+
+class Clock(Variable, name="Clock", abbreviation="t"):
+    pass
+
+
+class Alpha(Parameter, name="alpha", abbreviation="a"):
+    pass
+
+
+class Beta(Parameter, name="beta", abbreviation="b"):
+    pass
+
+
+class NearlyCentral(DeterministicFunction):
+    """x' = x, y' = -y, z' = -1e-7 z + z^2 (a and b unused)."""
+
+    def eval(self, point, time=None):
+        x, y, z = point
+        return [x, -y, -1.0e-7 * z + z * z]
+
+
+parameters = [Alpha(value=0.0), Beta(value=0.0)]
+variables = [Coordinate(), Coordinate(), Coordinate()]
+equation = DifferentialEquation(
+    variables=variables,
+    time=Clock(),
+    parameters=parameters,
+    derivative=NearlyCentral(
+        variables=variables,
+        parameters=parameters,
+        results=[Coordinate(), Coordinate(), Coordinate()],
+        time=None,
+    ),
+)
+curve = HomoclinicCurve(equation, 0, 1, MeshSpec(10.0, 20, 0, 0.0))
+point = curve.solve_point(0.0, np.zeros((21, 3)), np.zeros(3), 0.0)
+print(point is not None)  # True: two stable, one unstable, eigenvalue -1e-7 read exactly
+```
+
+A forward difference reads the third eigenvalue here as `-1e-7 + 1e-7 = 0` and
+refuses the seed as non-hyperbolic.
+
 Limits:
 
-- The counts come from a finite-difference Jacobian and a `1e-9` threshold on
-  the real parts, so a saddle within about `1e-7` of a fold or of a zero real
-  part may be read with the wrong counts.
+- A field that cannot be evaluated on Taylor jets (one that calls `math.pow`,
+  `float()` or another real-only function on the state) falls back to the
+  forward difference, and then a saddle with `|lam|` below about `c * 1e-7` may
+  still be read with the wrong counts.
+- Real parts within `1e-9` of zero count as central, so a saddle with an
+  eigenvalue that small is refused as non-hyperbolic.
 - A refusal only says the counts changed. Whether the curve really ends there
   (for instance at a Bogdanov-Takens point, where the saddle merges with
   another equilibrium) or Newton just wandered off from a poor seed is for the

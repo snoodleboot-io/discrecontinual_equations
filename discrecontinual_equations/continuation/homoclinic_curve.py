@@ -14,8 +14,12 @@ each swept point is seeded from the previous one.
 
 The boundary conditions give one row per stable and one per unstable eigenvalue
 of the saddle, so the system is square only while the saddle keeps the counts it
-was seeded with. Newton refuses an iterate, or a finite-difference shift, at which
-they change (:class:`EigenvalueCountError`), and a traced curve stops there.
+was seeded with. Newton refuses an iterate at which they change
+(:class:`EigenvalueCountError`), and a traced curve stops there. The counts and
+the projections are read from the saddle's exact (automatic-differentiation)
+Jacobian, so a saddle whose eigenvalue is far smaller than a difference step is
+still counted correctly; the finite-difference shifts that build the Newton
+matrix keep the iterate's partition of the eigenvalues rather than re-counting.
 
 The Newton matrix is block-banded in the nodes and bordered by the equilibrium,
 boundary and phase rows and the parameter column - HomCont's structure (Champneys,
@@ -26,6 +30,7 @@ a sparse LU, in time and memory linear in the nodes.
 import warnings
 
 import numpy as np
+from scipy.optimize import linear_sum_assignment
 from scipy.sparse import csc_matrix, csr_matrix
 from scipy.sparse.linalg import splu
 
@@ -62,9 +67,10 @@ class EigenvalueCountError(ValueError):
     With ``N`` nodes in ``n`` dimensions the system has ``N n + s + u + 1`` rows
     against ``N n + n + 1`` unknowns, so it is square only when ``s + u = n`` -
     a hyperbolic equilibrium - and a homoclinic orbit needs ``s, u >= 1``. When
-    Newton, or one of its finite-difference shifts, reaches a point where the
-    counts differ from the seed's, the rows no longer line up and the point is
-    refused with this error rather than solved as a different problem.
+    a Newton iterate reaches a point where the counts differ from the seed's,
+    the rows no longer line up and the point is refused with this error rather
+    than solved as a different problem. The counts are read from the exact
+    Jacobian at the saddle, so only a genuine change is refused.
 
     Attributes:
         expected: ``(stable, unstable)`` counts the solve requires, those of the
@@ -119,6 +125,46 @@ def _continuous_phases(values: np.ndarray, left: np.ndarray) -> np.ndarray:
         largest = row[np.argmax(np.abs(row))]
         fixed[index] = row * (np.conj(largest) / np.abs(largest))
     return fixed
+
+
+def _held_partition(
+    vectors: np.ndarray,
+    reference: tuple[np.ndarray, list[int], list[int]],
+) -> tuple[list[int], list[int]]:
+    """The stable and unstable indices of a shifted saddle, matched to a reference.
+
+    ``vectors`` holds the right eigenvectors of the shifted saddle's Jacobian as
+    columns; ``reference`` is the left eigenvectors (rows) and the stable and
+    unstable indices of the unshifted one. A finite-difference shift perturbs
+    the Jacobian slightly, so ``|left_ref @ vectors|`` is near a permutation
+    matrix: each shifted eigenvector lies almost entirely along one reference
+    eigenvector. Pairing them by the maximum-overlap assignment lets the shifted
+    rows inherit the reference's partition, in the reference's row order, even
+    where a small eigenvalue's real part changes sign within the step or two
+    small eigenvalues pass each other. Matching eigenvalues by distance instead
+    fails there: a stable and an unstable eigenvalue closer together than the
+    shift moves them are each nearer the other's reference value, and their rows
+    swap. A conjugate pair's members have near-zero overlap with each other, so
+    they are not confused either. Eigenvectors that are themselves ill-defined
+    (a repeated eigenvalue) cannot be followed by any matching.
+
+    References:
+        Bindel, D., Demmel, J. & Friedman, M. (2008). Continuation of invariant
+            subspaces in large bifurcation problems. *SIAM Journal on Scientific
+            Computing* 30(2), 637-656. DOI 10.1137/060654219 (read as technical
+            report UCB/EECS-2006-13, 2006). Sec. 3.2: following a subspace by the
+            eigenvectors of the new matrix that most nearly lie in the previous
+            one, rather than by nearest eigenvalues.
+        Crouse, D. F. (2016). On implementing 2D rectangular assignment
+            algorithms. *IEEE Transactions on Aerospace and Electronic Systems*
+            52(4), 1679-1696. DOI 10.1109/TAES.2016.140952. The modified
+            Jonker-Volgenant algorithm of ``scipy.optimize.linear_sum_assignment``.
+    """
+    reference_left, stable, unstable = reference
+    overlap = np.abs(reference_left @ vectors)
+    original, shifted = linear_sum_assignment(overlap, maximize=True)
+    matched = dict(zip(original.tolist(), shifted.tolist(), strict=True))
+    return [matched[index] for index in stable], [matched[index] for index in unstable]
 
 
 class HomoclinicCurvePoint:
@@ -222,6 +268,30 @@ class HomoclinicCurve:
             columns[:, j] = (self._field(shifted, continuation, sweep) - base) / _STEP
         return columns
 
+    def _saddle_jacobian(
+        self,
+        equilibrium: np.ndarray,
+        continuation: float,
+        sweep: float,
+    ) -> np.ndarray:
+        """The field Jacobian at the saddle, exact where the field allows it.
+
+        The eigenvalue counts and the projection rows are read from it. A
+        forward difference with step ``dx`` reads an eigenvalue ``lam`` as about
+        ``lam + c dx`` for a field curvature ``c``, which flips the sign of any
+        ``|lam| < c dx`` and so miscounts a genuine saddle; the Taylor-jet
+        Jacobian has no such error. A field that cannot be evaluated on jets
+        falls back to the forward difference, as the node Jacobians do.
+
+        References:
+            Griewank, A. & Walther, A. (2008). *Evaluating Derivatives: Principles
+                and Techniques of Algorithmic Differentiation*, 2nd ed. SIAM.
+                DOI 10.1137/1.9780898717761. Ch. 13 (Taylor and Tensor
+                Coefficients): first-order Taylor propagation along each unit
+                direction gives the Jacobian's columns exactly.
+        """
+        return self._node_jacobians(equilibrium[np.newaxis], continuation, sweep)[0]
+
     def _label(self, index: int) -> str:
         parameter = self._equation.derivative.parameters[index]
         return parameter.abbreviation or parameter.name or f"parameter {index}"
@@ -232,9 +302,9 @@ class HomoclinicCurve:
         continuation: float,
         sweep: float,
     ) -> tuple[int, int]:
-        """The saddle's ``(stable, unstable)`` eigenvalue counts."""
+        """The saddle's ``(stable, unstable)`` eigenvalue counts, read exactly."""
         _, _, stable, unstable = _split_eigenspaces(
-            self._field_jacobian(equilibrium, continuation, sweep),
+            self._saddle_jacobian(equilibrium, continuation, sweep),
         )
         return len(stable), len(unstable)
 
@@ -282,15 +352,30 @@ class HomoclinicCurve:
         sweep: float,
         counts: tuple[int, int] | None = None,
     ) -> np.ndarray:
+        """The collocation, equilibrium, projection and phase rows at ``unknowns``.
+
+        An iterate that has diverged - a non-finite saddle state or parameter, or
+        collocation rows that overflow - gives a residual of ``inf`` before the
+        saddle's eigenvalues are counted, so its norm is ``inf`` and the solve
+        returns ``None``. Counting the eigenvalues of a saddle that far from
+        converging would report lost hyperbolicity where the iteration merely
+        diverged; the count check (:class:`EigenvalueCountError`) applies only to
+        finite iterates.
+        """
         states = unknowns[: nodes * dimension].reshape(nodes, dimension)
         equilibrium = unknowns[nodes * dimension : nodes * dimension + dimension]
         continuation = float(unknowns[-1])
+        diverged = np.full(unknowns.size, np.inf)
+        if not (np.all(np.isfinite(equilibrium)) and np.isfinite(continuation)):
+            return diverged
         blocks = []
         for i in range(nodes - 1):
             step = times[i + 1] - times[i]
             here = self._field(states[i], continuation, sweep)
             ahead = self._field(states[i + 1], continuation, sweep)
             blocks.append(states[i + 1] - states[i] - 0.5 * step * (here + ahead))
+        if not all(np.all(np.isfinite(block)) for block in blocks):
+            return diverged
         blocks.append(
             self._tail(
                 states[0],
@@ -305,13 +390,14 @@ class HomoclinicCurve:
         blocks.append(np.array([phase]))
         return np.concatenate(blocks)
 
-    def _tail(
+    def _tail(  # noqa: PLR0913 (the tail's unknowns plus how to split the saddle)
         self,
         departure_state: np.ndarray,
         arrival_state: np.ndarray,
         equilibrium: np.ndarray,
         parameters: tuple[float, float],
         counts: tuple[int, int] | None = None,
+        partition: tuple[np.ndarray, list[int], list[int]] | None = None,
     ) -> np.ndarray:
         """The equilibrium condition and the projection boundary conditions.
 
@@ -326,11 +412,18 @@ class HomoclinicCurve:
 
         With ``counts`` given, a saddle whose ``(stable, unstable)`` counts differ
         is refused: its rows would not line up with the rows they are compared to.
+        With ``partition`` - the left eigenvectors and the stable and unstable
+        indices of an unshifted saddle - the eigenvalues are not re-counted but
+        matched to those by eigenvector (:func:`_held_partition`), so a
+        finite-difference shift gives
+        the same rows, in the same order, as the point it differences.
         """
         continuation, sweep = parameters
         values, left, stable, unstable = _split_eigenspaces(
-            self._field_jacobian(equilibrium, continuation, sweep),
+            self._saddle_jacobian(equilibrium, continuation, sweep),
         )
+        if partition is not None:
+            stable, unstable = _held_partition(np.linalg.inv(left), partition)
         found = (len(stable), len(unstable))
         if counts is not None and found != counts:
             reason = "the saddle's eigenvalue counts changed during the solve"
@@ -365,24 +458,29 @@ class HomoclinicCurve:
         * the equilibrium and boundary rows, which touch only the two end nodes,
           the equilibrium and the parameter, and whose dependence on the saddle's
           eigenvectors is differenced - as HomCont does - in ``3n + 1``
-          evaluations that do not grow with the mesh;
+          evaluations that do not grow with the mesh, each taking the
+          eigenvectors of the exact Jacobian at the shifted saddle;
         * the phase row, a single unit entry.
 
         The dense finite-difference matrix it replaces took one full residual per
         unknown: ``O(N^2)`` field evaluations and ``O(N^2)`` memory per iteration.
 
-        Each differenced tail must keep the saddle's eigenvalue counts at
-        ``unknowns``; a shift across a change in them raises
-        :class:`EigenvalueCountError` instead of differencing rows of two lengths.
+        Each differenced tail keeps the partition of the saddle's eigenvalues at
+        ``unknowns`` (:func:`_held_partition`): a shift of ``dx`` moves an
+        eigenvalue by about ``c dx``, and one with ``|lam| < c dx`` would
+        otherwise be re-counted on the other side and give rows of two lengths,
+        though the iterate itself is a saddle with the seed's counts.
         """
         size = unknowns.size
         nodes = times.size
         states = unknowns[: nodes * dimension].reshape(nodes, dimension)
         continuation = float(unknowns[-1])
-        counts = self._counts(
-            unknowns[nodes * dimension : nodes * dimension + dimension],
-            continuation,
-            sweep,
+        _, reference_left, stable, unstable = _split_eigenspaces(
+            self._saddle_jacobian(
+                unknowns[nodes * dimension : nodes * dimension + dimension],
+                continuation,
+                sweep,
+            ),
         )
         derivatives = self._node_jacobians(states, continuation, sweep)
         row, column, value = _collocation_triplets(derivatives, times)
@@ -408,7 +506,7 @@ class HomoclinicCurve:
                 shifted[bands : bands + dimension],
                 shifted[nodes * dimension : nodes * dimension + dimension],
                 (float(shifted[-1]), sweep),
-                counts,
+                partition=(reference_left, stable, unstable),
             )
             rows.append(tail_rows)
             columns.append(np.full(tail_rows.size, index))
@@ -444,7 +542,7 @@ class HomoclinicCurve:
         continuation: float,
         sweep: float,
     ) -> np.ndarray:
-        """The field Jacobian at every node, exact where the field allows it."""
+        """The field Jacobian at every point of ``states``, exact where possible."""
         parameters = self._equation.derivative.parameters
         parameters[self._continuation_index].value = float(continuation)
         parameters[self._sweep_index].value = float(sweep)
@@ -591,7 +689,9 @@ class HomoclinicCurve:
         Newton's method on the bordered collocation system: orbit nodes, saddle
         and the continuation parameter are unknowns, the swept parameter is held.
         The saddle must keep the seed's stable and unstable eigenvalue counts
-        throughout, since the boundary rows are counted from them.
+        throughout, since the boundary rows are counted from them. They are read
+        from the exact (Taylor-jet) Jacobian at the saddle, with a forward
+        difference only for a field that cannot be evaluated on jets.
 
         Args:
             sweep: Value of the swept parameter.
@@ -604,8 +704,7 @@ class HomoclinicCurve:
 
         Raises:
             EigenvalueCountError: The seed is not a hyperbolic saddle, or an
-                iterate or a finite-difference shift changes its stable and
-                unstable eigenvalue counts.
+                iterate changes its stable and unstable eigenvalue counts.
 
         References:
             Champneys, A. R., Kuznetsov, Yu. A. & Sandstede, B. (1996). A numerical
@@ -619,6 +718,9 @@ class HomoclinicCurve:
             Bader and Ascher 1987 (docs/references.md, ``Bader1987``), COLNEW
             subroutine ``CONTRL``: a Newton iteration that fails returns no
             solution (``IFLAG = -2``), as this returns ``None``.
+            Griewank, A. & Walther, A. (2008). *Evaluating Derivatives*, 2nd ed.
+                SIAM. DOI 10.1137/1.9780898717761. Ch. 13: the Taylor-jet
+                Jacobian the saddle's eigenvalue counts are read from.
         """
         nodes = self._mesh.intervals + 1
         dimension = orbit_seed.shape[1]
