@@ -591,6 +591,13 @@ class TestDirectionalStep:
         step = FiniteDifferenceDerivatives(1.0e-6).step(point, direction)
         assert step == pytest.approx(1.0e-6 * 4.0e12, rel=1.0e-15)
 
+    def test_a_zero_direction_takes_epsilon_and_has_no_slope(self):
+        point = np.array([0.5, 4.0e12, -3.0])
+        provider = FiniteDifferenceDerivatives(1.0e-6)
+        assert provider.step(point, np.zeros(3)) == 1.0e-6
+        slope = provider.taylor(_Spy.make(), point, np.zeros(3), 1, 0.0)[1]
+        assert np.array_equal(slope, np.zeros(3))
+
     @pytest.mark.parametrize("seed", range(4))
     def test_no_component_moves_more_than_its_own_step(self, seed):
         # |t d_j| <= epsilon s_j on every component, with equality on the one
