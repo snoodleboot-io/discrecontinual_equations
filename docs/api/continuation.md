@@ -939,9 +939,17 @@ The Newton matrix still differences the boundary rows in the end nodes, the
 saddle and the parameter (as HomCont does). A shift of the saddle by `dx` moves
 `lam` by about `2 c dx`, which can carry a small eigenvalue across zero although
 the iterate is a perfectly good saddle. So a shifted saddle's eigenvalues are not
-re-counted: each is matched to the iterate's eigenvalue it is nearest to, by a
-minimum-cost assignment ([Crouse2016](../references.md)), and keeps that
-eigenvalue's side and row. Only an iterate is ever refused.
+re-counted: each shifted eigenvector is matched to the iterate's eigenvector it
+most nearly lies along - a maximum-overlap assignment on `|W_iterate V_shifted|`
+([Bindel2008](../references.md), sec. 3.2; [Crouse2016](../references.md)) - and
+keeps that eigenvector's side and row. Matching the eigenvalues by distance
+instead would fail when a stable and an unstable eigenvalue are both closer to
+zero than the shift moves them: each shifted one then lies nearer the other's
+unshifted value, and their rows swap. Eigenvectors are only as well defined as
+the eigenvalues are separated, so a repeated eigenvalue with no preferred basis
+cannot be followed this way either. Only an iterate is ever refused, and an
+iterate that strays far enough from the saddle to change its counts is refused
+even though the converged point would be a saddle.
 
 ```python
 import numpy as np

@@ -325,11 +325,108 @@ class TestHeldPartition(TestCase):
     """A shifted saddle's eigenvalues inherit the partition of the unshifted one."""
 
     def test_a_reordered_shift_keeps_the_reference_rows_in_their_order(self):
-        reference = (np.array([1.0, -1.0, -1.0e-7]), [1, 2], [0])
-        shifted = np.array([1.0e-7, 1.0, -1.0])
+        """Shifted eigenvector ``j`` lies along reference eigenvector ``2, 0, 1``."""
+        reference = (np.eye(3), [1, 2], [0])
+        shifted = np.eye(3)[:, [2, 0, 1]]
         assert _held_partition(shifted, reference) == ([2, 0], [1])
 
     def test_a_complex_pair_keeps_its_two_members_apart(self):
-        reference = (np.array([-0.5 + 2.0j, -0.5 - 2.0j, 3.0]), [0, 1], [2])
-        shifted = np.array([3.0, -0.5 - 2.0j, -0.5 + 2.0j])
-        assert _held_partition(shifted, reference) == ([2, 1], [0])
+        """A perturbed saddle-focus, its eigenvectors listed in reverse order."""
+        jacobian = np.array([[-0.5, 2.0, 0.0], [-2.0, -0.5, 0.0], [0.0, 0.0, 3.0]])
+        values, vectors = np.linalg.eig(jacobian)
+        stable = [i for i in range(3) if values[i].real < 0]
+        unstable = [i for i in range(3) if values[i].real > 0]
+        perturbation = 1.0e-7 * np.arange(9.0).reshape(3, 3)
+        moved, moved_vectors = np.linalg.eig(jacobian + perturbation)
+        order = np.argsort(-moved.imag)[::-1]
+        held = _held_partition(
+            moved_vectors[:, order],
+            (np.linalg.inv(vectors), stable, unstable),
+        )
+        for reference, shifted in zip(
+            [*stable, *unstable],
+            [*held[0], *held[1]],
+            strict=True,
+        ):
+            assert abs(moved[order][shifted] - values[reference]) < 1.0e-5
+
+
+class _CrossingPair(DeterministicFunction):
+    """``x' = x, y' = -y, z' = -d z + z^2, w' = d w + w^2 - z w``.
+
+    At the origin the eigenvalues are ``1, -1, -d, d``: a saddle with a stable
+    and an unstable eigenvalue both near zero. The Jacobian is diagonal at every
+    point with ``w = 0``, so the left eigenvectors are the unit vectors there,
+    and shifting the saddle by ``dx`` in ``z`` moves the ``z`` eigenvalue to
+    ``-d + 2 dx`` and the ``w`` one to ``d - dx``: for ``d < dx`` they pass each
+    other, and each lies nearer the other's unshifted eigenvalue.
+    """
+
+    d = 0.0
+
+    def eval(
+        self,
+        point: list[float],
+        time: float | None = None,  # noqa: ARG002 (base signature)
+    ) -> list[float]:
+        first = self.parameters[0].value
+        second = self.parameters[1].value
+        z, w = point[2], point[3]
+        return [
+            point[0] + 0 * first,
+            -point[1] + 0 * second,
+            -self.d * z + z * z,
+            self.d * w + w * w - z * w,
+        ]
+
+
+class TestHeldPartitionFollowsEigenvectors(TestCase):
+    def test_a_stable_and_an_unstable_eigenvalue_passing_keep_their_rows(self):
+        """The differenced tail column of ``z_eq`` is exact: ``-1`` in the
+        departure row of ``z``, ``0`` in the arrival row of ``w``.
+
+        Matching the shifted eigenvalues to the nearest unshifted ones swaps the
+        ``z`` and ``w`` rows here and gives entries of order ``|z - w| / dx``.
+        """
+        parameters = [Alpha(value=0.0), BetaOne(value=0.0)]
+        variables = [State() for _ in range(4)]
+        field = _CrossingPair(
+            variables=variables,
+            parameters=parameters,
+            results=[State() for _ in range(4)],
+            time=None,
+        )
+        field.d = 1.0e-8
+        equation = DifferentialEquation(
+            variables=variables,
+            time=Time(),
+            parameters=parameters,
+            derivative=field,
+        )
+        curve = HomoclinicCurve(equation, 0, 1, MeshSpec(10.0, 4, 0, 0.0))
+        nodes, dimension = 5, 4
+        times = np.linspace(-10.0, 10.0, nodes)
+        states = np.zeros((nodes, dimension))
+        states[0] = [0.0, 0.1, 0.2, -0.3]
+        states[-1] = [0.1, 0.0, -0.2, 0.3]
+        unknowns = np.concatenate([states.ravel(), np.zeros(dimension), [0.0]])
+        residual = curve._residual(  # noqa: SLF001
+            unknowns,
+            times,
+            nodes,
+            dimension,
+            0.0,
+            (2, 2),
+        )
+        matrix = curve._jacobian(  # noqa: SLF001
+            unknowns,
+            times,
+            dimension,
+            0.0,
+            residual,
+        ).toarray()
+        boundary = (nodes - 1) * dimension + dimension
+        column = nodes * dimension + 2
+        # rows: departure y, departure z (stable); arrival x, arrival w (unstable)
+        assert abs(matrix[boundary + 1, column] + 1.0) < 1.0e-6
+        assert abs(matrix[boundary + 3, column]) < 1.0e-6

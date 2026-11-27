@@ -128,27 +128,41 @@ def _continuous_phases(values: np.ndarray, left: np.ndarray) -> np.ndarray:
 
 
 def _held_partition(
-    values: np.ndarray,
+    vectors: np.ndarray,
     reference: tuple[np.ndarray, list[int], list[int]],
 ) -> tuple[list[int], list[int]]:
-    """The stable and unstable indices of ``values``, matched to a reference.
+    """The stable and unstable indices of a shifted saddle, matched to a reference.
 
-    A finite-difference shift of the saddle moves each eigenvalue by about the
-    step times the field's curvature, and may reorder them. Pairing each shifted
-    eigenvalue with the reference eigenvalue it is closest to (a minimum-cost
-    assignment on ``|mu_i - lambda_j|``) lets the shifted rows inherit the
-    reference's partition, in the reference's row order, even where a small
-    eigenvalue's real part changes sign within the step.
+    ``vectors`` holds the right eigenvectors of the shifted saddle's Jacobian as
+    columns; ``reference`` is the left eigenvectors (rows) and the stable and
+    unstable indices of the unshifted one. A finite-difference shift perturbs
+    the Jacobian slightly, so ``|left_ref @ vectors|`` is near a permutation
+    matrix: each shifted eigenvector lies almost entirely along one reference
+    eigenvector. Pairing them by the maximum-overlap assignment lets the shifted
+    rows inherit the reference's partition, in the reference's row order, even
+    where a small eigenvalue's real part changes sign within the step or two
+    small eigenvalues pass each other. Matching eigenvalues by distance instead
+    fails there: a stable and an unstable eigenvalue closer together than the
+    shift moves them are each nearer the other's reference value, and their rows
+    swap. A conjugate pair's members have near-zero overlap with each other, so
+    they are not confused either. Eigenvectors that are themselves ill-defined
+    (a repeated eigenvalue) cannot be followed by any matching.
 
     References:
+        Bindel, D., Demmel, J. & Friedman, M. (2008). Continuation of invariant
+            subspaces in large bifurcation problems. *SIAM Journal on Scientific
+            Computing* 30(2), 637-656. DOI 10.1137/060654219 (read as technical
+            report UCB/EECS-2006-13, 2006). Sec. 3.2: following a subspace by the
+            eigenvectors of the new matrix that most nearly lie in the previous
+            one, rather than by nearest eigenvalues.
         Crouse, D. F. (2016). On implementing 2D rectangular assignment
             algorithms. *IEEE Transactions on Aerospace and Electronic Systems*
             52(4), 1679-1696. DOI 10.1109/TAES.2016.140952. The modified
             Jonker-Volgenant algorithm of ``scipy.optimize.linear_sum_assignment``.
     """
-    reference_values, stable, unstable = reference
-    distance = np.abs(values[:, None] - reference_values[None, :])
-    shifted, original = linear_sum_assignment(distance)
+    reference_left, stable, unstable = reference
+    overlap = np.abs(reference_left @ vectors)
+    original, shifted = linear_sum_assignment(overlap, maximize=True)
     matched = dict(zip(original.tolist(), shifted.tolist(), strict=True))
     return [matched[index] for index in stable], [matched[index] for index in unstable]
 
@@ -383,9 +397,10 @@ class HomoclinicCurve:
 
         With ``counts`` given, a saddle whose ``(stable, unstable)`` counts differ
         is refused: its rows would not line up with the rows they are compared to.
-        With ``partition`` - the eigenvalues and the stable and unstable indices
-        of an unshifted saddle - the eigenvalues are not re-counted but matched
-        to those (:func:`_held_partition`), so a finite-difference shift gives
+        With ``partition`` - the left eigenvectors and the stable and unstable
+        indices of an unshifted saddle - the eigenvalues are not re-counted but
+        matched to those by eigenvector (:func:`_held_partition`), so a
+        finite-difference shift gives
         the same rows, in the same order, as the point it differences.
         """
         continuation, sweep = parameters
@@ -393,7 +408,7 @@ class HomoclinicCurve:
             self._saddle_jacobian(equilibrium, continuation, sweep),
         )
         if partition is not None:
-            stable, unstable = _held_partition(values, partition)
+            stable, unstable = _held_partition(np.linalg.inv(left), partition)
         found = (len(stable), len(unstable))
         if counts is not None and found != counts:
             reason = "the saddle's eigenvalue counts changed during the solve"
@@ -445,7 +460,7 @@ class HomoclinicCurve:
         nodes = times.size
         states = unknowns[: nodes * dimension].reshape(nodes, dimension)
         continuation = float(unknowns[-1])
-        eigenvalues, _, stable, unstable = _split_eigenspaces(
+        _, reference_left, stable, unstable = _split_eigenspaces(
             self._saddle_jacobian(
                 unknowns[nodes * dimension : nodes * dimension + dimension],
                 continuation,
@@ -476,7 +491,7 @@ class HomoclinicCurve:
                 shifted[bands : bands + dimension],
                 shifted[nodes * dimension : nodes * dimension + dimension],
                 (float(shifted[-1]), sweep),
-                partition=(eigenvalues, stable, unstable),
+                partition=(reference_left, stable, unstable),
             )
             rows.append(tail_rows)
             columns.append(np.full(tail_rows.size, index))
