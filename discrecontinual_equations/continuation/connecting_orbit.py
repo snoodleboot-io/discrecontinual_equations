@@ -75,6 +75,17 @@ _ORDERING = "COLAMD"
 # a small factor: one step was measured within 4x and two within 30% of the true
 # value, and with either the step error matched QR's from cond(J) = 1e2 to 1e8.
 _SCALE_STEPS = 2
+# Levenberg-Marquardt parameter of every Newton step, as ``(_DAMPING sigma_max)^2``.
+# A connection that is one of a family has a Newton matrix singular along the
+# family (measured sigma_min / sigma_max 1e-18 to 7e-17 on the sheared Kirk-Silber
+# edges leaving xi2); the undamped step there divides rounding by rounding. The
+# damped step filters each singular direction by ``sigma^2 / (sigma^2 + lambda)``:
+# below the floor it is dropped, which makes the step the minimum-norm one (DEQ-175);
+# above it the step is changed by at most ``(_DAMPING cond(J))^2``, 1e-6 at the
+# ``cond(J) = 1e8`` that the augmented solve is pinned to match QR at.
+_DAMPING = 1.0e-11
+# Power-iteration steps for sigma_max, which only scales the damping floor.
+_POWER_STEPS = 8
 _ROOT_HALF = 0.5**0.5
 # How far the truncation estimate extends the interval, as a fraction of the
 # half-length. Truncation error decays like ``exp(-2 lambda T)``, so a fraction
@@ -487,13 +498,14 @@ class ConnectingOrbit(ABC):
                     shape,
                     residual.size,
                 )
-            step = self._least_squares(jacobian, residual)
+            step, resolved = self._newton_step(jacobian, residual)
             if improved:
                 best_correction = _relative_correction(
                     jacobian,
                     residual,
                     step,
                     unknowns,
+                    resolved=resolved,
                 )
             unknowns = unknowns + step
         states = best.reshape(shape)
@@ -816,66 +828,132 @@ class ConnectingOrbit(ABC):
         return states[centre, self._mesh.phase_index] - self._mesh.phase_value
 
     def _least_squares(self, jacobian: csr_matrix, residual: np.ndarray) -> np.ndarray:
-        """Solve the overdetermined Newton system for a step, by a sparse direct solve.
+        """The Newton step of :meth:`_newton_step`, without its rank report."""
+        return self._newton_step(jacobian, residual)[0]
 
-        The least-squares step ``x`` minimising ``|J x + r|`` is the lower half of the
-        solution of the augmented system
+    def _newton_step(
+        self,
+        jacobian: csr_matrix,
+        residual: np.ndarray,
+    ) -> tuple[np.ndarray, bool]:
+        """The minimum-norm least-squares Newton step, and whether ``J`` resolved it.
 
-            [ I    J ] [ s ]   [ -r ]
-            [ J^T  0 ] [ x ] = [  0 ],
+        The step ``x`` minimises ``|J x + r|^2 + lambda |x|^2``, the
+        Levenberg-Marquardt subproblem, with ``lambda = (_DAMPING sigma_max)^2``
+        fixed far below every singular value a well-posed solve has. In the
+        singular basis it is ``-sum_i sigma_i (u_i . r) / (sigma_i^2 + lambda) v_i``:
+        directions with ``sigma_i^2 >> lambda`` get the Gauss-Newton step
+        unchanged, and directions with ``sigma_i^2 << lambda`` are dropped. As
+        ``lambda -> 0`` this is the minimum-norm least-squares step ``-J^+ r``
+        (Moré 1978, eq. (2.4)). Where the connection is one of a family, ``J`` is
+        singular along the family and the Gauss-Newton step there is rounding
+        divided by rounding - 10 to 95 on the sheared Kirk-Silber edges leaving
+        xi2, and different on every BLAS kernel. The minimum-norm step is not:
+        it moves only across the family, so the iteration is Gauss-Newton with
+        the pseudo-inverse and stops on whichever member of the family it
+        reaches first. Measured there: the residual falls quadratically, 0.59
+        to 1e-15 in seven steps, on every OpenBLAS kernel tried, to within
+        1e-12 of Gauss-Newton with a dense SVD pseudo-inverse. ``lambda`` is a
+        fixed floor, not Moré's trust-region parameter: the iteration here keeps
+        no radius, and a nearly singular but isolated problem still takes its
+        full Gauss-Newton step.
 
-        whose first row defines the residual ``s = -r - J x`` and whose second is
-        the normal equations ``J^T s = 0``, without forming ``J^T J``. The identity
-        block is scaled, ``alpha I`` with ``alpha = sigma_min(J) / sqrt(2)``, and
-        that scaling is what keeps the condition number near ``cond(J)``: unscaled,
-        with ``sigma_min < 1`` as it is here (about ``1/N``), the augmented matrix is
-        conditioned like ``J^T J``. Measured on synthetic problems, unscaled forward
-        errors were 4e-7 at ``cond(J) = 1e6`` and 1e-3 at ``1e8``, against QR's 2e-9
-        and 3e-5; scaled, they match QR's (Bjorck, BIT 7, 1967). The scale comes
-        from ``_SCALE_STEPS`` steps of inverse iteration through an unscaled
+        It is the lower half of the solution of the augmented system
+
+            [ alpha I   J       ] [ s ]   [ -r ]
+            [ J^T      -mu I    ] [ x ] = [  0 ],
+
+        with ``alpha mu = lambda``: the first row defines ``s = (-r - J x) /
+        alpha`` and the second is then the damped normal equations
+        ``(J^T J + lambda I) x = -J^T r``, without forming ``J^T J``. The scale
+        ``alpha = sigma_eff / sqrt(2)``, with ``sigma_eff^2 = sigma_min^2 +
+        lambda`` the damped system's smallest singular value squared, keeps the
+        condition number near ``sigma_max / sigma_eff``: unscaled, with
+        ``sigma_min < 1`` as it is here (about ``1/N``), it is conditioned like
+        ``J^T J``. Measured on synthetic problems, unscaled forward errors were
+        4e-7 at ``cond(J) = 1e6`` and 1e-3 at ``1e8``, against QR's 2e-9 and 3e-5;
+        scaled, they match QR's (Bjorck, BIT 7, 1967). ``sigma_min`` comes from
+        ``_SCALE_STEPS`` steps of inverse iteration through an unscaled
         factorisation, so a step costs two sparse factorisations, both in fill
         linear in the nodes because only the boundary and phase rows reach across
         the block-banded collocation.
 
-        This replaces ``lsmr``, whose iteration count grew with the nodes. It
-        remains the fallback for a factorisation that is singular or non-finite,
-        with the dense least-squares solve behind it; both announce themselves with
-        a ``RuntimeWarning``.
+        The second value says whether ``J`` has full numerical rank,
+        ``sigma_min > _RCOND sigma_max``. A step computed where it does not is
+        not the Gauss-Newton step along the directions it dropped, so its size
+        certifies nothing (see :func:`_relative_correction`).
+
+        ``lsmr``, damped by the same floor, is the fallback for a factorisation
+        that is non-finite, with the dense least-squares solve, which reports
+        its rank, behind it; both announce themselves with a ``RuntimeWarning``.
+        An exactly singular factorisation in the ``sigma_min`` estimate also
+        warns, and is a rank deficiency the damped solve then handles; if
+        ``lsmr`` then takes the step, its estimate of ``cond(J)`` decides the
+        rank.
+
+        References:
+            J. J. Moré, "The Levenberg-Marquardt algorithm: implementation and
+            theory", in G. A. Watson (ed.), *Numerical Analysis*, Lecture Notes
+            in Mathematics 630, Springer, 1978, 105-116, DOI 10.1007/BFb0067700;
+            Sec. 2, eq. (2.4), ``p(lambda) = -(J^T J + lambda D^T D)^{-1} J^T f``,
+            and its limit for rank-deficient ``J``, ``D p(0) = lim D p(lambda) =
+            -(J D^{-1})^+ f`` as ``lambda -> 0+``, here with ``D = I``; Sec. 3,
+            eq. (3.1)-(3.2), the damped step as a least-squares problem rather
+            than normal equations, which "are particularly unreliable when
+            lambda = 0 and J is nearly rank deficient".
+            See docs/references.md, ``More1978``.
         """
         rows, columns = jacobian.shape
         right = np.concatenate([-residual, np.zeros(columns)])
+        largest = _largest_singular_value(jacobian)
+        floor = _DAMPING * largest
+        measured = True
+        try:
+            smallest = _smallest_singular_value(jacobian)
+        except RuntimeError:
+            measured = False
+            warnings.warn(
+                "connecting-orbit Newton step: exactly singular factorisation; "
+                "taking the minimum-norm step",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            smallest = 0.0
+        resolved = smallest > _RCOND * largest
         reason = "non-finite solution (near-singular factorisation)"
         try:
-            scale = _ROOT_HALF * _smallest_singular_value(jacobian)
-            solution = _factor(_augmented(jacobian, scale)).solve(right)
+            scale = _ROOT_HALF * math.hypot(smallest, floor)
+            augmented = _augmented(jacobian, scale, floor * floor / scale)
+            solution = _factor(augmented).solve(right)
         except RuntimeError:
             reason = "exactly singular factorisation"
             solution = np.full(rows + columns, np.nan)
         step = solution[rows:]
         if np.all(np.isfinite(step)):
-            return step
+            return step, resolved
         warnings.warn(
             f"connecting-orbit Newton step: {reason}; falling back to lsmr",
             RuntimeWarning,
             stacklevel=2,
         )
-        step, stop, *_ = lsmr(
+        step, stop, _, _, _, _, condition, _ = lsmr(
             jacobian,
             -residual,
+            damp=floor,
             atol=_LSMR_TOLERANCE,
             btol=_LSMR_TOLERANCE,
             maxiter=_LSMR_ITERATIONS,
         )
         if stop != _LSMR_ITERATION_LIMIT and np.all(np.isfinite(step)):
-            return step
+            # Without a sigma_min estimate, lsmr's own estimate of cond(J) decides.
+            return step, (resolved or not measured) and condition < 1.0 / _RCOND
         warnings.warn(
             "connecting-orbit Newton step: lsmr did not converge after a singular "
             "factorisation; falling back to a dense least-squares solve",
             RuntimeWarning,
             stacklevel=2,
         )
-        fallback, *_ = np.linalg.lstsq(jacobian.toarray(), -residual, rcond=_RCOND)
-        return fallback
+        return _dense_step(jacobian, residual)
 
     def _jacobian(
         self,
@@ -1138,6 +1216,8 @@ def _relative_correction(
     residual: np.ndarray,
     step: np.ndarray,
     unknowns: np.ndarray,
+    *,
+    resolved: bool = True,
 ) -> float:
     """Largest ``|step_i| / (1 + |x_i|)``, or ``inf`` if the step cannot be trusted.
 
@@ -1163,6 +1243,12 @@ def _relative_correction(
     normal-equation test: its defect is smaller than the rounding in forming
     ``J dx``.
 
+    So the test is only a second line. A step its solver computed without
+    full numerical rank - ``resolved`` false: ``lstsq`` kept fewer singular
+    values than columns, or the damped step's ``sigma_min`` estimate is below
+    ``_RCOND sigma_max`` - is never trusted, whatever its defect (DEQ-180).
+    Such an iterate is converged only if its residual is below tolerance.
+
     That rounding, about ``eps |J| |dx|``, is why ``|J|_F |dx|`` is in the
     scale. Without it, a tolerance this tight refuses a correct but large step.
     A truncated step is near zero, so the term costs it nothing. Measured over
@@ -1170,6 +1256,8 @@ def _relative_correction(
     of this scale. A step that is not finite makes the defect
     NaN, and fails the test too.
     """
+    if not resolved:
+        return math.inf
     norm = float(np.sqrt(jacobian.multiply(jacobian).sum()))
     with np.errstate(over="ignore", invalid="ignore"):
         scale = norm * (
@@ -1182,17 +1270,54 @@ def _relative_correction(
     return float(np.max(np.abs(step) / (1.0 + np.abs(unknowns))))
 
 
-def _augmented(jacobian: csr_matrix, scale: float = 1.0) -> csc_matrix:
-    """The augmented matrix ``[[scale I, J], [J^T, 0]]`` of the least-squares problem.
+def _augmented(
+    jacobian: csr_matrix,
+    scale: float = 1.0,
+    damping: float = 0.0,
+) -> csc_matrix:
+    """The augmented matrix ``[[scale I, J], [J^T, -damping I]]``.
 
-    Its lower solution block is the least-squares solution for any positive
-    ``scale``; the scale changes only the conditioning.
+    Its lower solution block is the least-squares solution of ``J x = -r``
+    damped by ``lambda = scale * damping`` - the minimiser of ``|J x + r|^2 +
+    lambda |x|^2`` - for any positive ``scale``; the scale changes only the
+    conditioning. ``damping = 0`` is the undamped least-squares problem.
     """
-    rows = jacobian.shape[0]
+    rows, columns = jacobian.shape
+    lower = -damping * sparse_identity(columns) if damping > 0.0 else None
     return bmat(
-        [[scale * sparse_identity(rows), jacobian], [jacobian.T, None]],
+        [[scale * sparse_identity(rows), jacobian], [jacobian.T, lower]],
         format="csc",
     )
+
+
+def _largest_singular_value(jacobian: csr_matrix) -> float:
+    """Estimate ``sigma_max(J)`` by ``_POWER_STEPS`` steps of power iteration.
+
+    It only scales the damping floor and the rank test, so a small factor is
+    immaterial; the estimate approaches ``sigma_max`` from below.
+    """
+    vector = 1.0 + 0.5 * np.cos(np.arange(jacobian.shape[1]))
+    growth = 0.0
+    for _ in range(_POWER_STEPS):
+        vector /= np.linalg.norm(vector)
+        image = jacobian.T @ (jacobian @ vector)
+        growth = float(np.linalg.norm(image))
+        if not np.isfinite(growth) or growth == 0.0:
+            return growth
+        vector = image
+    return growth**0.5
+
+
+def _dense_step(jacobian: csr_matrix, residual: np.ndarray) -> tuple[np.ndarray, bool]:
+    """The dense least-squares step, and whether it was computed at full rank.
+
+    ``lstsq`` with ``rcond = _RCOND`` zeroes every singular direction below
+    ``_RCOND sigma_max`` and reports how many it kept. A step that dropped any
+    is not the least-squares step along them, and no normal-equation test can
+    always tell (DEQ-180), so it is reported as rank-deficient.
+    """
+    step, _, rank, _ = np.linalg.lstsq(jacobian.toarray(), -residual, rcond=_RCOND)
+    return step, int(rank) == jacobian.shape[1]
 
 
 def _smallest_singular_value(jacobian: csr_matrix) -> float:
