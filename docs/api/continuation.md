@@ -744,8 +744,15 @@ This is the convergence test AUTO uses (`EPSU`) and COLNEW uses (`CONTRL`); neit
 program returns an iterate that fails it. The second test certifies a stationary
 point of the least squares. A system with no exact solution, such as a homoclinic
 orbit with one boundary condition too many, stops at such a point. The correction
-must also satisfy the normal equations `J^T (J dx + r) = 0`, so a broken linear
-solve cannot certify an iterate by returning a zero step. Any other outcome raises
+must also satisfy the normal equations `J^T (J dx + r) = 0`, to within `1e-11`
+of `|J|_F (|J|_F |dx| + |r|)`, so a broken linear solve cannot certify an
+iterate by returning a zero step. That includes the dense fallback, which
+truncates singular directions below `1e-8 sigma_max`. A step truncated along a
+direction with `sigma > 1e-11 |J|_F` is refused when the residual lies along
+that direction. A residual mostly in other directions raises the limit by
+`(|J|_F |dx| + |r|) / |r_t|`, with `r_t` the residual's part along it, so such
+a truncation can still be certified. Below the limit, the defect is smaller
+than the rounding in forming `J dx`, and no normal-equation test can see it. Any other outcome raises
 `NotConvergedError`, which carries the best iterate for diagnosis.
 
 Converged is not the same as *a trajectory*. Every returned `OrbitSolution`
@@ -1021,6 +1028,135 @@ Limits:
   caller to judge; a better seed or a smaller sweep step tells them apart.
 - Natural-parameter continuation cannot pass a fold of the curve in the swept
   parameter.
+
+### Broken connections
+
+**The problem.** A connection broken by less than the trapezoidal rule's own
+error used to come back as a trajectory. Take the homoclinic loop of
+`x'' = x - x^2`, broken by damping `delta y`. Its solve converges to a
+least-squares minimum, because the system has no exact solution. That residual,
+about `0.4 delta sqrt(h)`, is spread along the whole orbit. The per-interval
+allowance is of order `h^3`, so at `h = 0.25` the loop passed for every
+`delta` below `9e-3`.
+
+**The concept.** The question to ask is whether the *discrete system* can be
+satisfied, once its own truncation error is taken into account. The exact orbit
+leaves the trapezoidal rule the residual
+`tau = -h^3 x'''/12 - h^5 x^(5)/480 - ...` on each interval. The path's
+differences estimate it, `-D3/12 + D5/120`, to `O(h^7)`. Subtracting that
+estimate is deferred correction, and it turns the scheme into a sixth-order
+one. One Gauss-Newton step on the corrected system follows. What remains is
+the part of its residual that no step can remove: the `inconsistency`.
+
+For a genuine connection, the inconsistency is the corrected scheme's own
+error. Its bound, `inconsistency_tolerance`, has two terms:
+
+- the next term of the expansion, `|D7 x / 840|`;
+- the amount by which the exact orbit misses the linear projection conditions
+  on a finite interval. This is the quadratic part of the manifold,
+  `l_k N(e) / (2 mu - lambda_k)`, where `N(e)` is the field's nonlinear part
+  at the end. Each boundary row's miss is weighted by that row's share of the
+  inconsistent direction.
+
+Both terms are doubled, and the Newton tolerance is added as a floor. For a
+broken connection, the inconsistency is the miss. `is_trajectory` now needs
+both the per-interval test and `residual.consistent`.
+
+```python
+import numpy as np
+from discrecontinual_equations.continuation import HomoclinicOrbit, MeshSpec
+from discrecontinual_equations.function.deterministic import DeterministicFunction
+from discrecontinual_equations.variable import Variable
+
+
+class DampedWell(DeterministicFunction):
+    delta = 1.0e-4
+
+    def eval(self, point, time=None):
+        x, y = point
+        return [y, x - x * x - self.delta * y]
+
+
+field = DampedWell(variables=[Variable(), Variable()], parameters=[],
+                   results=[Variable(), Variable()], time=None)
+times = np.linspace(-10.0, 10.0, 81)
+loop = np.column_stack([1.5 / np.cosh(times / 2) ** 2,
+                        -1.5 * np.tanh(times / 2) / np.cosh(times / 2) ** 2])
+orbit = HomoclinicOrbit(field, np.zeros(2),
+                        np.array([[0.0, 1.0], [1.0, -field.delta]]),
+                        MeshSpec(half_length=10.0, intervals=80, phase_index=1))
+residual = orbit.solve(loop).residual
+print(residual.worst)  # about 0.011: within every interval's allowance
+print(residual.inconsistency, residual.inconsistency_tolerance)  # about 4e-5 > 1e-5
+assert not residual.is_trajectory
+```
+
+**What it resolves.** The smallest `delta` refused falls with the mesh, by
+about `h^5.5`. These were measured on a quarter-decade grid at half-length 10:
+
+| `h` | 0.5 (`T = 12`) | 0.25 | 0.125 | 0.0625 | 0.03125 |
+|---|---|---|---|---|---|
+| smallest `delta` refused | `1e-3` | `3.2e-5` | `5.6e-7` | `1.8e-8` | `1e-8` (Newton floor) |
+| before (per-interval only) | | `9e-3` | | | |
+
+Below those values, a broken loop and the corrected scheme's own error cannot
+be told apart on that mesh, so refine it. Where the boundary-miss term
+dominates the bound, refining stops helping and a longer interval is needed:
+a Nagumo front broken in its speed, at half-length 8, was refused from
+`1.8e-6` at both `h = 0.125` and `h = 0.0625`. The genuine controls stayed well
+inside their bounds. One is the reversible loop, and one is a dissipative loop
+`y' = x - x^2 + k y H` that keeps `x = 1.5 sech^2(t/2)` exactly while the
+trapezoidal rule breaks it at `O(h^2)`. On both, from `h = 0.5` to `0.03125`,
+the inconsistency stayed within 0.16 of the bound at half-lengths of 6 or
+more, and within 0.75 down to half-length 3. Kirk-Silber and the
+Bogdanov-Takens curve still report trajectories.
+
+**Limits.**
+
+- The test costs the Jacobian at the path and `2 + d` least-squares solves for
+  `d` boundary rows, once per returned solve.
+- A path with fewer than eight nodes is not checked, because `D7` needs eight.
+- `HomoclinicCurve` solves a square system, which has no inconsistent
+  direction, and keeps only the per-interval test.
+- A mesh far too coarse for the fastest rate, `h |lambda|_max` of about 4 or
+  more, can have a genuine connection refused on consistency, because the
+  difference expansion no longer converges there. On such meshes the exact
+  orbit already fails the per-interval test.
+- The boundary-miss estimate is leading order in the distance to the
+  equilibrium. On intervals so short that it fails, the per-interval test
+  already refuses the path: at half-length 3 it did on every mesh measured
+  with `h <= 0.25`.
+
+References: [Pereyra1967](../references.md) (deferred correction);
+[Beyn1990](../references.md) (projection boundary conditions).
+
+### Locating a connection by shooting
+
+`HomoclinicShooting.gap(p)` is the signed miss of the unstable manifold's first
+return to the saddle. It is NaN wherever the manifold does not come back.
+`locate(lower, upper)` bisects on its sign. It now refuses, with a
+`ValueError`, a bracket in any of these cases:
+
+- an end's gap is not finite;
+- both ends have the same sign;
+- a midpoint's gap is not finite. The sign of NaN cannot say which half holds
+  the root.
+
+It used to follow the NaN silently. A root at 0.3 came back as 1.0, the upper
+end. When that happens, narrow the bracket to where the gap is finite. On the
+damped well `y' = x - x^2 + mu y`, for example, that is `|mu| < 0.1`. A
+bracket can also hold two roots and no sign change at its ends. On the
+saddle-focus jerk at horizon 100, `[0.46, 0.50]` holds the roots `0.4651` and
+`0.4802`.
+
+`trace(control, values, guess, half_width)` cannot ask its caller for a
+bracket at every step, so it scans for one. It samples its window,
+`half_width` either side of the previous point, at nine points. It then hands
+`locate` the adjacent pair of finite, opposite-signed gaps nearest the previous
+point, which is the branch being followed. If no pair in the window qualifies,
+it raises the same `ValueError`.
+
+References: [Burden2016](../references.md) (bisection, section 2.1).
 
 ## Covariant Lyapunov vectors and finite-time exponents
 
