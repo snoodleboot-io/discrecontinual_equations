@@ -161,14 +161,23 @@ class TestFailingSeed(TestCase):
         centre = good.states.mean(axis=0)
         return CycleSeed(centre + 0.1 * (good.states - centre), 2.0 * good.period, 2.7)
 
-    def test_refused_in_well_under_a_second_with_a_warning(self):
+    def test_refused_with_a_warning(self):
         continuation = _continuation(2.7, 80, "gauss_legendre")
-        start = time.perf_counter()
         with pytest.warns(CycleSeedWarning, match="no cycle"):
             points, bifurcations = continuation.trace(self._hopeless(80), 0.01, 0)
-        assert time.perf_counter() - start < 2.0
         assert points == []
         assert bifurcations == []
+
+    @pytest.mark.timing
+    def test_refused_in_well_under_a_second(self):
+        # 0.15-0.5 s measured from 20 to 320 intervals; the 2 s is headroom
+        # for a loaded machine, not a claim.
+        continuation = _continuation(2.7, 320, "gauss_legendre")
+        seed = self._hopeless(320)
+        start = time.perf_counter()
+        with pytest.warns(CycleSeedWarning):
+            continuation.trace(seed, 0.01, 0)
+        assert time.perf_counter() - start < 2.0
 
     def test_a_seed_that_converges_warns_nothing(self):
         with warnings.catch_warnings():

@@ -230,7 +230,10 @@ class TestFallbackStep(TestCase):
 
 
 class TestExactJacobianPaths(TestCase):
-    """Where the field allows it the Jacobian is the analytic one, to rounding."""
+    """Where the field allows it the Jacobian is the analytic one, to rounding.
+
+    To 1e-13 absolute: the central difference would be 1e-11 off here.
+    """
 
     def _analytic(self, state: np.ndarray) -> np.ndarray:
         x, y, z = state
@@ -246,10 +249,20 @@ class TestExactJacobianPaths(TestCase):
     def test_one_state(self):
         state = np.array([0.3, -0.7, 0.2])
         jacobian = PeriodicOrbit(_field(), 4)._jacobian(state)  # noqa: SLF001
-        np.testing.assert_allclose(jacobian, self._analytic(state), atol=1e-13)
+        np.testing.assert_allclose(
+            jacobian,
+            self._analytic(state),
+            rtol=0.0,
+            atol=1e-13,
+        )
 
     def test_a_batch(self):
         states = np.random.default_rng(3).standard_normal((7, 3))
         batch = PeriodicOrbit(_field(), 4)._jacobians(states)  # noqa: SLF001
         for row, state in zip(batch, states, strict=True):
-            np.testing.assert_allclose(row, self._analytic(state), atol=1e-12)
+            np.testing.assert_allclose(
+                row,
+                self._analytic(state),
+                rtol=0.0,
+                atol=1e-13,
+            )
