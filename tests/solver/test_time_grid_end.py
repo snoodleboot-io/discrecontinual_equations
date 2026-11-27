@@ -253,6 +253,21 @@ def test_the_tolerance_scales_with_the_endpoints_not_the_span():
 
 
 @pytest.mark.parametrize(
+    ("start", "step"),
+    [(1.0e6, 1.0e-3), (6.0e4, 1.0e-5), (1.0e7, 1.0e-2), (1.0e9, 0.1)],
+)
+def test_a_half_step_span_far_from_zero_is_refused(start, step):
+    # Arrange: 1e-9 of |t| is a step or more here; half a step is still not
+    # rounding, and accepting it made the last step 1.5 (or 0.5) times the rest.
+    end = start + 1000.5 * step
+    config = FixedStepConfig(start_time=start, end_time=end, step_size=step)
+
+    # Act / Assert
+    with pytest.raises(ValueError, match="whole number of steps"):
+        _ = config.times
+
+
+@pytest.mark.parametrize(
     ("step", "accepted"),
     [("0.333333333333", True), ("0.333333", False)],
 )

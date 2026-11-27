@@ -79,8 +79,11 @@ divides the span.
 Limits and history:
 
 - The check accepts a gap between the span and `n * step_size` of up to `1e-9`
-  of the largest of `|start_time|`, `|end_time|` and the span
-  (`solver_config.GRID_TOLERANCE`).
+  of the larger of `|start_time|` and `|end_time|`
+  (`solver_config.GRID_TOLERANCE`), and never more than `1e-3` of a step
+  (`solver_config.GRID_STEP_FRACTION`): far from zero the first bound alone
+  would exceed the step, so that at `start_time = 1e6` with `step_size = 0.001`
+  a span half a step off would be accepted with a last step 1.5 times the others.
 - `start_time == end_time` gives the one-node grid `[start_time]`; a step that is
   not positive and finite, or an `end_time` before `start_time`, is refused.
 - Before DEQ-129 the grid was `np.arange(start, end + h, h)`, whose length

@@ -25,6 +25,12 @@ from pydantic import BaseModel, ConfigDict, Field
 # repeating decimal, 1/3 as 0.333333333333, by 1e-12. A span a deliberate
 # fraction of a step off misses by far more.
 GRID_TOLERANCE = 1e-9
+# The same gap may never exceed this fraction of the step. Far from zero,
+# ``GRID_TOLERANCE * |t|`` alone grows past the step itself - at ``|t| = 1e6``
+# with a step of ``1e-3`` it is a whole step - and a span half a step off would
+# be accepted with a last step 1.5 times the others. Rounding at that ``|t|`` is
+# a few ulps, ``1e-4`` of a step at ``|t| = 1e9`` and a step of ``1e-3``.
+GRID_STEP_FRACTION = 1e-3
 
 
 def uniform_step_count(start: float, end: float, step: float) -> int:
@@ -34,7 +40,8 @@ def uniform_step_count(start: float, end: float, step: float) -> int:
     ``end - start`` must be a whole number ``n`` of steps. ``n`` is the span
     over the step rounded to the nearest integer, and it is accepted when
     ``n * step`` matches the span to rounding - :data:`GRID_TOLERANCE` relative
-    to the larger of ``|start|`` and ``|end|``. Decimal inputs such as
+    to the larger of ``|start|`` and ``|end|``, and never more than
+    :data:`GRID_STEP_FRACTION` of the step. Decimal inputs such as
     ``(0, 10, 0.005)`` are multiples only to rounding in binary, which this
     accepts; a span a real fraction of a step off, such as ``(0, 0.8, 0.015)``,
     is refused rather than integrated past ``end`` or with a shorter last step.
@@ -71,7 +78,8 @@ def uniform_step_count(start: float, end: float, step: float) -> int:
         raise ValueError(message)
     steps = round(span / step)
     scale = max(abs(start), abs(end))
-    if abs(span - steps * step) > GRID_TOLERANCE * scale:
+    tolerance = min(GRID_TOLERANCE * scale, GRID_STEP_FRACTION * step)
+    if abs(span - steps * step) > tolerance:
         message = (
             f"the span from {start} to {end} is not a whole number of steps of "
             f"{step} ({span / step:.6g} steps). Every fixed-step solver takes "
