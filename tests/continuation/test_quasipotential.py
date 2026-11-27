@@ -53,10 +53,12 @@ from discrecontinual_equations.continuation.quasipotential import (
     _cubic_coefficients,
     _curved_triangle,
     _CycleExpansion,
+    _estimate,
     _guide,
     _HalfLattice,
     _March,
     _moved_start,
+    _parabolic_steps,
     _periodic_linear,
     _relax_from,
     _resample_closed,
@@ -569,6 +571,28 @@ class TestCycleExpansion(TestCase):
         quadratic, cubic = _ellipse_closed_form(samples)
         assert np.allclose(expansion.quadratic, quadratic, rtol=1.0e-4)
         assert np.allclose(expansion.cubic, cubic, rtol=2.0e-4)
+
+    def test_with_a_state_dependent_noise_the_coefficients_are_exact(self):
+        # The noisy Hopf with D = s^2 r^2 I about r = 1: U = (r^2 - 1 -
+        # log r^2) / s^2 = (2 w^2 - (2/3) w^3 + ...) / s^2 at r = 1 + w, so
+        # G = 4 / s^2 and C = -4 / s^2 along the outward normal - and the D_n
+        # term of C's equation, which D's change across the cycle feeds, is
+        # half of it here. Measured 5e-7 and 2e-6 relative.
+        sigma = 0.7
+        parameters = [Alpha(value=1.0), Sigma(value=sigma)]
+        drift = HopfField([State(), State()], parameters, [State(), State()], None)
+        angle = np.linspace(0.0, 2.0 * math.pi, 400, endpoint=False)
+        samples = _resample_closed(
+            np.column_stack([np.cos(angle), np.sin(angle)]),
+            0.05,
+        )
+        expansion = _CycleExpansion(samples, drift, _conformal(parameters))
+        velocity = fields_at(drift, samples)
+        tangent = velocity / np.linalg.norm(velocity, axis=1)[:, None]
+        normal = np.column_stack([-tangent[:, 1], tangent[:, 0]])
+        outward = np.einsum("ki,ki->k", normal, samples)
+        assert np.allclose(expansion.quadratic, 4.0 / sigma**2, rtol=1.0e-5)
+        assert np.allclose(expansion.cubic, -4.0 * outward / sigma**2, rtol=1.0e-5)
 
     def test_the_gradient_is_the_exact_one_to_third_order(self):
         # Across the cycle G z + C z^2 / 2, along it G' z^2 / (2 s), against
@@ -1400,27 +1424,70 @@ class TestUnboundedPoints(TestCase):
             assert not np.allclose(third, second)
             assert np.allclose(third, surfaces[1].shrunk().point(angle))
 
-    def test_the_surface_error_is_the_larger_move(self):
-        # Outer and inner values made equal, the inmost moved by half of a
-        # shift: the surface's share is that half, not the zero between the
-        # outer two (the multiplicative system's (-1.01, -0.71), DEQ-152).
+    def test_slow_convergence_widens_the_estimate_to_the_tail(self):
+        # Errors shrinking by 1.25 a step, as beside the fast ellipse (1.7 and
+        # 2.4 at (-1.1, 0.4), where the larger move alone did not bound the
+        # error): the tail left after the inmost value is 4 moves, doubled.
         solver, field, _checked_field, _indices, _true = _checked("gradient")
         genuine = _relax_from
-        shift = 1.0e-2
+        step = 5.0e-3
         calls = []
 
         def relax(gmam, surface, guide):
             value, chain, place = genuine(gmam, surface, guide)
             calls.append(value)
-            if len(calls) == 1:
-                return value + shift, chain, place
-            moved = calls[1] + (shift if len(calls) < 3 else 0.5 * shift)
+            base = calls[0]
+            moved = (base + 1.25 * step, base, base - step)[len(calls) - 1]
             return moved, chain, place
 
         with mock.patch.object(quasipotential_module, "_relax_from", relax):
             _value, own = solver.reference(field, np.array([-1.5, -0.8]))
         assert np.isfinite(own)
-        assert own >= 1.4 * shift
+        assert own >= 2.0 * step * 1.25 / 0.25
+
+    def test_a_value_that_moves_more_going_in_has_no_bound(self):
+        # The inner move twice the outer: nothing says the values converge,
+        # though the inner move is within the old estimate.
+        solver, field, _checked_field, _indices, _true = _checked("gradient")
+        genuine = _relax_from
+        step = 5.0e-3
+        calls = []
+
+        def relax(gmam, surface, guide):
+            value, chain, place = genuine(gmam, surface, guide)
+            calls.append(value)
+            base = calls[0]
+            moved = (base + 0.5 * step, base, base - step)[len(calls) - 1]
+            return moved, chain, place
+
+        with mock.patch.object(quasipotential_module, "_relax_from", relax):
+            _value, own = solver.reference(field, np.array([-1.5, -0.8]))
+        assert np.isinf(own)
+
+    def test_the_estimate_from_three_surfaces(self):
+        # Fast convergence: the outer move dominates; first order: the tail;
+        # no convergence: no bound; moves within the chain's error: twice both
+        # moves plus that error; no inner move: the outer move.
+        assert _estimate(1.0 + 16e-4, 1.0, 1.0 - 1e-4, 1.0) == pytest.approx(16e-4)
+        assert _estimate(1.0 + 2e-5, 1.0, 1.0 - 1.6e-5, 1.0) == pytest.approx(
+            2.0 * 1.6e-5 * 1.25 / 0.25
+        )
+        assert np.isinf(_estimate(1.0 + 1e-5, 1.0, 1.0 - 1.1e-5, 1.0))
+        assert _estimate(1.0 + 1e-5, 1.0, 1.0 - 3e-5, 1.0 + 5e-5) == pytest.approx(
+            2.0 * (1e-5 + 3e-5) + 5e-5
+        )
+        assert _estimate(1.0 + 1e-5, 1.0, 1.0, 1.0 + 5e-5) == pytest.approx(6e-5)
+
+    def test_the_least_value_is_found_by_parabolas(self):
+        # A slope that stopped the secant 0.14 away: the values alone bring
+        # the start to the least of a quadratic in a step or two.
+        def attempt(where, _previous):
+            return 3.0 * (where - 0.37) ** 2 + 1.0, np.zeros((3, 2))
+
+        tried = [(place, *attempt(place, None)) for place in (0.6, 0.5, 0.52)]
+        value, _chain, place = _parabolic_steps(tried, attempt, 0.4)
+        assert place == pytest.approx(0.37, abs=1.0e-9)
+        assert value == pytest.approx(1.0, abs=1.0e-12)
 
     def test_a_third_chain_that_will_not_stay_finite_has_no_bound(self):
         solver, field, _checked_field, _indices, _true = _checked("gradient")
@@ -1509,10 +1576,10 @@ class TestFastCycleReference(TestCase):
     Before, every reference here was labelled UNBOUNDED or FAILED: the band's
     start was off at leading order and the chain wound 0.12 times where the
     path winds about four (the value got worse going in: 0.19, 1.68, 1.84 off
-    at (0.3, 0)). Measured at 81 points, error against estimate: 4.7e-4 and
-    6.7e-3 at (0.3, 0), 2.2e-4 and 2.5e-3 at (0, 0.32), 1.6e-4 and 1.8e-3 at
-    (0.5, 0.2), 1.2e-4 and 2.5e-4 at (1.4, 0.32). Inside the cycle a point
-    costs one to four minutes.
+    at (0.3, 0)). Measured at 81 points, error against estimate: 3.2e-4 and
+    4.9e-3 at (0.3, 0), 1.8e-4 and 2.5e-3 at (0, 0.32), 9.9e-5 and 2.0e-3 at
+    (0.5, 0.2), 1.3e-4 and 5.0e-4 at (1.4, 0.32). Inside the cycle a point
+    costs up to a couple of minutes.
     """
 
     @classmethod

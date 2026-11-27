@@ -293,9 +293,13 @@ than the estimate, or where the first two surfaces' values differ by more than
 half of ``U`` on the outer one. A check never stops at a point: one without a
 bound is marked :data:`UNBOUNDED`, one where no reference could be computed
 :data:`FAILED`; neither is refined, :attr:`GridQuasipotential.unbounded` lists
-them and a warning names them. Across the verification's systems every finite
-estimate measured bounds its reference's error (see
-:meth:`OrderedLineIntegral.reference`).
+them and a warning names them. That a finite estimate bounds the error is
+measured, not proven: across the verification's systems every finite estimate
+measured does (see :meth:`OrderedLineIntegral.reference`), but the rule that
+decides it has been wrong once already - beside the fast ellipse, where the
+three surfaces' values converge only at first order, a finite estimate of
+2.6e-5 stood against an error of 2.9e-5 until the estimate took the tail of
+the series (DEQ-152).
 
 *Winding paths* (DEQ-152). That cycle's failures had two causes, both since
 removed. Its band started from a wrong ``U`` (see :class:`CycleAttractor`),
@@ -306,12 +310,14 @@ carried on into the start surface whatever ``U`` does, with the attractor's
 expansion for ``grad U`` once inside its band, and the chain gets 320 nodes
 for every turn the trace makes (81 at least); a start slid along the surface
 moves the whole chain with it, not its first node alone. Every reference
-beside and inside that cycle is now finite and bounds its error (0.3, 0:
-4.7e-4 off, estimate 6.7e-3, where the grid is 9.3e-3 off), and the
-strongly rotating equilibria gain as much: on SDE (21) the references went
-from 2.1e-2 to 4.3e-2 off to 1.7e-5 to 2.9e-5. A winding point costs far
-more than one that does not: 21 to 230 seconds inside the cycle at 81
-points, 3 to 16 beside it, against 0.4 to 16 elsewhere.
+of the verification's set beside and inside that cycle is now finite and
+bounds its error (0.3, 0: 3.2e-4 off, estimate 4.9e-3, where the grid is
+9.3e-3 off), and the strongly rotating equilibria gain as much: on SDE (21)
+the references went from 2.1e-2 to 4.3e-2 off to 7e-6 to 1.4e-5. Two more
+points beside the cycle, where the values converge too slowly to bound, are
+labelled. A winding point costs far more than one that does not: up to 100
+seconds inside the cycle at 81 points, 4 to 8 beside it, against 0.4 to 18
+elsewhere.
 
 The traced path's action was the first candidate, being cheap, and was measured
 and rejected: its own error, from a path that follows the grid's gradient, is
@@ -444,6 +450,10 @@ _START_SHARE = 0.25
 _SECANT_STEPS = 6
 _SECANT_TOLERANCE = 1.0e-4
 _SECANT_SETTLED = 1.0e-9
+# After the secant, at most this many parabolic steps on the values themselves.
+_PARABOLA_STEPS = 4
+# The safety factor on the reference's geometric tail bound.
+_TAIL_SAFETY = 2.0
 # A chain that blows up is relaxed again at half the step, this many times in all.
 _STEP_HALVINGS = 6
 # A node moving by this share of the distance between the chain's ends in one
@@ -744,7 +754,8 @@ class CycleAttractor:
     verification's mask falls from 0.472, 0.119 and 0.0188 to 0.372, 0.0911
     and 0.0119. On SDE (24)'s circle, where the old start was right in
     direction, the band is off by 2.3e-4, 1.7e-5 and 1.3e-6 against 1.6e-4,
-    4.4e-5 and 9.3e-6, and the largest error is unchanged to four digits.
+    4.4e-5 and 9.3e-6, and the largest error moves by at most 1.7e-5 of
+    itself (0.0220528 to 0.0220532 at 161 points).
 
     *Limit.* What is left beside a fast cycle is the march's own error, not
     the start's. The drift's rotation-to-gradient ratio grows without bound
@@ -1753,8 +1764,18 @@ class OrderedLineIntegral:
         moves the value by more than the estimate, or where the first two
         surfaces' values differ by more than half of ``U`` on the outer one,
         more than the expansion could be wrong by. Otherwise the surface's
-        share of the estimate is the larger of the two moves, outer to inner
-        and inner to inmost.
+        share of the estimate is the tail of a geometric series in the two
+        moves, outer to inner and inner to inmost, doubled for safety and never
+        below the outer move; where the inner move is not smaller than the
+        outer one there is no bound, unless it is within the chain's own
+        error, the half-nodes difference, and may be the chain's noise
+        rather than the surface's error; then twice the two moves together
+        stand for the surface (see :func:`_estimate`). (The larger of the
+        two moves alone, used at first, did not bound the error beside the
+        fast ellipse, where the values converge at first order: 2.9e-5 off
+        against 2.6e-5 at (-1.1, 0.4), DEQ-152.) The start on each surface
+        is found by the secant on the slope and then by parabolas on the
+        values (:func:`_relax_from`).
 
         So that the chain can follow a winding path at all (DEQ-152), the
         trace it starts from is carried on into the inmost surface when it
@@ -1766,13 +1787,15 @@ class OrderedLineIntegral:
         Ornstein-Uhlenbeck process, SDE (21), and the verification's strongly
         rotating linear, gradient, rotating, multiplicative and elliptic-cycle
         systems, 20 of them beside or inside the elliptic cycle - every finite
-        estimate bounds the reference's error. Before, 24 were labelled and 4
-        failed, the elliptic cycle's 20 among them; now none fails and 5 are
-        labelled, none of them the cycle's (one of the five, on the rotating
-        Ornstein-Uhlenbeck process, had a bound before; it is 1.7e-7 off).
-        The relaxations of a winding path cost far more: 21 to 230 seconds a
-        point inside the cycle, 3 to 16 beside it, and 0.4 to 16 elsewhere
-        (all at 81 points).
+        estimate bounds the reference's error, the closest by a factor of
+        2.5. Before, 24 were labelled and 4 failed, the elliptic cycle's 20
+        among them; now none fails and 4 are labelled, none of them the
+        cycle's. On ten more points, five of them beside the cycle where the
+        values converge slowly, none is finite and unbounded either (closest
+        factor 1.85) and two are labelled. The relaxations of a winding path
+        cost far more: up to 100 seconds a point inside the cycle, 4 to 8
+        beside it, and 0.4 to 18 elsewhere (all at 81 points). This is
+        measured, not proven.
 
         Args:
             field: A field from :meth:`solve`, which knows its attractor.
@@ -1831,14 +1854,7 @@ class OrderedLineIntegral:
             return near, np.inf
         if abs(near - nearest) > own:
             return near, np.inf
-        # The surface's error is measured from whichever neighbour is further:
-        # the outer start can land where the expansion happens to be good and
-        # the inner one where it is not. On the verification's multiplicative
-        # system at (-1.01, -0.71) the outer value was 1.8e-5 off, the inner
-        # 2.37e-4 and the inmost 3e-6, and |far - near| + |rough - near| came
-        # to 2.36e-4 (DEQ-152).
-        surface = max(abs(far - near), abs(near - nearest))
-        return near, surface + abs(rough - near)
+        return near, _estimate(far, near, nearest, rough)
 
     def _onto(
         self, field: GridQuasipotential, trace: np.ndarray, surface
@@ -1856,8 +1872,10 @@ class OrderedLineIntegral:
         reaches the region the attractor initialised, and from there, where
         the grid has nothing more to say, with the attractor's own expansion
         (``surface.gradient``), until it enters the surface. It stops early if
-        it leaves the grid or stops moving. A trace that entered the surface
-        is returned as it was.
+        a step is not finite - where ``f + D grad U`` vanishes, so the path
+        has no direction - or leaves the grid, and in any case after
+        ``_DESCENT_MAX_STEPS`` steps. A trace that entered the surface is
+        returned as it was.
         """
         if any(surface.inside(state) for state in trace):
             return trace
@@ -2713,9 +2731,15 @@ def _relax_from(
 
     Its derivative along the surface is ``(grad U - p) . t`` for the chain's
     momentum ``p`` and the surface's tangent ``t``, and the secant method finds
-    its root, each step relaxing the previous chain from the new start. Returns
-    the value, the chain and the parameter of the start with the smallest
-    derivative found.
+    its root, each step relaxing the previous chain from the new start. The
+    slope comes from the chain's first states, and it can be wrong enough to
+    stop the secant well off the least value: on the inmost surface about the
+    rotating Ornstein-Uhlenbeck process at (-0.41, -0.71) it settled 0.14
+    radians away, 3.4e-6 off where the least value is 1.0e-7 off (DEQ-152).
+    So the values themselves are then minimised: a parabola through the least
+    value found and its neighbours on either side, a few times
+    (:func:`_parabolic_steps`). Returns the least value, its chain and the
+    parameter of its start.
     """
     chain, parameter = guide
     nudge = surface.step * _SECANT_TOLERANCE
@@ -2732,10 +2756,12 @@ def _relax_from(
 
     best_place = parameter
     best = attempt(parameter, chain)
+    tried = [(best_place, best[0], best[1])]
     behind_place, behind = best_place, best
     place = parameter - np.copysign(surface.step, best[2])
     for _ in range(_SECANT_STEPS):
         here = attempt(place, behind[1])
+        tried.append((place, here[0], here[1]))
         if abs(here[2]) < abs(best[2]):
             best, best_place = here, place
         change = (here[2] - behind[2]) / (place - behind_place)
@@ -2750,7 +2776,97 @@ def _relax_from(
             break
         behind_place, behind = place, here
         place = following
-    return best[0], best[1], best_place
+    return _parabolic_steps(
+        tried,
+        lambda where, previous: attempt(where, previous)[:2],
+        4.0 * surface.step,
+    )
+
+
+def _parabolic_steps(tried, attempt, reach: float):
+    """The least of ``tried`` - ``(place, value, chain)`` - lowered by parabolas.
+
+    Each step fits the parabola through the least value and the nearest
+    place tried on either side of it (or the two nearest, if one side has
+    none), and tries its vertex, kept within ``reach``; a parabola that does
+    not open upwards steps ``reach / 4`` away from the higher neighbour
+    instead. It stops after ``_PARABOLA_STEPS`` steps or once a step lowers
+    the value by less than ``_SECANT_SETTLED``.
+    """
+    tried = list(tried)
+    for _ in range(_PARABOLA_STEPS):
+        tried.sort(key=lambda entry: entry[1])
+        place, value, chain = tried[0]
+        others = tried[1:]
+        if not others:
+            break
+        below = [entry for entry in others if entry[0] < place]
+        above = [entry for entry in others if entry[0] > place]
+        if below and above:
+            left = max(below, key=lambda entry: entry[0])
+            right = min(above, key=lambda entry: entry[0])
+        elif len(others) >= _PLANE:
+            left, right = sorted(others, key=lambda entry: abs(entry[0] - place))[:2]
+        else:
+            break
+        low, high = left[0] - place, right[0] - place
+        if 0.0 in (low, high) or low == high:
+            break
+        # The parabola a s^2 + b s + value through the three, s from place.
+        slope_low, slope_high = (left[1] - value) / low, (right[1] - value) / high
+        curvature = (slope_high - slope_low) / (high - low)
+        if curvature > 0.0:
+            following = place - (slope_low - curvature * low) / (2.0 * curvature)
+        else:
+            higher = max((left, right), key=lambda entry: entry[1])
+            following = place - np.copysign(0.25 * reach, higher[0] - place)
+        following = min(max(following, place - reach), place + reach)
+        if any(
+            abs(following - entry[0]) <= _SECANT_TOLERANCE * reach for entry in tried
+        ):
+            break
+        here, states = attempt(following, chain)
+        tried.append((following, here, states))
+        if value - here < _SECANT_SETTLED:
+            break
+    place, value, chain = min(tried, key=lambda entry: entry[1])
+    return value, chain, place
+
+
+def _estimate(far: float, near: float, nearest: float, rough: float) -> float:
+    """The inner value's error from the three surfaces and the half-node chain.
+
+    What is left of the inner value's surface error is bounded by the tail of
+    a geometric series in the two moves, outer to inner and inner to inmost:
+    with ratio ``r = |far - near| / |near - nearest|`` the error left in
+    ``near`` is ``|near - nearest| r / (r - 1)``, doubled here for safety
+    (``_TAIL_SAFETY``) and never taken below the outer move; the chain's own
+    error, ``|rough - near|``, is added. On a smooth expansion ``r`` is near
+    16 and the outer move is the larger. Beside the verification's fast
+    ellipse the values converge at first order (``r`` = 1.7 and 2.4 at
+    (-1.1, 0.4)), where the larger move alone, 2.6e-5, did not bound an error
+    of 2.9e-5 (DEQ-152). Where going in moves the value as much as the step
+    before (``r <= 1``) nothing says it converges, and there is no bound
+    (``inf``) - unless the inner move is within the chain's own error: then
+    the moves may be the chain's noise rather than the surface's error (SDE
+    (21) at 41 points, (0.5, 0.3): moves of 5e-6 and 9e-6 against a chain term
+    of 1.3e-4, and an error of 9e-6), and twice the two moves together, plus
+    the chain's error, is the estimate. (The larger move alone there, tried
+    first, bounded the slowly converging values beside the fast ellipse by
+    only 4% at (0.2, -0.84): moves of 9.0e-6 and 9.1e-6, a chain term of
+    2.3e-5 and an error of 3.1e-5.)
+    """
+    outward, inward = abs(far - near), abs(near - nearest)
+    noise = abs(rough - near)
+    if inward == 0.0:
+        return outward + noise
+    ratio = outward / inward
+    if ratio > 1.0:
+        tail = _TAIL_SAFETY * inward * ratio / (ratio - 1.0)
+        return max(outward, tail) + noise
+    if inward <= noise:
+        return _TAIL_SAFETY * (outward + inward) + noise
+    return float(np.inf)
 
 
 def _moved_start(chain: np.ndarray, start: np.ndarray) -> np.ndarray:
