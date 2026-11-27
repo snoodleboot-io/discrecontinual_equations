@@ -249,8 +249,9 @@ and $y' = y\cos t$, at tolerances $10^{-4}$, $10^{-6}$, $10^{-8}$ and $10^{-10}$
 total, the PI controller rejects 31-52% fewer steps and needs 3.5-6.3% fewer field
 evaluations: Cash-Karp 4.1%, Fehlberg 3.5%, Dormand-Prince 4.5% and the 8(7) pair
 6.3%. The end-point errors are comparable but not equal: run by run the PI
-controller's error is from 0.36 to 7.4 times the old one's, with a geometric mean of
-1.00 to 1.18 for the 5(4) and 4(5) pairs and 0.46 for the 8(7) pair. These figures
+controller's error is from 0.36 to 7.4 times the old one's for the 5(4) and 4(5)
+pairs, with a geometric mean of 1.00 to 1.18, and from 0.003 to 2.0 times for the
+8(7) pair, with a geometric mean of 0.46. These figures
 were re-measured in DEQ-157 with the old controller and max norm swapped into
 today's solvers, so nothing else differs; DEQ-140 had quoted 4-9%, measured against
 the old solvers' step loop as well.
