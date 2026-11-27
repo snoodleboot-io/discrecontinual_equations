@@ -1,4 +1,6 @@
-"""Branch points on hard brackets, stiff fields and turning branches (DEQ-179, 178, 168).
+"""Branch points on hard brackets, stiff fields and turning branches.
+
+DEQ-179, DEQ-178 and DEQ-168:
 
 * DEQ-179: the relative root-finder stop measured ``|f|`` against the bracket's end
   values. On ``sinh(40 (x - 0.37))`` that accepted the first midpoint, 0.13 from
@@ -19,6 +21,7 @@ import math
 from unittest import TestCase
 
 import numpy as np
+import pytest
 
 from discrecontinual_equations.continuation.builder import ContinuerBuilder
 from discrecontinual_equations.continuation.continuation_config import (
@@ -163,11 +166,11 @@ class TestNonFiniteEndsAreRefused(TestCase):
                     def function(x: float, bad=bad, end=end) -> float:
                         return bad if x == end else x - 0.3
 
-                    with self.assertRaises(ValueError):
+                    with pytest.raises(ValueError, match="finite"):
                         finder(_settings()).locate(function, 0.0, 1.0)
 
     def test_absolute_bisection_refuses_the_end_it_evaluates(self):
-        with self.assertRaises(ValueError):
+        with pytest.raises(ValueError, match="finite"):
             Bisection(_settings(relative=False)).locate(
                 lambda x: math.nan if x == 0.0 else x - 0.3,
                 0.0,
@@ -438,7 +441,7 @@ class TestWeightedArclength(TestCase):
         assert abs(weighted.constraint(step) - (7.0 / 100.0 + 2.0)) < 1.0e-15
         assert np.allclose(weighted.border(step), [0.03, 0.04, 2.0], atol=1.0e-15)
         assert PseudoArclength().border(step) is tangent
-        with self.assertRaises(ValueError):
+        with pytest.raises(ValueError, match="state_scale"):
             PseudoArclength(state_scale=0.0)
 
     def test_the_tangent_is_a_unit_vector_in_the_weighted_norm(self):

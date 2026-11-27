@@ -301,10 +301,13 @@ class Secant(ScalarRootFinder):
             value = function(current)
             if abs(value) < tolerance or (settings.relative and value == 0.0):
                 return current
-            if settings.relative and abs(current - right) <= distance:
-                # A short step is not a root until f changes sign nearby (DEQ-179).
-                if _changes_sign_near(function, current, value, (low, high), distance):
-                    return current
+            # A short step is not a root until f changes sign nearby (DEQ-179).
+            if (
+                settings.relative
+                and abs(current - right) <= distance
+                and _changes_sign_near(function, current, value, (low, high), distance)
+            ):
+                return current
             left, value_left = right, value_right
             right, value_right = current, value
         if settings.relative:

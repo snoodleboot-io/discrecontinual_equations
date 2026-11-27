@@ -353,21 +353,21 @@ def _branch_label(context: "DetectionContext") -> str:
     own ``a = c w0`` explains it, ``|a - c w0| <= |a| / 2`` with ``w0`` from
     :func:`_vertex_offset`; otherwise the point is ``branch_point``.
 
-    That first-order test is fooled far from the vertex: a transcritical seen
-    from its nontrivial branch at ``u0 = 0.2`` gave ``|a - c w0| / |a| = 0.37``
-    and was named ``pitchfork`` (DEQ-178). The normal form fixes a second,
-    independent relation on the nontrivial branch, between the eigenvalue and
-    the offset. With ``w' = mu w + (a0 / 2) w^2 + (c / 6) w^3`` and the point at
-    ``w0`` on the branch ``mu = -(a0 / 2) w0 - (c / 6) w0^2``,
-    ``lambda = (a0 / 2) w0 + (c / 3) w0^2`` and ``a = a0 + c w0``, so
-    ``3 lambda / (a w0)`` is 1 for a pitchfork (``a0 = 0``) and 3/2 for a
-    transcritical (``c = 0``). A pitchfork must therefore also satisfy
-    ``|3 lambda - a w0| <= |a w0| / 8`` (:data:`_EIGENVALUE_FRACTION`, a quarter
-    of the gap); the far transcritical gives 1.26 and is ``branch_point``. The
-    relation holds on the nontrivial branch only, so it is checked only where
+    That first-order test is fooled far from the vertex: a transcritical seen from
+    its nontrivial branch at ``u0 = 0.2`` gave ``|a - c w0| / |a| = 0.37`` and was
+    named ``pitchfork`` (DEQ-178). The normal form fixes a second, independent
+    relation on the nontrivial branch, between the eigenvalue and the offset. With
+    ``w' = mu w + (a0 / 2) w^2 + (c / 6) w^3`` and the point at ``w0`` on the branch
+    ``mu = -(a0 / 2) w0 - (c / 6) w0^2``, ``lambda = (a0 / 2) w0 + (c / 3) w0^2``
+    and ``a = a0 + c w0``, so ``3 lambda / (a w0)`` is 1 for a pitchfork
+    (``a0 = 0``) and 3/2 for a transcritical (``c = 0``). A pitchfork must therefore also
+    satisfy ``|3 lambda - a w0| <= |a w0| / 8`` (:data:`_EIGENVALUE_FRACTION`, a
+    quarter of the gap); the far transcritical gives 1.26 and is ``branch_point``.
+    The relation holds on the nontrivial branch only, so it is checked only where
     ``a^2 >= |c lambda| / 30``: a point located on the persisting branch, a
     corrector tolerance off it, has ``lambda = mu`` and an ``a = c w0`` far below
-    that, and keeps its name from the cubic. Both ratios are unit-free. The differences use the step of :func:`_branch_step`, which follows the state's
+    that, and keeps its name from the cubic. Both ratios are unit-free. The
+    differences use the step of :func:`_branch_step`, which follows the state's
     scale.
 
     References:
