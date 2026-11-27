@@ -234,6 +234,17 @@ class ContinuationConfig(SolverConfig):
         description="Real-part threshold for counting unstable eigenvalues",
     )
 
+    arclength_state_scale: float = Field(
+        default=1.0,
+        gt=0.0,
+        description=(
+            "State size that one unit of pseudo-arclength stands for: the state "
+            "enters the arclength divided by it, as AUTO's weights THU do, so a "
+            "system whose state is measured in other units is continued alike "
+            "once this is rescaled with it; 1 is the unweighted arclength"
+        ),
+    )
+
     newton_tolerance: float = Field(
         default=1e-9,
         description="Residual norm tolerance for the corrector",

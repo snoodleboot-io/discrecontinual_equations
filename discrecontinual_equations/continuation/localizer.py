@@ -41,6 +41,7 @@ from discrecontinual_equations.continuation.detection import (
     DetectionContext,
 )
 from discrecontinual_equations.continuation.jacobian import JacobianProvider
+from discrecontinual_equations.continuation.parameterization import weighted
 from discrecontinual_equations.continuation.root_finder import ScalarRootFinder
 from discrecontinual_equations.continuation.tangent import TangentComputer
 
@@ -108,13 +109,22 @@ class RefiningLocalizer(Localizer):
         tangent_computer: Recomputes the tangent at each corrected point.
         jacobian: Jacobian source handed to the detector.
         root_finder: Scalar root-finder on the chord fraction.
+        state_scale: The state size ``S`` of the weighted arclength (see
+            :class:`~.parameterization.PseudoArclength`); the chord's length,
+            which scales the tangents in the cubic, is measured with it.
 
     References:
     - Kuznetsov (1998), Section 10.2.2.
     - Allgower and Georg (1990), Section 9.2.
     """
 
-    __slots__ = ["_corrector", "_jacobian", "_root_finder", "_tangent_computer"]
+    __slots__ = [
+        "_corrector",
+        "_jacobian",
+        "_root_finder",
+        "_state_weight",
+        "_tangent_computer",
+    ]
 
     def __init__(
         self,
@@ -122,8 +132,10 @@ class RefiningLocalizer(Localizer):
         tangent_computer: TangentComputer,
         jacobian: JacobianProvider,
         root_finder: ScalarRootFinder,
+        state_scale: float = 1.0,
     ) -> None:
         self._corrector = corrector
+        self._state_weight = 1.0 / (state_scale * state_scale)
         self._tangent_computer = tangent_computer
         self._jacobian = jacobian
         self._root_finder = root_finder
@@ -135,7 +147,10 @@ class RefiningLocalizer(Localizer):
         detector: BifurcationDetector,
     ) -> LocatedBifurcation | None:
         chord = _augmented(upper) - _augmented(lower)
-        distance = float(np.linalg.norm(chord))
+        if self._state_weight == 1.0:
+            distance = float(np.linalg.norm(chord))
+        else:
+            distance = float(np.linalg.norm(weighted(chord, np.sqrt(self._state_weight))))
         if distance == 0.0:
             return None
         fallback = detector.test_value(DetectionContext(lower, self._jacobian))
