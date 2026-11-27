@@ -66,6 +66,9 @@ _DEFAULT_OFFSET = 1.0e-5
 _DIVERGENCE = 1.0e3
 _RETURN_BAND = 0.4
 _DEFAULT_BISECTIONS = 32
+# Subintervals ``trace`` samples its bracket on, to find a sign change of finite
+# gaps for ``locate``.
+_BRACKET_SAMPLES = 8
 
 
 class ReturnSettings:
@@ -192,25 +195,81 @@ class HomoclinicShooting:
         return float((closest - equilibrium) @ unstable)
 
     def locate(self, lower: float, upper: float) -> float:
-        """Bracketing search for the homoclinic parameter in ``[lower, upper]``.
+        """Bisect for the homoclinic parameter in ``[lower, upper]``.
+
+        The return gap changes sign through the homoclinic value, so bisection
+        on its sign finds it, provided the bracket holds a sign change of
+        *finite* gaps. ``gap`` is NaN wherever the manifold does not return to
+        the saddle's neighbourhood, and NaN compares false with everything. A
+        sign test on it once moved the bracket silently: a root at 0.3 came
+        back as 1.0 (DEQ-135). So both ends must give finite gaps of opposite
+        sign, and a midpoint whose gap is not finite stops the search. It
+        cannot say which half holds the root.
 
         Args:
-            lower: One end of a bracket on which the gap changes sign.
+            lower: One end of the bracket.
             upper: The other end.
 
         Returns:
-            The midpoint of the final bracket, after 32 bisections. The sign
-            change is assumed, not checked.
+            The midpoint of the final bracket, ``_DEFAULT_BISECTIONS`` halvings
+            in; an end whose gap is exactly zero is returned as it is.
+
+        Raises:
+            ValueError: An end's gap is not finite, both ends' gaps have the
+                same sign, or a midpoint's gap is not finite.
+
+        References:
+            R. L. Burden and J. D. Faires, *Numerical Analysis*, 10th ed.,
+            Cengage, 2016, section 2.1, the bisection method. It needs a
+            continuous function whose values at the two ends have opposite
+            signs; the intermediate value theorem then puts a root between
+            them. Read through the Wikipedia article "Bisection method",
+            sections "The method" and "Iteration process", which cites it. The
+            book itself was not fetched. See docs/references.md,
+            ``Burden2016``.
         """
-        low_gap = self.gap(lower)
+        low_gap = self._finite_gap(lower, "lower")
+        high_gap = self._finite_gap(upper, "upper")
+        if low_gap == 0.0:
+            return lower
+        if high_gap == 0.0:
+            return upper
+        if (low_gap > 0.0) == (high_gap > 0.0):
+            message = (
+                f"the return gap has the same sign at both ends of [{lower:g}, "
+                f"{upper:g}] ({low_gap:.3g} and {high_gap:.3g}), so the bracket "
+                f"holds no homoclinic parameter, or an even number of them"
+            )
+            raise ValueError(message)
         for _ in range(_DEFAULT_BISECTIONS):
             middle = 0.5 * (lower + upper)
             middle_gap = self.gap(middle)
-            if low_gap * middle_gap <= 0.0:
-                upper = middle
-            else:
+            if not np.isfinite(middle_gap):
+                message = (
+                    f"the return gap is not finite at {middle:g}, inside the "
+                    f"bracket [{lower:g}, {upper:g}]: the unstable manifold does "
+                    f"not return there, so the sign of the gap cannot say which "
+                    f"half holds the homoclinic parameter; narrow the bracket "
+                    f"to where it returns"
+                )
+                raise ValueError(message)
+            if (low_gap > 0.0) == (middle_gap > 0.0):
                 lower, low_gap = middle, middle_gap
+            else:
+                upper = middle
         return 0.5 * (lower + upper)
+
+    def _finite_gap(self, parameter: float, end: str) -> float:
+        """The gap at one end of a bracket, refused if it is not finite."""
+        value = self.gap(parameter)
+        if not np.isfinite(value):
+            message = (
+                f"the return gap is not finite at the {end} end of the bracket, "
+                f"{parameter:g}: the unstable manifold does not return to the "
+                f"saddle there, so the end cannot anchor a sign change"
+            )
+            raise ValueError(message)
+        return value
 
     def trace(
         self,
@@ -219,11 +278,16 @@ class HomoclinicShooting:
         guess: float,
         half_width: float,
     ) -> list[tuple[float, float]]:
-        """Trace the homoclinic locus in a second parameter (predictor-corrector).
+        """Trace the homoclinic locus in a second parameter.
 
-        For each value of the ``control_index`` parameter, locate the primary
-        parameter in a bracket centred on the previous result. Returns the
-        ``(control_value, located_parameter)`` pairs of the homoclinic curve.
+        For each value of the ``control_index`` parameter, the primary parameter
+        is sought within ``half_width`` of the previous result. That window
+        need not have a sign change at its ends, which can fall where the
+        manifold does not return (NaN), or past a second root. So the window is
+        sampled at ``_BRACKET_SAMPLES + 1`` points. The adjacent pair of finite
+        gaps with opposite signs that lies nearest the previous result is the
+        bracket handed to :meth:`locate`. That pair is the continuation of the
+        branch being followed.
 
         Args:
             control_index: The parameter swept along the curve.
@@ -233,12 +297,45 @@ class HomoclinicShooting:
                 contain the next point.
 
         Returns:
-            The curve as ``(control_value, located_parameter)`` pairs.
+            The ``(control_value, located_parameter)`` pairs of the curve.
+
+        Raises:
+            ValueError: No adjacent pair of samples in a window holds a sign
+                change of finite gaps. The curve has then left ``half_width``
+                of the previous point, or entered a region where the manifold
+                does not return.
         """
         centre = guess
         curve: list[tuple[float, float]] = []
         for value in control_values:
             self._function.parameters[control_index].value = value
-            centre = self.locate(centre - half_width, centre + half_width)
+            lower, upper = self._bracket(centre, half_width)
+            centre = self.locate(lower, upper)
             curve.append((value, centre))
         return curve
+
+    def _bracket(self, centre: float, half_width: float) -> tuple[float, float]:
+        """The sampled sign change of finite gaps nearest ``centre``."""
+        points = np.linspace(
+            centre - half_width,
+            centre + half_width,
+            _BRACKET_SAMPLES + 1,
+        )
+        gaps = [self.gap(float(point)) for point in points]
+        pairs = [
+            (abs(0.5 * (points[k] + points[k + 1]) - centre), k)
+            for k in range(_BRACKET_SAMPLES)
+            if np.isfinite(gaps[k])
+            and np.isfinite(gaps[k + 1])
+            and (gaps[k] > 0.0) != (gaps[k + 1] > 0.0)
+        ]
+        if not pairs:
+            sampled = ", ".join(f"{gap:.3g}" for gap in gaps)
+            message = (
+                f"no sign change of finite return gaps within {half_width:g} of "
+                f"{centre:g} (sampled: {sampled}); the curve has left the window "
+                f"or the manifold does not return there"
+            )
+            raise ValueError(message)
+        _, nearest = min(pairs)
+        return float(points[nearest]), float(points[nearest + 1])

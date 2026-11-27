@@ -156,6 +156,18 @@ class TestShilnikovContinuation(TestCase):
         return np.array([[0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [1.0, -b, -a]])
 
     @pytest.mark.slow
+    @pytest.mark.xfail(
+        raises=ValueError,
+        strict=True,
+        reason=(
+            "DEQ-135: the old trace returned its bracket's upper end at every "
+            "step (0.519, 0.589, ..., 0.799: +0.07 = half_width each time), so "
+            "this curve was never located. Followed honestly, the branch leaves "
+            "its window near a = 0.591, where six of nine samples are NaN. "
+            "DEQ-161 replaces this test with one checked against an independent "
+            "reference."
+        ),
+    )
     def test_traces_saddle_focus_homoclinic_through_belyakov(self):
         shooter = HomoclinicShooting(
             self._jerk(0.5, 0.9),
@@ -163,7 +175,9 @@ class TestShilnikovContinuation(TestCase):
             Departure(np.zeros(3), np.array([1.0, 0.0, 0.0])),
             ReturnSettings(dt=0.002, horizon=100.0, departure_radius=0.6),
         )
-        seed = shooter.locate(0.45, 0.58)
+        # The gap is NaN at 0.45 (horizon 100), which the old bisection
+        # followed silently (DEQ-135); +0.137 at 0.558 and -0.031 at 0.559.
+        seed = shooter.locate(0.558, 0.559)
         curve = shooter.trace(1, [0.90, 0.85, 0.80, 0.75, 0.70], seed, 0.07)
         controls = [b for b, _ in curve]
         located = [a for _, a in curve]
@@ -256,10 +270,12 @@ class TestShilnikovHomoclinic(TestCase):
             departure,
             ReturnSettings(dt=0.002, horizon=100.0, departure_radius=0.6),
         )
-        located = shooter.locate(0.46, 0.50)
-        # locate always returns a point of the bracket, so a failed search (no
-        # return within the horizon) still lands inside it, at an end (DEQ-161).
-        assert min(located - 0.46, 0.50 - located) > 1.0e-3, located
+        # The gap is +0.200 at 0.46 and -0.130 at 0.47 (horizon 100). At 0.50 it
+        # is +0.128, so [0.46, 0.50] holds two roots and no sign change; the
+        # old bisection found 0.4651 only through its midpoints (DEQ-135).
+        located = shooter.locate(0.46, 0.47)
+        # A search that ends at a bracket end has not located anything (DEQ-161).
+        assert min(located - 0.46, 0.47 - located) > 1.0e-3, located
         assert abs(located - _SHILNIKOV_HOMOCLINIC) < _LOCATE_TOLERANCE, located
         focus = classify_saddle_focus(self._jacobian(located))
         assert focus is not None

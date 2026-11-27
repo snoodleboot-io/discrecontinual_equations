@@ -1134,9 +1134,18 @@ return to the saddle. It is NaN wherever the manifold does not come back.
   the root.
 
 It used to follow the NaN silently. A root at 0.3 came back as 1.0, the upper
-end. `trace` raises the same error when the curve leaves its bracket. When that
-happens, narrow the bracket to where the gap is finite. On the damped well
-`y' = x - x^2 + mu y`, for example, that is `|mu| < 0.1`.
+end. When that happens, narrow the bracket to where the gap is finite. On the
+damped well `y' = x - x^2 + mu y`, for example, that is `|mu| < 0.1`. A
+bracket can also hold two roots and no sign change at its ends. On the
+saddle-focus jerk at horizon 100, `[0.46, 0.50]` holds the roots `0.4651` and
+`0.4802`.
+
+`trace(control, values, guess, half_width)` cannot ask its caller for a
+bracket at every step, so it scans for one. It samples its window,
+`half_width` either side of the previous point, at nine points. It then hands
+`locate` the adjacent pair of finite, opposite-signed gaps nearest the previous
+point, which is the branch being followed. If no pair in the window qualifies,
+it raises the same `ValueError`.
 
 References: [Burden2016](../references.md) (bisection, section 2.1).
 
