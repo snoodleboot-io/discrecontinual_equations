@@ -415,9 +415,32 @@ class TestCommutingCaseUnchanged:
         np.testing.assert_allclose(values, before, rtol=1.0e-10, atol=0.0)
 
 
-# Recorded at 0f43b4c (DEQ-70), before the accuracy setting existed: the default
-# must not change by a single bit (DEQ-67).
+# Recorded again at DEQ-118, whose relative slope step moved every value by at
+# most 1.2e-11 relative (against _DEFAULT_HEX_BEFORE_DEQ118 below).
 _DEFAULT_HEX = {
+    ("iterated", "generator"): [
+        "-0x1.38c20203854a6p+0",
+        "0x1.286512917c868p-1",
+    ],
+    ("iterated", "gaussian"): [
+        "0x1.ec4e59b07641ep-1",
+        "-0x1.efcd9a08a61a2p-1",
+    ],
+    ("cross", "generator"): [
+        "-0x1.536cb7e3aca06p-1",
+        "-0x1.267545b97e10ap-1",
+    ],
+    ("cross", "gaussian"): [
+        "0x1.6ea5448c20c14p-1",
+        "-0x1.4f95b385d2815p-2",
+    ],
+}
+
+
+# Recorded at 0f43b4c (DEQ-70), before the accuracy setting existed: the default
+# must not change by a single bit (DEQ-67). Slopes at the absolute step of 1e-6
+# that DEQ-118 replaced.
+_DEFAULT_HEX_BEFORE_DEQ118 = {
     ("iterated", "generator"): ["-0x1.38c20203854a6p+0", "0x1.2865129180357p-1"],
     ("iterated", "gaussian"): ["0x1.ec4e59b07641ep-1", "-0x1.efcd9a088d8efp-1"],
     ("cross", "generator"): ["-0x1.536cb7e3ace7cp-1", "-0x1.267545b983348p-1"],
@@ -443,6 +466,9 @@ class TestLevyAreaAccuracy:
             solver.solve(_equation(function_type[noise]), [0.3, -0.2])
         final = [float(r.discretization[-1]).hex() for r in solver.solution.results]
         assert final == _DEFAULT_HEX[(noise, source)]
+        before = [float.fromhex(h) for h in _DEFAULT_HEX_BEFORE_DEQ118[(noise, source)]]
+        values = [float.fromhex(h) for h in final]
+        np.testing.assert_allclose(values, before, rtol=1.0e-10, atol=0.0)
 
     @pytest.mark.parametrize("accuracy", [1.0, 0.05])
     def test_own_sampler_draws_at_the_configured_accuracy(self, accuracy):
