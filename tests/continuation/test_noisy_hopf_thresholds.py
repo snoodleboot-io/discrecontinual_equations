@@ -12,6 +12,7 @@ import math
 from unittest import TestCase
 
 import numpy as np
+import pytest
 
 from discrecontinual_equations.continuation.fokker_planck import (
     DensityGrid,
@@ -50,6 +51,7 @@ def _problem(mu, grid):
 
 
 class TestNoisyHopfThresholds(TestCase):
+    @pytest.mark.slow
     def test_the_located_p_agrees_with_the_variance_on_the_film_grid(self):
         # 200 cells over [-2.5, 2.5]^2, probe four cells out: the finite-volume
         # overshoot at the singular origin has decayed below a percent there

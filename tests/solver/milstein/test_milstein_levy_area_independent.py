@@ -28,6 +28,7 @@ Euler-Maruyama 0.45); ``y`` exact to 7e-12.
 import warnings
 
 import numpy as np
+import pytest
 
 from discrecontinual_equations.differential_equation import DifferentialEquation
 from discrecontinual_equations.function.stochastic import StochasticFunction
@@ -197,6 +198,7 @@ class TestAgainstIndependentReferences:
         assert slope(euler) < 0.65, euler
         assert milstein[_STEPS[-1]] < 0.2 * euler[_STEPS[-1]], (milstein, euler)
 
+    @pytest.mark.slow
     def test_cross_cosine_noise_converges_at_order_one(self):
         paths = 40
         initial = (0.3, -0.2)

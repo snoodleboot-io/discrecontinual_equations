@@ -411,6 +411,7 @@ class TestDynamicalThreshold(TestCase):
         assert stratonovich is not None
         assert abs((ito - stratonovich) - 0.5 * sigma * sigma) < 1.0e-2
 
+    @pytest.mark.slow
     def test_the_absolute_threshold_sits_at_half_the_variance(self):
         # Averaging four independent paths over a horizon of 75 time units leaves a
         # standard error of s / sqrt(4 T) = 0.041 on the exponent and so on the
@@ -423,6 +424,7 @@ class TestDynamicalThreshold(TestCase):
         assert abs(located - 0.5 * sigma * sigma) < 0.18
         assert located > 0.1
 
+    @pytest.mark.slow
     def test_the_threshold_curve_is_the_expected_parabola(self):
         # Followed in the noise amplitude, the threshold is mu = s^2 / 2 displaced by
         # one common offset that is linear in s, so the located curve is

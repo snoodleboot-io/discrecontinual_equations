@@ -9,6 +9,8 @@ afford. The weak slope is checked too, because the harness measured it at 1.98
 and the docstring reports that number.
 """
 
+import pytest
+
 from discrecontinual_equations.solver.stochastic.srk3.srk3_config import SRK3Config
 from discrecontinual_equations.solver.stochastic.srk3.srk3_solver import SRK3Solver
 from tests.solver.geometric_brownian_motion import GeometricBrownianMotionCase, slope
@@ -45,6 +47,7 @@ class TestSRK3Convergence:
         assert strong > 1.3, errors
         assert strong < 1.8, errors
 
+    @pytest.mark.slow
     def test_weak_order_two_on_geometric_brownian_motion(self):
         errors = GeometricBrownianMotionCase(seed=300).errors(
             SRK3Solver,

@@ -27,6 +27,7 @@ from dataclasses import replace
 from unittest import TestCase
 
 import numpy as np
+import pytest
 from scipy.optimize import fsolve
 
 from discrecontinual_equations.continuation.center_manifold import (
@@ -225,6 +226,7 @@ class TestIndependentOfDimension(TestCase):
     and ``delta``.
     """
 
+    @pytest.mark.slow
     def test_second_focal_value_from_three_to_eight_dimensions(self):
         for size in range(3, 9):
             StackedBautin.transform = random_transform(size, 7 * size + 1)

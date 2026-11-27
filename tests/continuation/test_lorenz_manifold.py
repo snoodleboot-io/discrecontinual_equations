@@ -219,6 +219,7 @@ class TestLorenzManifoldAsFarAsItGoes(TestCase):
         # 2003, Sec. 4.5) and 154.75 (the IJBC 2005 survey, Sec. 2.3).
         assert 151.75 < self.mesh.ring_distances[-1] < 170.0
 
+    @pytest.mark.slow
     def test_the_scrolls_have_formed_around_the_secondary_equilibria(self):
         offset = math.sqrt(_BETA * (_RHO - 1.0))
         for sign in (1.0, -1.0):
@@ -238,6 +239,7 @@ class TestLorenzManifoldAsFarAsItGoes(TestCase):
 
 
 class TestLossyLorenzManifold(TestCase):
+    @pytest.mark.slow
     def test_the_crochet_pattern_adds_up_when_points_are_lost(self):
         # Without the escalated budget, as above: it reaches 160 with 30
         # points lost. With it, it loses none to 160 and 1 to 170, slowly.
@@ -363,6 +365,7 @@ class TestLorenzManifoldIsOnTheManifold(TestCase):
     ring it starts from is off the manifold.
     """
 
+    @pytest.mark.slow
     def test_the_ring_at_distance_twenty_converges_onto_the_manifold(self):
         coarse = _outer_ring_error(1.5)
         fine = _outer_ring_error(0.75)
@@ -411,6 +414,7 @@ class TestLorenzManifoldAtThePublishedSettings(TestCase):
             ),
         ).compute(function, np.zeros(3), jacobian, StableManifold(), distance=160.0)
 
+    @pytest.mark.slow
     def test_the_bands_reach_the_published_distances(self):
         distances = self.mesh.ring_distances
         assert distances[25] == pytest.approx(62.75, abs=1.0e-9)

@@ -32,6 +32,7 @@ class TestSRK4Randomness:
 
 
 class TestSRK4Convergence:
+    @pytest.mark.slow
     def test_weak_order_two_on_geometric_brownian_motion(self):
         errors = GeometricBrownianMotionCase(seed=400).errors(
             SRK4Solver,

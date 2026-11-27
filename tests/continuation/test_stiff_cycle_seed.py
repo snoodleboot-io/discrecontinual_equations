@@ -12,6 +12,7 @@ import math
 from unittest import TestCase, mock
 
 import numpy as np
+import pytest
 from scipy.integrate import solve_ivp
 
 from discrecontinual_equations.continuation.cycle_continuation import (
@@ -125,9 +126,11 @@ class TestStiffStart(TestCase):
     def test_van_der_pol_at_mu_5(self):
         self._check(5.0, 32, 3.0e-4)
 
+    @pytest.mark.slow
     def test_van_der_pol_at_mu_6(self):
         self._check(6.0, 40, 4.0e-4)
 
+    @pytest.mark.slow
     def test_van_der_pol_at_mu_10(self):
         self._check(10.0, 80, 1.5e-3)
 
@@ -173,6 +176,7 @@ class TestRefusal(TestCase):
         points, _ = _start(1.0, 20, 4, period=-6.66)
         assert points == []
 
+    @pytest.mark.slow
     def test_a_cycle_far_from_the_seeds_period_is_refused(self):
         """Told the period is three times what it is, the seed path does not
         trust the cycle it finds: that is another cycle, as far as it knows."""

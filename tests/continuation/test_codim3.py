@@ -16,6 +16,7 @@ manifold's ``3 B(q, h2)`` share of the cubic coefficient moves it there (DEQ-83)
 from unittest import TestCase
 
 import numpy as np
+import pytest
 
 from discrecontinual_equations.continuation.codim3_builder import (
     Codim3Driver,
@@ -227,6 +228,7 @@ class TestCodim3(TestCase):
         assert abs(points[0].parameter_c) < LOCATION_TOLERANCE
         assert abs(points[0].state[0]) < LOCATION_TOLERANCE
 
+    @pytest.mark.slow
     def test_coupled_swallowtail_sits_where_the_manifold_puts_it(self):
         g = CoupledSwallowtail.feedback
         start = 0.75

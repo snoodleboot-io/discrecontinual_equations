@@ -361,6 +361,7 @@ class TestAdaptivePeriodicOrbit(TestCase):
         times = crossings[0] + np.linspace(0.0, period, intervals + 1)
         return period, cycle.sol(times).T
 
+    @pytest.mark.slow
     def test_beats_uniform_on_stiff_cycle(self):
         mu, intervals = 10.0, 200
         period, seed = self._van_der_pol_oracle(mu, intervals)
@@ -402,6 +403,7 @@ class TestAdaptivePeriodicOrbit(TestCase):
         assert adaptive is not None
         assert abs(adaptive.period - 2.0 * math.pi) / (2.0 * math.pi) < 1.0e-2
 
+    @pytest.mark.slow
     def test_error_estimate_flags_an_under_resolved_cycle(self):
         """The estimate separates a resolved cycle from an under-resolved one.
 
@@ -505,6 +507,7 @@ class TestAdaptivePeriodicOrbit(TestCase):
                 -1.0,
             )
 
+    @pytest.mark.slow
     def test_resolution_search_reports_the_mesh_that_worked(self):
         """The search returns every level it measured, and certifies from them.
 
@@ -541,6 +544,7 @@ class TestAdaptivePeriodicOrbit(TestCase):
         true_error = abs(resolved.period - oracle_period) / oracle_period
         assert true_error <= resolved.estimate
 
+    @pytest.mark.slow
     def test_continuation_reaches_extreme_stiffness(self):
         """Continuation reaches mu = 16, a stiffness a cold solve cannot.
 

@@ -11,6 +11,7 @@ import math
 from unittest import TestCase
 
 import numpy as np
+import pytest
 
 from discrecontinual_equations.continuation.connecting_orbit import (
     HeteroclinicOrbit,
@@ -151,6 +152,7 @@ class TestShilnikovContinuation(TestCase):
     def _jacobian(self, a: float, b: float) -> np.ndarray:
         return np.array([[0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [1.0, -b, -a]])
 
+    @pytest.mark.slow
     def test_traces_saddle_focus_homoclinic_through_belyakov(self):
         shooter = HomoclinicShooting(
             self._jerk(0.5, 0.9),
@@ -190,6 +192,7 @@ class TestShilnikovHomoclinic(TestCase):
     def _jacobian(self, a: float) -> np.ndarray:
         return np.array([[0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [1.0, -1.0, -a]])
 
+    @pytest.mark.slow
     def test_locates_saddle_focus_homoclinic(self):
         departure = Departure(np.zeros(3), np.array([1.0, 0.0, 0.0]))
         shooter = HomoclinicShooting(
@@ -204,6 +207,7 @@ class TestShilnikovHomoclinic(TestCase):
         assert focus is not None
         assert focus.satisfies_shilnikov_criterion
 
+    @pytest.mark.slow
     def test_chaos_tracks_the_saddle_index(self):
         settings = LyapunovSettings(dt=0.005, horizon=18000, transient=5000)
         chaotic = lyapunov_spectrum(

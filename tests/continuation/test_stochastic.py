@@ -8,6 +8,7 @@ density and the exponent are checked against both thresholds.
 from unittest import TestCase
 
 import numpy as np
+import pytest
 
 from discrecontinual_equations.continuation.lyapunov import (
     LyapunovSettings,
@@ -101,6 +102,7 @@ class TestLyapunovSpectrum(TestCase):
         assert abs(spectrum.exponents[0] + 0.5) < 1.0e-2
         assert abs(spectrum.exponents[1] + 1.0) < 1.0e-2
 
+    @pytest.mark.slow
     def test_lorenz_top_exponent(self):
         equation = DifferentialEquation(
             variables=[State(), State(), State()],
@@ -145,6 +147,7 @@ class TestStochasticLyapunov(TestCase):
             settings=settings,
         ).top
 
+    @pytest.mark.slow
     def test_convention_shift_is_half_diffusion_squared(self):
         # Stratonovich minus Ito equals s^2 / 2 exactly (shared Brownian path cancels).
         alpha, sigma = 0.3, 0.6
@@ -155,6 +158,7 @@ class TestStochasticLyapunov(TestCase):
         )
         assert abs(difference - 0.5 * sigma * sigma) < 2.0e-2
 
+    @pytest.mark.slow
     def test_ito_matches_closed_form(self):
         alpha, sigma = 0.3, 0.6
         oracle = LyapunovExponent(
@@ -164,6 +168,7 @@ class TestStochasticLyapunov(TestCase):
         ).at(0.0)
         assert abs(self._top(Ito(), alpha, sigma) - oracle) < 5.0e-2
 
+    @pytest.mark.slow
     def test_noise_shifts_dynamical_bifurcation(self):
         # Deterministically neutral (alpha = 0) but stabilised by noise; unstable above.
         sigma = 0.6
@@ -173,6 +178,7 @@ class TestStochasticLyapunov(TestCase):
     def test_zero_noise_recovers_drift(self):
         assert abs(self._top(Ito(), 0.2, 0.0) - 0.2) < 1.0e-2
 
+    @pytest.mark.slow
     def test_spectrum_on_noisy_lorenz_attractor(self):
         # Full spectrum on a bounded chaotic attractor under additive noise. The sum
         # equals the exact phase-space divergence -(10 + 1 + 8/3); the top stays

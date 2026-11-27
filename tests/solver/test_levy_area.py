@@ -158,6 +158,7 @@ class TestSamplerPathwiseError:
             )
         return errors
 
+    @pytest.mark.slow
     def test_error_is_within_theorem_four_four_and_falls_like_one_over_n(self):
         terms_list = [2, 4, 8, 16, 32]
         errors = self._errors(terms_list, samples=3000)
@@ -287,6 +288,7 @@ class TestBrownianPathAreas:
     by the sampler), and its reading has the full ``h^2 / 4`` at any resolution.
     """
 
+    @pytest.mark.slow
     def test_polygon_reading_converges_to_the_law_as_the_grid_refines(self):
         paths = 12000
         measured = {}
@@ -297,6 +299,7 @@ class TestBrownianPathAreas:
             assert measured[cells] == pytest.approx(expected, rel=0.05), measured
         assert measured[2] < measured[8] < measured[32]
 
+    @pytest.mark.slow
     def test_sampled_path_reading_has_the_law_at_a_coarse_grid(self):
         areas, increments = _path_areas(12000, _STEP, _STEP / 2, sampled=True)
         assert np.var(areas) == pytest.approx(_STEP**2 / 4, rel=0.05)
@@ -545,6 +548,7 @@ class TestAccuracySetting:
             errors[step] = float(np.sqrt(1.0 / step) * per_step)
         return errors
 
+    @pytest.mark.slow
     def test_small_accuracy_gives_order_one_at_moderate_steps(self):
         errors = self._global_errors(0.05)
         order = np.polyfit(np.log(list(errors)), np.log(list(errors.values())), 1)[0]

@@ -159,6 +159,7 @@ class TestGradientQuasipotential(TestCase):
         error = _double_well_error(81)
         assert error < 5.0e-2
 
+    @pytest.mark.slow
     def test_u_converges_on_doubling_the_grid(self):
         errors = [_double_well_error(count) for count in _COUNTS]
         orders = _orders(errors)
@@ -174,11 +175,13 @@ class TestGradientQuasipotential(TestCase):
 class TestRotatingOrnsteinUhlenbeck(TestCase):
     """Oracle 2: ``U = (1/2) x^T S^{-1} x``, ``A S + S A^T + G G^T = 0``."""
 
+    @pytest.mark.slow
     def test_u_is_the_lyapunov_quadratic_form(self):
         # 9.68e-4 at 81 points with the straight base of OLIM-MID, the
         # default (4.25e-5 with the parabolic one; TestQuadraticUpdate).
         assert _rotating_error(81) < 1.2e-3
 
+    @pytest.mark.slow
     def test_u_converges_on_doubling_the_grid(self):
         # Measured 2.27e-3, 9.68e-4, 5.00e-4: orders 1.23, 0.95, the first
         # order of the straight base (parabolic: 1.70e-4, 4.25e-5, 1.16e-5,
@@ -284,6 +287,7 @@ class TestMinimumActionPath(TestCase):
         assert not cut.converged
         assert cut.iterations == 5
 
+    @pytest.mark.slow
     def test_gmam_lands_on_the_same_path_whatever_its_step(self):
         # The step is how fast the chain relaxes, not where it ends; a fixed point
         # that moved with it was the tangential force fighting the
@@ -319,6 +323,7 @@ class TestMinimumActionPath(TestCase):
         assert np.all(np.isfinite(paths[0].states))
         assert abs(paths[0].action - paths[1].action) < 1.0e-6
 
+    @pytest.mark.slow
     def test_gmam_follows_a_state_dependent_diffusion(self):
         # The conformal noise of the noisy Hopf, D = s^2 r^2 I, about its cycle:
         # the grid-free reference relaxes gMAM in its general form from the
@@ -351,6 +356,7 @@ class TestCycleAttractor(TestCase):
     and infinite at the origin where the noise vanishes.
     """
 
+    @pytest.mark.slow
     def test_u_about_the_cycle_is_the_radial_closed_form(self):
         mu, sigma = 1.0, 0.7
         parameters = [Alpha(value=mu), Sigma(value=sigma)]
@@ -555,6 +561,7 @@ def _anisotropic_gradient_error(count):
 class TestPublishedCases(TestCase):
     """The two test problems of Dahiya and Cameron (2018), Section 3."""
 
+    @pytest.mark.slow
     def test_the_linear_sde_21_reaches_the_published_accuracy(self):
         # Their Table 4 fits OLIM-MID's max error on SDE (21) by 0.817 N^-1.39,
         # 9.5e-4 at N = 129, with K = 10 by their rule of thumb (28). Here
@@ -573,6 +580,7 @@ class TestPublishedCases(TestCase):
         error = np.abs(field.values.ravel()[inside] - exact[inside])
         assert np.max(error) < 1.5e-3
 
+    @pytest.mark.slow
     def test_u_about_the_cycle_of_sde_24_converges_at_second_order(self):
         # Additive noise, unlike the conformal case above: U = (r^2 - 1)^2 / 2.
         # Measured 0.0899, 0.0221 (and 0.00453 at 321): orders 2.02, 2.29.
@@ -597,6 +605,7 @@ class TestPublishedCases(TestCase):
         assert indices.size > 100
         assert np.max(np.abs(values - exact)) < 1.0e-4
 
+    @pytest.mark.slow
     def test_u_next_to_the_cycle_converges_at_second_order(self):
         # On |r - 1| < 0.1. With the straight-climb start the march could not
         # repair the values it accepted first: 5.45e-3 and 3.27e-3 at 161 and
@@ -624,6 +633,7 @@ class TestPublishedCases(TestCase):
 class TestAnisotropicReferences(TestCase):
     """``D`` that is not a multiple of the identity, against independent forms."""
 
+    @pytest.mark.slow
     def test_a_gradient_drift_in_the_noise_metric_has_u_twice_the_potential(self):
         # f = -D grad V: the density is exp(-2 V) for any constant D, so a
         # solver that used D for D^-1, or G^T G for G G^T, misses it by O(1).
@@ -633,6 +643,7 @@ class TestAnisotropicReferences(TestCase):
         assert errors[1] < 1.2e-2
         assert min(_orders(errors)) > 1.8
 
+    @pytest.mark.slow
     def test_a_non_normal_linear_drift_has_the_kronecker_lyapunov_form(self):
         grid = DensityGrid.box([-1.5, -1.5], [1.5, 1.5], [81, 81])
         field = OrderedLineIntegral(
@@ -662,6 +673,7 @@ class TestAnisotropicReferences(TestCase):
 class TestMaierStein(TestCase):
     """Maier-Stein at beta = 10, where the escape path leaves the symmetry axis."""
 
+    @pytest.mark.slow
     def test_the_barrier_converges_to_the_independent_minimum(self):
         # Measured 0.341561, 0.340604 against 0.340042 with OLIM-MID, the
         # default, at radius 8: errors 1.52e-3, 5.6e-4, order 1.44. With the
@@ -791,6 +803,7 @@ def _assert_tracks(estimate, true):
 class TestErrorEstimate(TestCase):
     """DEQ-57: an estimated error per checked point, against the true one."""
 
+    @pytest.mark.slow
     def test_a_field_from_the_march_has_measured_nothing(self):
         _solver, field, _checked_field, _indices, _true = _checked("gradient")
         assert np.all(np.isnan(field.errors))
@@ -807,6 +820,7 @@ class TestErrorEstimate(TestCase):
         assert np.array_equal(checked.values, field.values)
         assert np.all(np.isnan(field.errors))
 
+    @pytest.mark.slow
     def test_the_estimate_tracks_the_error_on_the_non_normal_system(self):
         _solver, _field, checked, indices, true = _checked("nonnormal")
         _assert_tracks(checked.errors.ravel()[indices], true)
@@ -815,6 +829,7 @@ class TestErrorEstimate(TestCase):
         _solver, _field, checked, indices, true = _checked("gradient")
         _assert_tracks(checked.errors.ravel()[indices], true)
 
+    @pytest.mark.slow
     def test_the_estimate_tracks_the_error_about_the_cycle_of_sde_24(self):
         _solver, _field, checked, indices, true = _checked("cycle")
         _assert_tracks(checked.errors.ravel()[indices], true)
@@ -831,6 +846,7 @@ class TestErrorEstimate(TestCase):
         )
         _assert_tracks(checked.errors.ravel()[indices], true)
 
+    @pytest.mark.slow
     def test_the_grid_free_value_is_closer_than_the_grid(self):
         # Where the path from a rotating equilibrium winds round it: from the
         # surface a quarter of the way out, the chain never sees the winding.
@@ -850,6 +866,7 @@ class TestErrorEstimate(TestCase):
         assert abs(value - exact) <= own
         assert abs(field.at(target) - exact) > 10.0 * abs(value - exact)
 
+    @pytest.mark.slow
     def test_a_strongly_rotating_drift_can_be_checked(self):
         # SDE (21), rotation ten times the gradient: the chain's flow is stiff
         # at the default step, and checking a point once raised from scipy.
@@ -872,6 +889,7 @@ class TestErrorEstimate(TestCase):
         grid_error = abs(field.values.ravel()[index] - exact)
         assert checked.errors.ravel()[index] >= grid_error
 
+    @pytest.mark.slow
     def test_the_references_own_estimate_bounds_its_error(self):
         # About a nonlinear well, where the chain's error goes at second order
         # in the nodes rather than the fourth of the linear systems: measured
@@ -883,6 +901,7 @@ class TestErrorEstimate(TestCase):
         assert error < 1.0e-4
         assert error <= own <= 10.0 * error
 
+    @pytest.mark.slow
     def test_the_reference_beside_a_cycle_starts_on_the_targets_side(self):
         # From the band's edge on the side of the target, with the march's
         # Simpson-rule start there: at r = sqrt(2), U = 1/2 exactly.
@@ -892,6 +911,7 @@ class TestErrorEstimate(TestCase):
         assert abs(value - 0.5) < 1.0e-4
         assert abs(value - 0.5) <= own
 
+    @pytest.mark.slow
     def test_the_estimate_is_the_distance_to_the_reference_plus_its_error(self):
         solver, field, checked, indices, _true = _checked("nonnormal")
         target = field.grid.points()[indices[0]]
@@ -932,6 +952,7 @@ class TestErrorEstimate(TestCase):
 class TestRefinement(TestCase):
     """DEQ-57: past a tolerance, the grid value is replaced by the grid-free one."""
 
+    @pytest.mark.slow
     def test_every_refined_point_is_within_the_tolerance(self):
         solver, field, _checked_field, indices, _true = _checked("gradient")
         tolerance = 5.0e-4
@@ -946,6 +967,7 @@ class TestRefinement(TestCase):
         grid_error = np.abs(field.values.ravel()[indices] - _gradient_exact(points))
         assert np.all(grid_error[status == REFINED] > error[status == REFINED])
 
+    @pytest.mark.slow
     def test_a_reference_not_good_to_the_tolerance_only_flags(self):
         # No reference here is good to 1e-7, so nothing may be replaced, however
         # far off the grid value is; each point is flagged by its error instead.
@@ -992,6 +1014,7 @@ class TestCubicTerm(TestCase):
 class TestArrival(TestCase):
     """A trace has reached a cycle when it stops inside the band, by distance."""
 
+    @pytest.mark.slow
     def test_a_trace_stopping_inside_the_band_has_arrived(self):
         # mu = 0.2: the trace from inside stops 1.48 cells from the cycle, U
         # 0.002 above the floor. The band is 1.5 cells wide, so it is in it;
@@ -1205,6 +1228,7 @@ class TestDefaultUpdate(TestCase):
 class TestQuadraticUpdate(TestCase):
     """``U`` a parabola along the triangle's base, through a third front point."""
 
+    @pytest.mark.slow
     def test_the_rotating_case_converges_at_second_order(self):
         # Measured 1.70e-4, 4.25e-5, 1.16e-5 at 41, 81, 161 (radius 8): orders
         # 2.00, 1.87. The midpoint update: 2.27e-3, 9.68e-4, 5.00e-4.
@@ -1212,6 +1236,7 @@ class TestQuadraticUpdate(TestCase):
         assert errors[2] < 2.0e-5
         assert min(_orders(errors)) > 1.8
 
+    @pytest.mark.slow
     def test_it_is_ten_times_closer_than_the_midpoint_update(self):
         quadratic = _rotating_error_by_order(81, QUADRATIC)
         midpoint = _rotating_error_by_order(81, MIDPOINT)
@@ -1409,6 +1434,7 @@ class TestMultiplicativeNoise(TestCase):
         )
         assert np.allclose(coefficients, [-2.0, 0.0, 0.0, 0.0], atol=1.0e-5)
 
+    @pytest.mark.slow
     def test_the_grid_converges_to_twice_the_potential(self):
         # Measured 0.139, 0.0327, 0.00776 on {U <= 1.5}: orders 2.09, 2.07
         # (parabolic: 0.141, 0.0333, 0.00808). On {U <= 2} 0.156, 0.0392,
@@ -1418,6 +1444,7 @@ class TestMultiplicativeNoise(TestCase):
         assert errors[0] > errors[1] > errors[2]
         assert min(_orders(errors)) > 1.8
 
+    @pytest.mark.slow
     def test_gmam_converges_to_twice_the_potential(self):
         gmam = GeometricMinimumAction(
             system(MultiplicativeField),
@@ -1433,6 +1460,7 @@ class TestMultiplicativeNoise(TestCase):
         assert errors[2] < 2.0e-5
         assert min(_orders(errors)) > 1.0
 
+    @pytest.mark.slow
     def test_gmam_agrees_with_the_grid_within_its_error_estimate(self):
         grid, solver, field = _multiplicative_field(81)
         index = np.ravel_multi_index(grid.nearest([-0.6, 0.5]), grid.shape)

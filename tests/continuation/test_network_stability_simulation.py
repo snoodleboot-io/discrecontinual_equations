@@ -22,6 +22,7 @@ import math
 from unittest import TestCase
 
 import numpy as np
+import pytest
 from scipy.integrate import solve_ivp
 
 from discrecontinual_equations.continuation.heteroclinic_network import (
@@ -177,6 +178,7 @@ class TestCompetitionNearDeltaZero(TestCase):
         ({**_BASE, "c14": 0.8 * 1.5 + 0.01}, _XI3),
     )
 
+    @pytest.mark.slow
     def test_every_seed_ends_on_the_predicted_cycle(self):
         for eigenvalues, winner in self._CASES:
             interaction = _interaction(eigenvalues)
@@ -198,6 +200,7 @@ class TestCompetitionNearDeltaZero(TestCase):
 class TestBasinFraction(TestCase):
     """The attracted fraction of a box shrinks its complement like ``eps^sigma``."""
 
+    @pytest.mark.slow
     def test_complement_of_the_basin_scales_with_the_index(self):
         """Kirk-Silber, Proposition 5.3 case (i): the xi3-cycle's index along
         ``xi1 -> xi2`` is ``e23/e24 - 1 = 1``, so ``1 - Sigma`` falls a thousandfold

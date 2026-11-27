@@ -26,6 +26,7 @@ import math
 from unittest import TestCase
 
 import numpy as np
+import pytest
 from scipy.integrate import solve_ivp
 
 from discrecontinual_equations.continuation.connecting_orbit import MeshSpec
@@ -294,6 +295,7 @@ class TestSymmetryBrokenNetwork(TestCase):
         expanding = (growth - 0.6, 1.0 - 0.6 * growth, 0.4)
         return math.prod(contracting) / math.prod(expanding)
 
+    @pytest.mark.slow
     def test_connections_persist_and_ratio_follows_the_closed_form(self):
         field = guckenheimer_holmes(_LAMBDA, _A1, _A2, _A3)
         continuation = NetworkContinuation(_gh_network(field), parameter_index=1)
@@ -425,6 +427,7 @@ class TestKirkSilberCompetition(TestCase):
         assert not three.is_asymptotically_stable
         assert not four.is_asymptotically_stable
 
+    @pytest.mark.slow
     def test_competition_is_won_where_castro_lohse_predict(self):
         for eigenvalues, winner in self._CASES:
             field, network = _kirk_silber(eigenvalues)
