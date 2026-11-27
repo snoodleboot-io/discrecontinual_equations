@@ -221,7 +221,10 @@ class TestRelativeValueStop(TestCase):
             )
 
     def test_an_absolute_stop_accepts_the_first_midpoint_of_a_slow_function(self):
-        assert abs(self._root(Bisection, 1.0e-9, relative=False) - 0.5) < LOCATION_TOLERANCE
+        assert (
+            abs(self._root(Bisection, 1.0e-9, relative=False) - 0.5)
+            < LOCATION_TOLERANCE
+        )
 
     def test_secant_locates_the_root_at_every_scale(self):
         for slope in (1.0e-18, 1.0e-9, 1.0, 1.0e9):
