@@ -15,6 +15,11 @@ coefficients with every term above the total degree ``order`` dropped, which is
 the propagation of Taylor coefficients of Griewank and Walther (2008, Chapter 13),
 here carried as a full multivariate polynomial rather than through univariate
 directional propagation. A product costs ``O(order^4)`` coefficient multiplications.
+Two series of different orders combine at the lower one: the terms the
+lower-order operand dropped are unknown, so every term of the result above its
+order would be wrong (the degree-``d`` part of a sum, product or quotient needs
+both operands' parts up to degree ``d``).
+Before DEQ-173 the result kept the left operand's order.
 Division by a number scales every coefficient. Division by a series ``w`` whose
 constant term ``w_0`` is non-zero is the truncated quotient: from ``u = h w``,
 taken degree by degree, ``h_k = (u_k - sum_{j<k} h_j w_{k-j}) / w_0``, where
@@ -181,7 +186,7 @@ class Bivariate:
         result = dict(self._coefficients)
         for key, value in right._coefficients.items():
             result[key] = result.get(key, 0.0) + value
-        return Bivariate(result, self._order)
+        return Bivariate(result, min(self._order, right._order))
 
     __radd__ = __add__
 
@@ -207,7 +212,7 @@ class Bivariate:
         right = self._combine(other)
         if right is NotImplemented:
             return NotImplemented
-        order = self._order
+        order = min(self._order, right._order)
         result: dict[tuple[int, int], _Scalar] = {}
         for (a, b), left_value in self._coefficients.items():
             for (c, d), right_value in right._coefficients.items():
@@ -222,7 +227,7 @@ class Bivariate:
     def __truediv__(self, other: object) -> "Bivariate":
         """Divide by a number, or by a series with a non-zero constant term.
 
-        A series quotient is truncated at this series' ``order``; a zero
+        A series quotient is truncated at the lower of the two orders; a zero
         constant term in the denominator raises ``ZeroDivisionError`` (see
         :func:`truncated_quotient`).
         """
@@ -234,13 +239,14 @@ class Bivariate:
             )
         if not isinstance(other, Bivariate):
             return NotImplemented
+        order = min(self._order, other._order)
         quotient = truncated_quotient(
             self._coefficients,
             other._coefficients,
-            self._order,
+            order,
             2,
         )
-        return Bivariate(quotient, self._order)
+        return Bivariate(quotient, order)
 
     def __rtruediv__(self, other: object) -> "Bivariate":
         right = self._combine(other)

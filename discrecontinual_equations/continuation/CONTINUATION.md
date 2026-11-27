@@ -91,46 +91,72 @@ change to `Continuer`.
 
 ### ContinuationConfig
 
-```python
-class ContinuationConfig(SolverConfig):
-    """Configuration for the Continuer (defaults give a working run)."""
+`ContinuationConfig` (a `SolverConfig`) gives a working run with its defaults. It
+names the continuation parameter by index (`continuation_parameter_index`) and its
+starting value (`initial_parameter`); the strategies by registry key (`corrector`,
+`predictor`, `jacobian`, `root_finder`, `detectors`, ...); the continuation
+constraint as `parameterization="pseudo_arclength"` or `"natural"`; and the step
+control (`initial_step`, `minimum_step`, `maximum_step`, `maximum_points`,
+`direction`, `parameter_lower_bound`, `parameter_upper_bound`). `measure` is
+`"norm"` or `"component"`, the quantity a diagram plots.
 
-    continuation_parameter_index: int = 0
-    initial_parameter: float = 0.0
-    corrector: Literal["pseudo_arclength", "natural"] = "pseudo_arclength"
-    jacobian: Literal["finite_difference"] = "finite_difference"
-    initial_step: float = 0.05
-    direction: Literal[1, -1] = 1
-    detect_folds: bool = True
-    detect_branch_points: bool = True
-    detect_hopf: bool = True
-    measure: Literal["norm", "component"] = "norm"
+```python
+from discrecontinual_equations.continuation.continuation_config import (
+    ContinuationConfig,
+)
+
+defaults = ContinuationConfig()
+print(defaults.parameterization, defaults.corrector, defaults.detectors)
+print(defaults.initial_step, defaults.maximum_points, defaults.measure)
 ```
+
+prints `pseudo_arclength newton_corrector ['fold', 'branch_point', 'hopf']`, then
+`0.05 4000 norm`.
 
 ### Continuer
 
-```python
-class Continuer(Solver):
-    """Thin orchestrator; collaborators are injected via ContinuationComponents."""
-
-    def __init__(
-        self,
-        solver_config: ContinuationConfig,
-        components: ContinuationComponents,
-    ) -> None: ...
-
-    def solve(
-        self,
-        equation: DifferentialEquation,
-        initial_values: list[float],
-    ) -> Branch: ...
-```
-
-Build one with the factory rather than wiring by hand:
+`Continuer(solver_config, components)` is a `Solver` whose
+`solve(equation, initial_values)` returns a `Branch`; `components` is the
+`ContinuationComponents` bundle of injected strategies. Build one with
+`ContinuerBuilder.build(config, equation)` rather than wiring it by hand. The
+builder resolves the strategies by key, so the `sweet_tea` registry must be filled
+once first:
 
 ```python
-continuer = ContinuerBuilder.build(config, equation)
-branch = continuer.solve(equation, initial_values)
+import math
+from pathlib import Path
+
+from sweet_tea.registry import Registry
+
+import discrecontinual_equations
+from discrecontinual_equations.continuation.builder import ContinuerBuilder
+from discrecontinual_equations.differential_equation import DifferentialEquation
+from discrecontinual_equations.function.deterministic import DeterministicFunction
+from discrecontinual_equations.parameter import Parameter
+from discrecontinual_equations.variable import Variable
+
+Registry.fill_registry(
+    path=str(Path(discrecontinual_equations.__file__).parent),
+    module="discrecontinual_equations",
+    exclude=["*.tests", "*.examples", "*.plot"],
+)
+
+
+class SaddleNode(DeterministicFunction):
+    """x' = mu - x^2, reading mu live from its parameter."""
+
+    def eval(self, point, time=None):
+        return [self.parameters[0].value - point[0] ** 2]
+
+
+mu = Parameter(name="mu", value=0.0)
+x = Variable(name="x")
+saddle_node_equation = DifferentialEquation(
+    variables=[x],
+    time=Variable(name="t"),
+    parameters=[mu],
+    derivative=SaddleNode(variables=[x], parameters=[mu], results=[Variable(name="x'")]),
+)
 ```
 
 ## Method
@@ -214,18 +240,26 @@ pitchfork although `<p, C(q, q, q)> = 0`.
 
 ## Example
 
+Continuing the block above, from the upper branch `x = sqrt(3)` at `mu = 3` down
+through the fold at `mu = 0`:
+
 ```python
 config = ContinuationConfig(
+    detectors=["fold"],
     initial_parameter=3.0,
     direction=-1,
     measure="component",
     parameter_lower_bound=-0.6,
     parameter_upper_bound=3.2,
 )
-continuer = ContinuerBuilder.create(config, saddle_node_equation)
+continuer = ContinuerBuilder.build(config, saddle_node_equation)
 branch = continuer.solve(saddle_node_equation, initial_values=[math.sqrt(3.0)])
 folds = [p for p in branch.special_points if p.kind == "fold"]
+print(len(branch), [f"{p.parameter:.2e}" for p in folds])
 ```
+
+prints `35 ['-1.32e-11']`: 35 points, and one fold located at `mu = 0` to the
+localisation tolerance.
 
 See `examples/continuation/bifurcation_examples.py` for a runnable gallery
 (saddle-node, transcritical, pitchfork with branch switching, cusp/hysteresis,

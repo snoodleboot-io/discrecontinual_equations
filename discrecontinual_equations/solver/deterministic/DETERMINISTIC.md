@@ -29,26 +29,27 @@ Deterministic Solvers
 ### EulerSolver
 
 ```python
-class EulerSolver(Solver):
-    """First-order explicit Euler method for ODEs."""
+from discrecontinual_equations.solver.solver import Solver
+from discrecontinual_equations.solver.deterministic.euler.euler_solver import EulerSolver
 
-    def solve(self, equation: DifferentialEquation, initial_values: list[float]):
-        """Solve ODE using forward Euler method."""
+# A Solver: built from an EulerConfig, solve(equation, initial_values) -> Curve.
+assert issubclass(EulerSolver, Solver)
 ```
 
 ### Adaptive Solvers
 
-All adaptive solvers inherit from a common base with error estimation:
+All adaptive solvers inherit from `EmbeddedRungeKuttaSolver` (`embedded_runge_kutta.py`), which takes the trial step, measures the error (`error_ratio`) and sets the next step (`accepted_step_size`, `rejected_step_size`):
 
 ```python
-class AdaptiveSolver(Solver):
-    """Base class for adaptive Runge-Kutta methods."""
+from discrecontinual_equations.solver.deterministic.dormand_prince.dormand_prince_config import DormandPrinceConfig
+from discrecontinual_equations.solver.deterministic.dormand_prince.dormand_prince_solver import DormandPrinceSolver
+from discrecontinual_equations.solver.deterministic.embedded_runge_kutta import EmbeddedRungeKuttaSolver
 
-    def _estimate_error(self, y_high, y_low) -> float:
-        """Estimate local truncation error."""
-
-    def _adjust_step_size(self, error, tolerance) -> float:
-        """Compute optimal step size."""
+solver = DormandPrinceSolver(DormandPrinceConfig())
+assert isinstance(solver, EmbeddedRungeKuttaSolver)
+# The subclass names its tableau; the base class steps, measures and controls.
+print(solver.tableau.stages, solver.tableau.error_order)  # 7 4
+print(f"{solver.controller_exponent:.2f}")  # alpha = 1/5 - 0.75 * 0.04 = 0.17
 ```
 
 ## UML Class Diagram
@@ -157,17 +158,23 @@ deterministic/
 ### Basic ODE Solution
 
 ```python
-from discrecontinual_equations.solver.deterministic.euler import EulerConfig, EulerSolver
-from discrecontinual_equations import DifferentialEquation, Variable
+from discrecontinual_equations.differential_equation import DifferentialEquation
+from discrecontinual_equations.function.deterministic import DeterministicFunction
+from discrecontinual_equations.solver.deterministic.euler.euler_config import EulerConfig
+from discrecontinual_equations.solver.deterministic.euler.euler_solver import EulerSolver
+from discrecontinual_equations.variable import Variable
+
 
 # Define dy/dt = -y
 class Decay(DeterministicFunction):
     def eval(self, point, time=None):
         return [-point[0]]
 
+
 # Setup and solve
-y = Variable(name="y")
-equation = DifferentialEquation(variables=[y], derivative=Decay(variables=[y]))
+y, t = Variable(name="y"), Variable(name="t")
+decay = Decay([y], [], [Variable(name="dy")], t)
+equation = DifferentialEquation(variables=[y], time=t, parameters=[], derivative=decay)
 
 config = EulerConfig(start_time=0, end_time=5, step_size=0.1)
 solver = EulerSolver(config)
@@ -177,17 +184,16 @@ solver.solve(equation, [1.0])
 ### Adaptive Solving with Error Control
 
 ```python
-from discrecontinual_equations.solver.deterministic.dormand_prince import DormandPrinceConfig, DormandPrinceSolver
-
 config = DormandPrinceConfig(
     start_time=0, end_time=10,
     initial_step_size=0.1,
     absolute_tolerance=1e-8,
-    relative_tolerance=1e-6
+    relative_tolerance=1e-6,
 )
 
 solver = DormandPrinceSolver(config)
-solver.solve(equation, [1.0])
+curve = solver.solve(equation, [1.0])
+print(len(curve) - 1, "accepted steps")  # 39 accepted steps
 ```
 
 ## Functionality Explanation
@@ -206,16 +212,16 @@ solver.solve(equation, [1.0])
 
 ### Error Control Algorithm
 
-```python
-error_estimate = ||y_{higher} - y_{lower}||
-scaled_error = error_estimate / (atol + rtol * ||y||)
+```text
+ratio = sqrt(mean((err_i / (atol + rtol * max(|y_i|, |y_new_i|)))^2))   # RMS norm
+alpha = 1/q - 0.75 * beta          # q = order of the error estimate + 1
 
-if scaled_error <= 1:
-    accept_step = True
-    optimal_h = h * safety * (scaled_error)^(-1/(min_order+1))
+if ratio <= 1:
+    accept the step
+    h_new = h * clip(safety * ratio^(-alpha) * ratio_old^beta, 0.2, 10)   # PI control
 else:
-    accept_step = False
-    optimal_h = h * safety * (scaled_error)^(-1/(min_order+1))
+    reject the step
+    h_new = h * max(0.2, safety * ratio^(-alpha))
 ```
 
 ## Performance Characteristics
@@ -243,8 +249,12 @@ else:
 **Child Modules:**
 - [EULER](euler/EULER.md)
 - [ADAMS_BASHFORTH2](adams_bashforth2/ADAMS_BASHFORTH2.md)
-- [ADAMS_BASHFORTH3](adams_bashforth3/ADAMS_BASHFORTH3.md)
-- [CASH_KARP](cash_karp/CASH_KARP.md)
-- [FEHLBERG](fehlberg/FEHLBERG.md)
-- [DORMAND_PRINCE](dormand_prince/DORMAND_PRINCE.md)
-- [PRINCE_DORMAND87](prince_dormand87/PRINCE_DORMAND87.md)
+- [`AdamsBashforth3Solver`](adams_bashforth3/adams_bashforth3_solver.py)
+- [`CashKarpSolver`](cash_karp/cash_karp_solver.py)
+- [`FehlbergSolver`](fehlberg/fehlberg_solver.py)
+- [`DormandPrinceSolver`](dormand_prince/dormand_prince_solver.py)
+- [`PrinceDormand87Solver`](prince_dormand87/prince_dormand87_solver.py)
+
+The solvers with no design page of their own link to their source; their
+docstrings, and the [deterministic solvers guide](../../../docs/user-guide/deterministic-solvers.md),
+document them.

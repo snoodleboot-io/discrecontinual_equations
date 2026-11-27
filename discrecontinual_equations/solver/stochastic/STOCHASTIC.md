@@ -30,14 +30,16 @@ Stochastic Solvers
 ### Base Stochastic Solver
 
 ```python
-class StochasticSolver(Solver):
-    """Base class for stochastic differential equation solvers."""
+from discrecontinual_equations.solver.solver import Solver
+from discrecontinual_equations.solver.stochastic.euler_maruyama.euler_maruyama_solver import EulerMaruyamaSolver
+from discrecontinual_equations.solver.stochastic.wiener import GaussianWienerSource, WienerSource
 
-    def __init__(self, solver_config: StochasticConfig):
-        """Initialize with random seed support."""
-
-    def _generate_wiener_increment(self, dt: float) -> float:
-        """Generate N(0, dt) Wiener increment."""
+# Every stochastic solver is a Solver. It draws its increments from a
+# WienerSource: by default a GaussianWienerSource seeded with random_seed.
+assert issubclass(EulerMaruyamaSolver, Solver)
+source = GaussianWienerSource(seed=1)
+assert isinstance(source, WienerSource)
+print(source.increments(0.0, 0.01, 2).delta_w.shape)  # (2,): one N(0, dt) per channel
 ```
 
 ### Calculus Support
@@ -45,13 +47,11 @@ class StochasticSolver(Solver):
 All stochastic solvers support calculus selection:
 
 ```python
-class StochasticConfig(SolverConfig):
-    """Configuration with calculus interpretation."""
+from discrecontinual_equations.solver.solver_config import StochasticConfig
+from discrecontinual_equations.solver.stochastic.coefficients import ItoCoefficients
 
-    calculus: Literal["ito", "stratonovich"] = "ito"
-
-    def apply_calculus_correction(self, drift, diffusion) -> tuple:
-        """Apply Ito ↔ Stratonovich conversion if needed."""
+# The configuration names the calculus; ItoCoefficients applies the correction.
+print(StochasticConfig.model_fields["calculus"].default)  # ito
 ```
 
 ## UML Class Diagram
@@ -167,40 +167,56 @@ stochastic/
 ### Basic SDE Solution
 
 ```python
-from discrecontinual_equations.solver.stochastic.euler_maruyama import EulerMaruyamaConfig, EulerMaruyamaSolver
+from discrecontinual_equations.differential_equation import DifferentialEquation
+from discrecontinual_equations.function.stochastic import StochasticFunction
+from discrecontinual_equations.parameter import Parameter
+from discrecontinual_equations.solver.stochastic.euler_maruyama.euler_maruyama_config import EulerMaruyamaConfig
+from discrecontinual_equations.variable import Variable
+
 
 # Geometric Brownian motion: dX = μX dt + σX dW
 class GBM(StochasticFunction):
     def eval(self, point, time=None):
-        x, mu, sigma = point[0], self.parameters[0].value, self.parameters[1].value
+        x, mu = point[0], self.parameters[0].value
         return [mu * x]  # Drift
 
     def diffusion(self, point, time=None):
         x, sigma = point[0], self.parameters[1].value
         return [sigma * x]  # Volatility
 
+
+x, t = Variable(name="x"), Variable(name="t")
+mu, sigma = Parameter(value=0.05, name="mu"), Parameter(value=0.2, name="sigma")
+equation = DifferentialEquation(
+    variables=[x], time=t, parameters=[mu, sigma],
+    derivative=GBM([x], [mu, sigma], [Variable(name="dx")], t),
+)
+
 # Solve with Ito calculus
 config = EulerMaruyamaConfig(
     start_time=0, end_time=1, step_size=0.01,
-    calculus="ito", random_seed=42
+    calculus="ito", random_seed=42,
 )
 solver = EulerMaruyamaSolver(config)
-solver.solve(equation, [100.0])  # Start at $100
+curve = solver.solve(equation, [100.0])  # Start at $100
+print(f"X(1) = {curve.results[0].discretization[-1]:.2f}")  # X(1) = 93.94
 ```
 
 ### High-Order Stochastic Solving
 
 ```python
-from discrecontinual_equations.solver.stochastic.srk4 import SRK4Config, SRK4Solver
+from discrecontinual_equations.solver.stochastic.srk4.srk4_config import SRK4Config
+from discrecontinual_equations.solver.stochastic.srk4.srk4_solver import SRK4Solver
 
 # Use SRK4 for weak order 2.0 (expectations); SRK3 for strong order 1.5 (paths)
 config = SRK4Config(
     start_time=0, end_time=1, step_size=0.001,
-    calculus="stratonovich", random_seed=123
+    calculus="stratonovich", random_seed=123,
 )
 
+stochastic_equation = equation  # the geometric Brownian motion above
 solver = SRK4Solver(config)
-solver.solve(stochastic_equation, [1.0])
+curve = solver.solve(stochastic_equation, [1.0])
 ```
 
 ## Functionality Explanation
@@ -277,25 +293,75 @@ solver's path hex for hex (diagonal noise) or to the last bit (matrix noise). Th
 per-step cost is a few array operations whatever the path count *if* the function
 overrides `eval_batch` and `diffusion_batch` with array arithmetic; the defaults
 loop over paths through `eval` and `diffusion`, so every function works and only
-the batched ones are fast. 20,000 paths of a planar Ornstein-Uhlenbeck process over
-2,000 steps take 4 s and reproduce the Lyapunov-equation covariance within 1%.
+the batched ones are fast. 20,000 paths of the planar Ornstein-Uhlenbeck process
+below over 2,000 steps took about 2 s (DEQ-173 re-measurement) and reproduced the
+Lyapunov-equation covariance to 1.4% of its diagonal, seed 3. The example uses 2,000
+paths to stay quick: it prints variances of 0.483 and 0.490 against the exact 0.5,
+and a covariance of 0.006 against 0.
 
 ```python
+import numpy as np
+from scipy.linalg import solve_continuous_lyapunov
+
 from discrecontinual_equations.solver.stochastic.ensemble import StochasticEnsemble
 
+A = np.array([[-1.0, 1.0], [-1.0, -1.0]])  # planar Ornstein-Uhlenbeck: dX = A X dt + dW
+
+
+class OrnsteinUhlenbeck(StochasticFunction):
+    def eval(self, point, time=None):
+        return list(A @ np.asarray(point))
+
+    def diffusion(self, point, time=None):
+        return [1.0, 1.0]
+
+    # Array versions, so the ensemble steps every path at once.
+    def eval_batch(self, points, time=None):
+        return points @ A.T
+
+    def diffusion_batch(self, points, time=None):
+        return np.ones_like(points)
+
+
+xy = [Variable(name="x"), Variable(name="y")]
+ou = DifferentialEquation(
+    variables=xy, time=t, parameters=[],
+    derivative=OrnsteinUhlenbeck(xy, [], [Variable(name="dx"), Variable(name="dy")], t),
+)
 config = EulerMaruyamaConfig(start_time=0, end_time=10, step_size=0.005, random_seed=3)
-result = StochasticEnsemble(config).solve(equation, [0.0, 0.0], paths=20000)
+result = StochasticEnsemble(config).solve(ou, [0.0, 0.0], paths=2000)
 covariance = np.cov(result.final.T)
-``` The
+exact = solve_continuous_lyapunov(A, -np.eye(2))
+print(np.round(covariance, 3), np.round(exact, 3))  # [[0.483 0.006] [0.006 0.49]] vs 0.5 I
+```
+
+The
 Stratonovich correction for a matrix is `(1/2) sum_k (dG_k/dx) G_k`. The conformal
 noise of the noisy Hopf, two drivers each pushing both components:
 
 ```python
 class ConformalNoise(StochasticFunction):
+    sigma = 0.3
+
+    def eval(self, point, time=None):
+        return [0.0, 0.0]
+
     def diffusion(self, point, time=None):
         x, y = point
         s = self.sigma
         return [[s * x, -s * y], [s * y, s * x]]
+
+
+coefficients = ItoCoefficients(
+    DifferentialEquation(
+        variables=xy, time=t, parameters=[],
+        derivative=ConformalNoise(xy, [], [Variable(name="dx"), Variable(name="dy")], t),
+    ),
+    "stratonovich",
+)
+# (1/2) sum_k (dG_k/dx) G_k: column 1 gives s^2 (x, y), column 2 gives -s^2 (x, y),
+# so the correction cancels and the Ito drift is the written one, zero.
+print(np.round(coefficients.drift(np.array([1.0, 2.0]), 0.0), 6) + 0.0)  # [0. 0.]
 ```
 
 ## Performance Characteristics
@@ -323,18 +389,16 @@ Kuznetsov's Legendre series (`iterated_integrals.py`).
 For Stratonovich → Ito conversion:
 
 ```python
-def apply_stratonovich_correction(drift, diffusion, point):
-    """Convert Stratonovich to Ito calculus."""
-    eps = 1e-8
-    # Numerical differentiation
-    diffusion_plus = diffusion(point + eps)
-    diffusion_minus = diffusion(point - eps)
-    dsigma_dx = (diffusion_plus - diffusion_minus) / (2 * eps)
+def apply_stratonovich_correction(drift, diffusion, point, eps=1e-6):
+    """Convert a scalar-noise Stratonovich drift to the Ito drift."""
+    dsigma_dx = (diffusion(point + eps) - diffusion(point - eps)) / (2 * eps)
+    # Added, never subtracted (DEQ-27). For a matrix diffusion the term is
+    # 0.5 * sum_k (dG_k/dx) G_k over the columns (DEQ-28).
+    return drift(point) + 0.5 * diffusion(point) * dsigma_dx
 
-    # Apply correction: added, never subtracted (DEQ-27). For a matrix diffusion
-    # the term is 0.5 * sum_k (dG_k/dx) G_k over the columns (DEQ-28).
-    corrected_drift = drift + 0.5 * diffusion * dsigma_dx
-    return corrected_drift, diffusion
+
+# dX = 0.2 X o dW: Ito drift 0.5 * 0.2 X * 0.2 = 0.02 X, so 2.0 at X = 100.
+print(round(apply_stratonovich_correction(lambda x: 0.0, lambda x: 0.2 * x, 100.0), 6))
 ```
 
 ## References

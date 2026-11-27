@@ -26,27 +26,24 @@ MilsteinSolver
 ### MilsteinConfig
 
 ```python
-class MilsteinConfig(SolverConfig):
-    """Configuration for Milstein method."""
+from discrecontinual_equations.solver.solver_config import StochasticConfig
+from discrecontinual_equations.solver.stochastic.milstein.milstein_config import MilsteinConfig
 
-    start_time: float = 0.0
-    end_time: float = 1.0
-    step_size: float = 0.01
-    random_seed: int | None = None
-    calculus: Literal["ito", "stratonovich"] = "ito"
+# start_time, end_time, step_size, random_seed, calculus, and the accuracy of the
+# Levy areas drawn for non-commuting matrix noise.
+config = MilsteinConfig(end_time=1.0, step_size=0.01, random_seed=0)
+assert isinstance(config, StochasticConfig)
+print(config.calculus, config.levy_area_accuracy)  # ito 1.0
 ```
 
 ### MilsteinSolver
 
 ```python
-class MilsteinSolver(Solver):
-    """Milstein method for SDEs with diffusion correction."""
+from discrecontinual_equations.solver.solver import Solver
+from discrecontinual_equations.solver.stochastic.milstein.milstein_solver import MilsteinSolver
 
-    def solve(self, equation: DifferentialEquation, initial_values: list[float]):
-        """Solve SDE using Milstein method."""
-
-    def _milstein_step(self, y, t, dt, equation):
-        """Single Milstein step with correction."""
+# solve(equation, initial_values) returns a Curve; the step is written out below.
+assert issubclass(MilsteinSolver, Solver)
 ```
 
 ## UML Class Diagram
@@ -106,7 +103,10 @@ milstein/
 ### Geometric Brownian Motion
 
 ```python
-from discrecontinual_equations.solver.stochastic.milstein import MilsteinConfig, MilsteinSolver
+from discrecontinual_equations.differential_equation import DifferentialEquation
+from discrecontinual_equations.function.stochastic import StochasticFunction
+from discrecontinual_equations.variable import Variable
+
 
 # dX = μX dt + σX dW
 class GBM(StochasticFunction):
@@ -118,13 +118,18 @@ class GBM(StochasticFunction):
         x = point[0]
         return [0.2 * x]  # 20% volatility
 
+
+x, t = Variable(name="x"), Variable(name="t")
+gbm = DifferentialEquation(
+    variables=[x], time=t, parameters=[], derivative=GBM([x], [], [Variable(name="dx")], t)
+)
 config = MilsteinConfig(
     start_time=0, end_time=1, step_size=0.01,
-    calculus="ito", random_seed=42
+    calculus="ito", random_seed=42,
 )
 
 solver = MilsteinSolver(config)
-solver.solve(equation, [100.0])  # Start at $100
+curve = solver.solve(gbm, [100.0])  # Start at $100
 ```
 
 ### Ornstein-Uhlenbeck Process
@@ -139,13 +144,17 @@ class OUProcess(StochasticFunction):
     def diffusion(self, point, time=None):
         return [0.3]  # Constant volatility
 
+
+ou = DifferentialEquation(
+    variables=[x], time=t, parameters=[], derivative=OUProcess([x], [], [Variable(name="dx")], t)
+)
 config = MilsteinConfig(
     start_time=0, end_time=5, step_size=0.001,
-    calculus="stratonovich", random_seed=123
+    calculus="stratonovich", random_seed=123,
 )
 
 solver = MilsteinSolver(config)
-solver.solve(equation, [1.0])
+solver.solve(ou, [1.0])  # additive noise: Stratonovich and Ito coincide
 ```
 
 ## Functionality Explanation
@@ -249,11 +258,27 @@ declared. The ensemble and the Stratonovich drift correction of every solver tak
 the same shortcut.
 
 ```python
+import math
+
+
 class IndependentNoise(StochasticFunction):
     diagonal_noise = True  # b_i depends on x_i alone
 
+    def eval(self, point, time=None):
+        return [-x for x in point]
+
     def diffusion(self, point, time=None):
         return [0.3 * math.sin(x) + 0.2 * x for x in point]
+
+
+states = [Variable(name=f"x{i}") for i in range(3)]
+independent = DifferentialEquation(
+    variables=states, time=t, parameters=[],
+    derivative=IndependentNoise(states, [], [Variable(name=f"d{i}") for i in range(3)], t),
+)
+MilsteinSolver(MilsteinConfig(end_time=0.1, step_size=0.01, random_seed=1)).solve(
+    independent, [1.0, 2.0, 3.0]
+)
 ```
 
 A wrong promise would make a wrong step - `cos(y), cos(x)` declared diagonal falls
@@ -271,28 +296,24 @@ wrong step. Declare diagonal noise only when it holds everywhere.
 ### Single Time Step Implementation
 
 ```python
-def _milstein_step(self, y, t, dt, equation):
-    # Evaluate functions
-    drift = np.array(equation.derivative.eval(y, t))
-    diffusion = np.array(equation.derivative.diffusion(y, t))
+import numpy as np
 
-    # Compute diffusion derivative
-    dsigma_dx = self._compute_diffusion_derivative(
-        lambda p: equation.derivative.diffusion(p, t), y
-    )
 
-    # Generate Wiener increment
-    dW = np.random.normal(0, np.sqrt(dt), len(y))
+def milstein_step(y, dt, a, b, db_dx, delta_w):
+    """Ito Milstein, diagonal noise: Euler-Maruyama plus (1/2) b b' (dW^2 - dt)."""
+    correction = 0.5 * b(y) * db_dx(y) * (delta_w**2 - dt)
+    return y + a(y) * dt + b(y) * delta_w + correction
 
-    # Milstein correction
-    if self.calculus == "ito":
-        correction = 0.5 * diffusion * dsigma_dx * (dW**2 - dt)
-    else:  # stratonovich
-        correction = 0.5 * diffusion * dsigma_dx * dW**2
 
-    # Update state
-    y_new = y + drift * dt + diffusion * dW + correction
-    return y_new
+# The geometric Brownian motion above by hand, with the exact b' = 0.2 and the
+# solver's own draws (default_rng(42), one N(0, dt) per step).
+generator = np.random.default_rng(42)
+y = np.array([100.0])
+for _ in range(100):
+    delta_w = generator.normal(0, np.sqrt(0.01), size=1)
+    y = milstein_step(y, 0.01, lambda y: 0.1 * y, lambda y: 0.2 * y, lambda y: 0.2, delta_w)
+# Agrees with MilsteinSolver, whose b' is a central difference: 1.2e-12 apart here.
+print(abs(y[0] - curve.results[0].discretization[-1]) < 1e-6)  # True
 ```
 
 ## Convergence Analysis

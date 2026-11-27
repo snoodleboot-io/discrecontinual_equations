@@ -26,22 +26,24 @@ AdamsBashforth2Solver
 ### AdamsBashforth2Config
 
 ```python
-class AdamsBashforth2Config(SolverConfig):
-    """Configuration for Adams-Bashforth 2 method."""
+from discrecontinual_equations.solver.solver_config import DeterministicConfig
+from discrecontinual_equations.solver.deterministic.adams_bashforth2.adams_bashforth2_config import AdamsBashforth2Config
 
-    start_time: float = 0.0
-    end_time: float = 1.0
-    step_size: float = 0.01
+# A fixed grid: start_time, end_time and a step that divides the interval.
+config = AdamsBashforth2Config(start_time=0.0, end_time=1.0, step_size=0.25)
+assert isinstance(config, DeterministicConfig)
+print(config.times.tolist())  # [0.0, 0.25, 0.5, 0.75, 1.0]
 ```
 
 ### AdamsBashforth2Solver
 
 ```python
-class AdamsBashforth2Solver(Solver):
-    """Second-order Adams-Bashforth method."""
+from discrecontinual_equations.solver.deterministic.adams_bashforth import AdamsBashforthSolver
+from discrecontinual_equations.solver.deterministic.adams_bashforth2.adams_bashforth2_solver import AdamsBashforth2Solver
 
-    def solve(self, equation: DifferentialEquation, initial_values: list[float]):
-        """Solve ODE using Adams-Bashforth 2 method."""
+# The shared k-step solver does the work; this class names its weights.
+assert issubclass(AdamsBashforth2Solver, AdamsBashforthSolver)
+print(AdamsBashforth2Solver.weights)  # (1.5, -0.5): newest derivative first
 ```
 
 ## UML Class Diagram
@@ -111,7 +113,13 @@ adams_bashforth2/
 ### Population Growth
 
 ```python
-from discrecontinual_equations.solver.deterministic.adams_bashforth2 import AdamsBashforth2Config, AdamsBashforth2Solver
+import math
+
+from discrecontinual_equations.differential_equation import DifferentialEquation
+from discrecontinual_equations.function.deterministic import DeterministicFunction
+from discrecontinual_equations.parameter import Parameter
+from discrecontinual_equations.variable import Variable
+
 
 # Logistic growth: dP/dt = r*P*(1 - P/K)
 class LogisticGrowth(DeterministicFunction):
@@ -119,11 +127,19 @@ class LogisticGrowth(DeterministicFunction):
         P = point[0]
         r = self.parameters[0].value  # growth rate
         K = self.parameters[1].value  # carrying capacity
-        return [r * P * (1 - P/K)]
+        return [r * P * (1 - P / K)]
 
-config = AdamsBashforth2Config(start_time=0, end_time=50, step_size=0.1)
-solver = AdamsBashforth2Solver(config)
-solver.solve(equation, [1.0])  # Start with 1 individual
+
+P, t = Variable(name="P"), Variable(name="t")
+r, K = Parameter(value=0.5, name="r"), Parameter(value=100.0, name="K")
+growth = LogisticGrowth([P], [r, K], [Variable(name="dP")], t)
+equation = DifferentialEquation(variables=[P], time=t, parameters=[r, K], derivative=growth)
+
+config = AdamsBashforth2Config(start_time=0, end_time=20, step_size=0.1)
+curve = AdamsBashforth2Solver(config).solve(equation, [1.0])  # Start with 1 individual
+exact = 100.0 / (1.0 + 99.0 * math.exp(-0.5 * 20))
+print(f"P(20) = {curve.results[0].discretization[-1]:.4f}, exact {exact:.4f}")
+# P(20) = 99.5507, exact 99.5526
 ```
 
 ### Damped Harmonic Oscillator
@@ -134,12 +150,20 @@ class DampedOscillator(DeterministicFunction):
     def eval(self, point, time=None):
         x, v = point  # position, velocity
         gamma = self.parameters[0].value  # damping
-        omega = self.parameters[1].value   # frequency
-        return [v, -gamma*v - omega**2*x]
+        omega = self.parameters[1].value  # frequency
+        return [v, -gamma * v - omega**2 * x]
+
+
+x, v = Variable(name="x"), Variable(name="v")
+gamma, omega = Parameter(value=0.2, name="gamma"), Parameter(value=1.0, name="omega")
+oscillator = DampedOscillator([x, v], [gamma, omega], [Variable(name="dx"), Variable(name="dv")], t)
+equation = DifferentialEquation(
+    variables=[x, v], time=t, parameters=[gamma, omega], derivative=oscillator
+)
 
 config = AdamsBashforth2Config(start_time=0, end_time=20, step_size=0.01)
-solver = AdamsBashforth2Solver(config)
-solver.solve(equation, [1.0, 0.0])  # x=1, v=0
+curve = AdamsBashforth2Solver(config).solve(equation, [1.0, 0.0])  # x=1, v=0
+print(f"x(20) = {curve.results[0].discretization[-1]:.4f}")  # x(20) = 0.0790
 ```
 
 ## Functionality Explanation
@@ -171,33 +195,34 @@ This is derived from the Newton backward difference interpolation of the integra
 
 ### Startup Phase
 
+The solver's loop lives in `adams_bashforth.AdamsBashforthSolver.solve`; this continues the logistic example and rebuilds it by hand.
+
 ```python
-def solve(self, equation, initial_values):
-    # First step: classical RK4 (adams_bashforth.classical_runge_kutta_step)
-    y0 = np.array(initial_values)
-    f0 = np.array(equation.derivative.eval(y0, self.start_time))
+import numpy as np
 
-    y1 = classical_runge_kutta_step(equation, self.start_time, y0, self.step_size)
-    t1 = self.start_time + self.step_size
+from discrecontinual_equations.solver.deterministic.adams_bashforth import (
+    classical_runge_kutta_step,
+)
 
-    # Store for AB2
-    self._prev_f = f0
-    self.solution.append([self.start_time, [], y0.tolist()])
-    self.solution.append([t1, [], y1.tolist()])
+# The same method by hand, on the logistic equation: one classical Runge-Kutta
+# step to start, because AB2 needs two derivatives to begin.
+h, times = 0.1, [0.1 * n for n in range(201)]
+f = lambda y, time: np.array(growth.eval(point=list(y), time=time))
+logistic = DifferentialEquation(variables=[P], time=t, parameters=[r, K], derivative=growth)
+y = [np.array([1.0])]
+y.append(classical_runge_kutta_step(logistic, times[0], y[0], h))
 ```
 
 ### Adams-Bashforth 2 Step
 
 ```python
-def _adams_bashforth_2_step(self, y_curr, f_curr, h):
-    """Perform Adams-Bashforth 2 step."""
-    # AB2 formula: y_{n+1} = y_n + (h/2)*(3*f_n - f_{n-1})
-    y_next = y_curr + (h/2) * (3 * f_curr - self._prev_f)
+# Then y_{n+1} = y_n + (h/2) * (3 f_n - f_{n-1}) on the rest of the grid.
+for n in range(1, len(times) - 1):
+    y.append(y[n] + h / 2 * (3 * f(y[n], times[n]) - f(y[n - 1], times[n - 1])))
 
-    # Update history
-    self._prev_f = f_curr
-
-    return y_next
+solved = AdamsBashforth2Solver(AdamsBashforth2Config(start_time=0, end_time=20, step_size=0.1))
+by_solver = solved.solve(logistic, [1.0]).results[0].discretization
+print(max(abs(a[0] - b) for a, b in zip(y, by_solver)) < 1e-12)  # True: agrees to rounding
 ```
 
 ## Error Analysis
@@ -265,4 +290,4 @@ Where C depends on the problem's smoothness.
 
 **Related Modules:**
 - [EULER](../euler/EULER.md) - Single-step method for startup
-- [ADAMS_BASHFORTH3](../adams_bashforth3/ADAMS_BASHFORTH3.md) - Higher-order Adams method
+- [`AdamsBashforth3Solver`](../adams_bashforth3/adams_bashforth3_solver.py) - Higher-order Adams method

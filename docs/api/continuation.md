@@ -2174,6 +2174,7 @@ read by any curve; the step is `finite_difference_epsilon`.
 References: [Dennis and Schnabel 1983, SciPy `_numdiff`](../references.md#lyapunov-exponents-covariant-vectors-and-noise);
 the curves themselves: [Govaerts, Kuznetsov and Sijnave 2000, MatCont manual 2019](../references.md#normal-forms-centre-manifolds-and-bifurcation-detection).
 
-::: discrecontinual_equations.continuation.jacobian
-
-::: discrecontinual_equations.continuation.derivative_provider
+The finite-difference Jacobian and derivative classes these steps drive are
+documented once, under [`continuation.jacobian`][discrecontinual_equations.continuation.jacobian]
+and [`continuation.derivative_provider`][discrecontinual_equations.continuation.derivative_provider]
+in *Jacobians and derivatives* above.

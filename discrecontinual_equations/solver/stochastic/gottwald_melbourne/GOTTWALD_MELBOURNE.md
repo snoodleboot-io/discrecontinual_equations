@@ -26,35 +26,27 @@ GottwaldMelbourneSolver
 ### GottwaldMelbourneConfig
 
 ```python
-class GottwaldMelbourneConfig(StochasticConfig):
-    """Configuration for Gottwald-Melbourne homogenisation method."""
+from discrecontinual_equations.solver.stochastic.gottwald_melbourne.gottwald_melbourne_config import GottwaldMelbourneConfig
 
-    alpha: float = 1.5      # Stability parameter (1 < α < 2)
-    eta: float = 1.0        # Scale parameter
-    beta: float = 0.0       # Skewness parameter (-1 ≤ β ≤ 1)
-    epsilon: float = 0.01   # Homogenisation parameter
-
-    @property
-    def gamma(self) -> float:
-        return 1.0 / self.alpha
+config = GottwaldMelbourneConfig(
+    alpha=1.5,  # Stability parameter (1 < α < 2)
+    eta=1.0,  # Scale parameter
+    beta=0.0,  # Skewness parameter (-1 ≤ β ≤ 1)
+    epsilon=0.01,  # Homogenisation parameter, at most step_size
+    step_size=0.01,
+)
+print(round(config.gamma, 4))  # γ = 1/α = 0.6667
 ```
 
 ### GottwaldMelbourneSolver
 
 ```python
-class GottwaldMelbourneSolver(Solver):
-    """Gottwald-Melbourne method for α-stable SDEs."""
+from discrecontinual_equations.solver.solver import Solver
+from discrecontinual_equations.solver.stochastic.gottwald_melbourne.gottwald_melbourne_solver import GottwaldMelbourneSolver
 
-    def __init__(self, solver_config: GottwaldMelbourneConfig)
-
-    def solve(self, equation: DifferentialEquation, initial_values: list[float]):
-        """Solve SDE using Gottwald-Melbourne homogenisation."""
-
-    def _thaler_map(self, x: float) -> float:
-        """Compute Thaler map T(x)."""
-
-    def _compute_observable(self, x: float, chi: int) -> float:
-        """Compute observable v(x) for noise generation."""
+# solve(equation, initial_values) returns a Curve; the Thaler map and the
+# observable v(x) are internal (see the table below).
+assert issubclass(GottwaldMelbourneSolver, Solver)
 ```
 
 ## Mathematical Foundation
@@ -62,7 +54,7 @@ class GottwaldMelbourneSolver(Solver):
 The Gottwald-Melbourne method approximates Marcus SDEs of the form:
 
 ```
-dZ = a(Z) dt + b(Z)  dW^α,η,β
+dZ = a(Z) dt + b(Z) ⋄ dW^α,η,β
 ```
 
 where `W^α,η,β` is an α-stable Lévy process, using a deterministic fast-slow system:
@@ -97,9 +89,12 @@ The z update is an explicit step of length `ε` in the drift plus a bounded kick
 ### Basic α-Stable Diffusion
 
 ```python
-from discrecontinual_equations.solver.stochastic.gottwald_melbourne import GottwaldMelbourneConfig, GottwaldMelbourneSolver
+from discrecontinual_equations.differential_equation import DifferentialEquation
+from discrecontinual_equations.function.stochastic import StochasticFunction
+from discrecontinual_equations.variable import Variable
 
-# dZ = b(Z)  dW^α,η,β (pure diffusion)
+
+# dZ = b(Z) ⋄ dW^α,η,β (pure diffusion)
 class AlphaStableDiffusion(StochasticFunction):
     def eval(self, point, time=None):
         return [0.0]  # No drift
@@ -107,10 +102,16 @@ class AlphaStableDiffusion(StochasticFunction):
     def diffusion(self, point, time=None):
         return [1.0]  # Constant diffusion
 
+
+z, t = Variable(name="z"), Variable(name="t")
+equation = DifferentialEquation(
+    variables=[z], time=t, parameters=[],
+    derivative=AlphaStableDiffusion([z], [], [Variable(name="dz")], t),
+)
 config = GottwaldMelbourneConfig(
     alpha=1.5, eta=1.0, beta=0.0, epsilon=0.01,
     start_time=0, end_time=1, step_size=0.01,
-    random_seed=42
+    random_seed=42,
 )
 
 solver = GottwaldMelbourneSolver(config)
@@ -120,7 +121,7 @@ solver.solve(equation, [0.0])  # Start at 0
 ### Non-Lipschitz SDE with Natural Boundary
 
 ```python
-# dZ = Z^3 dt + Z^2  dW^α,η,β (natural boundary at Z=0)
+# dZ = -Z^3 dt + Z^2 ⋄ dW^α,η,β (natural boundary at Z=0)
 class BoundarySDE(StochasticFunction):
     def eval(self, point, time=None):
         z = point[0]
@@ -128,11 +129,16 @@ class BoundarySDE(StochasticFunction):
 
     def diffusion(self, point, time=None):
         z = point[0]
-        return [z**2]   # Non-Lipschitz diffusion
+        return [z**2]  # Non-Lipschitz diffusion
 
-config = GottwaldMelbourneConfig(
+
+equation = DifferentialEquation(
+    variables=[z], time=t, parameters=[],
+    derivative=BoundarySDE([z], [], [Variable(name="dz")], t),
+)
+config = GottwaldMelbourneConfig(  # ε may not exceed the grid step
     alpha=1.5, eta=0.5, beta=0.5, epsilon=0.005,
-    start_time=0, end_time=2, step_size=0.001
+    start_time=0, end_time=2, step_size=0.01, random_seed=7,
 )
 
 solver = GottwaldMelbourneSolver(config)
@@ -157,17 +163,16 @@ The scheme is that of Gottwald & Melbourne (arXiv:2004.09914, MMS 19(2), 2021), 
 
 `ṽ` is negative on `(x*, 1]`, so `v` has mean zero under the invariant measure. Section 4.1 prints the sign as the product `χ^(n) = χ_{n-1}···χ_0`; taken literally, that product gives the symmetric law for every `β < 1`: the running product is a Markov chain on ±1 that forgets its start (for `β = -1` it alternates), so the rare long excursions that make the jumps take either sign with probability ½. Only `β = 1`, where every `δ` is +1, is unaffected. The proof of Theorem 4.1 (Section 5.3) gives each excursion its own `δ` (the induced observable `V(y, ±1)`), and that is what the solver does: it converges to the requested `β` (DEQ-108). Read literally, the empty product also gives the excursion under way at `x_0` the sign +1 on every path; that does not change the limit, but at finite `ε` it biases `ẑ_ε(1)` upwards (median +0.53 at `ε = 0.01` on `dZ = dW`, `β = 0`), so the solver signs it with a `δ` like any other.
 
-```python
-def solve(self, equation, initial_values):
-    x = T^10000(uniform)          # Remark 4.4
-    chi = delta()
-    for n in range(n_last):       # n_i = floor((t_i - t_0) / eps) at grid time t_i
-        if x > x_star:
-            chi = delta()         # a new excursion, a new sign
-        v = chi * v(x)            # both branches
-        t_n = t_0 + n * eps       # the drift's time is the fast step's own
-        z += eps * a(z, t_n) + eps**gamma * b(z, t_n) * v
-        x = T(x)                  # perturbed per Section 4.2
+```text
+x = T^10000(uniform)          # Remark 4.4
+chi = delta()
+for n in range(n_last):       # n_i = floor((t_i - t_0) / eps) at grid time t_i
+    if x > x_star:
+        chi = delta()         # a new excursion, a new sign
+    v = chi * v(x)            # both branches
+    t_n = t_0 + n * eps       # the drift's time is the fast step's own
+    z += eps * a(z, t_n) + eps**gamma * b(z, t_n) * v
+    x = T(x)                  # perturbed per Section 4.2
 ```
 
 Before DEQ-108 the solver dropped the `1/(2^{1-γ}-1)` and `(1-2^{γ-1})^{-γ}` factors, divided by `g_α`, gave `ṽ` the wrong sign on `(x*, 1]`, signed only that branch, started every path at `x_0 = 0.5`, took `int(h/ε)` fast steps per grid step and had no perturbation. Its observable had nonzero mean, so the path drifted: on `dZ = dW` (`α = 1.5`, `β = 0`) the median of `ẑ_ε(1)` was +2.2, +6.7 and +22 at `ε = 0.1`, `0.01` and `0.001`.

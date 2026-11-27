@@ -35,15 +35,19 @@ SRK3Solver
 ## Core Classes
 
 ```python
-class SRK3Config(StochasticConfig): ...
+import inspect
 
-class SRK3Solver(StochasticRungeKuttaSolver):
-    def __init__(self, solver_config: SRK3Config, wiener: WienerSource | None = None): ...
-    def solve(self, equation, initial_values) -> Curve: ...  # one variable: (11.2.1)
+from discrecontinual_equations.solver.solver_config import StochasticConfig
+from discrecontinual_equations.solver.stochastic.runge_kutta import StochasticRungeKuttaSolver
+from discrecontinual_equations.solver.stochastic.srk3.srk3_config import SRK3Config
+from discrecontinual_equations.solver.stochastic.srk3.srk3_solver import SRK3Solver
 
-    @staticmethod
-    def _step(y, t, h, coefficients, increments) -> np.ndarray:
-        """One step of Kloeden-Platen (11.2.1)."""
+assert issubclass(SRK3Config, StochasticConfig)  # start_time, end_time, step_size, random_seed, calculus
+# The base class owns the stepping loop and the Wiener source; SRK3 supplies _step.
+assert issubclass(SRK3Solver, StochasticRungeKuttaSolver)
+print(inspect.signature(SRK3Solver.__init__))  # (self, solver_config, wiener=None)
+# One variable runs (11.2.1); several channels the order 1.5 Taylor scheme.
+print(list(inspect.signature(SRK3Solver._step).parameters))
 ```
 
 ## Folder Structure
@@ -62,8 +66,45 @@ srk3/
 ## Example
 
 ```python
-from discrecontinual_equations.solver.stochastic.srk3.srk3_config import SRK3Config
-from discrecontinual_equations.solver.stochastic.srk3.srk3_solver import SRK3Solver
+from discrecontinual_equations.differential_equation import DifferentialEquation
+from discrecontinual_equations.function.stochastic import StochasticFunction
+from discrecontinual_equations.variable import Variable
+
+
+class GBM(StochasticFunction):
+    """dX = mu X dt + sigma X dW with mu = 1, sigma = 0.5."""
+
+    def eval(self, point, time=None):
+        return [1.0 * point[0]]
+
+    def diffusion(self, point, time=None):
+        return [0.5 * point[0]]
+
+
+x, t = Variable(name="x"), Variable(name="t")
+equation = DifferentialEquation(
+    variables=[x], time=t, parameters=[], derivative=GBM([x], [], [Variable(name="dx")], t)
+)
+
+scalar_equation = equation
+
+
+class Rotating(StochasticFunction):
+    """Two states, two drivers: an n x m diffusion matrix."""
+
+    def eval(self, point, time=None):
+        return [-point[0], -point[1]]
+
+    def diffusion(self, point, time=None):
+        u, v = point
+        return [[0.3, 0.1 * v], [0.1 * u, 0.3]]
+
+
+uv = [Variable(name="u"), Variable(name="v")]
+matrix_noise_equation = DifferentialEquation(
+    variables=uv, time=t, parameters=[],
+    derivative=Rotating(uv, [], [Variable(name="du"), Variable(name="dv")], t),
+)
 
 config = SRK3Config(start_time=0.0, end_time=1.0, step_size=0.01, random_seed=42)
 solver = SRK3Solver(config)

@@ -120,3 +120,19 @@ class TestDeprecatedNames:
             [1.0],
         )
         assert curve.results[0].discretization == new.results[0].discretization
+
+    def test_old_b9_attribute_warns_and_holds_the_old_values(self):
+        # The values the alias exposed as ``b9`` before DEQ-139 (git dbc47d2~25),
+        # which RKSUITE's CONST lists as the seventh-order weights.
+        old_b9 = [
+            13451932 / 455176623, 0, 0, 0, 0,
+            -808719846 / 976000145, 1757004468 / 5645159321,
+            656045339 / 265891186, -3867574721 / 1518517206,
+            465885868 / 322736535, 53011238 / 667516719, 2 / 45, 0,
+        ]  # fmt: skip
+        with pytest.warns(DeprecationWarning, match="deprecated"):
+            solver = DormandPrince89Solver(DormandPrince89Config(end_time=2.0))
+        with pytest.warns(DeprecationWarning, match="b7"):
+            b9 = solver.b9
+        np.testing.assert_allclose(b9, solver.b7, rtol=0, atol=0)
+        np.testing.assert_allclose(b9, old_b9, rtol=1e-15, atol=1e-18)
