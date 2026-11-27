@@ -15,12 +15,14 @@ without the code under test.
 """
 
 import math
+import warnings
 from unittest import TestCase, mock
 
 import numpy as np
 import pytest
 from scipy.sparse import csr_matrix
 
+from discrecontinual_equations.continuation import connecting_orbit
 from discrecontinual_equations.continuation.connecting_orbit import (
     _DAMPING,
     _NORMAL_EQUATIONS,
@@ -221,6 +223,91 @@ class TestRankDeficientStepIsNeverCertified(TestCase):
                 # Gauss-Newton's is 1e-10 / sigma, 100 and 1e7; measured 2.8e-3
                 # of it at sigma = 1e-12, just under the floor, and 5e-11 at 1e-17.
                 assert abs(components[9]) < 1.0e-2 * abs(gauss_newton[9])
+
+    def _filtered(self, solver, jacobian, residual):
+        """The step's component along the truncated direction over Gauss-Newton's,
+        and the Levenberg-Marquardt filter ``sigma^2 / (sigma^2 + lambda)``
+        computed from numpy's SVD with ``lambda = (_DAMPING sigma_max)^2``."""
+        step, resolved = solver._newton_step(jacobian, residual)  # noqa: SLF001
+        left, values, right = np.linalg.svd(jacobian.toarray())
+        ratio = (right @ step)[9] / (-(left[:, 9] @ residual) / values[9])
+        damping = (_DAMPING * values[0]) ** 2
+        return ratio, values[9] ** 2 / (values[9] ** 2 + damping), resolved
+
+    def test_the_step_is_the_levenberg_marquardt_step_on_every_path(self):
+        """Just under the floor (sigma = 1e-12, floor 2e-11) the filter is
+        2.5e-3: measured 2.8e-3 on the sparse path, sigma_max being estimated
+        from below. lsmr, the fallback, is damped by the same floor and drops
+        the direction outright."""
+        solver = _tanh_problem()[0]
+        jacobian, residual, _ = self._mixed(1.0e-12, 1.0)
+
+        def refuse(_matrix):
+            message = "Factor is exactly singular"
+            raise RuntimeError(message)
+
+        for path in ("sparse", "lsmr"):
+            with self.subTest(path=path), warnings.catch_warnings():
+                warnings.simplefilter("ignore", RuntimeWarning)
+                if path == "lsmr":
+                    with mock.patch.object(connecting_orbit, "_factor", refuse):
+                        ratio, expected, resolved = self._filtered(
+                            solver,
+                            jacobian,
+                            residual,
+                        )
+                else:
+                    ratio, expected, resolved = self._filtered(
+                        solver,
+                        jacobian,
+                        residual,
+                    )
+                assert not resolved
+                if path == "lsmr":
+                    # lsmr stops once the damped residual is converged, before
+                    # resolving a direction this weak: measured 7e-24.
+                    assert abs(ratio) <= 1.25 * expected
+                    continue
+                # Same sign as Gauss-Newton, and the filter's size to 25%.
+                assert ratio == pytest.approx(expected, rel=0.25)
+
+    def test_lsmr_reports_rank_from_its_condition_estimate(self):
+        """With no sigma_min estimate, lsmr's estimate of cond(J) decides."""
+        solver = _tanh_problem()[0]
+
+        def refuse(_matrix):
+            message = "Factor is exactly singular"
+            raise RuntimeError(message)
+
+        for smallest, full_rank in ((1.0e-3, True), (1.0e-12, False)):
+            jacobian, residual, _ = self._mixed(smallest, 1.0)
+            with (
+                self.subTest(sigma=smallest),
+                mock.patch.object(connecting_orbit, "_factor", refuse),
+                warnings.catch_warnings(),
+            ):
+                warnings.simplefilter("ignore", RuntimeWarning)
+                _, resolved = solver._newton_step(jacobian, residual)  # noqa: SLF001
+                assert resolved == full_rank
+
+    def test_an_exactly_singular_estimate_is_a_rank_deficiency(self):
+        """A factorisation too singular for the sigma_min estimate is reported
+        rank-deficient, and the damped solve still takes the step."""
+        solver = _tanh_problem()[0]
+        jacobian, residual, _ = self._mixed(1.0e-3, 1.0)
+
+        def refuse(_jacobian):
+            message = "Factor is exactly singular"
+            raise RuntimeError(message)
+
+        with (
+            mock.patch.object(connecting_orbit, "_smallest_singular_value", refuse),
+            self.assertWarnsRegex(RuntimeWarning, "minimum-norm"),
+        ):
+            step, resolved = solver._newton_step(jacobian, residual)  # noqa: SLF001
+        assert not resolved
+        exact = -np.linalg.pinv(jacobian.toarray()) @ residual
+        np.testing.assert_allclose(step, exact, rtol=1e-6)
 
     def test_a_solve_whose_steps_are_rank_deficient_is_certified_only_by_residual(
         self,

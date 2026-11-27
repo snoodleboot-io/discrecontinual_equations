@@ -752,7 +752,12 @@ direction with `sigma > 1e-11 |J|_F` is refused when the residual lies along
 that direction. A residual mostly in other directions raises the limit by
 `(|J|_F |dx| + |r|) / |r_t|`, with `r_t` the residual's part along it, so such
 a truncation can still be certified. Below the limit, the defect is smaller
-than the rounding in forming `J dx`, and no normal-equation test can see it. Any other outcome raises
+than the rounding in forming `J dx`, and no normal-equation test can see it.
+So every step also reports its rank (DEQ-180): the dense fallback reports how
+many singular values `lstsq` kept, and the sparse step whether its estimate of
+`sigma_min` exceeds `1e-8 sigma_max`. A step computed without full rank never
+certifies convergence, whatever its defect; such an iterate is converged only
+if its residual is below `1e-9`. Any other outcome raises
 `NotConvergedError`, which carries the best iterate for diagnosis.
 
 Converged is not the same as *a trajectory*. Every returned `OrbitSolution`
@@ -800,15 +805,21 @@ else:
 
 **Limits.**
 
-- A connection that is not isolated, such as one in a family, is refused rather
-  than solved. The full-space solve on those Kirk-Silber edges is refused in this
-  way. `HeteroclinicNetwork.solve` solves the connection inside its invariant
-  subspace instead, and records the full-space refusal on
-  `ConnectionOrbit.full_space.converged`.
-- Measured but not adopted: lsmr steps, and Levenberg-Marquardt, do converge on
-  those edges. They converge to a *different* member of the family, 0.025 to 0.16
-  off the plane. A damped Gauss-Newton step (Armijo backtracking, smallest step
-  `1e-3` as in COLNEW) stalls without converging.
+- A connection that is not isolated, such as one in a family, has a Newton
+  matrix singular along the family. Every step is the Levenberg-Marquardt step
+  with the fixed damping `(1e-11 sigma_max)^2`, which there is the minimum-norm
+  step (DEQ-175; [More1978](../references.md), eq. (2.4)). The full-space solve
+  on those Kirk-Silber edges converges, on every OpenBLAS kernel tried, to a
+  *different* member of the family, 0.025 to 0.16 off the plane, a trajectory
+  to rounding. `HeteroclinicNetwork.solve` solves the connection inside its
+  invariant subspace, and records the full-space member on
+  `ConnectionOrbit.full_space`. A connection that does not exist, such as
+  xi3 -> xi2 there, is still refused.
+- The damping is a fixed floor, not a trust region: a nearly singular but
+  isolated problem (`sigma_min` between `1e-11` and `1e-8 sigma_max`) still
+  takes its long Gauss-Newton step, and such steps are not certified.
+- Measured but not adopted: a damped Gauss-Newton step (Armijo backtracking,
+  smallest step `1e-3` as in COLNEW) stalls without converging on those edges.
 - A phase condition placed where the pinned coordinate is stationary fixes the time
   shift only to second order. An example is pinning `x` at its peak. Gauss-Newton
   then wanders along the shift and is refused, so pin a coordinate where it is
@@ -819,7 +830,8 @@ else:
   their collocation residual as `point.residual`.
 
 References: [Doedel2007](../references.md) (AUTO-07p manual, `EPSU`, `ITNW`);
-[Bader1987](../references.md) (COLNEW, subroutine `CONTRL`).
+[Bader1987](../references.md) (COLNEW, subroutine `CONTRL`);
+[More1978](../references.md) (the damped step and its minimum-norm limit).
 
 ### Continuing a homoclinic curve, and where it stops (DEQ-112)
 

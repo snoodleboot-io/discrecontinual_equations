@@ -122,7 +122,7 @@ def _homoclinic_problem():
 
 
 def _pinv_gauss_newton(solver, seed: np.ndarray, times: np.ndarray) -> np.ndarray:
-    """Gauss-Newton with the dense SVD pseudo-inverse: the reference, not the solver's step.
+    """Gauss-Newton with the dense SVD pseudo-inverse, not the solver's step.
 
     Directions below 1e-10 sigma_max are dropped; the Newton matrices of the
     xi2 edges have one singular value at 1e-18 to 7e-17 of sigma_max and the
@@ -142,7 +142,8 @@ def _pinv_gauss_newton(solver, seed: np.ndarray, times: np.ndarray) -> np.ndarra
         ).toarray()
         left, values, right = np.linalg.svd(jacobian, full_matrices=False)
         kept = values > 1.0e-10 * values[0]
-        unknowns = unknowns - right[kept].T @ ((left[:, kept].T @ residual) / values[kept])
+        coefficients = (left[:, kept].T @ residual) / values[kept]
+        unknowns = unknowns - right[kept].T @ coefficients
     return unknowns.reshape(seed.shape)
 
 

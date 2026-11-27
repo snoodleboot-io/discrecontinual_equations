@@ -435,7 +435,10 @@ class ConnectingOrbit(ABC):
         below ``_DEFAULT_TOLERANCE``, or the Gauss-Newton correction computed
         there is below ``_CORRECTION_TOLERANCE`` relative to ``1 + |x|`` in every
         component - a stationary point of the least squares, which a system with
-        no exact solution stops at. This is the test of AUTO (EPSU) and COLNEW;
+        no exact solution stops at. The correction certifies only a step
+        computed at full numerical rank (DEQ-180); see :meth:`_newton_step`,
+        whose minimum-norm step is what lets a connection that is one of a
+        family converge at all (DEQ-175). This is the test of AUTO (EPSU) and COLNEW;
         neither returns an iterate that fails it, and neither does this. Where
         Gauss-Newton diverges the best iterate is often the seed itself, and
         returning it unannounced was how a non-trajectory with an estimate of
@@ -464,7 +467,10 @@ class ConnectingOrbit(ABC):
             boundary value ODE solver", SIAM J. Sci. Stat. Comput. 8(4), 483-500,
             1987, DOI 10.1137/0908047; COLNEW subroutine ``CONTRL``: convergence is
             ``|dz_i| <= tol (|z_i| + 1)``, failure returns ``IFLAG = -2``.
-            See docs/references.md, ``Doedel2007`` and ``Bader1987``.
+            J. J. Moré, "The Levenberg-Marquardt algorithm: implementation and
+            theory", Lecture Notes in Mathematics 630, Springer, 1978, 105-116,
+            DOI 10.1007/BFb0067700, eq. (2.4): the step (see :meth:`_newton_step`).
+            See docs/references.md, ``Doedel2007``, ``Bader1987``, ``More1978``.
         """
         nodes = self._mesh.intervals + 1
         times = np.linspace(-self._mesh.half_length, self._mesh.half_length, nodes)
@@ -521,8 +527,10 @@ class ConnectingOrbit(ABC):
             f"correction {best_correction:.3g} of the state's scale (converged "
             f"means below {_DEFAULT_TOLERANCE:g} or {_CORRECTION_TOLERANCE:g}); "
             f"its collocation residual reaches {measured.worst:.3g} "
-            f"times what the mesh allows. A Newton matrix that is nearly singular "
-            f"there - a connection that is not isolated - is one cause"
+            f"times what the mesh allows. A seed too far from any connection, or "
+            f"a connection that does not exist, is the usual cause. A correction "
+            f"of inf means the step there could not be trusted: computed without "
+            f"full rank, or failing the normal equations"
         )
         raise NotConvergedError(
             message,

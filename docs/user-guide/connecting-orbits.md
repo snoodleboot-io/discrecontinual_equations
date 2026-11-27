@@ -60,6 +60,85 @@ The equations are discretised by the trapezoidal rule. They are solved by
 Gauss–Newton, with a sparse bordered block-banded Jacobian, so each iteration
 costs time and memory linear in the number of mesh nodes.
 
+**Connections that come in a family (DEQ-175).** If the source's unstable
+manifold meets the target's stable manifold in more than one orbit, the
+connections form a family and none of them is isolated. The Newton matrix $J$
+is then singular along the family. On the sheared Kirk–Silber edges leaving
+$\xi_2$ the smallest singular value is $10^{-18}$ to $7 \times 10^{-17}$ of the
+largest, and the next one is $8 \times 10^{-3}$. A plain Gauss–Newton step
+divides rounding by rounding along the family: it came out 10 to 95 long,
+different on every BLAS kernel, and the solve diverged.
+
+Every step is therefore a Levenberg–Marquardt step with a fixed, tiny damping
+$\lambda = (10^{-11}\sigma_{\max})^2$:
+
+$$
+\Delta x = -(J^\top J + \lambda I)^{-1} J^\top r .
+$$
+
+In the singular basis this multiplies each Gauss–Newton component by
+$\sigma^2/(\sigma^2 + \lambda)$. Directions far above the floor keep their
+Gauss–Newton step, changed by at most $(10^{-11}\operatorname{cond} J)^2$.
+Directions far below it are dropped. As $\lambda \to 0^+$ the step tends to the
+minimum-norm step $-J^+ r$ (Moré 1978, eq. (2.4)), which moves only across the
+family. On the Kirk–Silber edges the residual then falls quadratically, from
+0.59 to $10^{-15}$ in seven steps. The result matches Gauss–Newton with a dense
+SVD pseudo-inverse to $10^{-12}$, and it is the same on every OpenBLAS kernel
+tried. The member found lies 0.025 and 0.16 off the invariant plane: a genuine
+connection, but not the one in the plane. `HeteroclinicNetwork.solve` finds that
+one by solving inside the plane.
+
+A step computed without full numerical rank ($\sigma_{\min} \le 10^{-8}\sigma_{\max}$,
+or `lstsq` keeping fewer singular values than columns) is not the Gauss–Newton
+step along the directions it dropped. Its size therefore never certifies
+convergence (DEQ-180). Such a solve is converged only if its residual is below
+$10^{-9}$.
+
+```python
+import numpy as np
+from discrecontinual_equations.continuation import (
+    HeteroclinicOrbit, MeshSpec, Terminus,
+)
+from discrecontinual_equations.function.deterministic import DeterministicFunction
+from discrecontinual_equations.variable import Variable
+
+
+class Decoupled(DeterministicFunction):
+    """A heteroclinic double well beside an uncoupled neutral direction z' = 0.
+
+    Every plane z = c holds a connection, so they form a one-parameter family.
+    """
+
+    def eval(self, point, time=None):
+        x, y, z = point
+        return [y, -x + x**3, 0.0]
+
+
+field = Decoupled(variables=[Variable()] * 3, parameters=[],
+                  results=[Variable()] * 3, time=None)
+
+
+def jacobian(x):
+    return np.array([[0.0, 1.0, 0.0], [-1.0 + 3.0 * x * x, 0.0, 0.0], [0.0, 0.0, 0.0]])
+
+
+orbit = HeteroclinicOrbit(
+    field,
+    Terminus(np.array([-1.0, 0.0, 0.0]), jacobian(-1.0)),
+    Terminus(np.array([1.0, 0.0, 0.0]), jacobian(1.0)),
+    MeshSpec(half_length=8.0, intervals=200),
+)
+times = np.linspace(-8.0, 8.0, 201)
+seed = np.column_stack([np.tanh(times / 2), 0 * times, 0.3 + 0 * times])
+# z' = 0 makes the Newton matrix exactly singular: a RuntimeWarning says so,
+# and each step is the minimum-norm one, which never moves z.
+solution = orbit.solve(seed)
+assert solution.residual.is_trajectory
+print("z of the member found:", solution.states[100, 2])
+```
+
+References: [More1978](../references.md).
+
 **Two errors, measured separately.** The truncation to $[-T, T]$ costs
 $O(e^{-2\lambda T})$, where $\lambda$ is the weakest eigenvalue magnitude involved
 (Beyn 1990; Doedel et al. 2008 give $C e^{-2\min(\mu_-|\tau_-|, \mu_+|\tau_+|)}$).
@@ -137,12 +216,15 @@ Jacobian, and works the same way.
 
 **Limits.**
 
-- `solve` returns its best iterate whatever happens. The residual of the
-  overdetermined least-squares system is not zero at the solution, so neither
-  the residual nor a failure flag tells you whether the orbit is right. Check
-  with `estimate_orbit_error`. When Gauss–Newton diverges on a near-singular
-  Jacobian, the returned "orbit" can be the seed, unchanged. A refusal for that
-  case is being added (DEQ-120).
+- `solve` returns only a converged iterate and raises `NotConvergedError`
+  otherwise (DEQ-120). Converged is not the same as a trajectory: the residual
+  of the overdetermined least-squares system is not zero at the solution, so
+  check `solution.residual.is_trajectory` and `estimate_orbit_error`.
+- A connection that is one of a family is not isolated, and the Newton matrix
+  is singular along the family. Each step is then the minimum-norm one, so
+  the solve converges to *some* member of the family, the one Gauss–Newton
+  with the pseudo-inverse reaches from your seed, not necessarily the one you
+  meant (DEQ-175, below).
 - `intervals` must be even. The phase condition pins the centre node.
 - The seed must be close enough for Gauss–Newton to converge. Shooting (section 2)
   or a nearby solved orbit is the usual source.
