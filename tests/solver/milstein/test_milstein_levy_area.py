@@ -415,8 +415,15 @@ class TestCommutingCaseUnchanged:
         np.testing.assert_allclose(values, before, rtol=1.0e-10, atol=0.0)
 
 
+# How far a value recorded on one machine may be from the same run on another
+# whose vectorised cos rounds an ulp differently: a central difference turns that
+# ulp of b into eps |b| / h, some 4e-11, of a slope (DEQ-118).
+_RECORDED = 1.0e-10
+
+
 # Recorded again at DEQ-118, whose relative slope step moved every value by at
-# most 1.2e-11 relative (against _DEFAULT_HEX_BEFORE_DEQ118 below).
+# most 1.2e-11 relative (against _DEFAULT_HEX_BEFORE_DEQ118 below). Held to
+# _RECORDED, not to the bit: the cross case differences cos.
 _DEFAULT_HEX = {
     ("iterated", "generator"): [
         "-0x1.38c20203854a6p+0",
@@ -464,10 +471,10 @@ class TestLevyAreaAccuracy:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             solver.solve(_equation(function_type[noise]), [0.3, -0.2])
-        final = [float(r.discretization[-1]).hex() for r in solver.solution.results]
-        assert final == _DEFAULT_HEX[(noise, source)]
+        values = [float(r.discretization[-1]) for r in solver.solution.results]
+        recorded = [float.fromhex(h) for h in _DEFAULT_HEX[(noise, source)]]
+        np.testing.assert_allclose(values, recorded, rtol=_RECORDED, atol=0.0)
         before = [float.fromhex(h) for h in _DEFAULT_HEX_BEFORE_DEQ118[(noise, source)]]
-        values = [float.fromhex(h) for h in final]
         np.testing.assert_allclose(values, before, rtol=1.0e-10, atol=0.0)
 
     @pytest.mark.parametrize("accuracy", [1.0, 0.05])

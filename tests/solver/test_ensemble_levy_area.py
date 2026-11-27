@@ -17,7 +17,6 @@ Three yardsticks, DEQ-65's.
   in both calculi and from each kind of source.
 """
 
-import hashlib
 import warnings
 
 import numpy as np
@@ -63,6 +62,9 @@ from tests.solver.milstein.test_milstein_levy_area import (
 
 _STEP = 2.0**-5
 _RESOLUTION = 2.0**-8
+# How far a value recorded on one machine may be from the same run on another
+# whose vectorised transcendentals round differently (DEQ-118 verification).
+_RECORDED = 1.0e-10
 _START = [0.3, -0.2]
 # Relative: einsum and the per-path products may round once differently a step.
 _ROUNDING = 1.0e-12
@@ -353,46 +355,157 @@ class TestStrongOrderOnNonCommutingNoise:
         assert milstein[_STEPS[-1]] < 0.3 * euler[_STEPS[-1]], (milstein, euler)
 
 
-# sha256 of the final (4, n) states of a commuting Milstein ensemble, recorded
-# again at DEQ-118, whose relative slope step moved every state by at most 1.3e-11
-# relative (against _COMMUTING_BEFORE_DEQ118 below).
+# The final (4, n) states of a commuting Milstein ensemble, recorded again at
+# DEQ-118, whose relative slope step moved every state by at most 1.3e-11
+# relative (against _COMMUTING_BEFORE_DEQ118 below). Held to _RECORDED, not to
+# the bit: the diagonal cases difference 0.3 sin x + 0.2 x, and a vectorised
+# sin that rounds one ulp differently on another CPU moves a slope by about
+# eps |b| / h, some 4e-11 relative.
 _COMMUTING_BEFORE = {
-    ("conformal", "ito", "generator"): (
-        "a3973adef952936c939b65419251894225b687bf79fd8da5a7192ba040197038"
-    ),
-    ("conformal", "ito", "path"): (
-        "34c1e8c6a37a403b82fe017050a52d78ad504ac46c1117b57ff42076141d4409"
-    ),
-    ("conformal", "ito", "gaussian"): (
-        "3973ffd189596753bd230b9194d3b2368e53224967307a917226720ba65a9917"
-    ),
-    ("conformal", "stratonovich", "generator"): (
-        "a3973adef952936c939b65419251894225b687bf79fd8da5a7192ba040197038"
-    ),
-    ("conformal", "stratonovich", "path"): (
-        "34c1e8c6a37a403b82fe017050a52d78ad504ac46c1117b57ff42076141d4409"
-    ),
-    ("conformal", "stratonovich", "gaussian"): (
-        "3973ffd189596753bd230b9194d3b2368e53224967307a917226720ba65a9917"
-    ),
-    ("diagonal", "ito", "generator"): (
-        "3c01d7a93b50ad07a37f35d9e4d9722250fe08bd1d9e95e5a3bd6c9fd43cecf7"
-    ),
-    ("diagonal", "ito", "path"): (
-        "10ac3f1eae3bd635c522d64e7e9eaf1681ef5a33bc66d24ba2661072c9de19c6"
-    ),
-    ("diagonal", "ito", "gaussian"): (
-        "f2e47b7e6500b84dcae426ba0b97920abde857eba67da8869994c120f5401411"
-    ),
-    ("diagonal", "stratonovich", "generator"): (
-        "1bf4f88b84dc8675107a40c253af72bed9c9fc473225eb2fba3ac94b880529ba"
-    ),
-    ("diagonal", "stratonovich", "path"): (
-        "b9721a6a659e3283b18bcae0ea447b9e704cfca21b0ab4f92a7a20f598e6ba48"
-    ),
-    ("diagonal", "stratonovich", "gaussian"): (
-        "691ac086d5470a26c78b3f4342bcbc2f4290c68522fd59a671dc114234443e70"
-    ),
+    ("conformal", "ito", "generator"): [
+        "0x1.ee5cb6142b7c2p+0",
+        "0x1.0237cadd813cbp+0",
+        "0x1.99e441cecc7bep+0",
+        "0x1.44ed15775396fp-1",
+        "0x1.50a096ee9e6f0p+0",
+        "0x1.8138a361781e2p-2",
+        "0x1.5f40cd452969bp-1",
+        "-0x1.a7cd283aa9f7fp-3",
+    ],
+    ("conformal", "ito", "path"): [
+        "0x1.c0705aeb52c20p-1",
+        "0x1.641452325f262p-3",
+        "0x1.c0705aeb52c20p-1",
+        "0x1.641452325f262p-3",
+        "0x1.c0705aeb52c20p-1",
+        "0x1.641452325f262p-3",
+        "0x1.c0705aeb52c20p-1",
+        "0x1.641452325f262p-3",
+    ],
+    ("conformal", "ito", "gaussian"): [
+        "0x1.179fbf2176ff6p+0",
+        "0x1.0a08333358630p-1",
+        "0x1.89b08d71362e8p+0",
+        "0x1.ba391f3de43bbp-2",
+        "0x1.9bfa90d434a18p-1",
+        "0x1.3dec179a47dbcp-1",
+        "0x1.d2ffb148f420ep+0",
+        "0x1.d634de4a4bd0cp-1",
+    ],
+    ("conformal", "stratonovich", "generator"): [
+        "0x1.ee5cb6142b7c2p+0",
+        "0x1.0237cadd813cbp+0",
+        "0x1.99e441cecc7bep+0",
+        "0x1.44ed15775396fp-1",
+        "0x1.50a096ee9e6f0p+0",
+        "0x1.8138a361781e2p-2",
+        "0x1.5f40cd452969bp-1",
+        "-0x1.a7cd283aa9f7fp-3",
+    ],
+    ("conformal", "stratonovich", "path"): [
+        "0x1.c0705aeb52c20p-1",
+        "0x1.641452325f262p-3",
+        "0x1.c0705aeb52c20p-1",
+        "0x1.641452325f262p-3",
+        "0x1.c0705aeb52c20p-1",
+        "0x1.641452325f262p-3",
+        "0x1.c0705aeb52c20p-1",
+        "0x1.641452325f262p-3",
+    ],
+    ("conformal", "stratonovich", "gaussian"): [
+        "0x1.179fbf2176ff6p+0",
+        "0x1.0a08333358630p-1",
+        "0x1.89b08d71362e8p+0",
+        "0x1.ba391f3de43bbp-2",
+        "0x1.9bfa90d434a18p-1",
+        "0x1.3dec179a47dbcp-1",
+        "0x1.d2ffb148f420ep+0",
+        "0x1.d634de4a4bd0cp-1",
+    ],
+    ("diagonal", "ito", "generator"): [
+        "0x1.cfa8d8ab3bb55p-2",
+        "0x1.cf1f451818b00p-2",
+        "0x1.58a82b6904815p-1",
+        "0x1.cd09b1dedef75p-3",
+        "0x1.395b8501f1379p-1",
+        "0x1.6670015e09b17p-1",
+        "0x1.8dfe3eb419c8ap-2",
+        "0x1.25e64159b25a9p-1",
+        "0x1.0b1b7483906ecp+0",
+        "0x1.0ccf8baa05c45p-2",
+        "0x1.e744e810ddc66p-3",
+        "0x1.ae9fb39edeec4p-1",
+    ],
+    ("diagonal", "ito", "path"): [
+        "0x1.de98adc71e732p-3",
+        "0x1.0b70159a0dd49p-1",
+        "0x1.e8f54307fa79ep-1",
+        "0x1.de98adc71e732p-3",
+        "0x1.0b70159a0dd49p-1",
+        "0x1.e8f54307fa79ep-1",
+        "0x1.de98adc71e732p-3",
+        "0x1.0b70159a0dd49p-1",
+        "0x1.e8f54307fa79ep-1",
+        "0x1.de98adc71e732p-3",
+        "0x1.0b70159a0dd49p-1",
+        "0x1.e8f54307fa79ep-1",
+    ],
+    ("diagonal", "ito", "gaussian"): [
+        "0x1.74d309351e44fp-3",
+        "0x1.0c642bf37aa6dp-1",
+        "0x1.0a204e0c26d6fp+0",
+        "0x1.4c7f9500c43e6p-2",
+        "0x1.1c8e856529860p-1",
+        "0x1.e266b94d22529p-1",
+        "0x1.fa230489e75bep-2",
+        "0x1.3dd35f10c7cebp-1",
+        "0x1.e3c7f2bb5f319p-2",
+        "0x1.3dfb8da4066c6p-2",
+        "0x1.c750129159961p-2",
+        "0x1.f7b841c0f53f3p-1",
+    ],
+    ("diagonal", "stratonovich", "generator"): [
+        "0x1.eb16040e0f143p-2",
+        "0x1.e7b51049efa1bp-2",
+        "0x1.67370be597d0ep-1",
+        "0x1.eb531e7676420p-3",
+        "0x1.48d80eadbcef1p-1",
+        "0x1.75a1cc3cc294cp-1",
+        "0x1.a612aa0f96120p-2",
+        "0x1.3507da3b7ba54p-1",
+        "0x1.13bcaf79de9bfp+0",
+        "0x1.1d6f8e6ba21bap-2",
+        "0x1.0232cffd54ebfp-2",
+        "0x1.c0b54e03924cep-1",
+    ],
+    ("diagonal", "stratonovich", "path"): [
+        "0x1.fd74a5b8b1e6cp-3",
+        "0x1.195b25f3df834p-1",
+        "0x1.fbb221e8e3bbbp-1",
+        "0x1.fd74a5b8b1e6cp-3",
+        "0x1.195b25f3df834p-1",
+        "0x1.fbb221e8e3bbbp-1",
+        "0x1.fd74a5b8b1e6cp-3",
+        "0x1.195b25f3df834p-1",
+        "0x1.fbb221e8e3bbbp-1",
+        "0x1.fd74a5b8b1e6cp-3",
+        "0x1.195b25f3df834p-1",
+        "0x1.fbb221e8e3bbbp-1",
+    ],
+    ("diagonal", "stratonovich", "gaussian"): [
+        "0x1.8d4fdf5affbf0p-3",
+        "0x1.1a8d7aeb7f12cp-1",
+        "0x1.1243d34d70c46p+0",
+        "0x1.611ffd20b8666p-2",
+        "0x1.298901489a4f8p-1",
+        "0x1.f3a1b725a80bcp-1",
+        "0x1.0b9aa8da8d212p-1",
+        "0x1.4e129b10d9727p-1",
+        "0x1.f9753aee63a88p-2",
+        "0x1.51e8094067c8ep-2",
+        "0x1.dfa324aac20f0p-2",
+        "0x1.03887804ff274p+0",
+    ],
 }
 
 
@@ -563,7 +676,7 @@ def _commuting(noise):
 @pytest.mark.parametrize("noise", ["conformal", "diagonal", "matrix", "declared"])
 def test_commuting_ensembles_keep_their_bits(noise, calculus, source):
     # Arrange: diagonal noise as a vector, as the matrix diag(b), and declared
-    # all recorded the same bits; each is held to them.
+    # all recorded the same values; each is held to them, to _RECORDED.
     equation, start, channels = _commuting(noise)
     wiener = {
         "generator": None,
@@ -589,8 +702,10 @@ def test_commuting_ensembles_keep_their_bits(noise, calculus, source):
 
     # Assert
     recorded = "conformal" if noise == "conformal" else "diagonal"
-    digest = hashlib.sha256(final.tobytes()).hexdigest()
-    assert digest == _COMMUTING_BEFORE[(recorded, calculus, source)]
+    recorded_values = [
+        float.fromhex(h) for h in _COMMUTING_BEFORE[(recorded, calculus, source)]
+    ]
+    np.testing.assert_allclose(final.ravel(), recorded_values, rtol=_RECORDED, atol=0.0)
     before = [
         float.fromhex(h) for h in _COMMUTING_BEFORE_DEQ118[(recorded, calculus, source)]
     ]

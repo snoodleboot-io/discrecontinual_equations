@@ -52,6 +52,10 @@ _WEAK = 1.0e-8
 _DIFFERENCES = 1.0e-8
 # How far DEQ-118's relative slope step may move a seeded path at ordinary scale.
 _SLOPE_STEP_CHANGE = 1.0e-10
+# How far a value recorded on one machine may be from the same run on another
+# whose vectorised sin and cos round an ulp differently: the central difference
+# turns that ulp of b into eps |b| / h, some 4e-11, of a slope (DEQ-118).
+_RECORDED = 1.0e-10
 
 
 def _b(x):
@@ -326,7 +330,8 @@ def test_the_step_is_kloeden_and_platens_diagonal_scheme(calculus):
 
 
 # Recorded again at DEQ-118, whose relative slope step moved every value by at
-# most 7e-12 relative (against _BEFORE_DEQ118 below): the DEQ-48 step, bit for bit.
+# most 7e-12 relative (against _BEFORE_DEQ118 below): the DEQ-48 step, to
+# _RECORDED, since b is 0.3 sin x + 0.2 x and sin is not correctly rounded.
 _BEFORE = {
     ("ito", "generator", "diagonal"): [
         "0x1.f33c6ab7bcb8cp-3",
@@ -408,7 +413,8 @@ def test_the_bits_of_before_are_kept(calculus, source, noise):
     )
 
     # Assert
-    assert [float(value).hex() for value in final] == _BEFORE[(calculus, source, noise)]
+    recorded = [float.fromhex(h) for h in _BEFORE[(calculus, source, noise)]]
+    np.testing.assert_allclose(final, recorded, rtol=_RECORDED, atol=0.0)
     before = [float.fromhex(h) for h in _BEFORE_DEQ118[(calculus, source, noise)]]
     np.testing.assert_allclose(final, before, rtol=_SLOPE_STEP_CHANGE, atol=0.0)
 
