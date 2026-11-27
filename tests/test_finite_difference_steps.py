@@ -26,6 +26,7 @@ from discrecontinual_equations.continuation.derivative_provider import (
 )
 from discrecontinual_equations.continuation.jacobian import FiniteDifferenceJacobian
 from discrecontinual_equations.continuation.residual import ResidualFunction
+from discrecontinual_equations.continuation.sparsity import SparsityPattern
 from discrecontinual_equations.differential_equation import DifferentialEquation
 from discrecontinual_equations.finite_difference import (
     CENTRAL_STEP,
@@ -575,3 +576,63 @@ class TestDirectionalStep:
         assert step == 1.0e-6
         step = FiniteDifferenceDerivatives(1.0e-6).step(point, np.array([0.0, 2.0]))
         assert step == pytest.approx(1.0e-6 * 4.0e12, rel=1.0e-15)
+
+
+def _separable(scales, point):
+    """``f_i = s_i (u_i^3 + u_i^2)``: row ``i`` reads ``x_i`` alone."""
+    return [
+        s * ((x / s) ** 3 + (x / s) ** 2) for x, s in zip(point, scales, strict=True)
+    ]
+
+
+class _SeparableResidual(ResidualFunction):
+    def __init__(self, scales) -> None:
+        self.scales = scales
+
+    def evaluate(self, state: np.ndarray, parameter: float) -> np.ndarray:
+        del parameter
+        return np.array(_separable(self.scales, list(state)), dtype=float)
+
+
+class _SeparableField(_Field):
+    def eval(self, point, time=None):  # noqa: ARG002 (base signature)
+        return _separable(self.scales, point)
+
+
+@pytest.mark.parametrize(("scales", "typical"), _CASES)
+class TestGroupedColumns:
+    """Curtis-Powell-Reid groups move each column by its own step."""
+
+    _ROWS = [[0], [1], [2]]
+
+    def test_continuation_jacobian(self, scales, typical):
+        dense = FiniteDifferenceJacobian(
+            _SeparableResidual(scales),
+            CENTRAL_STEP,
+            **_typical(scales, typical),
+        )
+        grouped = FiniteDifferenceJacobian(
+            _SeparableResidual(scales),
+            CENTRAL_STEP,
+            sparsity=self._ROWS,
+            **_typical(scales, typical),
+        )
+        state = _state(scales)
+        expected = dense.state_jacobian(state, 0.0)
+        assert np.array_equal(grouped.state_jacobian(state, 0.0), expected)
+        slopes = _separable_slopes(scales, state)
+        error = np.abs(np.diag(expected) - slopes)
+        assert np.all(error <= _separable_allowance(scales, state, CENTRAL_STEP))
+
+    def test_derivative_fallback(self, scales, typical):
+        provider = FiniteDifferenceDerivatives(
+            CENTRAL_STEP,
+            **_typical(scales, typical),
+        )
+        field = _SeparableField.make(scales)
+        state = _state(scales)
+        pattern = SparsityPattern.from_rows(self._ROWS, 3)
+        dense = provider.jacobian(field, state, 0.0)
+        assert np.array_equal(provider.jacobian(field, state, 0.0, pattern), dense)
+        error = np.abs(np.diag(dense) - _separable_slopes(scales, state))
+        assert np.all(error <= _separable_allowance(scales, state, CENTRAL_STEP))
