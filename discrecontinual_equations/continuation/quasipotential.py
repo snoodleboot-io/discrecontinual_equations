@@ -1784,10 +1784,10 @@ def _curved_triangle(own, other, bend, edge, reach, midpoints):  # noqa: PLR0913
 
     ``U(x_s) = U0 + s dU + c s (s - 1)`` in place of the straight line, and
     ``f`` and ``A`` in ``Q`` linear in ``s`` between the two end midpoints, as
-    Dahiya and Cameron take them (arXiv 1706.07509, Eqs. (15), (B-7)). The
+    Dahiya and Cameron take them (arXiv 1806.05321, Eqs. (21), (22)). The
     minimum of ``F(s) = U(x_s) + Q(x_s, x)`` is where ``F'(s) = 0``, with
     ``F'`` the exact derivative of that ``F`` (:func:`_base_slope`), the change
-    of ``f`` and ``A`` along the base included - their Eq. (B-8) - and its
+    of ``f`` and ``A`` along the base included - their Eq. (23) - and its
     root is found by :func:`_root_on_base`, a secant iteration safeguarded by
     bisection like the paper's hybrid solver, from the straight base's
     frozen-coefficient root. The value returned is the least of ``F`` at that
@@ -1833,7 +1833,8 @@ def _base_slope(rise, bend, edge, reach, base, fraction):  # noqa: PLR0913
     ``near + s (far - near)``. With ``d = reach - s edge``, ``a = |d|_A^2``,
     ``b = |f|_A^2`` and ``c = <d, f>_A``, all three depending on ``s`` through
     ``d``, ``f`` and ``A``, ``Q = sqrt(a b) - c`` and ``Q' = (a' b + a b') /
-    (2 sqrt(a b)) - c'`` - Dahiya and Cameron's Eq. (B-8) in the metric
+    (2 sqrt(a b)) - c'`` - Dahiya and Cameron's Eq. (23) (Physica D 2018,
+    arXiv 1806.05321), their Eq. (B-8) of arXiv 1706.07509 with a matrix
     ``A``. ``nan`` where ``Q`` is not differentiable: a vanishing ``f``, or
     ``A`` undefined beside a point where ``D`` vanishes.
     """
