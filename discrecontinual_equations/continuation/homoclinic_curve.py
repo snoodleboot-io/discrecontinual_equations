@@ -352,15 +352,30 @@ class HomoclinicCurve:
         sweep: float,
         counts: tuple[int, int] | None = None,
     ) -> np.ndarray:
+        """The collocation, equilibrium, projection and phase rows at ``unknowns``.
+
+        An iterate that has diverged - a non-finite saddle state or parameter, or
+        collocation rows that overflow - gives a residual of ``inf`` before the
+        saddle's eigenvalues are counted, so its norm is ``inf`` and the solve
+        returns ``None``. Counting the eigenvalues of a saddle that far from
+        converging would report lost hyperbolicity where the iteration merely
+        diverged; the count check (:class:`EigenvalueCountError`) applies only to
+        finite iterates.
+        """
         states = unknowns[: nodes * dimension].reshape(nodes, dimension)
         equilibrium = unknowns[nodes * dimension : nodes * dimension + dimension]
         continuation = float(unknowns[-1])
+        diverged = np.full(unknowns.size, np.inf)
+        if not (np.all(np.isfinite(equilibrium)) and np.isfinite(continuation)):
+            return diverged
         blocks = []
         for i in range(nodes - 1):
             step = times[i + 1] - times[i]
             here = self._field(states[i], continuation, sweep)
             ahead = self._field(states[i + 1], continuation, sweep)
             blocks.append(states[i + 1] - states[i] - 0.5 * step * (here + ahead))
+        if not all(np.all(np.isfinite(block)) for block in blocks):
+            return diverged
         blocks.append(
             self._tail(
                 states[0],
