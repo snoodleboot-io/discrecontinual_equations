@@ -138,10 +138,17 @@ class TestHomoclinicCurve(TestCase):
 class TestShilnikovContinuation(TestCase):
     """Two-parameter continuation of a saddle-focus homoclinic through a Belyakov point.
 
-    There is no closed-form oracle for a saddle-focus homoclinic locus, so this is
-    validated by convergent structural evidence: the located curve is smooth and
-    monotone, the equilibrium is a saddle-focus along it, and the saddle index
-    crosses one (the Belyakov transition from Shilnikov chaos to a tame homoclinic).
+    The jerk system ``x' = y, y' = z, z' = -a z - b y + x - x^2`` has a
+    saddle-focus at the origin: one unstable eigenvalue ``gamma`` and a stable
+    pair ``-rho +- i omega``. Its saddle index ``nu = rho / gamma`` crosses one -
+    the Belyakov transition from Shilnikov chaos (``nu < 1``) to a tame
+    homoclinic - on the curve between ``b = 0.85`` and ``b = 0.825``.
+
+    The curve is continued by the boundary-value problem (:class:`HomoclinicCurve`
+    with the saddle-focus projection rows), not by shooting: the shooter's return
+    gap jumps across zero near the curve (at ``b = 0.85`` within ``7e-5`` of it),
+    so bisection there lands on a jump (DEQ-174). Every traced point is checked
+    against :func:`_independent_gap`, which shares no code with the library.
     """
 
     def _jerk(self, a: float, b: float) -> TwoParameterJerkField:
@@ -155,45 +162,138 @@ class TestShilnikovContinuation(TestCase):
     def _jacobian(self, a: float, b: float) -> np.ndarray:
         return np.array([[0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [1.0, -b, -a]])
 
+    def _trace(self, a: float) -> list:
+        """The BVP curve over ``_BELYAKOV_SWEEP``, seeded at ``(a, 0.9)``."""
+        field = self._jerk(a, _BELYAKOV_SWEEP[0])
+        equation = DifferentialEquation(
+            variables=field.variables,
+            time=Time(),
+            parameters=field.parameters,
+            derivative=field,
+        )
+        mesh = MeshSpec(_BELYAKOV_HALF, _BELYAKOV_INTERVALS, 1, 0.0)
+        curve = HomoclinicCurve(equation, 0, 1, mesh)
+        seed = _manifold_seed(a, _BELYAKOV_SWEEP[0], mesh)
+        return curve.trace(_BELYAKOV_SWEEP, seed, np.zeros(3), a)
+
+    def _assert_one_curve_through_belyakov(self, points: list) -> None:
+        assert [point.sweep for point in points] == _BELYAKOV_SWEEP
+        located = [point.continuation for point in points]
+        # each point brackets the independent root within the pin, with the
+        # same orientation everywhere: one root, followed
+        for point in points:
+            a, b = point.continuation, point.sweep
+            assert _independent_gap(a - _BELYAKOV_PIN, b) < 0.0, (a, b)
+            assert _independent_gap(a + _BELYAKOV_PIN, b) > 0.0, (a, b)
+        # smooth, monotone locus: a increases as b decreases, at a slope that
+        # changes by less than 10% from one step to the next (measured: 0.2% to
+        # 4%; a jump to a neighbouring root 1e-2 away would change it by 30%)
+        slopes = [
+            (q.continuation - p.continuation) / (q.sweep - p.sweep)
+            for p, q in itertools.pairwise(points)
+        ]
+        assert all(slope < 0.0 for slope in slopes)
+        for earlier, later in itertools.pairwise(slopes):
+            assert abs(later / earlier - 1.0) < _BELYAKOV_SLOPE_CHANGE, slopes
+        # neighbouring orbits differ by a step's worth (0.11 to 0.15 per 0.025
+        # of b, measured), not by another loop round the saddle (order one)
+        for p, q in itertools.pairwise(points):
+            assert np.max(np.abs(q.orbit.states - p.orbit.states)) < 0.2
+        # every point is a genuine saddle-focus, and nu crosses one along it
+        for point in points:
+            focus = classify_saddle_focus(
+                self._jacobian(point.continuation, point.sweep),
+            )
+            assert focus is not None
+        top = classify_saddle_focus(self._jacobian(located[0], _BELYAKOV_SWEEP[0]))
+        bottom = classify_saddle_focus(
+            self._jacobian(located[-1], _BELYAKOV_SWEEP[-1]),
+        )
+        assert top.saddle_index < 1.0
+        assert bottom.saddle_index > 1.0
+
+    def test_the_bvp_follows_one_homoclinic_through_belyakov(self):
+        """Seeded at the independent root, the BVP traces all nine values."""
+        self._assert_one_curve_through_belyakov(self._trace(_BELYAKOV_SEED))
+
     @pytest.mark.slow
-    @pytest.mark.xfail(
-        raises=ValueError,
-        strict=True,
-        reason=(
-            "DEQ-135: after its first point (0.519), the old trace returned its "
-            "bracket's upper end at every step (0.589, ..., 0.799: +0.07 = "
-            "half_width each time), so this curve was never located. Followed "
-            "honestly, the branch leaves its window near a = 0.591, where six "
-            "of nine samples are NaN. "
-            "DEQ-161 replaces this test with one checked against an independent "
-            "reference."
-        ),
-    )
     def test_traces_saddle_focus_homoclinic_through_belyakov(self):
+        """Shooting seeds the curve; the boundary-value problem continues it.
+
+        Once ``xfail``: the old trace returned its bracket's upper end at every
+        step (DEQ-135), and followed honestly the shooter loses the curve near
+        ``a = 0.591`` (DEQ-174).
+        """
         shooter = HomoclinicShooting(
-            self._jerk(0.5, 0.9),
+            self._jerk(0.5, _BELYAKOV_SWEEP[0]),
             0,
             Departure(np.zeros(3), np.array([1.0, 0.0, 0.0])),
             ReturnSettings(dt=0.002, horizon=100.0, departure_radius=0.6),
         )
-        # The gap is NaN at 0.45 (horizon 100), which the old bisection
-        # followed silently (DEQ-135); +0.137 at 0.558 and -0.031 at 0.559.
-        seed = shooter.locate(0.558, 0.559)
-        curve = shooter.trace(1, [0.90, 0.85, 0.80, 0.75, 0.70], seed, 0.07)
-        controls = [b for b, _ in curve]
-        located = [a for _, a in curve]
-        assert controls == [0.90, 0.85, 0.80, 0.75, 0.70]
-        # smooth, monotone locus: a increases as b decreases
-        for earlier, later in itertools.pairwise(located):
-            assert later > earlier
-        # every point is a genuine saddle-focus
-        for b, a in curve:
-            assert classify_saddle_focus(self._jacobian(a, b)) is not None
-        # the saddle index crosses one along the curve: Shilnikov -> tame (Belyakov)
-        top = classify_saddle_focus(self._jacobian(located[0], controls[0]))
-        bottom = classify_saddle_focus(self._jacobian(located[-1], controls[-1]))
-        assert top.saddle_index < 1.0
-        assert bottom.saddle_index > 1.0
+        # -0.0149 at 0.519 and +0.0571 at 0.520 (horizon 100)
+        seed = shooter.locate(0.519, 0.520)
+        assert abs(seed - _BELYAKOV_SEED) < 1.0e-6
+        self._assert_one_curve_through_belyakov(self._trace(seed))
+
+    @pytest.mark.slow
+    def test_shooting_refuses_the_jump_next_to_the_curve(self):
+        """At ``b = 0.85`` the gap jumps from ``-0.0123`` to ``+0.0120`` at 0.59113.
+
+        That is ``7e-5`` from the curve (0.591061), and bisection converged on
+        it: the ``|gap|`` it left, ``1.2e-2``, is what refuses it now.
+        """
+        shooter = HomoclinicShooting(
+            self._jerk(0.5, 0.85),
+            0,
+            Departure(np.zeros(3), np.array([1.0, 0.0, 0.0])),
+            ReturnSettings(dt=0.002, horizon=100.0, departure_radius=0.6),
+        )
+        with pytest.raises(ValueError, match="jump of the gap") as caught:
+            shooter.locate(0.5911168, 0.5911368)
+        assert "0.5911" in str(caught.value)
+
+
+def _manifold_seed(a: float, b: float, mesh: MeshSpec) -> np.ndarray:
+    """The jerk system's unstable manifold at ``(a, b)``, on ``mesh``, by SciPy.
+
+    Started ``1e-9`` along the unstable eigenvector and integrated by DOP853, it
+    is shifted so the peak of ``x`` on its first excursion sits at ``t = 0``,
+    where the phase condition ``y = 0`` holds.
+    """
+    jacobian = np.array([[0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [1.0, -b, -a]])
+    values, vectors = np.linalg.eig(jacobian)
+    unstable = vectors[:, int(np.argmax(values.real))].real
+    unstable *= np.sign(unstable[0]) / np.linalg.norm(unstable)
+    solution = solve_ivp(
+        lambda _t, s: [s[1], s[2], -a * s[2] - b * s[1] + s[0] - s[0] * s[0]],
+        (0.0, 80.0),
+        1.0e-9 * unstable,
+        method="DOP853",
+        rtol=1.0e-12,
+        atol=1.0e-15,
+        dense_output=True,
+    )
+    times = np.linspace(0.0, 80.0, 80_001)
+    states = solution.sol(times)
+    departed = int(np.argmax(np.linalg.norm(states, axis=0) > 0.6))
+    falling = np.flatnonzero(np.diff(states[0, departed:]) < 0.0)
+    peak = times[departed + int(falling[0])]
+    nodes = np.linspace(-mesh.half_length, mesh.half_length, mesh.intervals + 1)
+    return solution.sol(nodes + peak).T
+
+
+# The traced curve: b from 0.9 down to 0.7, seeded at the independent root at
+# b = 0.9. The mesh is h = 0.05 on [-12, 12]; there the BVP's a lies 1.4e-4 to
+# 2.4e-4 below the independent root at every b (h^2 convergence: 7.5e-5 at
+# h = 0.025, 3.4e-5 at 0.0125; the rest is truncation, 2e-5 to 7e-5), so the pin
+# is twice the largest. Neighbouring roots of the shooter's gap lie 1e-2 apart.
+# outputs/verification/deq-172/belyakov_crosscheck.out (DEQ-174).
+_BELYAKOV_SWEEP = [0.9, 0.875, 0.85, 0.825, 0.8, 0.775, 0.75, 0.725, 0.7]
+_BELYAKOV_SEED = 0.5190497227
+_BELYAKOV_HALF = 12.0
+_BELYAKOV_INTERVALS = 480
+_BELYAKOV_PIN = 5.0e-4
+_BELYAKOV_SLOPE_CHANGE = 0.1
 
 
 # The primary homoclinic of the jerk system near a = 0.465, computed without the
@@ -206,46 +306,66 @@ _SHILNIKOV_HOMOCLINIC = 0.465109935777
 _LOCATE_TOLERANCE = 1.0e-8
 
 
-def _independent_homoclinic(offset: float = 1.0e-7, rtol: float = 1.0e-12) -> float:
-    """The jerk system's homoclinic parameter in [0.465, 0.4675], by SciPy alone.
+def _independent_gap(
+    a: float,
+    b: float = 1.0,
+    offset: float = 1.0e-7,
+    rtol: float = 1.0e-12,
+) -> float:
+    """The jerk system's return gap at ``(a, b)``, by SciPy alone.
 
     The unstable manifold of the origin, started ``offset`` along the unstable
     eigenvector and integrated by DOP853, makes its first return into the ball of
     radius 0.4 after leaving radius 0.6; its gap is the closest point's component
     along the left unstable eigenvector, the coordinate that vanishes on the
-    stable eigenspace (the shooter projects on the right one instead). brentq
-    finds the gap's root. Nothing here comes from the library.
+    stable eigenspace (the shooter projects on the right one instead). Near the
+    saddle that coordinate keeps its sign through the passage, so the gap changes
+    sign where the first return becomes a homoclinic orbit. Nothing here comes
+    from the library.
     """
-
-    def gap(a: float) -> float:
-        jacobian = np.array([[0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [1.0, -1.0, -a]])
-        values, right = np.linalg.eig(jacobian)
-        unstable = right[:, int(np.argmax(values.real))].real
-        unstable *= np.sign(unstable[0]) / np.linalg.norm(unstable)
-        values, left = np.linalg.eig(jacobian.T)
-        covector = left[:, int(np.argmax(values.real))].real
-        covector /= covector @ unstable
-        solution = solve_ivp(
-            lambda _t, s: [s[1], s[2], -a * s[2] - s[1] + s[0] - s[0] * s[0]],
-            (0.0, 100.0),
-            offset * unstable,
-            method="DOP853",
-            rtol=rtol,
-            atol=1.0e-3 * rtol,
-            dense_output=True,
-        )
-        times = np.linspace(0.0, 100.0, 200_001)
+    jacobian = np.array([[0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [1.0, -b, -a]])
+    values, right = np.linalg.eig(jacobian)
+    unstable = right[:, int(np.argmax(values.real))].real
+    unstable *= np.sign(unstable[0]) / np.linalg.norm(unstable)
+    values, left = np.linalg.eig(jacobian.T)
+    covector = left[:, int(np.argmax(values.real))].real
+    covector /= covector @ unstable
+    solution = solve_ivp(
+        lambda _t, s: [s[1], s[2], -a * s[2] - b * s[1] + s[0] - s[0] * s[0]],
+        (0.0, 100.0),
+        offset * unstable,
+        method="DOP853",
+        rtol=rtol,
+        atol=1.0e-3 * rtol,
+        dense_output=True,
+    )
+    times = np.linspace(0.0, 100.0, 200_001)
+    # past its return the manifold may escape to infinity: inf radii are fine
+    with np.errstate(over="ignore", invalid="ignore"):
         radius = np.linalg.norm(solution.sol(times).T, axis=1)
-        band = (np.cumsum(radius > 0.6) > 0) & (radius < 0.4)
-        first = int(np.flatnonzero(band)[0])
-        leaves = np.flatnonzero(~band[first:])
-        last = first + int(leaves[0]) if leaves.size else band.size
-        closest = first + int(np.argmin(radius[first:last]))
-        fine = np.linspace(times[closest - 1], times[closest + 1], 2001)
-        states = solution.sol(fine).T
-        return float(covector @ states[np.argmin(np.linalg.norm(states, axis=1))])
+    band = (np.cumsum(radius > 0.6) > 0) & (radius < 0.4)
+    first = int(np.flatnonzero(band)[0])
+    leaves = np.flatnonzero(~band[first:])
+    last = first + int(leaves[0]) if leaves.size else band.size
+    closest = first + int(np.argmin(radius[first:last]))
+    fine = np.linspace(times[closest - 1], times[closest + 1], 2001)
+    states = solution.sol(fine).T
+    return float(covector @ states[np.argmin(np.linalg.norm(states, axis=1))])
 
-    return float(brentq(gap, 0.465, 0.4675, xtol=1.0e-13))
+
+def _independent_homoclinic(offset: float = 1.0e-7, rtol: float = 1.0e-12) -> float:
+    """The jerk system's homoclinic parameter in [0.465, 0.4675] at ``b = 1``.
+
+    brentq on :func:`_independent_gap`; nothing here comes from the library.
+    """
+    return float(
+        brentq(
+            lambda a: _independent_gap(a, 1.0, offset, rtol),
+            0.465,
+            0.4675,
+            xtol=1.0e-13,
+        ),
+    )
 
 
 class TestShilnikovHomoclinic(TestCase):
@@ -340,6 +460,37 @@ class TestHomoclinicShooting(TestCase):
 
     def test_locates_homoclinic_parameter(self):
         assert abs(self._shooter().locate(-0.05, 0.05)) < 1.0e-3
+
+    def test_locate_refuses_a_jump_and_returns_a_root(self):
+        """Bisection converges on any sign change; only a root leaves ``gap ~ 0``.
+
+        The gap here is ``sqrt(d)`` either side of a root at ``0.3``, as the
+        saddle-focus gap falls (``d**0.46``, measured), and steps from
+        ``-0.012`` to ``+0.012`` at ``0.7``, as it did at ``b = 0.85``.
+        """
+
+        class _Scripted(HomoclinicShooting):
+            def gap(self, parameter: float) -> float:
+                if parameter < 0.5:
+                    distance = parameter - 0.3
+                    return math.copysign(abs(distance) ** 0.5, distance)
+                return 0.012 if parameter > 0.7 else -0.012
+
+        shooter = _Scripted(
+            self._field(0.0),
+            0,
+            Departure(np.zeros(2), np.ones(2)),
+        )
+        assert abs(shooter.locate(0.1, 0.45) - 0.3) < 1.0e-9
+        with pytest.raises(ValueError, match="jump of the gap"):
+            shooter.locate(0.6, 0.8)
+        lenient = _Scripted(
+            self._field(0.0),
+            0,
+            Departure(np.zeros(2), np.ones(2)),
+            ReturnSettings(jump_tolerance=0.02),
+        )
+        assert abs(lenient.locate(0.6, 0.8) - 0.7) < 1.0e-9
 
     def test_traces_homoclinic_curve_along_melnikov_line(self):
         grid = np.linspace(-40.0, 40.0, 200001)

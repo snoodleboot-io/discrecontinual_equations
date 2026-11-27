@@ -281,13 +281,25 @@ mu = -0.0857; Melnikov, first order: -0.0857
 
 - The gap is `NaN` where there is no return. Here that means $\mu = -0.2$, where
   the manifold settles on the centre, and $\mu = 0$, where it escapes. `locate`
-  does not check its bracket. A `NaN` never counts as a sign change: when the
-  gap at `lower`, or at a midpoint, is `NaN`, the search moves `lower` to that
-  point and then on to the next midpoint without a test. If that skips the root,
-  the answer is `upper`. Evaluate `gap` at both ends first, as above.
+  needs finite gaps of opposite sign at both ends of its bracket, and stops with
+  a `ValueError` at a midpoint whose gap is `NaN`: it cannot say which half holds
+  the root. `trace` samples each window at nine points and hands `locate` the
+  sign change of finite gaps nearest the previous result.
+- A sign change of the gap need not be a root. The gap is the unstable component
+  of the *closest* return, and where the closest return switches from one pass
+  near the saddle to another the gap jumps across zero without vanishing. On the
+  saddle-focus jerk system (section 3) at $b = 0.85$ it jumps from $-0.0123$ to
+  $+0.0120$ within $10^{-5}$ of $a = 0.59113$, $7 \times 10^{-5}$ from the true
+  homoclinic. So `locate` evaluates the gap once more where bisection converged
+  and refuses a result whose $|\text{gap}|$ exceeds `ReturnSettings.jump_tolerance`
+  (default $10^{-3}$): at a root the gap falls towards zero with the bracket
+  (like $d^{0.46}$ at that saddle-focus), at a jump it does not. Near a
+  saddle-focus, follow the curve with the boundary-value problem of section 3
+  instead, and use shooting only for its seed.
 - The saddle needs a one-dimensional unstable manifold with a real leading
-  eigenvalue. The departure and return radii are absolute (0.5 and 0.4), so a
-  system far from unit scale needs its own `ReturnSettings`.
+  eigenvalue. The departure and return radii are absolute (0.5 and 0.4), and so
+  is `jump_tolerance`, so a system far from unit scale needs its own
+  `ReturnSettings`.
 - The accuracy is that of fixed-step RK4 and of the closest sampled return.
   Refine the result with the boundary-value problem of section 1 or 3.
 - `gap` and `trace` leave the parameters set to the last value they tried.
@@ -298,7 +310,8 @@ API: [`homoclinic_shooting`](../api/continuation.md#discrecontinual_equations.co
 
 **Idea.** Add the saddle and one parameter to the unknowns of section 1, and add
 the equilibrium condition $f(\xi, \mu) = 0$ to the equations. The projection rows
-are rebuilt at every iterate from the eigenvectors of $Df(\xi, \mu)$. That gives
+are rebuilt at every iterate from the eigenvectors of $Df(\xi, \mu)$, keeping
+the seed's split into stable and unstable ones (see the limits below). That gives
 a square system: collocation, equilibrium, projection and phase, with one free
 parameter. It is the defining system HomCont continues (Champneys, Kuznetsov and
 Sandstede 1996). Sweep the second parameter and seed each point from the last.
@@ -339,17 +352,116 @@ nu = 0.10  mu = -0.0855
 The located points follow the Melnikov line $\mu = -\tfrac67\nu$ to within the
 mesh error at $h = 0.25$. The shooting value in section 2 agrees to $2 \times 10^{-4}$.
 
+**A saddle-focus curve through a Belyakov point.** The jerk system
+$x' = y,\ y' = z,\ z' = -a z - b y + x - x^2$ has a saddle-focus at the origin:
+one unstable eigenvalue $\gamma$ and a stable pair $-\rho \pm i\omega$. A complex
+pair gives one real and one imaginary projection row. Along its homoclinic curve
+the saddle index $\rho / \gamma$ of section 4 crosses one between $b = 0.85$ and
+$b = 0.80$: the Belyakov transition from Shilnikov chaos to a tame loop. Shooting
+loses this curve near $b = 0.85$, where its gap jumps (section 2); the
+boundary-value problem follows it. The seed is the unstable manifold at the
+shooting value for $b = 0.9$, shifted so that the first peak of $x$, where
+$y = 0$, sits at the mesh centre.
+
+```python
+from scipy.integrate import solve_ivp
+
+from discrecontinual_equations.continuation.shilnikov import classify_saddle_focus
+
+
+class JerkA(Parameter, name="jerk_a", abbreviation="a"):
+    pass
+
+
+class JerkB(Parameter, name="jerk_b", abbreviation="b"):
+    pass
+
+
+class Jerk(DeterministicFunction):
+    def eval(self, point, time=None):
+        a, b = self.parameters[0].value, self.parameters[1].value
+        x, y, z = point
+        return [y, z, -a * z - b * y + x - x * x]
+
+
+a0, b0 = 0.519, 0.9  # HomoclinicShooting.locate(0.519, 0.520) gives 0.51905
+jerk_parameters = [JerkA(value=a0), JerkB(value=b0)]
+jerk_variables = [State(), State(), State()]
+jerk = Jerk(
+    variables=jerk_variables,
+    parameters=jerk_parameters,
+    results=[State(), State(), State()],
+)
+jerk_equation = DifferentialEquation(
+    variables=jerk_variables,
+    time=Time(),
+    parameters=jerk_parameters,
+    derivative=jerk,
+)
+
+values, vectors = np.linalg.eig(
+    np.array([[0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [1.0, -b0, -a0]]),
+)
+unstable = vectors[:, np.argmax(values.real)].real
+unstable *= np.sign(unstable[0])
+manifold = solve_ivp(
+    lambda t, s: jerk.eval(list(s)),
+    (0.0, 80.0),
+    1e-9 * unstable,
+    method="DOP853",
+    rtol=1e-12,
+    atol=1e-15,
+    dense_output=True,
+)
+grid = np.linspace(0.0, 80.0, 80_001)
+x = manifold.sol(grid)[0]
+departed = np.argmax(np.abs(x) > 0.5)
+peak = grid[departed + np.flatnonzero(np.diff(x[departed:]) < 0)[0]]
+jerk_mesh = MeshSpec(half_length=12.0, intervals=480, phase_index=1, phase_value=0.0)
+jerk_seed = manifold.sol(np.linspace(-12.0, 12.0, 481) + peak).T
+
+jerk_curve = HomoclinicCurve(jerk_equation, continuation_index=0, sweep_index=1, mesh=jerk_mesh)
+for point in jerk_curve.trace([0.9, 0.85, 0.8, 0.75, 0.7], jerk_seed, np.zeros(3), a0):
+    focus = classify_saddle_focus(
+        np.array([[0, 1, 0], [0, 0, 1], [1, -point.sweep, -point.continuation]]),
+    )
+    print(f"b = {point.sweep:.2f}  a = {point.continuation:.4f}  index {focus.saddle_index:.3f}")
+```
+
+```text
+b = 0.90  a = 0.5188  index 0.917
+b = 0.85  a = 0.5908  index 0.974
+b = 0.80  a = 0.6624  index 1.031
+b = 0.75  a = 0.7327  index 1.086
+b = 0.70  a = 0.7995  index 1.137
+```
+
+An independent computation (SciPy's DOP853 and `brentq` on the first-return
+gap projected on the *left* unstable eigenvector, sharing no code with the
+library) puts the curve at $a = 0.519050, 0.591061, 0.662600, 0.732836, 0.799624$.
+At $h = 0.05$ the boundary-value problem lies $1.5$ to $2.4 \times 10^{-4}$ below
+it; the error falls as $h^2$ to a truncation floor of $2$ to $7 \times 10^{-5}$
+at $T = 12$.
+
 **Limits.**
 
-- *Saddle-focus.* On the current release, a complex pair contributes two copies
-  of the same real row, so the Newton matrix is singular. The verifier measured
-  its condition number at $4.4 \times 10^{15}$. The fix gives a real row and an
-  imaginary row per pair, with a fixed phase. It is pending in PR #67 (DEQ-85),
-  and with it the condition number is about $10^2$. Until then, continue
-  saddle-focus homoclinics with `HomoclinicShooting.trace`.
-- A change in the number of stable or unstable eigenvalues inside a
-  finite-difference step raises a bare broadcasting `ValueError`, not a clear
-  refusal. A fix is in progress (DEQ-112).
+- *Eigenvalue counts.* The boundary rows need the saddle's eigenvalues split
+  into stable and unstable ones. They are counted once, at the seed, and then
+  followed from Newton iterate to iterate by eigenvector, not re-counted: one
+  near-singular step can move the saddle further than a small eigenvalue is from
+  zero, and the next brings it back. An iterate whose saddle has the seed's
+  counts takes its own split by sign: two eigenvalues that cross zero in
+  opposite directions leave the counts unchanged, and the followed split would
+  then converge on the other split's boundary rows. The counts are enforced at the accepted
+  point: a point whose residual has converged but whose saddle has other counts
+  is refused with an `EigenvalueCountError`, and so is a solve that runs out of
+  iterations after an iterate with other counts. `trace` stops at such a
+  refusal with a `RuntimeWarning` that names both counts and the parameters. A solve that diverges to
+  non-finite values returns `None`.
+- The equilibrium rows' derivative in the saddle is the exact (Taylor-jet)
+  Jacobian; the boundary rows' dependence on the eigenvectors, and every column
+  of a field that cannot be evaluated on jets, are forward differences with an
+  absolute step of $10^{-7}$ (DEQ-171).
 - `trace` sweeps a parameter in natural steps, with no pseudo-arclength, so it
   stops at a fold of the curve in the swept parameter. `trace` stops at the first
   point that fails to converge, and `solve_point` returns `None` there.
@@ -733,6 +845,4 @@ here. Their docstrings will be updated when they merge.
 | Work | What it changes |
 |---|---|
 | PR #69 (DEQ-81) | network connections solved inside their subspace; `NotATrajectoryError` |
-| PR #67 (DEQ-85) | `HomoclinicCurve` at a saddle-focus: real and imaginary rows per complex pair |
-| DEQ-112 | a clear refusal when the saddle's eigenvalue count changes during a step |
 | DEQ-120 | refuse a diverged Gauss–Newton solve instead of returning the seed |

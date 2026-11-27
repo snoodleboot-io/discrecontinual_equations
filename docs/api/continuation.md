@@ -848,7 +848,9 @@ eigenvalue of the saddle. With `N` nodes in `n` dimensions the Newton system has
 The counts are read at the seed and held:
 
 - a seed that is not a hyperbolic saddle is refused before Newton starts;
-- an iterate at which the counts change is refused too.
+- a point Newton converges on whose counts are not the seed's is refused, and so
+  is a solve that runs out of iterations after an iterate with other counts. An
+  iterate on the way may cross a count change and come back (DEQ-172, below).
 
 Both raise `EigenvalueCountError`, a `ValueError` whose message names the
 required and found counts and both parameter values, and which carries them as
@@ -937,9 +939,11 @@ except EigenvalueCountError as refusal:
     print(refusal.expected, refusal.found, f"{refusal.continuation:.3g}")
 ```
 
-This prints the two solved points, then `(1, 1) (2, 0) -0.46`: freeing `b2`
+This prints the two solved points, then `(1, 1) (0, 2) 2.62`: freeing `b2`
 from a seed with `b1 > 0`, where the field has no equilibrium at all, Newton
-moves `b2` until the "saddle" is a stable node.
+cannot converge, and the refusal names the last of its iterates that was not a
+saddle, an unstable node at `b2 = 2.62`. (Before DEQ-172 the first such iterate
+was refused at once: a stable node at `b2 = -0.46`.)
 
 #### Reading the counts exactly (DEQ-154)
 
@@ -966,9 +970,43 @@ instead would fail when a stable and an unstable eigenvalue are both closer to
 zero than the shift moves them: each shifted one then lies nearer the other's
 unshifted value, and their rows swap. Eigenvectors are only as well defined as
 the eigenvalues are separated, so a repeated eigenvalue with no preferred basis
-cannot be followed this way either. Only an iterate is ever refused, and an
-iterate that strays far enough from the saddle to change its counts is refused
-even though the converged point would be a saddle.
+cannot be followed this way either.
+
+#### Enforcing the counts where they mean something (DEQ-172)
+
+The DEQ-154 verifier drove the public API on `x' = y, y' = (1 + b) x - x^2 + a y,
+z' = lam z + c z^2` (a homoclinic loop at `a = 0` for every `b`, third eigenvalue
+`lam`) from a seed perturbed by `1e-3`, and 2 of its 24 genuine saddles were
+refused: `lam = -1e-7, c = 1` and `lam = -1e-6, c = 10`. Both have
+`lam = -c dx`. The equilibrium rows' derivative in the saddle was differenced
+too, and read `lam + c dx = 0`: the sparse LU was exactly singular, the
+least-squares fallback moved the saddle by `2e-5` and `1e-4` in `z`, far past
+`|lam| / 2c`, and that iterate was refused for its counts. Two changes:
+
+- the equilibrium rows' block in the saddle's columns is the exact Jacobian the
+  counts are read from, so the step leaves `z` at zero;
+- Newton counts the eigenvalues once, at the seed, and follows that split from
+  iterate to iterate by the same eigenvector matching, instead of re-counting
+  and refusing. An iterate far from convergence may then cross a count change
+  and come back: on `z' = (-1e-5 - a) z` the first step overshoots to
+  `a = -3.6e-5`, where the saddle has one stable and two unstable eigenvalues,
+  and the next returns to `a = 0`. The counts are enforced at the point Newton
+  accepts: a converged residual whose saddle has other counts is refused there.
+  On `z' = (1e-3 - a) z`, seeded at `a = 0.01` where `z` is stable, the rows
+  converge at `a = 0`, where it is unstable: refused at `a = 0`, not at an
+  iterate on the way. A solve that runs out of iterations after an iterate with
+  other counts is refused too, naming the last such iterate. Matching is used
+  only at an iterate whose counts differ from the seed's; one with the seed's
+  counts takes its own split by sign. Otherwise a stable and an unstable
+  eigenvalue that both cross zero during the solve keep the counts and swap
+  the rows: on `z' = (5e-3 - a) z + x^2, w' = (a - 5e-3) w + x^2`, seeded at
+  `a = 0.01`, the accepted orbit had `z(-T) = 0, w(T) = 0` instead of
+  `z(T) = 0, w(-T) = 0`, 6.4 away from the right one (verify-deq-172).
+
+The probe now solves and traces all 20 of its saddles with `|lam| > 1e-9`; the
+four at `|lam| = 1e-9`, at the hyperbolicity threshold, are refused by design.
+A field that cannot be evaluated on jets still differences everything with the
+absolute step `1e-7` (DEQ-171).
 
 ```python
 import numpy as np
@@ -1160,6 +1198,20 @@ damped well `y' = x - x^2 + mu y`, for example, that is `|mu| < 0.1`. A
 bracket can also hold two roots and no sign change at its ends. On the
 saddle-focus jerk at horizon 100, `[0.46, 0.50]` holds the roots `0.4651` and
 `0.4802`.
+
+Bisection converges on a sign change, and a sign change is not always a root.
+The gap is the unstable component of the *closest* return, and where the closest
+return switches from one pass near the saddle to another, the gap jumps across
+zero without vanishing. Near a saddle-focus this happens beside the homoclinic
+value: on the jerk system at `b = 0.85` the gap jumps from `-0.0123` to
+`+0.0120` within `1e-5` of `a = 0.59113`, `7e-5` from the curve at `0.591061`,
+and `locate` returned that jump. It now evaluates the gap once more where it
+converged and refuses a result whose `|gap|` exceeds
+`ReturnSettings.jump_tolerance` (default `1e-3`, absolute like the radii). At a
+genuine root the gap falls towards zero with the bracket: like `d**0.46` at
+that saddle-focus, leaving `1.7e-7` to `7e-6` after 32 halvings; the jump left
+`1.27e-2` (DEQ-174). Continue a saddle-focus curve with `HomoclinicCurve`
+(user guide, section 3) and use shooting for the seed.
 
 `trace(control, values, guess, half_width)` cannot ask its caller for a
 bracket at every step, so it scans for one. It samples its window,

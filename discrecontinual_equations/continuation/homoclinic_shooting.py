@@ -28,14 +28,17 @@ Limits:
 * the saddle must have a one-dimensional unstable manifold with a real leading
   eigenvalue. Nothing checks this; with a complex leading pair the real part of
   its eigenvector is used and the gap has no meaning;
-* ``locate`` assumes the gap changes sign in ``[lower, upper]``. It does not
-  check, and always returns a point of the bracket after 32 halvings. The gap
-  is NaN where there is no equilibrium or no return within ``horizon`` - which,
-  away from the homoclinic value, is common: the manifold settles on another
-  attractor or escapes. A NaN never counts as a sign change: when the gap at
-  ``lower`` or at a midpoint is NaN, ``lower`` moves to that point and then on to
-  the next midpoint without a test. If that skips the root, the bracket no longer
-  changes sign and the result is ``upper``. Check ``gap`` at both ends first;
+* ``locate`` needs finite gaps of opposite sign at both ends of its bracket and
+  refuses a NaN midpoint (DEQ-135). The gap is NaN where there is no equilibrium
+  or no return within ``horizon`` - which, away from the homoclinic value, is
+  common: the manifold settles on another attractor or escapes;
+* a sign change of the gap need not be a root. Where the closest return
+  switches from one pass near the saddle to another, the gap jumps across zero
+  without vanishing, and near a saddle-focus it does so next to the homoclinic
+  value (on the jerk system at ``b = 0.85``, ``7e-5`` from it). ``locate``
+  refuses a result whose ``|gap|`` exceeds ``ReturnSettings.jump_tolerance``
+  (DEQ-174); follow such a curve with :class:`.homoclinic_curve.HomoclinicCurve`
+  and use shooting for its seed;
 * the radii are absolute distances, so a system whose orbit is much smaller or
   larger than order one needs its own ``ReturnSettings``;
 * ``gap`` and ``trace`` set parameter values on the function and leave them set.
@@ -63,6 +66,12 @@ _DEFAULT_DT = 2.0e-3
 _DEFAULT_HORIZON = 60.0
 _DEFAULT_DEPARTURE = 0.5
 _DEFAULT_OFFSET = 1.0e-5
+# Largest |gap| ``locate`` accepts at the parameter it returns. Near a root of
+# the jerk saddle-focus the gap falls only like ``d**0.46`` in the distance ``d``
+# from it (measured from d = 1e-4 to 1e-10, DEQ-155), not like ``d``: the genuine
+# roots left 1.7e-7 to 7e-6 after 32 halvings of a 0.14 bracket, the jump it
+# once returned at b = 0.85 left 1.27e-2 (DEQ-174).
+_DEFAULT_JUMP_TOLERANCE = 1.0e-3
 _DIVERGENCE = 1.0e3
 _RETURN_BAND = 0.4
 _DEFAULT_BISECTIONS = 32
@@ -80,9 +89,12 @@ class ReturnSettings:
         departure_radius: The distance from the saddle the orbit must exceed
             before a close approach counts as a return.
         offset: The initial displacement along the unstable eigenvector.
+        jump_tolerance: The largest ``|gap|`` :meth:`HomoclinicShooting.locate`
+            accepts at the parameter it returns; a larger one marks a jump of
+            the gap rather than a root. An absolute distance, like the radii.
     """
 
-    __slots__ = ["departure_radius", "dt", "horizon", "offset"]
+    __slots__ = ["departure_radius", "dt", "horizon", "jump_tolerance", "offset"]
 
     def __init__(
         self,
@@ -90,11 +102,13 @@ class ReturnSettings:
         horizon: float = _DEFAULT_HORIZON,
         departure_radius: float = _DEFAULT_DEPARTURE,
         offset: float = _DEFAULT_OFFSET,
+        jump_tolerance: float = _DEFAULT_JUMP_TOLERANCE,
     ) -> None:
         self.dt = dt
         self.horizon = horizon
         self.departure_radius = departure_radius
         self.offset = offset
+        self.jump_tolerance = jump_tolerance
 
 
 class Departure:
@@ -210,13 +224,24 @@ class HomoclinicShooting:
             lower: One end of the bracket.
             upper: The other end.
 
+        Bisection converges to a sign change, and a sign change need not be a
+        root: the gap is the unstable component of the closest return, and
+        where the closest return switches from one pass near the saddle to
+        another the gap jumps across zero without vanishing. On the jerk
+        system at ``b = 0.85`` it jumps from ``-0.0123`` to ``+0.0120`` within
+        ``1e-5`` of ``a = 0.59113`` (DEQ-174). So the gap is evaluated once
+        more at the result, and a result whose ``|gap|`` exceeds
+        ``ReturnSettings.jump_tolerance`` is refused: at a root the gap falls
+        towards zero with the bracket, at a jump it does not.
+
         Returns:
             The midpoint of the final bracket, ``_DEFAULT_BISECTIONS`` halvings
             in; an end whose gap is exactly zero is returned as it is.
 
         Raises:
             ValueError: An end's gap is not finite, both ends' gaps have the
-                same sign, or a midpoint's gap is not finite.
+                same sign, a midpoint's gap is not finite, or the gap at the
+                result is not within ``jump_tolerance`` of zero.
 
         References:
             R. L. Burden and J. D. Faires, *Numerical Analysis*, 10th ed.,
@@ -257,7 +282,17 @@ class HomoclinicShooting:
                 lower, low_gap = middle, middle_gap
             else:
                 upper = middle
-        return 0.5 * (lower + upper)
+        located = 0.5 * (lower + upper)
+        residual = self.gap(located)
+        if not abs(residual) <= self._settings.jump_tolerance:
+            message = (
+                f"the return gap is {residual:.3g} at {located:.10g}, where the "
+                f"bisection converged, not within {self._settings.jump_tolerance:g} "
+                f"of zero: the sign change there is a jump of the gap, not a "
+                f"homoclinic parameter"
+            )
+            raise ValueError(message)
+        return located
 
     def _finite_gap(self, parameter: float, end: str) -> float:
         """The gap at one end of a bracket, refused if it is not finite."""

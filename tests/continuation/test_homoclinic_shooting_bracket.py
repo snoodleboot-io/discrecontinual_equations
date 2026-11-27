@@ -21,6 +21,7 @@ import pytest
 from discrecontinual_equations.continuation.homoclinic_shooting import (
     Departure,
     HomoclinicShooting,
+    ReturnSettings,
 )
 from tests.continuation.fields import Alpha, DampedWellField, State
 
@@ -41,6 +42,8 @@ class _Scripted(HomoclinicShooting):
 
     def __init__(self, root: float, holes: tuple[tuple[float, float], ...]) -> None:
         self.root, self.holes, self.calls = root, holes, []
+        # locate reads its jump tolerance from the settings (DEQ-174)
+        self._settings = ReturnSettings()
 
     def gap(self, parameter: float) -> float:
         self.calls.append(parameter)
@@ -92,6 +95,36 @@ class TestBisection(TestCase):
         assert _Scripted(0.3, ()).locate(0.0, 0.3) == 0.3
 
 
+class _Step(_Scripted):
+    """A gap that jumps from ``-size`` to ``+size`` at ``jump`` without vanishing."""
+
+    def __init__(self, jump: float, size: float) -> None:
+        super().__init__(jump, ())
+        self.size = size
+
+    def gap(self, parameter: float) -> float:
+        self.calls.append(parameter)
+        return self.size if parameter >= self.root else -self.size
+
+
+class TestAJumpIsNotARoot(TestCase):
+    """A sign change that does not vanish is refused whichever side ``locate`` ends on.
+
+    The bracket's ends fix the side: from ``[0, 1]`` the result is just above
+    the jump, from ``[1, 0]`` just below it, so its gap is ``+size`` once and
+    ``-size`` once (verify-deq-172).
+    """
+
+    def test_a_jump_is_refused_on_either_side(self):
+        for lower, upper in ((0.0, 1.0), (1.0, 0.0)):
+            with self.subTest(lower=lower), pytest.raises(ValueError, match="jump"):
+                _Step(0.3, 1.0e-2).locate(lower, upper)
+
+    def test_a_jump_within_the_tolerance_is_returned(self):
+        located = _Step(0.3, 1.0e-4).locate(0.0, 1.0)
+        assert located == pytest.approx(0.3, abs=1e-9)
+
+
 class _Wave(HomoclinicShooting):
     """A traced gap ``cos(pi (p - c))``, roots at ``c + 1/2 + k``, NaN past ``edge``.
 
@@ -100,6 +133,7 @@ class _Wave(HomoclinicShooting):
 
     def __init__(self, edge: float) -> None:
         self.edge = edge
+        self._settings = ReturnSettings()
         self._function = SimpleNamespace(
             parameters=[SimpleNamespace(value=0.0), SimpleNamespace(value=0.0)],
         )

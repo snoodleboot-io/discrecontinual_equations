@@ -430,3 +430,240 @@ class TestHeldPartitionFollowsEigenvectors(TestCase):
         # rows: departure y, departure z (stable); arrival x, arrival w (unstable)
         assert abs(matrix[boundary + 1, column] + 1.0) < 1.0e-6
         assert abs(matrix[boundary + 3, column]) < 1.0e-6
+
+
+class _SaddleLoop(DeterministicFunction):
+    """``x' = y, y' = (1 + b) x - x^2 + a y, z' = g(z, a)``: a loop times a line.
+
+    At ``a = 0`` the ``(x, y)`` plane has the homoclinic loop
+    ``x = 1.5 (1 + b) sech^2(sqrt(1 + b) t / 2)`` to the origin for every ``b``,
+    and ``z = 0`` is an equilibrium of ``z' = g``. The saddle's third eigenvalue
+    is ``g_z(0, a)``: the verifier's public-API probe for DEQ-154 and DEQ-172.
+    """
+
+    third = staticmethod(lambda z, a: 0.0 * z * a)
+
+    def eval(
+        self,
+        point: list[float],
+        time: float | None = None,  # noqa: ARG002 (base signature)
+    ) -> list[float]:
+        a = self.parameters[0].value
+        b = self.parameters[1].value
+        x, y, z = point
+        return [y, (1 + b) * x - x * x + a * y, self.third(z, a)]
+
+
+def _saddle_loop_curve(third, curve_class=HomoclinicCurve) -> HomoclinicCurve:
+    parameters = [Alpha(value=0.0), BetaOne(value=0.0)]
+    variables = [State(), State(), State()]
+    field = _SaddleLoop(
+        variables=variables,
+        parameters=parameters,
+        results=[State(), State(), State()],
+        time=None,
+    )
+    field.third = third
+    equation = DifferentialEquation(
+        variables=variables,
+        time=Time(),
+        parameters=parameters,
+        derivative=field,
+    )
+    return curve_class(equation, 0, 1, MeshSpec(12.0, 120, 1, 0.0))
+
+
+def _perturbed_loop() -> np.ndarray:
+    """The ``b = 0`` loop with ``1e-3`` noise on every node, ``a`` seeded at 0.01.
+
+    Newton's first step takes ``a`` from 0.01 past the curve to ``-3.6e-5``,
+    then back to ``0``: an iterate far from convergence that the next corrects.
+    """
+    nodes = 121
+    times = np.linspace(-12.0, 12.0, nodes)
+    x = 1.5 / np.cosh(times / 2.0) ** 2
+    seed = np.column_stack([x, np.gradient(x, times), np.zeros(nodes)])
+    seed += 1.0e-3 * np.random.default_rng(0).standard_normal((nodes, 3))
+    seed[nodes // 2, 1] = 0.0
+    return seed
+
+
+# Seed and starting parameter of every solve below.
+_LOOP_SEED_A = 0.01
+
+
+class _RecordingCurve(HomoclinicCurve):
+    """Records the saddle's counted ``(stable, unstable)`` at every iterate."""
+
+    __slots__ = ["iterates"]
+
+    def _follow(self, equilibrium, continuation, sweep, reference, counts):
+        if not hasattr(self, "iterates"):
+            self.iterates = []
+        self.iterates.append(
+            (self._counts(equilibrium, float(continuation), sweep), continuation),
+        )
+        return super()._follow(equilibrium, continuation, sweep, reference, counts)
+
+
+class TestCountsAreEnforcedAtTheAcceptedPoint(TestCase):
+    """DEQ-172: a far iterate's counts do not stop a solve; the accepted point's do."""
+
+    def test_the_verifier_probe_saddles_solve_and_trace(self):
+        """The two of the DEQ-154 verifier's 24 probe saddles that failed.
+
+        Each has ``lam = -c dx`` for the difference step ``dx = 1e-7``: the
+        differenced equilibrium row read ``lam + c dx = 0``, the sparse LU was
+        exactly singular, and the least-squares fallback moved the saddle by
+        ``2e-5`` and ``1e-4`` in ``z``, far past ``|lam| / 2c``. Both were
+        refused on that first iterate.
+        """
+        for lam, c in ((-1.0e-7, 1.0), (-1.0e-6, 10.0)):
+            with self.subTest(lam=lam, c=c):
+                curve = _saddle_loop_curve(
+                    lambda z, _a, lam=lam, c=c: lam * z + c * z * z,
+                )
+                point = curve.solve_point(
+                    0.0,
+                    _perturbed_loop(),
+                    np.zeros(3),
+                    _LOOP_SEED_A,
+                )
+                assert point is not None
+                assert abs(point.continuation) < 1.0e-9
+                assert np.max(np.abs(point.orbit.states[:, 2])) < 1.0e-9
+                with warnings.catch_warnings():
+                    warnings.simplefilter("error", RuntimeWarning)
+                    points = curve.trace(
+                        [0.0, 0.05, 0.1],
+                        _perturbed_loop(),
+                        np.zeros(3),
+                        _LOOP_SEED_A,
+                    )
+                assert len(points) == 3
+
+    def test_the_equilibrium_rows_hold_the_exact_saddle_jacobian(self):
+        """At ``lam = -c dx`` a forward difference reads the ``z`` entry as 0."""
+        lam, c = -1.0e-7, 1.0
+        curve = _saddle_loop_curve(lambda z, _a: lam * z + c * z * z)
+        nodes = 121
+        times = np.linspace(-12.0, 12.0, nodes)
+        unknowns = np.concatenate(
+            [_perturbed_loop().ravel(), np.zeros(3), [_LOOP_SEED_A]],
+        )
+        residual = curve._residual(unknowns, times, nodes, 3, 0.0)  # noqa: SLF001
+        matrix = curve._jacobian(unknowns, times, 3, 0.0, residual)  # noqa: SLF001
+        row = (nodes - 1) * 3 + 2
+        column = nodes * 3 + 2
+        assert abs(matrix[row, column] - lam) < 1.0e-20
+        # every column of the block is exact, not only the small eigenvalue's:
+        # differenced, the x column reads (1 + b) - dx (verify-deq-172)
+        exact = curve._saddle_jacobian(np.zeros(3), _LOOP_SEED_A, 0.0)  # noqa: SLF001
+        block = matrix[row - 2 : row + 1, column - 2 : column + 1].toarray()
+        assert np.max(np.abs(block - exact)) < 1.0e-14
+
+    def test_an_iterate_that_loses_the_counts_and_regains_them_is_not_refused(self):
+        """``z' = (-1e-5 - a) z``: stable at the seed and on the curve (``a = 0``).
+
+        Newton's first step overshoots to ``a = -3.6e-5``, where ``-1e-5 - a``
+        is positive: that iterate has one stable and two unstable eigenvalues.
+        It was refused there; the next step returns to ``a = 0``.
+        """
+        curve = _saddle_loop_curve(
+            lambda z, a: (-1.0e-5 - a) * z,
+            curve_class=_RecordingCurve,
+        )
+        point = curve.solve_point(0.0, _perturbed_loop(), np.zeros(3), _LOOP_SEED_A)
+        assert point is not None
+        assert abs(point.continuation) < 1.0e-9
+        crossed = [a for counts, a in curve.iterates if counts == (1, 2)]
+        assert crossed, curve.iterates
+        assert all(a < -1.0e-5 for a in crossed)
+
+    def test_a_count_change_at_the_converged_point_is_refused(self):
+        """``z' = (1e-3 - a) z``: stable at the seed ``a = 0.01``, unstable at 0.
+
+        The rows built for the seed's partition converge at ``a = 0``, where
+        the saddle has one stable and two unstable eigenvalues: a solution of
+        a different problem, refused there and not at an iterate on the way.
+        """
+        curve = _saddle_loop_curve(lambda z, a: (1.0e-3 - a) * z)
+        with pytest.raises(EigenvalueCountError, match="converged where") as caught:
+            curve.solve_point(0.0, _perturbed_loop(), np.zeros(3), _LOOP_SEED_A)
+        assert caught.value.expected == (2, 1)
+        assert caught.value.found == (1, 2)
+        assert abs(caught.value.continuation) < 1.0e-9
+        with self.assertWarnsRegex(RuntimeWarning, "1 stable and 2 unstable"):
+            points = curve.trace(
+                [0.0, 0.05],
+                _perturbed_loop(),
+                np.zeros(3),
+                _LOOP_SEED_A,
+            )
+        assert points == []
+
+
+class _SwappingPair(DeterministicFunction):
+    """A saddle loop with a stable and an unstable direction that swap sides.
+
+    ``x' = y, y' = (1 + b) x - x^2 + a y, z' = (k - a) z + x^2,
+    w' = (a - k) w + x^2``: the loop of :class:`_SaddleLoop` at ``a = 0``, with
+    two directions it forces.
+    At the seed ``a = 0.01`` the ``z`` eigenvalue ``k - a`` is stable and the
+    ``w`` one ``a - k`` unstable; on the curve ``a = 0`` they have swapped, and
+    the counts, two stable and two unstable, are the same at both.
+    """
+
+    k = 5.0e-3
+
+    def eval(
+        self,
+        point: list[float],
+        time: float | None = None,  # noqa: ARG002 (base signature)
+    ) -> list[float]:
+        a = self.parameters[0].value
+        b = self.parameters[1].value
+        x, y, z, w = point
+        return [
+            y,
+            (1 + b) * x - x * x + a * y,
+            (self.k - a) * z + x * x,
+            (a - self.k) * w + x * x,
+        ]
+
+
+class TestFollowedPartitionAtTheAcceptedPoint(TestCase):
+    """The rows at the accepted point split its saddle by sign (verify-deq-172).
+
+    Following the seed's partition by eigenvector through the solve kept ``z``
+    stable and ``w`` unstable after both eigenvalues had crossed zero. The
+    counts were the seed's, so the point was accepted, but it solved the
+    projection conditions of the other split: ``z(-T) = 0`` and ``w(T) = 0``,
+    an orbit up to 6.4 away from the one a seed on the curve converges to.
+    """
+
+    def test_two_eigenvalues_that_swap_sides_do_not_swap_the_rows(self):
+        parameters = [Alpha(value=0.0), BetaOne(value=0.0)]
+        variables = [State() for _ in range(4)]
+        equation = DifferentialEquation(
+            variables=variables,
+            time=Time(),
+            parameters=parameters,
+            derivative=_SwappingPair(
+                variables=variables,
+                parameters=parameters,
+                results=[State() for _ in range(4)],
+                time=None,
+            ),
+        )
+        curve = HomoclinicCurve(equation, 0, 1, MeshSpec(12.0, 120, 1, 0.0))
+        loop = _perturbed_loop()
+        seed = np.column_stack([loop[:, :2], np.zeros((loop.shape[0], 2))])
+        crossed = curve.solve_point(0.0, seed, np.zeros(4), _LOOP_SEED_A)
+        on_curve = curve.solve_point(0.0, seed, np.zeros(4), 0.0)
+        assert crossed is not None
+        assert on_curve is not None
+        # z is unstable on the curve, so it vanishes at the arrival end.
+        assert abs(on_curve.orbit.states[-1, 2]) < 1.0e-9
+        assert abs(on_curve.orbit.states[0, 3]) < 1.0e-9
+        assert np.max(np.abs(crossed.orbit.states - on_curve.orbit.states)) < 1.0e-8
