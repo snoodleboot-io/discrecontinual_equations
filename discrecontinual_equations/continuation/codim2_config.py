@@ -13,13 +13,17 @@ References:
 """
 
 import warnings
+from pathlib import Path
 from typing import Any, Literal
 
+import pydantic
 from pydantic import Field, model_validator
 
 from discrecontinual_equations.continuation.continuation_config import (
     ContinuationConfig,
 )
+
+_PYDANTIC_DIRECTORY = str(Path(pydantic.__file__).parent)
 
 
 class Codim2Config(ContinuationConfig):
@@ -102,7 +106,9 @@ class Codim2Config(ContinuationConfig):
                 "finite_difference_epsilon, and the finite-difference derivative "
                 "provider's step is derivative_epsilon (DEQ-166).",
                 DeprecationWarning,
-                stacklevel=2,
+                # Attribute it to the caller, past pydantic's own frames: Python
+                # shows a DeprecationWarning by default only from __main__.
+                skip_file_prefixes=(_PYDANTIC_DIRECTORY, __file__),
             )
             data = {key: value for key, value in data.items() if key != "curve_epsilon"}
         return data

@@ -493,6 +493,23 @@ class TestCodim2Steps:
         assert "curve_epsilon" not in Codim2Config.model_fields
         assert "curve_epsilon" not in config.model_dump()
 
+    @pytest.mark.parametrize(
+        "build",
+        [
+            lambda: Codim2Config(curve_epsilon=1.0e-3),
+            lambda: Codim2Config.model_validate({"curve_epsilon": 1.0e-3}),
+            lambda: Codim2Config.model_validate_json('{"curve_epsilon": 1e-3}'),
+        ],
+        ids=["init", "model_validate", "model_validate_json"],
+    )
+    def test_the_warning_points_at_the_caller(self, build):
+        # Python shows a DeprecationWarning by default only when it is
+        # attributed to __main__; one attributed to pydantic's own frames is
+        # hidden from a user's script, so the retirement went unannounced.
+        with pytest.warns(DeprecationWarning, match="curve_epsilon") as record:
+            build()
+        assert record[0].filename == __file__
+
     def test_a_config_without_it_does_not_warn(self):
         with warnings.catch_warnings():
             warnings.simplefilter("error")
