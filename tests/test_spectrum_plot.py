@@ -58,3 +58,41 @@ class TestPeriodogramLabel(TestCase):
     def test_an_unknown_scaling_is_refused(self):
         with pytest.raises(ValueError, match="scaling must be one of"):
             _periodogram(scaling="psd")
+
+
+def _fft_trace(samples: int) -> tuple[np.ndarray, np.ndarray, str]:
+    times = np.arange(samples) * _STEP
+    values = _AMPLITUDE * np.sin(2 * np.pi * _BIN / (samples * _STEP) * times)
+    with TemporaryDirectory() as directory:
+        plot = SpectrumPlot(output_dir=directory, output_format="html")
+        plot.plot_fft(Variable(discretization=list(values)), dt=_STEP)
+    trace = plot.figure.data[0]
+    return np.asarray(trace.x), np.asarray(trace.y), plot.figure.layout.yaxis.title.text
+
+
+class TestFftPowerSpectrum:
+    """``plot_fft`` is the one-sided power spectrum its axis names (DEQ-173).
+
+    A sine of amplitude ``A`` on a bin frequency has mean square ``A^2 / 2``, all
+    in that one bin, at any record length; the unnormalised ``|X_k|^2`` it used to
+    plot was ``(A N / 2)^2`` there.
+    """
+
+    @pytest.mark.parametrize("samples", [64, 65, 256])
+    def test_a_sine_peaks_at_its_mean_square_at_any_length(self, samples):
+        freqs, power, label = _fft_trace(samples)
+        assert power.max() == pytest.approx(_AMPLITUDE**2 / 2)
+        assert freqs[power.argmax()] == pytest.approx(_BIN / (samples * _STEP))
+        assert power.sum() == pytest.approx(_AMPLITUDE**2 / 2)
+        assert label == "Power spectrum (amplitude²)"
+
+    def test_it_matches_the_periodogram_without_its_zero_and_nyquist_bins(self):
+        rng = np.random.default_rng(7)
+        signal = Variable(discretization=list(rng.standard_normal(_SAMPLES)))
+        with TemporaryDirectory() as directory:
+            plot = SpectrumPlot(output_dir=directory, output_format="html")
+            plot.plot_fft(signal, dt=_STEP)
+            plot.plot_periodogram(signal, dt=_STEP)
+        fft, periodogram = plot.figure.data
+        np.testing.assert_allclose(fft.x, periodogram.x[1:-1])
+        np.testing.assert_allclose(fft.y, periodogram.y[1:-1], rtol=1e-12)

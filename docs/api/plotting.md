@@ -101,7 +101,19 @@ sine of amplitude 2 has mean square 2.
 spectrum: its variance does not shrink as the record grows. A boxcar also leaks
 a sine that falls between bins into its neighbours, so the peak height is exact
 only on a bin frequency. Welch averaging and tapered windows address both and
-are not applied. `plot_fft` and `plot_multiple` plot $|X_k|^2$ unnormalised,
-labelled "Power".
+are not applied.
+
+`plot_fft` and `plot_multiple` plot the same power spectrum, $2|X_k|^2/N^2$ at the
+positive frequencies below Nyquist, under the same axis title, so their level no
+longer grows with the record length. Before DEQ-173 they plotted $|X_k|^2$
+unnormalised, labelled "Power", which grows as $N^2$. Continuing the example:
+
+```python
+plot.plot_fft(x, dt=dt)
+print(plot.figure.layout.yaxis.title.text, max(plot.figure.data[1].y))
+```
+
+prints `Power spectrum (amplitude²) 2.0`, the periodogram's peak; the unnormalised
+value was 4096 here. Source: [SciPy `periodogram` and `_spectral_helper`](../references.md#pages-films-and-numerics-infrastructure).
 
 ::: discrecontinual_equations.plot.spectrum_plot

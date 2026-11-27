@@ -19,7 +19,9 @@ integer powers. Division by a number scales the coefficients; division by a
 series with a non-zero constant term is the truncated quotient of
 :func:`~.bivariate.truncated_quotient` (Neidinger 2010, Sections 6 and 8), and a
 zero constant term raises ``ZeroDivisionError``, since the quotient then has no
-power series at the expansion point.
+power series at the expansion point. Two series of different orders combine
+at the lower order, as in :mod:`~.bivariate` (DEQ-173), and series of different
+dimensions are refused with ``ValueError``.
 
 References:
 - Griewank, A. and Walther, A. "Evaluating Derivatives: Principles and
@@ -115,6 +117,11 @@ class Multivariate:
 
     def _combine(self, other: object) -> "Multivariate":
         if isinstance(other, Multivariate):
+            if other._dimension != self._dimension:
+                raise ValueError(
+                    f"cannot combine series in {self._dimension} and "
+                    f"{other._dimension} variables"
+                )
             return other
         if isinstance(other, Number):
             return Multivariate.constant(other, self._order, self._dimension)  # type: ignore[arg-type]
@@ -127,7 +134,7 @@ class Multivariate:
         result = dict(self._coefficients)
         for key, value in right._coefficients.items():
             result[key] = result.get(key, 0.0) + value
-        return Multivariate(result, self._order, self._dimension)
+        return Multivariate(result, min(self._order, right._order), self._dimension)
 
     __radd__ = __add__
 
@@ -154,7 +161,7 @@ class Multivariate:
         right = self._combine(other)
         if right is NotImplemented:
             return NotImplemented
-        order = self._order
+        order = min(self._order, right._order)
         result: dict[tuple[int, ...], _Scalar] = {}
         for left_key, left_value in self._coefficients.items():
             left_degree = sum(left_key)
@@ -170,7 +177,7 @@ class Multivariate:
     def __truediv__(self, other: object) -> "Multivariate":
         """Divide by a number, or by a series with a non-zero constant term.
 
-        A series quotient is truncated at this series' ``order``; a zero
+        A series quotient is truncated at the lower of the two orders; a zero
         constant term in the denominator raises ``ZeroDivisionError`` (see
         :func:`~.bivariate.truncated_quotient`).
         """
@@ -183,13 +190,15 @@ class Multivariate:
             )
         if not isinstance(other, Multivariate):
             return NotImplemented
+        self._combine(other)  # refuses a different dimension
+        order = min(self._order, other._order)
         quotient = truncated_quotient(
             self._coefficients,
             other._coefficients,
-            self._order,
+            order,
             self._dimension,
         )
-        return Multivariate(quotient, self._order, self._dimension)
+        return Multivariate(quotient, order, self._dimension)
 
     def __rtruediv__(self, other: object) -> "Multivariate":
         right = self._combine(other)
