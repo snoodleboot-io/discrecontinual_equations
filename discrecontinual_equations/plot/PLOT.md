@@ -24,7 +24,7 @@ Plot (Base Classes)
 │
 └── SpectrumPlot - Power spectra and frequency analysis
     ├── plot_fft(x, dt, title)
-    ├── plot_periodogram(x, dt, title)
+    ├── plot_periodogram(x, dt, title, scaling)
     └── plot_multiple(signals, labels, title)
 ```
 
@@ -96,8 +96,8 @@ class SpectrumPlot:
     def plot_fft(self, x: Variable, dt: float = 1.0, title: str = "Power Spectrum"):
         """Plot power spectrum using FFT."""
 
-    def plot_periodogram(self, x: Variable, dt: float = 1.0, title: str = "Periodogram"):
-        """Plot periodogram (smoothed power spectrum)."""
+    def plot_periodogram(self, x: Variable, dt: float = 1.0, title: str = "Periodogram", scaling: str = "spectrum"):
+        """Plot the raw (boxcar, unsmoothed) periodogram, labelled by its scaling."""
 
     def plot_multiple(self, signals: list[tuple], labels: list[str] = None, title: str = "Multiple Spectra"):
         """Plot power spectra for multiple signals."""

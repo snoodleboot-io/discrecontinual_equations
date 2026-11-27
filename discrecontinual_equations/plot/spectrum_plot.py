@@ -29,6 +29,13 @@ import plotly.graph_objects as go
 
 from discrecontinual_equations.variable import Variable
 
+# What ``scipy.signal.periodogram`` returns for each ``scaling``, as an axis title.
+# "spectrum" is power per frequency bin; "density" is power per unit frequency.
+PERIODOGRAM_LABELS = {
+    "spectrum": "Power spectrum (amplitude²)",
+    "density": "Power spectral density (amplitude²/Hz)",
+}
+
 
 class SpectrumPlot:
     """Plot class for power spectra and frequency analysis.
@@ -99,24 +106,54 @@ class SpectrumPlot:
         x: Variable,
         dt: float = 1.0,
         title: str = "Periodogram",
+        scaling: str = "spectrum",
     ):
-        """Plot the raw periodogram (rectangular window, no smoothing).
+        """Plot the raw periodogram of a sampled signal, labelled by its scaling.
 
-        It is ``scipy.signal.periodogram`` with ``scaling="spectrum"``: the power
-        spectrum in squared signal units. It is not averaged, so it is as noisy
-        as :meth:`plot_fft`.
+        The signal's mean is removed and its one-sided periodogram is taken with
+        ``scipy.signal.periodogram``: a boxcar window (no taper), no averaging and
+        no smoothing, so each value is the squared modulus of one DFT bin. The
+        ``scaling`` decides what that value means, and the y-axis says so:
+
+        - ``"spectrum"`` (default): power per frequency bin, in amplitude² (V² for
+          a signal in volts). A sine on a bin frequency peaks at its mean square,
+          ``A² / 2``, and the bins sum to the signal's variance.
+        - ``"density"``: power per unit frequency, in amplitude²/Hz (with ``dt``
+          in seconds). The bins times the bin width ``1 / (N dt)`` sum to the
+          variance; use it for broadband noise, whose level should not depend on
+          ``N``.
+
+        Limits: the raw periodogram is not a consistent estimate of a noise
+        spectrum - its variance does not fall as ``N`` grows - and a boxcar leaks
+        power from a sine between bins into its neighbours. Welch averaging or a
+        taper would address both and is not applied here.
 
         Args:
             x: The sampled signal.
-            dt: Sample spacing; the sampling frequency is ``1 / dt``.
-            title: Figure title, also used for the file name.
+            dt: The sampling interval; the frequency axis is ``1 / dt`` wide.
+            title: The plot title, also the file name.
+            scaling: ``"spectrum"`` or ``"density"``.
+
+        Raises:
+            ValueError: If ``scaling`` is neither.
+
+        References:
+        - SciPy ``scipy.signal.periodogram`` documentation (v1.18.0): parameter
+          ``scaling`` ("density", V²/Hz; "spectrum", V²), default window
+          ``"boxcar"``, default ``detrend="constant"``.
         """
         from scipy.signal import periodogram
+
+        if scaling not in PERIODOGRAM_LABELS:
+            message = (
+                f"scaling must be one of {sorted(PERIODOGRAM_LABELS)}, not {scaling!r}"
+            )
+            raise ValueError(message)
 
         signal = np.array(x.discretization)
         signal = signal - np.mean(signal)
 
-        freqs, power = periodogram(signal, fs=1.0 / dt, scaling="spectrum")
+        freqs, power = periodogram(signal, fs=1.0 / dt, scaling=scaling)
 
         self.figure.add_trace(
             go.Scatter(
@@ -132,7 +169,7 @@ class SpectrumPlot:
         self.figure.update_layout(
             title=title,
             xaxis_title="Frequency (Hz)",
-            yaxis_title="Power Spectral Density",
+            yaxis_title=PERIODOGRAM_LABELS[scaling],
             hovermode="x",
             width=800,
             height=600,
