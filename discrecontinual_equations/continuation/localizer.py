@@ -134,17 +134,14 @@ class RefiningLocalizer(Localizer):
         upper: ContinuationState,
         detector: BifurcationDetector,
     ) -> LocatedBifurcation | None:
-        direction_vector = np.concatenate(
-            [upper.state - lower.state, [upper.parameter - lower.parameter]],
-        )
-        distance = float(np.linalg.norm(direction_vector))
+        chord = _augmented(upper) - _augmented(lower)
+        distance = float(np.linalg.norm(chord))
         if distance == 0.0:
             return None
-        unit = direction_vector / distance
         fallback = detector.test_value(DetectionContext(lower, self._jacobian))
 
         def test_at(fraction: float) -> float:
-            state = self._corrected_state(lower, unit, distance, fraction)
+            state = self._corrected_state(lower, upper, distance, fraction)
             if state is None:
                 return fallback
             return detector.test_value(DetectionContext(state, self._jacobian))
@@ -152,7 +149,7 @@ class RefiningLocalizer(Localizer):
         fraction = self._root_finder.locate(test_at, 0.0, 1.0)
         if fraction is None:
             return None
-        found = self._corrected_state(lower, unit, distance, fraction)
+        found = self._corrected_state(lower, upper, distance, fraction)
         if found is None:
             return None
         context = DetectionContext(found, self._jacobian)
@@ -165,17 +162,15 @@ class RefiningLocalizer(Localizer):
     def _corrected_state(
         self,
         lower: ContinuationState,
-        unit: np.ndarray,
+        upper: ContinuationState,
         distance: float,
         fraction: float,
     ) -> ContinuationState | None:
-        offset = fraction * distance
-        predicted_state = lower.state + offset * unit[:-1]
-        predicted_parameter = lower.parameter + offset * float(unit[-1])
+        predicted, direction = _hermite(lower, upper, distance, fraction)
         result = self._corrector.correct(
-            predicted_state,
-            predicted_parameter,
-            lower.tangent,
+            predicted[:-1],
+            float(predicted[-1]),
+            direction,
         )
         if not result.converged:
             return None
@@ -190,3 +185,42 @@ class RefiningLocalizer(Localizer):
             tangent,
             lower.arclength,
         )
+
+
+def _augmented(point: ContinuationState) -> np.ndarray:
+    """``(u, lambda)`` as one vector, the parameter last."""
+    return np.concatenate([point.state, [point.parameter]])
+
+
+def _hermite(
+    lower: ContinuationState,
+    upper: ContinuationState,
+    distance: float,
+    fraction: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    """The cubic through both points with both tangents, and its unit direction.
+
+    ``y(s) = h00 y_k + h10 L t_k + h01 y_(k+1) + h11 L t_(k+1)`` with the cubic
+    Hermite basis ``h00 = 2s^3 - 3s^2 + 1``, ``h10 = s^3 - 2s^2 + s``,
+    ``h01 = -2s^3 + 3s^2``, ``h11 = s^3 - s^2`` and ``L`` the chord's length, at
+    ``s = fraction``; the direction is ``y'(s)`` normalised. The cubic follows the
+    branch to third order in the step, where the chord is off it by the
+    curvature times the step squared, and at ``s = 0`` and ``s = 1`` it and its
+    direction are the accepted points and their tangents.
+    """
+    square = fraction * fraction
+    cube = square * fraction
+    start, end = _augmented(lower), _augmented(upper)
+    start_slope, end_slope = distance * lower.tangent, distance * upper.tangent
+    point = (
+        (2.0 * cube - 3.0 * square + 1.0) * start
+        + (cube - 2.0 * square + fraction) * start_slope
+        + (-2.0 * cube + 3.0 * square) * end
+        + (cube - square) * end_slope
+    )
+    slope = (
+        (6.0 * square - 6.0 * fraction) * (start - end)
+        + (3.0 * square - 4.0 * fraction + 1.0) * start_slope
+        + (3.0 * square - 2.0 * fraction) * end_slope
+    )
+    return point, slope / float(np.linalg.norm(slope))

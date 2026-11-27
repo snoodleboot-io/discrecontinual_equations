@@ -363,8 +363,11 @@ def _branch_label(context: "DetectionContext") -> str:
     ``3 lambda / (a w0)`` is 1 for a pitchfork (``a0 = 0``) and 3/2 for a
     transcritical (``c = 0``). A pitchfork must therefore also satisfy
     ``|3 lambda - a w0| <= |a w0| / 8`` (:data:`_EIGENVALUE_FRACTION`, a quarter
-    of the gap); the far transcritical gives 1.26 and is ``branch_point``. Both
-    ratios are unit-free. The differences use the step of :func:`_branch_step`, which follows the state's
+    of the gap); the far transcritical gives 1.26 and is ``branch_point``. The
+    relation holds on the nontrivial branch only, so it is checked only where
+    ``a^2 >= |c lambda| / 30``: a point located on the persisting branch, a
+    corrector tolerance off it, has ``lambda = mu`` and an ``a = c w0`` far below
+    that, and keeps its name from the cubic. Both ratios are unit-free. The differences use the step of :func:`_branch_step`, which follows the state's
     scale.
 
     References:
@@ -405,8 +408,14 @@ def _branch_label(context: "DetectionContext") -> str:
         vertex = quadratic - cubic * offset_estimate
         if abs(vertex) > _VERTEX_FRACTION * abs(quadratic):
             return "branch_point"
+        # On the nontrivial branch a^2 = 3 |c lambda| for a pitchfork; an a far
+        # below that is the persisting branch's own, a corrector tolerance off
+        # it, where lambda = mu and the relation below does not hold.
         drift = quadratic * offset_estimate
-        if abs(3.0 * eigenvalue - drift) > _EIGENVALUE_FRACTION * abs(drift):
+        nontrivial = _OFFSET_FACTOR * quadratic * quadratic >= abs(cubic * eigenvalue)
+        if nontrivial and abs(3.0 * eigenvalue - drift) > _EIGENVALUE_FRACTION * abs(
+            drift,
+        ):
             return "branch_point"
     if _resolved(cubic, cubic_size, cubic_error):
         return "pitchfork"
