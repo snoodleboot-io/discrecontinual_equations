@@ -55,6 +55,7 @@ inside ``[-0.5, 1.5]`` with a quarter of the axis between them. Scrubbing
 which is at ``mu = 0`` for every sigma, so only one threshold would pass.
 """
 
+import functools
 import math
 import sys
 
@@ -66,6 +67,7 @@ from discrecontinual_equations.continuation.covariant_lyapunov import (
 )
 from discrecontinual_equations.continuation.fokker_planck import (
     DensityGrid,
+    GridDiffusion,
     StationaryFokkerPlanck,
 )
 from discrecontinual_equations.continuation.lyapunov import (
@@ -320,7 +322,24 @@ def density_at(mu: float, grid: DensityGrid) -> StationaryFokkerPlanck | None:
     if mu <= 0.0:
         return None
     parameters = _parameters(mu)
-    return StationaryFokkerPlanck(_drift(parameters), _noise(parameters), Ito(), grid)
+    return StationaryFokkerPlanck(
+        _drift(parameters),
+        _noise(parameters),
+        Ito(),
+        grid,
+        _diffusion_on(grid),
+    )
+
+
+@functools.cache
+def _diffusion_on(grid: DensityGrid) -> GridDiffusion:
+    """``G G^T`` on ``grid``, evaluated once for every frame and every probe.
+
+    The noise reads sigma alone, never mu, so the diffusion is the same at every
+    value scrubbed; only the drift has to be evaluated again (DEQ-76). Grids are
+    keyed by identity, and the film passes the same two on every call.
+    """
+    return GridDiffusion(_noise(_parameters(0.0)), grid)
 
 
 def exponent_at(mu: float) -> float:

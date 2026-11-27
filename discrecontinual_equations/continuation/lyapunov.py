@@ -226,6 +226,19 @@ def _scalar_state_drift(
     return drift + half * (slope @ diffusion)
 
 
+def _unchanged(state: np.ndarray, anchor: np.ndarray | None) -> bool:
+    """Whether ``state`` is ``anchor`` bit for bit, so its coefficients still hold.
+
+    The fields are evaluated with no time argument and parameters that do not change
+    during an estimate, so every coefficient is a function of the state's bits alone.
+    A reference state that never moves - an equilibrium whose noise vanishes there,
+    the case every D-bifurcation estimate is about - then needs them only once.
+    Comparing bytes rather than values keeps ``-0.0`` and ``0.0`` apart, so reuse
+    cannot change a single bit of the estimate.
+    """
+    return anchor is not None and state.tobytes() == anchor.tobytes()
+
+
 class _Coefficients:
     """Everything one horizon step needs at a state, each field evaluated once.
 
@@ -268,6 +281,26 @@ def stochastic_lyapunov(
     multiplicative system ``f = a x``, ``g = s x`` the top exponent is ``a - s**2 / 2``
     (Ito) or ``a`` (Stratonovich), so noise shifts the stability boundary by
     ``s**2 / 2`` - the stochastic (D) bifurcation.
+
+    The estimate is of the Euler-Maruyama map, not of the flow: for that linear
+    system it converges to ``E log|1 + a dt + s sqrt(dt) Z| / dt`` (``Z`` standard
+    normal), which is ``a - s**2 / 2`` only up to ``O(dt)``; without noise it is
+    ``log(1 + a dt) / dt``, below ``a`` by about ``a**2 dt / 2``.
+
+    The coefficients - both fields and both Jacobians - are a function of the state
+    alone, so while the state has not moved they are reused rather than evaluated
+    again (DEQ-76). At an equilibrium whose noise vanishes there, the reference
+    state of every D-bifurcation estimate, the step leaves the state exactly where it
+    was and the fields are evaluated once per estimate instead of once per step; the
+    exponents are the same bit for bit.
+
+    References:
+        [HigMaoYuan2007] D. J. Higham, X. Mao and C. Yuan, "Almost sure and moment
+        exponential stability in the numerical simulation of stochastic
+        differential equations", SIAM J. Numer. Anal. 45(2), 592-609 (2007),
+        doi:10.1137/060658138: Theorem 4.1 (the sample exponent ``a - s**2 / 2``
+        of ``dx = a x dt + s x dB``), eqs. (4.3)-(4.4) (the Euler-Maruyama
+        recurrence and its almost-sure growth rate).
     """
     control = settings if settings is not None else StochasticLyapunovSettings()
     dt = control.dt
@@ -285,8 +318,12 @@ def stochastic_lyapunov(
     frame = np.eye(dimension)[:, :directions]
     totals = np.zeros(directions)
     elapsed = 0.0
+    coefficients: _Coefficients | None = None
+    anchor: np.ndarray | None = None
     for i in range(control.horizon):
-        coefficients = _Coefficients(system, state)
+        if coefficients is None or not _unchanged(state, anchor):
+            coefficients = _Coefficients(system, state)
+            anchor = state
         increment = root_dt * generator.standard_normal()
         variation = coefficients.diffusion_jacobian @ frame
         frame = frame + coefficients.variational @ frame * dt + variation * increment
@@ -388,6 +425,15 @@ def matrix_noise_lyapunov(
     linear system is exactly the real parts of its eigenvalues, with no Monte-Carlo
     error. With noise ``G = diag(s_i x_i)`` the components decouple into geometric
     Brownian motions and the spectrum is ``{a_i - s_i^2 / 2}`` (Ito) exactly.
+
+    As in :func:`stochastic_lyapunov`, the coefficients are reused while the state's
+    bytes are unchanged, so an estimate at an invariant state - the noisy Hopf
+    film's origin under conformal noise - evaluates its fields once (DEQ-76).
+
+    References:
+        [HigMaoYuan2007] D. J. Higham, X. Mao and C. Yuan, SIAM J. Numer. Anal.
+        45(2), 592-609 (2007), doi:10.1137/060658138: Theorem 4.1, the scalar
+        exponent each decoupled component above attains.
     """
     control = settings if settings is not None else StochasticLyapunovSettings()
     dt = control.dt
@@ -406,8 +452,12 @@ def matrix_noise_lyapunov(
     frame = np.eye(dimension)[:, :directions]
     totals = np.zeros(directions)
     elapsed = 0.0
+    coefficients: _MatrixCoefficients | None = None
+    anchor: np.ndarray | None = None
     for i in range(control.horizon):
-        coefficients = _MatrixCoefficients(system, state, factor)
+        if coefficients is None or not _unchanged(state, anchor):
+            coefficients = _MatrixCoefficients(system, state, factor)
+            anchor = state
         increments = root_dt * generator.standard_normal(drivers)
         # sum_k dW_k (dG_k/dx) Y, increments first: an O(K n^2) sum and one BLAS
         # product. A three-operand einsum without a contraction path runs as one

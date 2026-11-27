@@ -73,6 +73,36 @@ MU = "\u03bc"
 ALPHA = "\u03b1"
 
 
+def bifurcation_exponent(
+    alpha: float,
+    sigma: float,
+    settings: StochasticLyapunovSettings,
+) -> float:
+    """Top exponent of ``x = 0`` for ``dx = alpha x dt + sigma x dW`` (Ito).
+
+    Without noise the trivial solution of ``x' = alpha x`` grows as
+    ``exp(alpha t)``, so its exponent is ``alpha`` exactly, and it is taken from
+    the closed form ``f'(0) - g'(0)^2 / 2`` rather than integrated: the
+    simulation could only return ``log(1 + alpha dt) / dt``, which differs from
+    it by the Euler step's bias of about ``alpha^2 dt / 2`` (DEQ-76). With noise
+    the curve is the stochastic Benettin estimate the page is about.
+
+    References:
+        [HigMaoYuan2007] D. J. Higham, X. Mao and C. Yuan, SIAM J. Numer. Anal.
+        45(2), 592-609 (2007), doi:10.1137/060658138: Theorem 4.1 (the exponent
+        ``alpha - sigma^2 / 2``, ``alpha`` at ``sigma = 0``) and eq. (4.4) (what
+        Euler-Maruyama converges to instead).
+    """
+    system = StochasticSystem(
+        _stochastic_drift(alpha),
+        _stochastic_diffusion(sigma),
+        Ito(),
+    )
+    if sigma == 0.0:
+        return LyapunovExponent(system.drift, system.diffusion, Ito()).at(0.0)
+    return stochastic_lyapunov(system, np.array([0.0]), settings=settings).top
+
+
 def _stochastic_bifurcation() -> Scene:
     settings = StochasticLyapunovSettings(dt=0.005, horizon=80000, transient=0, seed=7)
     curves: list[tuple[str, str, list[tuple[float, float]], str | None]] = []
@@ -83,13 +113,7 @@ def _stochastic_bifurcation() -> Scene:
         points: list[tuple[float, float]] = []
         for step in range(13):
             alpha = -0.1 + 0.03 * step
-            system = StochasticSystem(
-                _stochastic_drift(alpha),
-                _stochastic_diffusion(sigma),
-                Ito(),
-            )
-            top = stochastic_lyapunov(system, np.array([0.0]), settings=settings).top
-            points.append((alpha, top))
+            points.append((alpha, bifurcation_exponent(alpha, sigma, settings)))
         curves.append((kind, label, points, None))
     markers = [("bifurcation", "shifted threshold", [(0.18, 0.0)], None)]
     scene = curve_scene(
@@ -97,8 +121,9 @@ def _stochastic_bifurcation() -> Scene:
         markers,
         (ALPHA, "top Lyapunov exponent"),
         "Stochastic (D) bifurcation: noise shifts the threshold",
-        "The top Lyapunov exponent of the trivial solution, simulated by the "
-        "stochastic Benettin method. Without noise it crosses zero at alpha = 0; "
+        "The top Lyapunov exponent of the trivial solution: with noise simulated "
+        "by the stochastic Benettin method, without it the closed form alpha. "
+        "Without noise it crosses zero at alpha = 0; "
         "multiplicative noise shifts the crossing to alpha = s^2 / 2 = 0.18.",
     )
     return with_regions(

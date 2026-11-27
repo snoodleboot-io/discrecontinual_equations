@@ -1128,6 +1128,59 @@ changes how much noise the differences pick up. A genuine coefficient smaller th
 `1e-5` of its terms is reported as zero. When the Jacobian is too noisy to resolve
 `c`, the point is honestly `branch_point`, not a guessed `pitchfork`.
 
+## Scanning a stochastic system without repeating work (DEQ-76)
+
+**The problem.** A D-bifurcation is located by estimating the top exponent of an
+invariant state at many parameter values, and a P-bifurcation by solving the
+stationary Fokker-Planck equation at many parameter values. Both scans used to
+evaluate, on every step or every solve, quantities that cannot have changed.
+
+**At an invariant state the coefficients are computed once.** `stochastic_lyapunov`
+and `matrix_noise_lyapunov` keep the fields and Jacobians of the last step and reuse
+them while the state's bytes are unchanged. An equilibrium whose noise vanishes there
+(`f(0) = G(0) = 0`) is left exactly where it was by every Euler-Maruyama step, so the
+whole horizon costs one evaluation. The comparison is of bytes, so `-0.0` and `0.0`
+are different states and the exponents are identical bit for bit to the estimate
+without reuse.
+
+**A shared diffusion.** When only the drift varies, `G G^T` on the grid is the same for
+every solve. `GridDiffusion` evaluates it once, and a `StationaryFokkerPlanck` given
+one skips those evaluations. Under Ito it evaluates no noise at all.
+
+```python
+from discrecontinual_equations.continuation import (
+    DensityGrid,
+    GridDiffusion,
+    Ito,
+    StationaryFokkerPlanck,
+)
+from examples.continuation.stage_noisy_hopf import _drift, _noise, _parameters
+
+grid = DensityGrid.box([-2.5, -2.5], [2.5, 2.5], [40, 40])
+diffusion = GridDiffusion(_noise(_parameters(0.0)), grid)  # sigma only
+for mu in (0.3, 0.9, 1.5):
+    parameters = _parameters(mu)
+    density = StationaryFokkerPlanck(
+        _drift(parameters), _noise(parameters), Ito(), grid, diffusion
+    ).solve()
+    print(mu, density.mass())
+```
+
+**Without noise, use the closed form.** For `dx = a x dt + s x dW` the exponent of
+`x = 0` is `a - s^2 / 2` ([HigMaoYuan2007], Theorem 4.1), so at `s = 0` it is `a`.
+The stochastic bifurcation page now draws that curve from `LyapunovExponent` instead
+of integrating it. The Euler-Maruyama estimate converges to
+`E log|1 + a dt + s sqrt(dt) Z| / dt` ([HigMaoYuan2007], eq. (4.4)), which at `s = 0`
+is `log(1 + a dt) / dt`. That is below `a` by `a^2 dt / 2` to leading order, at most
+`1.7e-4` on that page, and that is the only change to the page's numbers.
+
+**Limits.** The reuse needs fields that depend on the state alone. Fields that read a
+clock or keep their own state would be reused wrongly. A `GridDiffusion` is checked
+against its grid but not against its noise: passing one is the caller's statement
+that `D` does not depend on the parameter being scanned. Under Stratonovich the drift
+shift still evaluates the columns and their Jacobians at the faces. See
+[References](../references.md) for the full entries.
+
 ## Continuation
 
 ::: discrecontinual_equations.continuation
