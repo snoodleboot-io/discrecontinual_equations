@@ -634,3 +634,7 @@ The concepts, worked examples and limits are on the
 ::: discrecontinual_equations.systems.reflection_cubic
 
 ::: discrecontinual_equations.systems.coupled_ring
+
+## Slow manifolds and canards
+
+::: discrecontinual_equations.continuation.slow_manifold

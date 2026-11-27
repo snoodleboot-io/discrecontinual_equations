@@ -3,7 +3,35 @@
 This note records work that was investigated but deliberately not shipped, so the
 context and the reasoning are not lost. It is developer documentation, not a promise.
 
-## 1. Adaptive periodic-orbit mesh for extreme relaxation oscillations (RESOLVED)
+## 1. Relaxation oscillations as fast-slow orbits: the adaptive mesh, and the canards it cannot reach
+
+**What a relaxation oscillation is, in the terms that explain the mesh.** Van der Pol
+at large `mu` is a fast-slow system. In the Lienard plane, `x' = mu (y - x^3/3 + x)`,
+`y' = -x / mu`, so with `eps = 1 / mu^2` the variable `x` is fast and `y` slow. The
+critical manifold `y = x^3/3 - x` has two attracting outer branches (`|x| > 1`) and a
+repelling middle one, separated by folds at `x = +-1`. Fenichel's theorem puts an
+attracting slow manifold `S_a` within `O(eps)` of each outer branch; the cycle crawls
+along `S_a`, loses it at a fold, and jumps along a fast fibre to the other branch.
+Desroches et al. (SIAM Review 54, 2012, section 2.1.1) give the cycle as lying
+`O(eps^(2/3))` from that singular candidate, the `eps^(2/3)` being the fold's own
+scaling. Every difficulty below is one of these three places:
+
+- **the fast fibres** are the "jump layers": they take `O(1/mu)` of a period of
+  `O(mu)`, which is why a uniform time mesh's period error was first order and large
+  (~10% at `mu = 10`), and why the curvature monitor - large exactly on the fibres -
+  is the one that works;
+- **the folds** are where normal hyperbolicity fails and the orbit turns from slow
+  to fast over the `eps^(2/3)` window; the adapted mesh must resolve that turn as
+  well as the jump, which is the headroom in 1b;
+- **the slow branches** are where nothing happens and a uniform mesh wastes nodes.
+
+The extreme case is the **canard explosion** (section 1d): just below the Hopf the
+cycle *follows the repelling slow manifold*, and there no mesh refinement and no
+forward integration helps, because the orbit is exponentially unstable in the
+direction the integrator would have to go. That is now computed by boundary-value
+problem rather than by mesh.
+
+### The adaptive mesh (RESOLVED)
 
 **Status:** resolved. `AdaptivePeriodicOrbit` (in `continuation/periodic_orbit.py`)
 adapts the mesh and, on stiff relaxation oscillations, beats the uniform mesh by
@@ -162,6 +190,90 @@ solver returns the same near-optimal result as the uniform mesh (no regression).
     problem whose leading eigenvalue is small would get a proportionally weaker
     reduction; scaling the extension by `1 / lambda` is the principled version and
     again needs the eigenvalue in the base class.
+
+## 1d. Slow manifolds and canards by boundary-value problem (RESOLVED, DEQ-39)
+
+**The gap.** The adaptive mesh resolves a relaxation oscillation because the cycle
+stays on *attracting* slow manifolds between its jumps. The canard explosion is the
+case where it does not: van der Pol with constant forcing,
+`x' = y - x^3/3 + x`, `y' = eps (a - x)` (Desroches et al. 2012, eq. 2.7), has a
+singular Hopf at `a = 1`, and just below it the cycle grows from Hopf size to
+relaxation size inside a window of `a` about `1e-9` wide at `eps = 0.05`, by
+following the *repelling* slow manifold `S_r`. Forward integration cannot follow
+`S_r` at all, and the cycle's monodromy is a product of factors from `e^40` to
+`e^-80`, so its Floquet multipliers off the collocation are meaningless there
+(errors above one).
+
+**What was built.** `continuation/slow_manifold.py`:
+
+- `FenichelExpansion` - the slow manifold `x = h(y, eps)` as Fenichel's series,
+  solved one order of `eps` at a time from the invariance equation (the homological
+  operator is multiplication by the layer eigenvalue `f_x(h_0(y), y, 0)`, inverted
+  as a series in `y`). A constant divisor, the first version, is *not* enough:
+  `eps h_y` preserves total degree, so the `eps^3` coefficient came out wrong until
+  the divisor was the series; the invariance residual now vanishes to 1e-17 through
+  the order.
+- `SlowManifold` - each manifold as a family of orbit segments of Desroches et al.'s
+  problem (8.1), `u' = T F(u)`, `u(0)` on the Fenichel point, `u(1)` on a section,
+  `T < 0` for `S_r`; the family is swept from `T = 0` to the target section and then
+  continued in the parameter.
+- `CanardSearch` - the maximal canard as the zero of the gap between `S_a` and `S_r`
+  on the section `x = 1` through the fold (section 8.3).
+- `MaximalCanard` - the concatenated problem (8.6)-(8.7), `u(0) = L_a`,
+  `u(1) = L_r`, `T` and `a` free, continued in `eps`.
+
+**Measured** (Python 3.14, NumPy 2.4, SciPy 1.18, `solve_bvp` at tol 1e-10):
+
+- `a_c(0.05) = 0.9934909325`, the gap search and the concatenated problem agreeing
+  to 1e-14; Desroches et al. report 0.993491 for the explosion at this `eps`.
+- Against `a_c = 1 - eps/8 - 3 eps^2/32 - 173 eps^3/1024 - 7593 eps^4/16384 -
+  436777 eps^5/262144 - ...` the error of the series truncated after `eps^k` falls
+  with log-log slope `k + 1` for `k = 1 .. 4` over `eps` in [0.01, 0.04] (the
+  table), and what is left after `eps^5` is the next term, `-15340159 eps^6 /
+  2097152`, to 5% at `eps = 0.01` - a residual of 7.7e-12. The coefficients come
+  from a symbolic expansion of the canard as a graph `y(x)` regular at the fold;
+  the first is Krupa and Szmolyan's (SIAM J. Math. Anal. 2001, Thm 3.1, eq. 3.8)
+  with `A = -1`. Their JDE paper (the canard explosion, 2001) could not be fetched
+  (publisher captcha); through `eps^3` the series is the one Brons (arXiv
+  1209.1109, eq. 9) quotes from Zvonkin and Shubin (Russian Math. Surveys 39,
+  1984) for exactly this system. His own iterative scheme gets `-75/1024` at
+  `eps^3`, which he notes agrees with (9) only to `eps^2`; the BVP sides with
+  `-173/1024` (slope 4.09 for the `eps^3` truncation).
+
+  | truncated after | `eps = 0.04` | `0.02` | `0.01` | slope (7 points) |
+  |---|---|---|---|---|
+  | `eps^1` | 1.6e-4 | 3.9e-5 | 9.6e-6 | 2.04 |
+  | `eps^2` | 1.2e-5 | 1.4e-6 | 1.7e-7 | 3.07 |
+  | `eps^3` | 1.4e-6 | 8.0e-8 | 4.8e-9 | 4.09 |
+  | `eps^4` | 2.1e-7 | 5.9e-9 | 1.7e-10 | 5.11 |
+
+  The located values move by 9e-13 between `solve_bvp` tolerances 1e-9 and 1e-10.
+- The explosion itself, `CycleContinuation` on 160 Hermite-Simpson intervals,
+  against a shooting continuation parametrised by the cycle's leftmost point:
+  periods agree to 3e-5 relative, amplitudes to 3e-4, and `a` to 5e-10 through the
+  whole explosion (1.7e-8 in the relaxation tail, where `a` steepens in `m` and the
+  readout of `m` limits it); every cycle that follows `S_r` past `x = -0.3` sits within 3e-10
+  of the slow-manifold canard.
+
+**The film** (`examples/continuation/stage_canard.py`) scrubs `s` with
+`a = a_c + 1e-10 sinh(s)`, because the explosion is invisible on a linear `a`
+axis; at `eps = 0.05` the series through `eps^4` is 6.8e-7 from `a_c`, a thousand
+times the explosion's width, so the axis is centred on the computed canard. Its
+cycles carry Liouville's multiplier `exp(int (1 - x^2) dt)` instead of the
+monodromy's, which is exact for a planar flow and shows every cycle stable.
+
+Headroom left:
+
+- **Planar only.** The expansion and the problems are for one fast and one slow
+  variable. Folded nodes and mixed-mode oscillations need two slow variables, where
+  `L` becomes a curve and the manifolds surfaces (problem 8.1 as written);
+  Guckenheimer and Kuehn's saddle-type slow manifolds need two fast ones.
+- **The library's first Lyapunov coefficient has the wrong sign here.**
+  `normal_form.first_lyapunov` normalises the adjoint eigenvector by `<p, q>`
+  rather than its conjugate, which leaves `<p, q> = c / conj(c)`; for this
+  system's non-normal Jacobian `c` is imaginary and the sign flips (+2.13 against
+  the hand-computed -2.13 at `eps = 0.05`). It is recorded as an expected failure
+  in `tests/continuation/test_slow_manifold.py` and needs its own fix.
 
 ## 2. Smaller open frontier items
 
