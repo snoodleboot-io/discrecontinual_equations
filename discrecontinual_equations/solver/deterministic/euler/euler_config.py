@@ -1,3 +1,12 @@
+"""Configuration of the forward Euler solver: a fixed grid and its step.
+
+The grid and its checks come from ``DeterministicConfig``; this class only names
+the configuration ``EulerSolver`` takes.
+
+References:
+    See ``EulerSolver`` and ``docs/references.md`` (Euler1768).
+"""
+
 from discrecontinual_equations.solver.solver_config import DeterministicConfig
 
 
@@ -10,4 +19,7 @@ class EulerConfig(DeterministicConfig):
     - times, n_steps, dt: Computed properties
 
     The Euler method is the fundamental first-order explicit solver.
+
+    References:
+        See ``EulerSolver`` and ``docs/references.md`` (Euler1768).
     """

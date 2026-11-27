@@ -1,3 +1,37 @@
+"""The Cash-Karp embedded Runge-Kutta pair of orders 4 and 5, with adaptive steps.
+
+Cash and Karp (1990) give a six-stage tableau for a variable-order method
+aimed at right-hand sides that vary rapidly. This solver uses one fixed pair
+from it: two weight rows on the same six stages, of orders 5 and 4, whose
+difference estimates the local error. Steps are accepted and resized as
+in the other embedded pairs (see the Dormand-Prince 5(4) solver).
+
+Known defects, found while documenting and not yet fixed (no behaviour changes
+in this pass):
+
+* The weight rows are swapped. ``b4 = (37/378, 0, 250/621, 125/594, 0,
+  512/1771)`` is the fifth-order row and ``b5 = (2825/27648, ...,
+  277/14336, 1/4)`` the fourth-order one: the order conditions, solved in exact
+  rational arithmetic, hold through order 5 for the first and only through
+  order 4 for the second. The solver advances with ``b5``, so it propagates the
+  *fourth*-order solution; the error estimate ``|y5 - y4|`` is unchanged. On
+  ``y' = y cos t`` with fixed steps the global error falls as ``h^4``.
+* The step-size controller and the endless retry at ``min_step_size`` are as
+  in the Dormand-Prince 5(4) solver: an integral controller
+  ``h S err^(-(1 + beta)/5)`` with no previous error, a max-norm error, and a
+  ``RuntimeError("Step size became too small")`` that cannot be reached.
+
+References:
+    Cash, J. R. and Karp, A. H. (1990). A variable order Runge-Kutta method
+    for initial value problems with rapidly varying right-hand sides. ACM
+    Transactions on Mathematical Software 16(3):201-222.
+    DOI: 10.1145/79505.79507. The six-stage tableau (not read directly:
+    checked against the Wikipedia article "Cash-Karp method" and by the order
+    conditions). The code's earlier citation gave the year as 1978.
+
+    See ``docs/references.md`` (CashKarp1990, HairerWanner1996).
+"""
+
 import numpy as np
 
 from discrecontinual_equations.curve import Curve
@@ -9,21 +43,25 @@ from discrecontinual_equations.solver.solver import Solver
 
 
 class CashKarpSolver(Solver):
-    """
-    Cash-Karp Runge-Kutta method (4,5) for solving ODEs.
+    """Cash-Karp 4(5) pair on six stages, with adaptive steps.
 
-    A 4th-order Runge-Kutta method with embedded 5th-order solution for error estimation.
-    Uses 6 stages and provides adaptive step size control through local error estimation.
-
-    The method provides both 4th-order (y4) and 5th-order (y5) solutions, where the
-    difference |y5 - y4| serves as an estimate of the local truncation error.
+    ``a`` and ``c`` hold the tableau. Despite their names, ``b4`` is the
+    fifth-order weight row and ``b5`` the fourth-order one, and the solver
+    advances with ``b5``: the solution it returns is fourth order (module
+    docstring). ``|y5 - y4|`` is the error estimate.
 
     References:
-    - Cash, J.R. and Karp, A.H. "A variable order Runge-Kutta method for initial value problems
-      with rapidly varying right-hand sides" ACM Transactions on Mathematical Software, 1978
+        Cash and Karp (1990), the six-stage tableau. See ``docs/references.md``
+        (CashKarp1990).
     """
 
     def __init__(self, solver_config: CashKarpConfig):
+        """Store the configuration and build the tableau.
+
+        Args:
+            solver_config: The interval, first step, tolerances, step bounds,
+                ``safety_factor`` and ``beta``.
+        """
         super().__init__(solver_config=solver_config)
 
         # Cash-Karp coefficients
@@ -52,6 +90,29 @@ class CashKarpSolver(Solver):
         equation: DifferentialEquation,
         initial_values: list[float],
     ) -> Curve:
+        """Integrate from ``start_time`` to ``end_time`` with adaptive steps.
+
+        Starting from ``initial_step_size``, each step is tried, accepted when
+        the scaled error estimate is at most 1, and the next step size is set
+        from that estimate; a rejected step is retried with the smaller size.
+        The last step is shortened to land on ``end_time``. The accepted
+        points are recorded, so their spacing varies.
+
+        Args:
+            equation: The equation; its ``derivative.eval(point, time)`` is the
+                field ``f(t, y)``.
+            initial_values: The state at ``start_time``.
+
+        Returns:
+            The curve of accepted points: ``time`` holds ``t_n``, ``results``
+            the state ``y_n`` and ``variables`` zeros (this solver records no
+            derivative). It is also kept as ``solution``.
+
+        Raises:
+            RuntimeError: Declared for a step below ``min_step_size``, but not
+                reached: a step rejected at ``min_step_size`` is retried there
+                indefinitely (see the module docstring).
+        """
         self.solution = self._new_solution(equation)
 
         # Initialize
@@ -85,7 +146,12 @@ class CashKarpSolver(Solver):
         return self.solution
 
     def _step(self, equation: DifferentialEquation, t: float, y: np.ndarray, h: float):
-        """Perform one Cash-Karp step."""
+        """Take one trial step of size ``h`` from ``(t, y)``.
+
+        Evaluates the six stages, forms both weight rows and returns the
+        advancing solution ``y5``, the componentwise estimate ``|y4 - y5|``
+        and the proposed next step from :meth:`_compute_new_step_size`.
+        """
         k = np.zeros((6, len(y)))
 
         # Compute stages
@@ -115,7 +181,9 @@ class CashKarpSolver(Solver):
         y_new: np.ndarray,
         h: float,
     ) -> bool:
-        """Check if the step should be accepted based on error."""
+        """Accept the step when ``max_i err_i / (atol + rtol max(|y_i|, |y_new_i|))``
+        is at most 1 (a max norm; Hairer and Wanner's ``DOPRI5`` uses the RMS
+        norm of the same ratios)."""
         # Compute scaled error
         tol = (
             self.solver_config.absolute_tolerance
@@ -132,7 +200,15 @@ class CashKarpSolver(Solver):
         y: np.ndarray,
         h: float,
     ) -> float:
-        """Compute new step size using PI control."""
+        """Propose the next step: ``h S r^(-1/5) r^(-beta/5)``, clipped to the bounds.
+
+        ``r`` is the max-norm error ratio, scaled by ``atol + rtol |y|`` (the old
+        state only), and ``S`` is ``safety_factor``; ``r = 0`` gives
+        ``max_step_size``. This is an integral controller with exponent
+        ``(1 + beta)/5``: although the name says PI, no earlier error enters,
+        unlike the Lund-stabilized ``err^(-(0.2 - 0.75 beta)) err_old^beta``
+        of Hairer and Wanner's ``DOPRI5`` for its 5(4) pair.
+        """
         tol = (
             self.solver_config.absolute_tolerance
             + self.solver_config.relative_tolerance * np.abs(y)

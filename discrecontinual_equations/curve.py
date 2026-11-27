@@ -1,3 +1,18 @@
+"""The discretized solution of a differential equation: a ``Curve``.
+
+A solver returns a ``Curve``: parallel lists of node times, of ``variables``
+and of ``results``, each a :class:`~discrecontinual_equations.variable.Variable`
+whose ``discretization`` grows by one value per node. Point ``i`` is
+``[time_i, [variables_i], [results_i]]`` (or, without a time variable,
+``[[variables_i], [results_i]]``).
+
+What the two lists hold depends on the solver. In every deterministic solver
+``results`` holds the state ``y_n``, so ``curve.results[k].discretization[-1]``
+is the final value of component ``k``. The fixed-step solvers (Euler,
+Adams-Bashforth) put the previous state ``y_{n-1}`` in ``variables`` (zeros at
+the first node); the adaptive Runge-Kutta solvers put zeros there.
+"""
+
 from discrecontinual_equations.variable import Variable
 
 
@@ -43,14 +58,17 @@ class Curve:
 
     @property
     def time(self):
+        """The time variable, whose ``discretization`` is the nodes; ``None`` if none."""
         return self._time
 
     @property
     def variables(self):
+        """The variables, one ``Variable`` per component."""
         return self._variables
 
     @property
     def results(self):
+        """The results, one ``Variable`` per component; the solvers' state."""
         return self._results
 
     def __getitem__(self, index: int) -> list[float | list[float]]:
@@ -129,7 +147,7 @@ class Curve:
             ]
 
     def __len__(self):
-        """Return the length of the curve."""
+        """Return the number of points: the time nodes, else the first variable's."""
         if self._time:
             return len(self._time.discretization)
         return len(self._variables[0].discretization) if self._variables else 0

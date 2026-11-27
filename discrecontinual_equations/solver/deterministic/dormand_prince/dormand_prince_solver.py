@@ -1,3 +1,50 @@
+"""The Dormand-Prince 5(4) embedded Runge-Kutta pair, with adaptive steps.
+
+An explicit Runge-Kutta step evaluates the field ``f(t, y)`` at ``s`` stages
+``k_i = f(t + c_i h, y + h sum_j a_ij k_j)`` and combines them as
+``y + h sum_i b_i k_i``. An *embedded* pair carries two weight rows on the same
+stages, here a fifth-order ``b`` and a fourth-order ``b_hat``, so the difference
+``y5 - y4`` estimates the local error at no extra cost. The step is accepted when
+that estimate is within tolerance, and the next step is scaled from it.
+
+Dormand and Prince (1980) chose their seven-stage 5(4) tableau so that the
+fifth-order solution has small error coefficients: it is the one to advance with
+("local extrapolation"), and this solver does so. Its last stage is evaluated at
+the new point (the "first same as last" property); this solver does not reuse
+it, so a step costs seven evaluations, not six.
+
+Known defects, found while documenting and not yet fixed (no behaviour changes
+in this pass):
+
+* The node ``c_5`` is ``7/9`` here; Dormand and Prince's is ``8/9``, the sum of
+  ``a_5j`` (Hairer and Wanner's ``CDOPRI`` has ``C5=8.D0/9.D0``). The ``a`` and
+  ``b`` rows are right, so an autonomous field (``f`` not depending on ``t``)
+  is integrated at fifth order; a field that depends on ``t`` sees the fifth
+  stage at the wrong time, and the global error drops to first order. On
+  ``y' = y cos t`` to ``t = 2`` with fixed steps 0.1 to 0.0125 the error halves
+  with ``h`` (1.3e-2 to 1.6e-3), where an autonomous field gains ``2^5``.
+* The controller is not the PI ("Lund-stabilized") controller its comment
+  names: it scales by ``err^(-(1 + beta)/5)`` with no previous error, where
+  Hairer and Wanner's ``DOPRI5`` uses ``err^(-(0.2 - 0.75 beta)) err_old^beta``.
+  The error is measured in the max norm, not the RMS norm.
+* A step rejected at ``min_step_size`` is retried at ``min_step_size`` without
+  end; the ``RuntimeError("Step size became too small")`` cannot be reached.
+
+References:
+    Dormand, J. R. and Prince, P. J. (1980). A family of embedded Runge-Kutta
+    formulae. Journal of Computational and Applied Mathematics 6(1):19-26.
+    DOI: 10.1016/0771-050X(80)90013-3. The seven-stage tableau (not read
+    directly: checked against Hairer and Wanner's ``CDOPRI`` and by the order
+    conditions in exact arithmetic).
+
+    Hairer, E. and Wanner, G. (1996). DOPRI5, Fortran code described in
+    Hairer, Norsett and Wanner, Solving Ordinary Differential Equations I,
+    2nd ed., Springer 1993. Routine ``CDOPRI`` (coefficients) and ``DOPCOR``
+    (step-size control; the defaults ``SAFE = 0.9`` and ``BETA = 0.04``).
+
+    See ``docs/references.md`` (DormandPrince1980, HairerWanner1996).
+"""
+
 import numpy as np
 
 from discrecontinual_equations.curve import Curve
@@ -9,21 +56,25 @@ from discrecontinual_equations.solver.solver import Solver
 
 
 class DormandPrinceSolver(Solver):
-    """
-    Dormand-Prince Runge-Kutta method (5,4) for solving ODEs.
+    """Dormand-Prince 5(4): advance at fifth order, estimate the error at fourth.
 
-    A 5th-order Runge-Kutta method with embedded 4th-order solution for error estimation.
-    Uses 7 stages and provides adaptive step size control through local error estimation.
-
-    The method provides both 5th-order (y5) and 4th-order (y4) solutions, where the
-    difference |y5 - y4| serves as an estimate of the local truncation error.
+    Seven stages per step. ``a``, ``c``, ``b5`` and ``b4`` hold the tableau;
+    ``b5`` advances the solution and ``|y5 - y4|`` is the error estimate. See the
+    module docstring for the step control and the known ``c_5`` defect.
 
     References:
-    - Dormand, John R. and Prince, Peter J. "A family of embedded Runge-Kutta formulae"
-      Journal of Computational and Applied Mathematics, 1980
+        Dormand and Prince (1980), the seven-stage tableau; Hairer and Wanner
+        (1996), ``DOPRI5``. See ``docs/references.md`` (DormandPrince1980,
+        HairerWanner1996).
     """
 
     def __init__(self, solver_config: DormandPrinceConfig):
+        """Store the configuration and build the tableau.
+
+        Args:
+            solver_config: The interval, first step, tolerances, step bounds,
+                ``safety_factor`` and ``beta``.
+        """
         super().__init__(solver_config=solver_config)
 
         # Dormand-Prince coefficients
@@ -61,6 +112,29 @@ class DormandPrinceSolver(Solver):
         equation: DifferentialEquation,
         initial_values: list[float],
     ) -> Curve:
+        """Integrate from ``start_time`` to ``end_time`` with adaptive steps.
+
+        Starting from ``initial_step_size``, each step is tried, accepted when
+        the scaled error estimate is at most 1, and the next step size is set
+        from that estimate; a rejected step is retried with the smaller size.
+        The last step is shortened to land on ``end_time``. The accepted
+        points are recorded, so their spacing varies.
+
+        Args:
+            equation: The equation; its ``derivative.eval(point, time)`` is the
+                field ``f(t, y)``.
+            initial_values: The state at ``start_time``.
+
+        Returns:
+            The curve of accepted points: ``time`` holds ``t_n``, ``results``
+            the state ``y_n`` and ``variables`` zeros (this solver records no
+            derivative). It is also kept as ``solution``.
+
+        Raises:
+            RuntimeError: Declared for a step below ``min_step_size``, but not
+                reached: a step rejected at ``min_step_size`` is retried there
+                indefinitely (see the module docstring).
+        """
         self.solution = self._new_solution(equation)
 
         # Initialize
@@ -94,7 +168,12 @@ class DormandPrinceSolver(Solver):
         return self.solution
 
     def _step(self, equation: DifferentialEquation, t: float, y: np.ndarray, h: float):
-        """Perform one Dormand-Prince step."""
+        """Take one trial step of size ``h`` from ``(t, y)``.
+
+        Evaluates the seven stages, forms both weight rows and returns the
+        advancing solution ``y5``, the componentwise estimate ``|y4 - y5|``
+        and the proposed next step from :meth:`_compute_new_step_size`.
+        """
         k = np.zeros((7, len(y)))
 
         # Compute stages
@@ -124,7 +203,9 @@ class DormandPrinceSolver(Solver):
         y_new: np.ndarray,
         h: float,
     ) -> bool:
-        """Check if the step should be accepted based on error."""
+        """Accept the step when ``max_i err_i / (atol + rtol max(|y_i|, |y_new_i|))``
+        is at most 1 (a max norm; Hairer and Wanner's ``DOPRI5`` uses the RMS
+        norm of the same ratios)."""
         # Compute scaled error
         tol = (
             self.solver_config.absolute_tolerance
@@ -141,7 +222,15 @@ class DormandPrinceSolver(Solver):
         y: np.ndarray,
         h: float,
     ) -> float:
-        """Compute new step size using PI control."""
+        """Propose the next step: ``h S r^(-1/5) r^(-beta/5)``, clipped to the bounds.
+
+        ``r`` is the max-norm error ratio, scaled by ``atol + rtol |y|`` (the old
+        state only), and ``S`` is ``safety_factor``; ``r = 0`` gives
+        ``max_step_size``. This is an integral controller with exponent
+        ``(1 + beta)/5``: although the name says PI, no earlier error enters,
+        unlike the Lund-stabilized ``err^(-(0.2 - 0.75 beta)) err_old^beta``
+        of Hairer and Wanner's ``DOPRI5`` for its 5(4) pair.
+        """
         tol = (
             self.solver_config.absolute_tolerance
             + self.solver_config.relative_tolerance * np.abs(y)
