@@ -130,6 +130,7 @@ class TestGuckenheimerHolmesCycle(TestCase):
             source = network.saddle(connection.source).equilibrium
             target = network.saddle(connection.target).equilibrium
             assert orbit.subspace_defect < 1.0e-10
+            assert orbit.full_space.subspace_defect < 1.0e-10
             assert np.linalg.norm(orbit.solution.states[0] - source) < 1.0e-3
             assert np.linalg.norm(orbit.solution.states[-1] - target) < 1.0e-3
             assert orbit.resolution.estimate < 1.0e-3

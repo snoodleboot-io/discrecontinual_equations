@@ -127,6 +127,7 @@ from discrecontinual_equations.continuation.heteroclinic_network import (
     HeteroclinicNetwork,
     NetworkConnection,
     NetworkSaddle,
+    NotATrajectoryError,
     coordinate_plane,
 )
 from discrecontinual_equations.continuation.homoclinic_curve import (
@@ -342,6 +343,7 @@ __all__ = [
     "NoiseConvention",
     "NoiseMatrix",
     "NoiseMatrixFunction",
+    "NotATrajectoryError",
     "OrbitSolution",
     "OrderedLineIntegral",
     "ParameterFamily",

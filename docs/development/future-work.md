@@ -294,7 +294,12 @@ Headroom left:
 - **Heteroclinic networks (RESOLVED, starting from robust equivariant cycles).**
   `HeteroclinicNetwork` (`continuation/heteroclinic_network.py`) holds saddles,
   connections in flow-invariant subspaces, and the elementary cycles they form; each
-  connection is solved by the projection BVP in the full space, and each cycle's
+  connection is solved by the projection BVP restricted to its subspace (where it
+  is isolated even when the source's unstable manifold is 2-D, as at Kirk-Silber's
+  `xi2`), checked by the full-space solve, and refused with `NotATrajectoryError`
+  when its collocation residual under the full field exceeds, on any interval,
+  twice that interval's trapezoidal truncation error `h^3 |x'''| / 12` (DEQ-81),
+  and each cycle's
   eigenvalues are classified per node into radial, contracting, expanding and
   transverse (Krupa and Melbourne 1995, section 2.3). The oracles, all in
   `tests/continuation/test_heteroclinic_network.py`:

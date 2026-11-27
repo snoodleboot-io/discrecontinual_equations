@@ -70,6 +70,9 @@ _ROOT_HALF = 0.5**0.5
 # natural time scales differ by orders of magnitude. A quarter buys roughly a
 # decade of reduction on the saddle measured in the docstrings below.
 _TRUNCATION_EXTENSION = 0.25
+# Multiple of an interval's truncation error its residual may reach; the exact
+# orbit, sampled, reaches 1.24 of it (see CollocationResidual).
+_RESIDUAL_SAFETY = 2.0
 _AUTODIFF = AutomaticDifferentiation()
 
 
@@ -161,6 +164,56 @@ class OrbitResolution:
         if self.truncation > self.discretisation:
             return "length"
         return "spacing"
+
+
+class CollocationResidual:
+    """How far a path is from satisfying the trapezoidal rule, and how far it may be.
+
+    ``largest`` is the largest component of ``x_{i+1} - x_i - (h/2)(f_i + f_{i+1})``
+    over every interval. A converged solve of a consistent discrete system drives
+    it to the Newton tolerance; one that has no solution - because the orbit it
+    asks for does not exist - stops at a least-squares minimum that is not.
+
+    Each interval is held to its own allowance: ``_RESIDUAL_SAFETY`` times the
+    trapezoidal rule's local truncation error ``h^3 |x'''| / 12``, read off the
+    largest third difference of the path among the (up to three) stencils that
+    cover the interval, plus the Newton tolerance as a floor - a residual the
+    solver itself calls converged cannot refute a path. ``worst`` is the largest
+    ratio of an interval's residual to its allowance, and the path is a
+    trajectory when it is at most 1. ``tolerance`` is the largest allowance, for
+    scale.
+
+    Per interval, because the truncation error varies by orders of magnitude
+    along a connection: near a saddle ``x'''`` is 50 to 250 times smaller than
+    mid-transition, and a test against the largest third difference anywhere
+    passes a defect there as large as the whole orbit's error estimate. With a
+    safety factor, because the exact orbit sampled on the mesh leaves a residual
+    1.005 (``h = 0.2``) to 1.24 (``h = 1.6``) times its largest third difference
+    over 12, measured on the Guckenheimer-Holmes connection; per interval it
+    stays within 0.62 of the allowance. As in COLSYS and bvp4c, the error is
+    controlled where it is made.
+
+    Measured on that connection at ``h = 0.2``: genuine orbits leave 1e-15 to
+    3e-10, a path with no orbit behind it 1.9e-3, against a largest allowance of
+    6e-5. A leak ``eps x1^2 x2^2`` out of the plane is refused from
+    ``eps = 1e-3`` (3e-4 at ``h = 0.1``): the threshold falls as ``h^2``.
+
+    The resolution estimate cannot stand in for this. It measures how much a path
+    moves when the mesh changes, and a non-trajectory converged on one mesh can
+    sit still on the next: the path above had an estimate of 1.9e-4.
+    """
+
+    __slots__ = ["largest", "tolerance", "worst"]
+
+    def __init__(self, largest: float, tolerance: float, worst: float) -> None:
+        self.largest = largest
+        self.tolerance = tolerance
+        self.worst = worst
+
+    @property
+    def is_trajectory(self) -> bool:
+        """Whether every interval's residual is within its allowance."""
+        return self.worst <= 1.0
 
 
 class ConnectingOrbit(ABC):
@@ -272,6 +325,39 @@ class ConnectingOrbit(ABC):
             self._truncation_shift(solution),
         )
 
+    def collocation_residual(self, solution: OrbitSolution) -> CollocationResidual:
+        """The path's largest trapezoidal residual, against its truncation error.
+
+        Only the collocation rows are measured: the boundary and phase rows say
+        where the path starts, ends and is pinned, not whether it is a trajectory.
+        Any path with the solver's dimension can be measured, not only one this
+        solver returned. See :class:`CollocationResidual`.
+        """
+        states, times = solution.states, solution.times
+        rows = [self._collocation(states, times, i) for i in range(len(times) - 1)]
+        residuals = np.max(np.abs(np.array(rows)), axis=1)
+        third = np.max(np.abs(np.diff(states, 3, axis=0)), axis=1, initial=0.0)
+        covering = np.array(
+            [
+                np.max(third[max(0, i - 2) : i + 1], initial=0.0)
+                for i in range(len(residuals))
+            ],
+        )
+        allowance = _RESIDUAL_SAFETY * covering / 12.0 + _DEFAULT_TOLERANCE
+        return CollocationResidual(
+            float(np.max(residuals)),
+            float(np.max(allowance)),
+            float(np.max(residuals / allowance)),
+        )
+
+    def _shift(self, moved: np.ndarray, original: np.ndarray) -> float:
+        """Largest component of the change between two paths at shared nodes.
+
+        A solver posed in other coordinates overrides this to measure the change
+        in the coordinates its caller reads the orbit in.
+        """
+        return float(np.max(np.abs(moved - original)))
+
     def _solve_on(self, mesh: MeshSpec, seed: np.ndarray) -> OrbitSolution:
         """Solve the same problem on a different mesh, leaving this solver unchanged.
 
@@ -311,7 +397,7 @@ class ConnectingOrbit(ABC):
             ),
             seed,
         )
-        return float(np.max(np.abs(refined.states[::2] - states)))
+        return self._shift(refined.states[::2], states)
 
     def _truncation_shift(self, solution: OrbitSolution) -> float:
         """Largest state shift on the overlap from extending the interval.
@@ -340,7 +426,7 @@ class ConnectingOrbit(ABC):
             seed,
         )
         overlap = longer.states[extra : extra + states.shape[0]]
-        return float(np.max(np.abs(overlap - states)))
+        return self._shift(overlap, states)
 
     def _residual(
         self,

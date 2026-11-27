@@ -35,6 +35,7 @@ from discrecontinual_equations.continuation.connecting_orbit import (
 )
 from discrecontinual_equations.continuation.heteroclinic_network import (
     HeteroclinicNetwork,
+    NotATrajectoryError,
     coordinate_plane,
 )
 from discrecontinual_equations.function.deterministic import DeterministicFunction
@@ -357,7 +358,12 @@ class TestSubspaceChecks(TestCase):
             network.add_connection("xi1", "xi2", tilted)
 
     def test_subspace_defect_sees_an_orbit_leave_a_plane_the_flow_leaves(self):
-        """Measured: defect 0 at ``eps = 0`` and 5.0e-3 at ``eps = 0.05``."""
+        """Measured: defect 0 at ``eps = 0`` and 5.0e-3 at ``eps = 0.05``.
+
+        The defect is the full-space check's, which is not told about the plane.
+        Since DEQ-81 the ``eps = 0.05`` path is also refused on its collocation
+        residual, and the refusal carries the orbit with its check.
+        """
         inner = guckenheimer_holmes(1.0, -1.0, -1.5, -0.6)
         defects = []
         for strength in (0.0, 0.05):
@@ -377,7 +383,11 @@ class TestSubspaceChecks(TestCase):
                 coordinate_plane(3, (0, 1)),
             )
             mesh = network.mesh(connection, half_length=20.0, intervals=200)
-            defects.append(network.solve(connection, mesh).subspace_defect)
+            try:
+                orbit = network.solve(connection, mesh)
+            except NotATrajectoryError as refusal:
+                orbit = refusal.orbit
+            defects.append(orbit.full_space.subspace_defect)
         assert defects[0] < 1.0e-12
         assert defects[1] > 1.0e-3
 
