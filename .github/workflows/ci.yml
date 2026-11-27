@@ -112,13 +112,14 @@ jobs:
 
       # The PR gate: every test except the integration studies marked `slow` (run nightly by
       # slow.yml) and the clock measurements marked `timing`. One worker per core; NumPy's BLAS
-      # gets one thread per worker, so the workers do not fight over the cores (DEQ-144).
+      # gets one thread per worker, so the workers do not fight over the cores (DEQ-144). Tests
+      # marked xdist_group share one worker, and so one build of the grid they read (DEQ-162).
       - name: Run unit tests
         env:
           OPENBLAS_NUM_THREADS: "1"
           MKL_NUM_THREADS: "1"
           OMP_NUM_THREADS: "1"
-        run: uv run pytest tests/ -n auto -m "not slow and not timing" --durations=25
+        run: uv run pytest tests/ -n auto --dist loadgroup -m "not slow and not timing" --durations=25
 
   build-and-test-package:
     runs-on: ubuntu-latest
