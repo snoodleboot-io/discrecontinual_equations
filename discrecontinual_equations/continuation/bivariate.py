@@ -35,18 +35,17 @@ References:
 """
 
 from numbers import Number
-from typing import TypeVar, cast
+from typing import cast
 
 _Scalar = complex | float | int
-_Key = TypeVar("_Key", bound=tuple[int, ...])
 
 
-def truncated_quotient(
-    numerator: dict[_Key, _Scalar],
-    denominator: dict[_Key, _Scalar],
+def truncated_quotient[Key: tuple[int, ...]](
+    numerator: dict[Key, _Scalar],
+    denominator: dict[Key, _Scalar],
     order: int,
     dimension: int,
-) -> dict[_Key, _Scalar]:
+) -> dict[Key, _Scalar]:
     """Coefficients of ``numerator / denominator`` to total degree ``order``.
 
     The idea: ``u = h w`` holds degree by degree, so the part of ``h`` of degree
@@ -71,7 +70,7 @@ def truncated_quotient(
     - Neidinger (2010), Section 6, the division formula derived from (6.2);
       Section 8 for its extension to multivariable series.
     """
-    leading = denominator.get(cast(_Key, (0,) * dimension), 0)
+    leading = denominator.get(cast("Key", (0,) * dimension), 0)
     if leading == 0:
         message = (
             "cannot divide by a series whose constant term is zero: it vanishes "
@@ -81,14 +80,14 @@ def truncated_quotient(
         raise ZeroDivisionError(message)
     denominator_parts = _by_degree(denominator, order)
     numerator_parts = _by_degree(numerator, order)
-    quotient_parts: list[dict[_Key, _Scalar]] = []
+    quotient_parts: list[dict[Key, _Scalar]] = []
     for degree in range(order + 1):
         part = dict(numerator_parts[degree])
         for lower in range(degree):
             for left_key, left_value in quotient_parts[lower].items():
                 for right_key, right_value in denominator_parts[degree - lower].items():
                     key = cast(
-                        _Key,
+                        "Key",
                         tuple(a + b for a, b in zip(left_key, right_key, strict=True)),
                     )
                     part[key] = part.get(key, 0.0) - left_value * right_value
@@ -96,11 +95,11 @@ def truncated_quotient(
     return {key: value for part in quotient_parts for key, value in part.items()}
 
 
-def _by_degree(
-    coefficients: dict[_Key, _Scalar],
+def _by_degree[Key: tuple[int, ...]](
+    coefficients: dict[Key, _Scalar],
     order: int,
-) -> list[dict[_Key, _Scalar]]:
-    parts: list[dict[_Key, _Scalar]] = [{} for _ in range(order + 1)]
+) -> list[dict[Key, _Scalar]]:
+    parts: list[dict[Key, _Scalar]] = [{} for _ in range(order + 1)]
     for key, value in coefficients.items():
         degree = sum(key)
         if degree <= order:
@@ -228,7 +227,7 @@ class Bivariate:
         :func:`truncated_quotient`).
         """
         if isinstance(other, Number):
-            scale = cast(_Scalar, other)
+            scale = cast("_Scalar", other)
             return Bivariate(
                 {key: value / scale for key, value in self._coefficients.items()},
                 self._order,

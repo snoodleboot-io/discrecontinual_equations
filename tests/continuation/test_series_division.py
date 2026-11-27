@@ -138,7 +138,9 @@ class TestRationalFieldFocalValues(TestCase):
         for speed, frequency in ((None, 1.0), (2.0, 0.5)):
             _ShiftedRational.speed = speed
             lyapunov = PlanarLyapunov(
-                _ShiftedRational([Variable(), Variable()], [], [Variable(), Variable()]),
+                _ShiftedRational(
+                    [Variable(), Variable()], [], [Variable(), Variable()]
+                ),
                 np.array(_CENTRE),
                 np.array([[0.0, -frequency], [frequency, 0.0]]),
                 0.0,
@@ -154,7 +156,7 @@ _CENTRE = (1.0, -2.0)
 class _ShiftedRational(DeterministicFunction):
     speed: float | None = None
 
-    def eval(self, point, time=None):
+    def eval(self, point, time=None):  # noqa: ARG002 (base signature)
         s, t = point[0] - _CENTRE[0], point[1] - _CENTRE[1]
         r2 = s * s + t * t
         drift = [-1.0 * t - 0.3 * s * r2, s - 0.3 * t * r2]

@@ -175,7 +175,7 @@ class Multivariate:
         :func:`~.bivariate.truncated_quotient`).
         """
         if isinstance(other, Number):
-            scale = cast(_Scalar, other)
+            scale = cast("_Scalar", other)
             return Multivariate(
                 {key: value / scale for key, value in self._coefficients.items()},
                 self._order,
