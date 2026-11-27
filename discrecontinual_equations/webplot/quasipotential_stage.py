@@ -71,7 +71,23 @@ def frame_quasipotential(
     cap: float,
     paths: Sequence[np.ndarray],
 ) -> QuasipotentialFrame:
-    """A computed field as one frame draws it: windowed, capped, its paths."""
+    """A computed field as one frame draws it: windowed, capped, its paths.
+
+    Values are clipped at ``cap`` and rounded to two decimals, a two-hundredth of
+    the default cap and finer than the colour ramp's 256 steps resolve.
+
+    Args:
+        field: The quasipotential on its grid.
+        window: The stage's box; only cells whose centres lie in it are kept.
+        cap: The largest ``U`` the colour ramp resolves.
+        paths: Minimum action paths, each an ``(n, 2)`` array of states.
+
+    Returns:
+        The frame's field, row by row with ``x`` running fastest, and its paths.
+
+    Raises:
+        ValueError: If ``window`` holds no cell of the grid.
+    """
     xs, ys, _extent = density_window(field.grid, window)
     block = np.minimum(field.values[xs, ys], cap)
     # Rows of constant y, x running fastest: the layout the density uses. Two
@@ -86,7 +102,27 @@ def with_quasipotential(
     scene: StageScene,
     settings: QuasipotentialSettings,
 ) -> StageScene:
-    """Add the quasipotential panel to a stochastic ``scene``, one field per frame."""
+    """Add the quasipotential panel to a stochastic ``scene``, one field per frame.
+
+    Each frame asks ``settings.family`` for the ordered-line-integral march and
+    the attractor at its parameter, solves it once, and traces a minimum action
+    path back from every start where ``U`` is finite. A frame with no attractor
+    gets no field. The quasipotential method and its limits are those of
+    :mod:`~discrecontinual_equations.continuation.quasipotential`.
+
+    Args:
+        scene: A stage already made stochastic by
+            :func:`~.stochastic_stage_builder.stochastic_stage`; it is changed in
+            place and returned.
+        settings: The family, grid, starts and colour cap.
+
+    Returns:
+        ``scene``, with its stochastic block carrying the panel.
+
+    Raises:
+        ValueError: If ``scene`` is not stochastic, or the stage's box holds no
+            cell of the grid.
+    """
     if scene.stochastic is None:
         message = "the quasipotential panel belongs on a stochastic stage"
         raise ValueError(message)

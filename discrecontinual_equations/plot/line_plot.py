@@ -1,3 +1,16 @@
+"""Time series and trajectories drawn with Plotly.
+
+:class:`LinePlot` draws one variable against another (a time series is a variable
+against time), every result of a :class:`~discrecontinual_equations.curve.Curve`
+against its variables, or a trajectory in three dimensions, and writes the figure
+as PNG, HTML or both. There is no algorithm here; it is a thin layer over
+``plotly.graph_objects``.
+
+Limits: traces accumulate on the one figure across :meth:`LinePlot.plot` and
+:meth:`LinePlot.plot_curves` calls (only :meth:`LinePlot.plot_3d` starts afresh),
+and PNG output needs ``kaleido``.
+"""
+
 import importlib
 from pathlib import Path
 
@@ -21,6 +34,14 @@ def _require_kaleido() -> None:
 
 
 class LinePlot:
+    """Plot variables against each other and save the figure.
+
+    Args:
+        output_dir: Directory the figures are written to; created if missing.
+        output_format: ``"png"``, ``"html"`` or ``"both"``, used by
+            :meth:`plot_curves` and :meth:`plot`.
+    """
+
     def __init__(self, output_dir: str = ".", output_format: str = "png"):
         self.output_dir = output_dir
         # A plotter is told where to write; make sure that place exists,
@@ -30,7 +51,16 @@ class LinePlot:
         self.figure: go.Figure = go.Figure()
 
     def plot_curves(self, curve: Curve, title: str = "Curve Plot"):
-        """Plot all variables and results on a single plot."""
+        """Plot every result of ``curve`` against every variable, on one figure.
+
+        Args:
+            curve: The curve whose ``results`` are drawn against its ``variables``.
+            title: Figure title, also used for the file name.
+
+        Raises:
+            ValueError: If ``output_format`` is not ``png``, ``html`` or ``both``.
+            ImportError: If PNG output is asked for and kaleido is missing.
+        """
 
         # Plot variables vs results
         for variable in curve.variables:
@@ -56,7 +86,19 @@ class LinePlot:
         self._save(title, self.output_format)
 
     def plot(self, x: Variable, y: Variable, title: str = "Curve Plot"):
-        """Plot all variables and results on a single plot."""
+        """Plot ``y`` against ``x`` and save the figure.
+
+        The data is drawn twice, as a wide line and a thin red one over it.
+
+        Args:
+            x: Horizontal variable (time, for a time series).
+            y: Vertical variable.
+            title: Figure title, also used for the file name.
+
+        Raises:
+            ValueError: If ``output_format`` is not ``png``, ``html`` or ``both``.
+            ImportError: If PNG output is asked for and kaleido is missing.
+        """
 
         # Plot variables vs results
         self.figure.add_trace(
@@ -96,7 +138,20 @@ class LinePlot:
         title: str = "3D Plot",
         output_format: str = "both",
     ):
-        """Plot 3D scatter plot."""
+        """Plot a trajectory through three variables on a fresh figure.
+
+        Args:
+            x: First coordinate.
+            y: Second coordinate.
+            z: Third coordinate.
+            title: Figure title, also used for the file name.
+            output_format: ``"png"``, ``"html"`` or ``"both"``; this method uses
+                its own argument, not the constructor's.
+
+        Raises:
+            ValueError: If ``output_format`` is not ``png``, ``html`` or ``both``.
+            ImportError: If PNG output is asked for and kaleido is missing.
+        """
         self.figure = go.Figure()
 
         self.figure.add_trace(

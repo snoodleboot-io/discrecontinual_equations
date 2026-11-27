@@ -1,3 +1,11 @@
+"""Two-dimensional phase portraits drawn with Plotly.
+
+:class:`PhasePlot` draws one or several trajectories in the plane of two state
+variables and writes the figure as PNG or HTML. It is a thin layer over
+``plotly.graph_objects``, with no algorithm of its own. Traces accumulate on the
+one figure across calls.
+"""
+
 from pathlib import Path
 
 import plotly.graph_objects as go
@@ -19,7 +27,13 @@ _TRAJECTORY_COLORS = [
 
 
 class PhasePlot:
-    """Plot class for 2D phase space diagrams."""
+    """Plot class for 2D phase space diagrams.
+
+    Args:
+        output_dir: Directory the figures are written to; created if missing.
+        output_format: ``"png"`` writes a PNG through kaleido; anything else
+            writes HTML.
+    """
 
     def __init__(self, output_dir: str = ".", output_format: str = "png") -> None:
         self.output_dir = output_dir
@@ -30,7 +44,16 @@ class PhasePlot:
         self.figure: go.Figure = go.Figure()
 
     def plot(self, x: Variable, y: Variable, title: str = "Phase Space Plot") -> str:
-        """Plot a single 2D phase-space trajectory and save it."""
+        """Plot a single 2D phase-space trajectory and save it.
+
+        Args:
+            x: Horizontal state variable.
+            y: Vertical state variable.
+            title: Figure title, also used for the file name.
+
+        Returns:
+            The path of the file written.
+        """
         self.figure.add_trace(
             go.Scatter(
                 x=x.discretization,
@@ -57,7 +80,17 @@ class PhasePlot:
         labels: list[str] | None = None,
         title: str = "Phase Space Plot",
     ) -> str:
-        """Plot several trajectories in phase space and save the figure."""
+        """Plot several trajectories in phase space and save the figure.
+
+        Args:
+            trajectories: ``(x, y)`` pairs of variables, one per trajectory; the
+                first pair's names label the axes.
+            labels: Legend labels; missing ones become ``Trajectory k``.
+            title: Figure title, also used for the file name.
+
+        Returns:
+            The path of the file written.
+        """
         for index, (x, y) in enumerate(trajectories):
             color = _TRAJECTORY_COLORS[index % len(_TRAJECTORY_COLORS)]
             if labels and index < len(labels):

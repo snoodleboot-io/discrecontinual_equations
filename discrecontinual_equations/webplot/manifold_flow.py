@@ -15,17 +15,35 @@ branches are the ones a per-branch solve would draw, to rounding: the
 coefficients and the Shampine dense output of [1]_ and [2]_, the initial step
 of [3]_ (II.4), the same safety factor and growth bounds, the same RMS error
 norm, a row stopped where its box event's sign changes and the crossing found
-by Brent's method on its interpolant, and the branch resampled at evenly spaced
-times from that interpolant.
+by Brent's method on its interpolant [4], and the branch resampled at evenly
+spaced times from that interpolant. The tableau and interpolant matrices are
+SciPy's ``RK45`` ones entry for entry.
 
-References
-----------
-.. [1] J. R. Dormand, P. J. Prince, "A family of embedded Runge-Kutta
-       formulae", J. Comput. Appl. Math. 6(1), 19-26, 1980.
-.. [2] L. F. Shampine, "Some practical Runge-Kutta formulas", Math. Comp.
-       46(173), 135-150, 1986.
-.. [3] E. Hairer, S. P. Norsett, G. Wanner, "Solving Ordinary Differential
-       Equations I: Nonstiff Problems", 2nd ed., Springer, 1993.
+Limits: the rows share an array, not an error norm, so a row's accuracy is its
+own tolerance and no better; a field that does not broadcast is evaluated row by
+row and keeps only the shared stepping; and a row that never leaves the box is
+cut at ``duration``, so a branch that spirals into an attractor is drawn only as
+far as the time allows.
+
+References:
+    [1] Dormand, J. R., and Prince, P. J. (1980). A family of embedded
+    Runge-Kutta formulae. *Journal of Computational and Applied Mathematics*
+    6(1), 19-26. DOI 10.1016/0771-050X(80)90013-3. The RK5(4) pair: nodes,
+    stage weights, fifth-order weights and the embedded error weights.
+
+    [2] Shampine, L. F. (1986). Some practical Runge-Kutta formulas.
+    *Mathematics of Computation* 46(173), 135-150.
+    DOI 10.1090/S0025-5718-1986-0815836-3. The free fourth-order
+    (quartic) interpolant used for the dense output.
+
+    [3] Hairer, E., Norsett, S. P., and Wanner, G. (1993). *Solving Ordinary
+    Differential Equations I: Nonstiff Problems*, 2nd rev. ed. Springer.
+    DOI 10.1007/978-3-540-78862-1. Section II.4, the starting step-size rule
+    and the step-size control.
+
+    [4] Brent, R. P. (1973). *Algorithms for Minimization without
+    Derivatives*. Prentice-Hall, Englewood Cliffs, NJ. Chapters 3-4, the
+    zero-finding algorithm (``scipy.optimize.brentq``).
 """
 
 from collections.abc import Callable, Sequence
@@ -273,6 +291,24 @@ def flow_branches(  # noqa: PLR0913, PLR0915 (one integrator, its settings spell
     ``margin`` - or, like ``solve_ivp``'s sign-change event, crosses back in -
     or at ``duration``, and is returned as ``samples`` states at evenly spaced
     times from its start to its stop. ``tolerance`` is ``(rtol, atol)``.
+
+    Args:
+        function: The vector field, evaluated with ``time=None``.
+        starts: The starting states, one per branch.
+        senses: ``+1`` or ``-1`` per start: the direction of time it is carried.
+        bounds: ``(low, high)`` per coordinate: the box the branches are drawn in.
+        margin: How far past ``bounds`` a branch may go before it stops.
+        duration: The longest time any branch is carried for.
+        samples: The number of states each branch is returned as.
+        tolerance: ``(rtol, atol)`` of the step-size control.
+
+    Returns:
+        One branch per start, each ``samples`` states as lists of floats. A row
+        that took no accepted step is its start repeated.
+
+    References:
+        Dormand and Prince (1980); Shampine (1986); Hairer, Norsett and Wanner
+        (1993), section II.4; Brent (1973), chapters 3-4. See the module docstring.
     """
     if not starts:
         return []

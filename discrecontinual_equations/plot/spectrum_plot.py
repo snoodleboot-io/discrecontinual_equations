@@ -1,3 +1,26 @@
+"""Power spectra of a sampled signal, drawn with Plotly.
+
+A periodic signal puts its power at a few frequencies and their harmonics; a
+quasiperiodic one at integer combinations of two or more incommensurate ones; a
+chaotic one spreads it over a broad band. The spectrum is the quickest way to
+tell those apart, and :class:`SpectrumPlot` draws it two ways, both from the
+mean-removed samples ``x_0, ..., x_{N-1}`` at spacing ``dt``:
+
+* :meth:`SpectrumPlot.plot_fft` plots ``|X_k|^2`` with
+  ``X_k = sum_n x_n exp(-2 pi i k n / N)`` (``numpy.fft.fft``) at the positive
+  frequencies ``k / (N dt)``, on log-log axes. It is not normalised, so only its
+  shape is meaningful, not its level.
+* :meth:`SpectrumPlot.plot_periodogram` uses ``scipy.signal.periodogram`` with a
+  rectangular window and ``scaling="spectrum"``, which is the power spectrum in
+  squared signal units (not a density per hertz, whatever the axis title says).
+
+Limits: both are single raw periodograms, with no averaging or windowing beyond
+the rectangle, so each bin's estimate has a standard deviation as large as its
+mean however long the series, and a peak between bins leaks into its
+neighbours. For a smoother estimate average segments (``scipy.signal.welch``)
+before plotting. The frequency unit is the inverse of ``dt``'s, labelled "Hz".
+"""
+
 import os
 from pathlib import Path
 
@@ -8,7 +31,12 @@ from discrecontinual_equations.variable import Variable
 
 
 class SpectrumPlot:
-    """Plot class for power spectra and frequency analysis."""
+    """Plot class for power spectra and frequency analysis.
+
+    Args:
+        output_dir: Directory the figures are written to; created if missing.
+        output_format: ``"png"`` or ``"html"``; no other value can be saved.
+    """
 
     def __init__(self, output_dir: str = ".", output_format: str = "png"):
         self.output_dir = output_dir
@@ -19,7 +47,13 @@ class SpectrumPlot:
         self.figure: go.Figure = go.Figure()
 
     def plot_fft(self, x: Variable, dt: float = 1.0, title: str = "Power Spectrum"):
-        """Plot power spectrum using FFT."""
+        """Plot the unnormalised power ``|FFT|^2`` of the mean-removed signal.
+
+        Args:
+            x: The sampled signal.
+            dt: Sample spacing, which sets the frequency axis.
+            title: Figure title, also used for the file name.
+        """
         signal = np.array(x.discretization)
 
         # Remove DC component
@@ -66,7 +100,17 @@ class SpectrumPlot:
         dt: float = 1.0,
         title: str = "Periodogram",
     ):
-        """Plot periodogram (smoothed power spectrum)."""
+        """Plot the raw periodogram (rectangular window, no smoothing).
+
+        It is ``scipy.signal.periodogram`` with ``scaling="spectrum"``: the power
+        spectrum in squared signal units. It is not averaged, so it is as noisy
+        as :meth:`plot_fft`.
+
+        Args:
+            x: The sampled signal.
+            dt: Sample spacing; the sampling frequency is ``1 / dt``.
+            title: Figure title, also used for the file name.
+        """
         from scipy.signal import periodogram
 
         signal = np.array(x.discretization)
@@ -102,7 +146,13 @@ class SpectrumPlot:
         labels: list[str] | None = None,
         title: str = "Multiple Spectra",
     ):
-        """Plot power spectra for multiple signals."""
+        """Plot the ``|FFT|^2`` power of several signals on one figure.
+
+        Args:
+            signals: ``(x, dt)`` pairs, each signal with its own sample spacing.
+            labels: Legend labels; missing ones become ``Signal k``.
+            title: Figure title, also used for the file name.
+        """
         colors = ["blue", "red", "green", "orange", "purple", "brown", "pink"]
 
         for i, (x, dt) in enumerate(signals):
