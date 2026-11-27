@@ -55,7 +55,26 @@ class ResidualFunction(ABC):
 
 
 class DifferentiableResidual(ResidualFunction):
-    """A residual that supplies its own ``[df/du | df/dlambda]``."""
+    """A residual that supplies its own ``[df/du | df/dlambda]``.
+
+    Bordered augmented systems - the cusp and generalized-Hopf curves - know
+    most of their columns in closed form and difference only the rest. Those
+    columns take ``epsilon`` as a *relative* step (DEQ-159), the rule every
+    other finite difference in the package follows (DEQ-118): the unknown ``x``
+    a column moves is stepped by ``epsilon max(|x|, 1)`` and the quotient is
+    divided by the width actually stepped, which
+    :func:`~discrecontinual_equations.finite_difference.central_column` does.
+    On unknowns of size one or less the step is ``epsilon`` itself, as it was
+    when it was absolute; above one it grows with the unknown, where an
+    absolute step rounds away (an ulp of ``3e11`` is ``6e-5``) and returns a
+    zero column.
+
+    References:
+        Dennis and Schnabel (1983), Sec. 5.4 and Algorithm A5.4.1: the step
+        scaled by ``max(|x_j|, typx_j)``. SciPy 1.14.1,
+        ``scipy/optimize/_numdiff.py``: the division by the width actually
+        stepped. See ``docs/references.md``.
+    """
 
     @abstractmethod
     def extended_jacobian(
@@ -66,7 +85,8 @@ class DifferentiableResidual(ResidualFunction):
     ) -> np.ndarray:
         """Return the ``(m, m + 1)`` extended Jacobian at ``(state, parameter)``.
 
-        ``epsilon`` is the step for any column the residual differences.
+        ``epsilon`` is the relative step for any column the residual
+        differences: the moved unknown ``x`` steps ``epsilon max(|x|, 1)``.
 
         Args:
             state: The state ``u``.

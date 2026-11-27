@@ -22,7 +22,11 @@ The state columns of the Jacobian are analytic. ``G_z = -W^T (f_u^2)_z V`` with
 through the eigenvalue problem: the eigenvector derivative comes from one bordered
 solve per column and the adjoint eigenvector's from a single adjoint solve, so a
 column costs ``O(n^2)`` after one factorisation, plus a fixed number of
-multilinear-form evaluations. Only the three parameter columns are differenced.
+multilinear-form evaluations. Only the three parameter columns are differenced,
+centrally, at the relative step ``epsilon max(|p|, 1)`` and over the width actually
+stepped (:func:`~discrecontinual_equations.finite_difference.central_column`,
+DEQ-159); the Jacobian that picks the pair of ``G`` entries at an accepted point
+uses the same rule at ``epsilon = 1e-6``.
 Borders are frozen through a Newton solve and adapted at accepted points, where
 the pair of ``G`` entries is also re-chosen to keep the system best conditioned.
 A degenerate Bautin point is where the second Lyapunov quantity ``l2`` changes
@@ -75,11 +79,11 @@ from discrecontinual_equations.continuation.residual import DifferentiableResidu
 from discrecontinual_equations.continuation.two_parameter_problem import (
     TwoParameterProblem,
 )
+from discrecontinual_equations.finite_difference import central_column
 from discrecontinual_equations.parameter import Parameter
 
 _BORDER = 2
 _UNKNOWNS_AFTER_STATE = 3
-_CENTRAL_DIFFERENCE_POINTS = 2.0
 _SELECTION_EPSILON = 1.0e-6
 _ENTRIES = [(0, 0), (0, 1), (1, 0), (1, 1)]
 
@@ -212,8 +216,9 @@ class GeneralizedHopfCurveResidual(DifferentiableResidual):
         Args:
             state: ``(u, kappa, p_a, p_b)``.
             parameter: The continuation coordinate ``p_c``.
-            epsilon: The central-difference step for the three parameter
-                columns; the state and ``kappa`` columns are analytic.
+            epsilon: The relative central-difference step for the three
+                parameter columns: ``p`` steps ``epsilon max(|p|, 1)``. The
+                state and ``kappa`` columns are analytic.
 
         Returns:
             The extended Jacobian.
@@ -279,19 +284,12 @@ class GeneralizedHopfCurveResidual(DifferentiableResidual):
         epsilon: float,
         entries: list[tuple[int, int]],
     ) -> np.ndarray:
-        size = state.size
-        if column < size:
-            step = np.zeros(size)
-            step[column] = epsilon
-            forward = self._linearize(state + step, parameter)
-            upper = self._rows(forward, entries)
-            backward = self._linearize(state - step, parameter)
-            lower = self._rows(backward, entries)
-        else:
-            upper = self._rows(self._linearize(state, parameter + epsilon), entries)
-            lower = self._rows(self._linearize(state, parameter - epsilon), entries)
+        def rows(point: np.ndarray, coordinate: float) -> np.ndarray:
+            return self._rows(self._linearize(point, coordinate), entries)
+
+        difference = central_column(rows, state, parameter, column, epsilon)
         self._third.value = float(parameter)
-        return (upper - lower) / (_CENTRAL_DIFFERENCE_POINTS * epsilon)
+        return difference
 
     def adapt(self, state: np.ndarray, parameter: float) -> None:
         """Move the borders to the null spaces, then pick the best pair of ``G``.

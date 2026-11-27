@@ -136,7 +136,8 @@ The residual supplies its own Jacobian (`jacobian="analytic_jacobian"`, which
 `g_u = -w^T B(v, e_k)` and `G_u = -W^T (f_u^2)_u V`, with `w` and `W` from the
 transposed bordered system; `a_u` and `l1_u` use adjoint solves with the same
 factors instead of differentiating the null and eigenvectors of the adjoint
-problem. Only the three parameter columns are differenced. A Newton iteration is
+problem. Only the three parameter columns are differenced, at the relative step
+`epsilon * max(|p|, 1)` over the width actually stepped (DEQ-159). A Newton iteration is
 then one factorisation plus `O(n)` field evaluations: `O(n^3)` for a dense field,
 where differencing every column of the old Moore-Spence systems was `O(n^4)` for
 the cusp and, through a center-manifold reduction per column, `O(n^5)` for the

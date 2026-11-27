@@ -189,6 +189,17 @@ class AnalyticJacobian(JacobianProvider):
     every column would redo the whole bordered reduction per column; the residual
     instead differentiates its rows analytically (see
     :class:`~.residual.DifferentiableResidual`).
+
+    ``epsilon`` is handed to the residual for the columns it still differences,
+    as a *relative* step (DEQ-159): the unknown ``x`` such a column moves steps
+    ``epsilon max(|x|, 1)``, as in :class:`FiniteDifferenceJacobian`. The
+    builder passes ``finite_difference_epsilon``, so on unknowns of size one or
+    less nothing changes, and on a curve whose parameters are of size ``1e12``
+    the differenced columns are still resolved.
+
+    References:
+        Dennis and Schnabel (1983), Sec. 5.4 and Algorithm A5.4.1: the step
+        scaled per unknown. See ``docs/references.md``.
     """
 
     __slots__ = ["_epsilon", "_residual"]

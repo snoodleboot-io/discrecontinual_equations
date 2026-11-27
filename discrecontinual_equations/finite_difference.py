@@ -20,7 +20,13 @@ it the step grows with the component.
 The quotient is divided by the width the machine actually stepped,
 ``(x_j + h_j) - (x_j - h_j)``, rather than by ``2 h_j``; the two differ by the
 rounding of the moved state, which is up to ``eps |x_j| / h_j`` relative.
+
+:func:`central_column` is that central difference for one unknown of a
+``(state, parameter)`` pair, for the residuals that difference only some of their
+columns (the cusp and generalized-Hopf curves, DEQ-159).
 """
+
+from collections.abc import Callable
 
 import numpy as np
 
@@ -63,3 +69,43 @@ def step_scales(
     """
     sizes = typical_sizes(typical, point.shape[-1])
     return np.maximum(np.abs(point), sizes)
+
+
+def central_column(
+    rows: Callable[[np.ndarray, float], np.ndarray],
+    state: np.ndarray,
+    parameter: float,
+    column: int,
+    epsilon: float,
+) -> np.ndarray:
+    """Central difference of ``rows`` along one unknown of ``(state, parameter)``.
+
+    ``column`` names a state component, or the parameter when it equals
+    ``state.size``. That unknown ``x`` is moved by ``h = epsilon max(|x|, 1)``
+    either way, and the difference is divided by the width actually stepped,
+    ``(x + h) - (x - h)``: ``epsilon`` is a relative step, and on an unknown of
+    size one or less the step is ``epsilon`` itself. The forward point is
+    evaluated first. ``state`` is not modified.
+
+    References:
+        Dennis and Schnabel (1983), Sec. 5.4 and Algorithm A5.4.1: the step
+        ``max(|x_j|, typx_j)`` times a relative step, with ``typx_j = 1``.
+        SciPy 1.14.1, ``scipy/optimize/_numdiff.py``: the division by the width
+        actually stepped. See ``docs/references.md``.
+    """
+    moves_parameter = column == state.size
+    value = float(parameter) if moves_parameter else float(state[column])
+    step = epsilon * float(step_scales(np.array([value]))[0])
+    up = value + step
+    down = value - step
+    if moves_parameter:
+        upper = rows(state, up)
+        lower = rows(state, down)
+    else:
+        forward = np.array(state, dtype=float)
+        backward = np.array(state, dtype=float)
+        forward[column] = up
+        backward[column] = down
+        upper = rows(forward, parameter)
+        lower = rows(backward, parameter)
+    return (upper - lower) / (up - down)

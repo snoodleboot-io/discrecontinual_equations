@@ -18,7 +18,11 @@ MatCont's cusp test function ``w^T f_uu[v, v]`` up to the factor one half.
 Each row costs one LU of the bordered matrix. The state columns of the Jacobian
 are analytic: ``g_u = -w^T B(v, e_k)`` (Govaerts' ``g_z = -w^T (f_u)_z v``), and
 the derivative of ``a`` uses two more solves with the same factors in place of the
-derivatives of ``v`` and ``w``. Only the three parameter columns are differenced.
+derivatives of ``v`` and ``w``. Only the three parameter columns are differenced,
+centrally, at the relative step ``epsilon max(|p|, 1)`` and over the width actually
+stepped (:func:`~discrecontinual_equations.finite_difference.central_column`,
+DEQ-159), so the columns stay resolved on a curve whose parameters are of size
+``1e12``; an absolute step there rounds away and returns zero columns.
 The borders are frozen through a Newton solve and moved to the normalised ``v``
 and ``w`` at every accepted point (MatCont's adaptation); the cusp curve itself
 does not depend on them. A swallowtail is where the cubic coefficient vanishes
@@ -33,10 +37,10 @@ from discrecontinual_equations.continuation.residual import DifferentiableResidu
 from discrecontinual_equations.continuation.two_parameter_problem import (
     TwoParameterProblem,
 )
+from discrecontinual_equations.finite_difference import central_column
 from discrecontinual_equations.parameter import Parameter
 
 _HALF = 0.5
-_CENTRAL_DIFFERENCE_POINTS = 2.0
 _PARAMETER_COUNT = 2
 
 
@@ -191,17 +195,9 @@ class CuspCurveResidual(DifferentiableResidual):
         column: int,
         epsilon: float,
     ) -> np.ndarray:
-        size = state.size
-        if column < size:
-            step = np.zeros(size)
-            step[column] = epsilon
-            forward = self.evaluate(state + step, parameter)
-            backward = self.evaluate(state - step, parameter)
-        else:
-            forward = self.evaluate(state, parameter + epsilon)
-            backward = self.evaluate(state, parameter - epsilon)
+        difference = central_column(self.evaluate, state, parameter, column, epsilon)
         self._third.value = float(parameter)
-        return (forward - backward) / (_CENTRAL_DIFFERENCE_POINTS * epsilon)
+        return difference
 
     def adapt(self, state: np.ndarray, parameter: float) -> None:
         """Move the borders to the normalised null vectors at an accepted point."""
