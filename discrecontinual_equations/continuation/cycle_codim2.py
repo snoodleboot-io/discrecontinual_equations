@@ -43,6 +43,49 @@ strong resonances on a torus curve as ``kappa`` passes ``1, -1, -1/2, 0``
 (``strong_resonance_1_1`` to ``_1_4``), and the normal form coefficient of the
 curve itself vanishing (``cusp_of_cycles``, ``generalized_period_doubling``,
 ``chenciner``; see :mod:`.cycle_normal_form`).
+
+Limits:
+
+- Only the one-point-per-interval schemes (Hermite-Simpson, trapezoidal) are
+  supported; a Gauss-Legendre ``collocation`` is refused with ``ValueError``.
+- A codimension-two point is *located*: a test function changing sign
+  between two adjacent curve points is driven to zero by the secant method on
+  the curve between them (eight trials at most, back to the linear estimate
+  if a trial fails to correct). Its own normal form (De Witte et al.'s
+  coefficients, which decide the unfolding) is not computed.
+- The test functions are read off the discrete monodromy's multipliers and
+  the coefficients off the discrete cycle, so the located points carry the
+  discretisation's error, and two sign changes within one step cancel and
+  are not seen.
+- The corner's gradient is differenced, not exact: its state and period
+  components from the blocks re-assembled at the states displaced along
+  ``V_l``, its parameter components by forward differences, both with steps
+  of ``1e-7`` relative to the quantity's size.
+- ``M^2 - 2 kappa M + I`` is singular also for a real pair ``mu, 1/mu``,
+  ``kappa = (mu + 1/mu) / 2`` outside ``[-1, 1]``: past a 1:1 or 1:2
+  resonance a torus curve continues as a curve of neutral saddle cycles,
+  where no ``d`` is computed and no Chenciner point is looked for.
+
+References:
+    - [Doedel2003] Doedel, E. J., Govaerts, W. and Kuznetsov, Yu. A.
+      "Computation of periodic solution bifurcations in ODEs using bordered
+      systems", SIAM J. Numer. Anal. 41(2), 401-435, 2003.
+      DOI 10.1137/S0036142902400779. The bordered (minimally augmented)
+      defining systems for fold, flip and torus curves of cycles.
+    - [DeWitte2013] De Witte, V., Della Rossa, F., Govaerts, W. and
+      Kuznetsov, Yu. A. "Numerical periodic normalization for codim 2
+      bifurcations of limit cycles: computational formulas, numerical
+      implementation, and examples", SIAM J. Appl. Dyn. Syst. 12(2),
+      722-788, 2013. DOI 10.1137/120874904; preprint arXiv:1111.4445.
+      Section 2, as numbered in the preprint: the codimension-two points of
+      cycles - cusp (2.1.1), generalised period-doubling (2.1.2), Chenciner
+      (2.2.1), strong resonances 1:1 to 1:4 (2.2.2-2.2.5), fold-flip (2.2.6)
+      and the rest - which the test functions here locate.
+    - [Kuznetsov2005] Kuznetsov, Yu. A., Govaerts, W., Doedel, E. J. and
+      Dhooge, A. "Numerical periodic normalization for codim 1 bifurcations
+      of limit cycles", SIAM J. Numer. Anal. 43(4), 1407-1435, 2005.
+      DOI 10.1137/040611306. The coefficients whose zeros end a curve's
+      nondegenerate stretch.
 """
 
 from itertools import combinations
@@ -91,7 +134,25 @@ class CycleCurvePoint:
     ``kappa`` is ``cos theta`` of the critical pair on a torus curve and
     ``None`` elsewhere; ``coefficient`` the normal form coefficient of the
     curve's bifurcation there (``b``, ``c``, or the complex ``d``), ``None``
-    when not computed.
+    when not computed. ``tests`` holds each codimension-two test function's
+    value at the point, keyed by the point it detects.
+
+    Args:
+        parameters: The two parameters' values.
+        states: The cycle's node states.
+        period: Its period.
+        multipliers: Its Floquet multipliers.
+        kappa: ``cos theta`` of the critical pair, torus curves only.
+        coefficient: The curve's normal form coefficient, or ``None``.
+
+    References:
+        - [Doedel2003] Doedel, E. J., Govaerts, W. and Kuznetsov, Yu. A.
+          "Computation of periodic solution bifurcations in ODEs using
+          bordered systems", SIAM J. Numer. Anal. 41(2), 401-435, 2003.
+          DOI 10.1137/S0036142902400779.
+        - [Kuznetsov2005] Kuznetsov, Govaerts, Doedel and Dhooge, SIAM J.
+          Numer. Anal. 43(4), 1407-1435, 2005. DOI 10.1137/040611306.
+          ``b``, ``c`` and ``d``.
     """
 
     __slots__ = [
@@ -123,7 +184,23 @@ class CycleCurvePoint:
 
 
 class CycleCodim2Point:
-    """A codimension-two point located on a curve, between two of its points."""
+    """A codimension-two point located on a curve, between two of its points.
+
+    Args:
+        kind: Which point: ``cusp_of_cycles``, ``generalized_period_doubling``,
+            ``chenciner``, ``fold_flip``, ``fold_neimark_sacker``,
+            ``flip_neimark_sacker``, ``double_neimark_sacker`` or
+            ``strong_resonance_1_1`` to ``strong_resonance_1_4``.
+        parameters: Where it lies, interpolated linearly between the two
+            curve points whose test functions differ in sign.
+
+    References:
+        - [DeWitte2013] De Witte, V., Della Rossa, F., Govaerts, W. and
+          Kuznetsov, Yu. A. "Numerical periodic normalization for codim 2
+          bifurcations of limit cycles: computational formulas, numerical
+          implementation, and examples", SIAM J. Appl. Dyn. Syst. 12(2),
+          722-788, 2013. DOI 10.1137/120874904; preprint arXiv:1111.4445. Section 2.
+    """
 
     __slots__ = ["kind", "parameters"]
 
@@ -133,7 +210,20 @@ class CycleCodim2Point:
 
 
 class CycleCurve:
-    """A traced fold, flip or torus curve of cycles and its codimension-two points."""
+    """A traced fold, flip or torus curve of cycles and its codimension-two points.
+
+    Args:
+        kind: ``fold_of_cycles``, ``period_doubling`` or ``neimark_sacker``.
+        points: The curve's points in the order traced; empty if the start
+            could not be corrected onto the curve.
+        special: The codimension-two points found between adjacent points.
+
+    References:
+        - [Doedel2003] Doedel, E. J., Govaerts, W. and Kuznetsov, Yu. A.
+          "Computation of periodic solution bifurcations in ODEs using
+          bordered systems", SIAM J. Numer. Anal. 41(2), 401-435, 2003.
+          DOI 10.1137/S0036142902400779.
+    """
 
     __slots__ = ["kind", "points", "special"]
 
@@ -187,7 +277,40 @@ class CycleCurveContinuation:
     ``parameter_indices`` are the two parameters, the first the one the start
     point was traced in. The cycle is discretised as
     :class:`CycleContinuation` with the same ``intervals``, phase and
-    ``collocation`` (a one-point-per-interval scheme).
+    ``collocation`` (a one-point-per-interval scheme). The unknowns are the
+    cycle's states, its period, both parameters and, on a torus curve,
+    ``kappa``; the equations are the cycle's collocation system, its phase
+    condition, the bifurcation's test functions (the bordered operator's
+    corner entries) and the arclength condition. The step is a fixed
+    pseudo-arclength in AUTO's ``L2`` norm of the orbit and both parameters.
+
+    Args:
+        equation: The system; its first two parameters by
+            ``parameter_indices`` are the ones the curve moves.
+        parameter_indices: The two active parameters, the first the one the
+            start point was traced in.
+        intervals: Mesh intervals, as :class:`CycleContinuation`.
+        phase_index: The coordinate the point phase condition pins.
+        phase_value: The value it is pinned to.
+        collocation: ``"hermite_simpson"`` or ``"trapezoidal"``.
+        normal_forms: Compute the curve's normal form coefficient at every
+            point (needed for the cusp, generalised period-doubling and
+            Chenciner points).
+
+    Raises:
+        ValueError: If ``collocation`` is not a one-point-per-interval
+            scheme, or :class:`CycleContinuation` refuses its arguments.
+
+    References:
+        - [Doedel2003] Doedel, E. J., Govaerts, W. and Kuznetsov, Yu. A.
+          "Computation of periodic solution bifurcations in ODEs using
+          bordered systems", SIAM J. Numer. Anal. 41(2), 401-435, 2003.
+          DOI 10.1137/S0036142902400779.
+        - [DeWitte2013] De Witte, V., Della Rossa, F., Govaerts, W. and
+          Kuznetsov, Yu. A. "Numerical periodic normalization for codim 2
+          bifurcations of limit cycles: computational formulas, numerical
+          implementation, and examples", SIAM J. Appl. Dyn. Syst. 12(2),
+          722-788, 2013. DOI 10.1137/120874904; preprint arXiv:1111.4445.
     """
 
     __slots__ = [
@@ -552,8 +675,37 @@ class CycleCurveContinuation:
         ``start`` is a cycle at or near the bifurcation, at the current value of
         the second parameter; it is first corrected onto the curve with the
         second parameter held. ``direction`` is the initial sense of the second
-        parameter. Returns the curve, possibly empty if the start cannot be
-        corrected onto it.
+        parameter. The second parameter is handed back at its starting value
+        when the trace ends.
+
+        Args:
+            start: A cycle near the bifurcation, e.g. the traced point of a
+                :meth:`CycleContinuation.trace` nearest a crossing it reported.
+            kind: ``"fold_of_cycles"``, ``"period_doubling"`` or
+                ``"neimark_sacker"``.
+            arclength: The pseudo-arclength step.
+            steps: How many steps to take.
+            direction: The initial sense of the second parameter, +1 or -1.
+
+        Returns:
+            The curve, possibly empty if the start cannot be corrected onto it;
+            it ends early where the corrector fails.
+
+        Raises:
+            ValueError: If ``kind`` is not one of the three, the second
+                parameter has no value, or a torus curve's start has no complex
+                multiplier pair.
+
+        References:
+            - [Doedel2003] Doedel, E. J., Govaerts, W. and Kuznetsov, Yu. A.
+              "Computation of periodic solution bifurcations in ODEs using
+              bordered systems", SIAM J. Numer. Anal. 41(2), 401-435, 2003.
+              DOI 10.1137/S0036142902400779.
+            - [DeWitte2013] De Witte, V., Della Rossa, F., Govaerts, W. and
+              Kuznetsov, Yu. A. "Numerical periodic normalization for codim 2
+              bifurcations of limit cycles: computational formulas, numerical
+              implementation, and examples", SIAM J. Appl. Dyn. Syst. 12(2),
+              722-788, 2013. DOI 10.1137/120874904; preprint arXiv:1111.4445.
         """
         if kind not in _KINDS:
             message = f"kind must be one of {list(_KINDS)}, got {kind!r}"

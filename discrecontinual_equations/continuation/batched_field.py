@@ -32,6 +32,28 @@ against the caller's own state-at-a-time evaluation: a difference beyond
 rounding (:data:`_SPOT_ULPS` units of the row's largest entry) returns ``None``
 too. Two states are a spot check, not a proof; a field wrong on arrays is wrong
 by far more than rounding, so the bound costs it nothing.
+
+The derivatives are forward-mode automatic differentiation: :class:`_Dual` is
+the first-order truncation of the Taylor arithmetic of Griewank and Walther
+(2008, chapters 3 and 13), carrying every seed direction at once, so one
+evaluation gives the whole Jacobian.
+
+Limits:
+
+- *Rounding, not bits* (DEQ-75): batched and state-at-a-time values agree to
+  rounding. NumPy's vectorised ``pow`` and libm's scalar ``pow`` differ by an
+  ulp on some CPUs, so a cycle traced through the batched path can differ in
+  the last bits from the same cycle traced a state at a time.
+- Only fields written in ``+ - * /`` and integer powers batch. Anything else
+  is refused and falls back to the slow path, correctly but without the speed.
+- The spot check sees the first and last states only. A field that is right on
+  those two and wrong in between would pass.
+
+References:
+    - [Griewank2008] Griewank, A. and Walther, A. *Evaluating Derivatives:
+      Principles and Techniques of Algorithmic Differentiation*, 2nd ed., SIAM,
+      2008. DOI 10.1137/1.9780898717761. Forward mode (chapter 3) and Taylor
+      arithmetic (chapter 13), which :class:`_Dual` truncates at first order.
 """
 
 from collections.abc import Callable
@@ -181,8 +203,29 @@ def field_values(
 ) -> np.ndarray | None:
     """``f`` at every row of ``states`` in one call, or ``None`` if it cannot be.
 
-    ``single`` is the caller's own evaluation at one state, against which the
-    first and last rows are checked to rounding (:func:`_agrees`).
+    Every coordinate is handed to the field as an array over the states, so a
+    field written in arithmetic and integer powers evaluates all of them in
+    one pass. The first and last rows are then checked against ``single`` to
+    rounding (:func:`_agrees`).
+
+    Args:
+        function: The vector field, with its parameters already set.
+        states: One state to a row, shape ``(n, d)``.
+        single: The caller's own evaluation at one state, the reference the
+            spot check compares against.
+        time: Passed through to the field.
+
+    Returns:
+        ``f`` at every state, shape ``(n, components)``; or ``None`` when there
+        are fewer than two states, the field refuses arrays, or the spot check
+        finds a difference beyond rounding. ``None`` means: evaluate a state at
+        a time.
+
+    References:
+        - [Griewank2008] Griewank, A. and Walther, A. *Evaluating Derivatives*,
+          2nd ed., SIAM, 2008. DOI 10.1137/1.9780898717761. Chapter 2, the
+          evaluation of a function as a sequence of elementary operations,
+          which is what lets every operation take arrays.
     """
     count = states.shape[0]
     if count < _MINIMUM_BATCH:
@@ -208,8 +251,28 @@ def field_jacobians(
     """``df/dx`` at every row of ``states``, shape ``(n, d, d)``, or ``None``.
 
     The field is evaluated once on :class:`_Dual` coordinates seeded along
-    every unit direction together. ``single`` is the caller's own Jacobian at
-    one state, against which the first and last are checked to rounding.
+    every unit direction together: forward-mode automatic differentiation with
+    all ``d`` directions carried at once, over every state at once. The first
+    and last Jacobians are then checked against ``single`` to rounding.
+
+    Args:
+        function: The vector field, with its parameters already set.
+        states: One state to a row, shape ``(n, d)``.
+        single: The caller's own Jacobian at one state, the reference the spot
+            check compares against.
+        time: Passed through to the field.
+
+    Returns:
+        The Jacobians, shape ``(n, d, d)``; or ``None`` when there are fewer
+        than two states, the field refuses dual numbers (a comparison, a
+        :mod:`math` call, a fractional power), returns something that is
+        neither a dual nor a number, or the spot check finds a difference
+        beyond rounding.
+
+    References:
+        - [Griewank2008] Griewank, A. and Walther, A. *Evaluating Derivatives*,
+          2nd ed., SIAM, 2008. DOI 10.1137/1.9780898717761. Forward mode,
+          chapter 3; Taylor arithmetic, chapter 13.
     """
     count, dimension = states.shape
     if count < _MINIMUM_BATCH:

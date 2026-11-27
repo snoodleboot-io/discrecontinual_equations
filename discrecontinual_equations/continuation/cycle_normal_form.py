@@ -23,6 +23,51 @@ the field must be one automatic differentiation can carry.
 
 Everything is in the cycle's own time ``t in [0, T]``; ``<u, v> = conj(u) . v``
 and the integrals are Simpson's rule on the nodes and the Hermite midpoints.
+
+The normal forms, the boundary-value problems and the three coefficient
+formulas are those of the lecture notes, slides 9-21, which summarise the
+2005 paper; the normalisations follow the notes too: ``<v*, v> = 1/2`` and
+``<psi*, f> = 1/2`` for the flip, both ``1`` for the fold and the torus.
+The notes discretise by orthogonal collocation, scaled to ``[0, 1]`` as
+MATCONT does (slide 22); this module uses Hermite-Simpson in the cycle's own
+time, which changes the discretisation and nothing in the formulas.
+
+Limits:
+
+- The coefficients are fourth order in the mesh, like the cycle they are
+  computed on: ``b`` on the extended Bautin oracle fell 1.7e-3, 1.05e-4,
+  6.5e-6, 4.1e-7 (relative) from 10 to 80 intervals. A cycle that is itself
+  under-resolved gives a coefficient no better than its multipliers.
+- The cycle must be *at* the bifurcation: the singular problems are bordered
+  by their near-null vectors, which exist only to the discretisation's error
+  there. Off the curve the coefficient is computed all the same, and means
+  nothing.
+- ``b`` needs the fold's double multiplier ``1`` to be non-semisimple (a
+  Jordan block). Where the cycles' frequency does not vary with the amplitude,
+  the block is semisimple and ``b`` is not defined.
+- The torus coefficient assumes no strong resonance, ``e^(i k theta) != 1`` for
+  ``k = 1, 2, 3, 4`` (slide 17). Nothing here checks it;
+  :mod:`.cycle_codim2` reports the resonances as codimension-two points.
+- The field must accept Taylor jets (:mod:`.derivative_provider`): no
+  comparisons on the state, no :mod:`math` calls.
+
+References:
+    - [Kuznetsov2005] Kuznetsov, Yu. A., Govaerts, W., Doedel, E. J. and
+      Dhooge, A. "Numerical periodic normalization for codim 1
+      bifurcations of limit cycles", SIAM J. Numer. Anal. 43(4),
+      1407-1435, 2005. DOI 10.1137/040611306. The periodic normal forms
+      and the explicit formulas for ``b``, ``c`` and ``d``.
+    - [Kuznetsov2014] Kuznetsov, Yu. A. "Numerical periodic normalization
+      for codim 1 bifurcations of limit cycles", lecture 10, Utrecht
+      University, 9 April 2014.
+      https://webspace.science.uu.nl/~kouzn101/NBA/LC2.pdf.
+      Slides 4-6 (the normal forms), 7 (the Fredholm alternative), 11
+      (``b``), 15-16 (``a`` and ``c`` of the flip), 19-21 (``a``, ``h_11``
+      and ``d`` of the torus).
+    - [Iooss1988] Iooss, G. "Global characterization of the normal form for a
+      vector field near a closed orbit", J. Differential Equations 76(1),
+      47-76, 1988. DOI 10.1016/0022-0396(88)90063-0. The periodic normal form
+      the coefficients belong to.
 """
 
 from collections.abc import Callable
@@ -122,9 +167,28 @@ def _bordered_solve(
 class CycleNormalForm:
     """The critical cycle and the tools its normal form coefficients share.
 
-    ``states`` are the cycle's ``N + 1`` nodes on a uniform mesh of one period
-    (first equal to last), ``period`` its period, and ``function`` the vector
-    field with its parameters already at the bifurcation values.
+    On construction the field, its Jacobian ``A(t)`` and the cycle's Hermite
+    midpoints are evaluated once; :meth:`fold`, :meth:`flip` and :meth:`torus`
+    then solve the linear periodic boundary-value problems of the
+    corresponding coefficient on that mesh.
+
+    Args:
+        function: The vector field, with its parameters already at the
+            bifurcation values.
+        states: The cycle's ``N + 1`` nodes on a uniform mesh of one period,
+            first equal to last, shape ``(N + 1, n)``.
+        period: The cycle's period.
+
+    References:
+        - [Kuznetsov2005] Kuznetsov, Yu. A., Govaerts, W., Doedel, E. J. and
+          Dhooge, A. "Numerical periodic normalization for codim 1
+          bifurcations of limit cycles", SIAM J. Numer. Anal. 43(4),
+          1407-1435, 2005. DOI 10.1137/040611306.
+        - [Kuznetsov2014] Kuznetsov, Yu. A. "Numerical periodic normalization
+          for codim 1 bifurcations of limit cycles", lecture 10, Utrecht
+          University, 9 April 2014.
+          https://webspace.science.uu.nl/~kouzn101/NBA/LC2.pdf.
+          Slide 8, the multilinear forms ``B`` and ``C``.
     """
 
     __slots__ = [
@@ -165,7 +229,12 @@ class CycleNormalForm:
 
     @property
     def period(self) -> float:
-        """The cycle's period."""
+        """The cycle's period.
+
+        References:
+            - [Kuznetsov2005] Kuznetsov, Govaerts, Doedel and Dhooge, SIAM J.
+              Numer. Anal. 43(4), 2005. DOI 10.1137/040611306. ``T_0``.
+        """
         return self._period
 
     def _value(self, state: np.ndarray) -> np.ndarray:
@@ -244,7 +313,22 @@ class CycleNormalForm:
     # -- integrals and linear problems ----------------------------------------
 
     def integral(self, first: _Profile, second: _Profile) -> complex:
-        """``int_0^T <u, v> dt`` by Simpson's rule on nodes and midpoints."""
+        """``int_0^T <u, v> dt`` by Simpson's rule on nodes and midpoints.
+
+        The first argument is conjugated, so ``integral(u, u)`` is real.
+
+        Args:
+            first: ``u``, values at the nodes and the midpoints.
+            second: ``v``, likewise.
+
+        Returns:
+            The integral, fourth order in the mesh for smooth ``u`` and ``v``.
+
+        References:
+            - [Kuznetsov2014] Kuznetsov, Yu. A. Lecture 10, Utrecht, 2014.
+              Slide 7: every normalisation and solvability condition is an
+              integral of this form.
+        """
         nodes = np.sum(np.conj(first.nodes) * second.nodes, axis=1)
         middles = np.sum(np.conj(first.middles) * second.middles, axis=1)
         return complex(
@@ -282,6 +366,27 @@ class CycleNormalForm:
         its own near-null vectors (:func:`_bordered_solve`): for no source it
         returns the null vector, of unit size at the nodes; otherwise the
         solution with no component along it, which the caller then fixes.
+
+        Args:
+            shift: The constant subtracted from the operator: ``i theta / T``
+                for the torus eigenfunction, ``2 i theta / T`` for ``h_20``.
+            adjoint: Solve the adjoint problem, ``-A^T`` in place of ``A``.
+            twist: ``1`` for periodic, ``-1`` for antiperiodic (the flip).
+            source: ``g``; zero when ``None``.
+            singular: The operator is singular, so border it.
+
+        Returns:
+            ``y`` at the nodes and the Hermite midpoints.
+
+        References:
+            - [Kuznetsov2014] Kuznetsov, Yu. A. Lecture 10, Utrecht, 2014.
+              Slide 7, the Fredholm alternative for periodic boundary-value
+              problems; slides 10, 13 and 18, the eigenfunction problems.
+            - [Doedel2003] Doedel, E. J., Govaerts, W. and Kuznetsov, Yu. A.
+              "Computation of periodic solution bifurcations in ODEs using
+              bordered systems", SIAM J. Numer. Anal. 41(2), 401-435, 2003.
+              DOI 10.1137/S0036142902400779. Bordering a singular periodic
+              problem.
         """
         operator = self._operator(shift, adjoint=adjoint)
         dimension = operator.nodes.shape[1]
@@ -397,7 +502,22 @@ class CycleNormalForm:
     # -- the coefficients ----------------------------------------------------
 
     def fold(self) -> float:
-        """``b`` of the fold of cycles (limit point of cycles)."""
+        """``b`` of the fold of cycles (limit point of cycles).
+
+        ``b = 1/2 int <phi*, B(v, v) + 2 A v>`` with ``v`` the generalised
+        eigenfunction (``v' - A v = f``, orthogonal to ``f``) and ``phi*`` the
+        adjoint null function, normalised ``int <phi*, v> = 1``.
+
+        Returns:
+            ``b``; its sign says on which side of the fold the two cycles lie,
+            and it vanishes at a cusp of cycles.
+
+        References:
+            - [Kuznetsov2014] Kuznetsov, Yu. A. Lecture 10, Utrecht, 2014.
+              Slides 9-11.
+            - [Kuznetsov2005] Kuznetsov, Govaerts, Doedel and Dhooge, SIAM J.
+              Numer. Anal. 43(4), 1407-1435, 2005. DOI 10.1137/040611306.
+        """
         field = self._field_profile()
         generalised = self.solve(source=field, singular=True)
         # Only v's component along f is free; the normalisation picks it.
@@ -411,7 +531,22 @@ class CycleNormalForm:
         )
 
     def flip(self) -> float:
-        """``c`` of the period-doubling (flip) bifurcation."""
+        """``c`` of the period-doubling (flip) bifurcation.
+
+        ``c = 1/3 int_0^T <v*, C(v, v, v) + 3 B(v, h_2) - 6 a A v>`` on one
+        period, with ``v`` the antiperiodic eigenfunction, ``a`` and ``h_2``
+        from the quadratic terms.
+
+        Returns:
+            ``c``; negative for a supercritical flip, zero at a generalised
+            period-doubling.
+
+        References:
+            - [Kuznetsov2014] Kuznetsov, Yu. A. Lecture 10, Utrecht, 2014.
+              Slides 12-16.
+            - [Kuznetsov2005] Kuznetsov, Govaerts, Doedel and Dhooge, SIAM J.
+              Numer. Anal. 43(4), 1407-1435, 2005. DOI 10.1137/040611306.
+        """
         eigen = self.solve(twist=-1.0, singular=True)
         eigen = eigen.scaled(1.0 / np.sqrt(self.integral(eigen, eigen).real))
         adjoint = self.solve(adjoint=True, twist=-1.0, singular=True)
@@ -438,7 +573,24 @@ class CycleNormalForm:
         )
 
     def torus(self, angle: float) -> complex:
-        """``d`` of the Neimark-Sacker bifurcation at multipliers ``e^(+-i angle)``."""
+        """``d`` of the Neimark-Sacker bifurcation at multipliers ``e^(+-i angle)``.
+
+        ``d = 1/2 int <v*, C(v, v, conj v)> + 1/2 int <v*, 2 B(h_11, v) +
+        B(h_20, conj v)> - a int <v*, A v> + i a theta / T``.
+
+        Args:
+            angle: ``theta``, the critical pair's argument, in ``(0, pi)``.
+
+        Returns:
+            ``d``; ``Re d < 0`` for a supercritical torus bifurcation, zero at
+            a Chenciner point.
+
+        References:
+            - [Kuznetsov2014] Kuznetsov, Yu. A. Lecture 10, Utrecht, 2014.
+              Slides 17-21.
+            - [Kuznetsov2005] Kuznetsov, Govaerts, Doedel and Dhooge, SIAM J.
+              Numer. Anal. 43(4), 1407-1435, 2005. DOI 10.1137/040611306.
+        """
         period = self._period
         rate = 1j * angle / period
         eigen = self.solve(rate, singular=True)
