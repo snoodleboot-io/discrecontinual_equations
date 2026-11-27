@@ -56,8 +56,10 @@ _STAGNATION_LIMIT = 3
 # the diverged solves this refuses at 1.1 to 14.
 _CORRECTION_TOLERANCE = 1.0e-7
 # How nearly a Newton correction must satisfy the normal equations, relative to
-# ``|J|_F |J dx + r|``, before its size is trusted; see ``_relative_correction``.
-_NORMAL_EQUATIONS = 1.0e-6
+# ``|J|_F (|J|_F |dx| + |r|)``, before its size is trusted; see
+# ``_relative_correction``. Neither AUTO nor COLNEW has such a test: they trust
+# their own linear solves. This one exists for the fallbacks.
+_NORMAL_EQUATIONS = 1.0e-11
 # Convergence tolerance for the iterative least squares, the fallback when the
 # sparse factorisation fails. Tight enough that the step matches a dense
 # factorisation to well below the accuracy of the orbit.
@@ -83,6 +85,14 @@ _TRUNCATION_EXTENSION = 0.25
 # Multiple of an interval's truncation error its residual may reach; the exact
 # orbit, sampled, reaches 1.24 of it (see CollocationResidual).
 _RESIDUAL_SAFETY = 2.0
+# Multiple of its own error bound the deferred-corrected inconsistency may reach.
+# Genuine connections measured at most 0.38 of the unscaled bound, and 0.08 on
+# intervals long enough to resolve (see CollocationResidual); the factor is
+# margin for the leading-order estimates the bound is made of.
+_INCONSISTENCY_SAFETY = 2.0
+# Differences of order 7 bound the corrected truncation estimate, so a path needs
+# at least eight nodes to be checked for consistency.
+_CORRECTED_ORDER = 7
 _AUTODIFF = AutomaticDifferentiation()
 
 
@@ -242,19 +252,114 @@ class CollocationResidual:
     The resolution estimate cannot stand in for this. It measures how much a path
     moves when the mesh changes, and a non-trajectory converged on one mesh can
     sit still on the next: the path above had an estimate of 1.9e-4.
+
+    **Broken connections.** The per-interval test cannot see a connection that
+    is broken by less than the trapezoidal rule's own error. A homoclinic loop
+    broken by damping ``delta y`` leaves a least-squares minimum whose residual
+    is about ``0.4 delta sqrt(h)`` spread along the whole orbit, well inside
+    allowances of order ``h^3``. At ``h = 0.25`` it passed up to ``delta = 9e-3``
+    (DEQ-155). A second test closes this gap. It asks whether the *discrete
+    system* is consistent once its own truncation error is accounted for.
+
+    The idea is deferred correction. The exact orbit leaves the trapezoidal rule
+    a residual ``tau = -h^3 x'''/12 - h^5 x^(5)/480 - ...`` on each interval, and
+    ``-D3/12 + D5/120`` reads it off the path's differences to ``O(h^7)``. The
+    corrected system ``G(x) = F(x) - tau_hat(x)``, with ``F`` the solver's
+    Newton residual, is then a sixth-order discretisation. One Gauss-Newton step
+    on ``G`` moves the path to ``x + z``. ``inconsistency`` is the part of
+    ``G(x + z)`` that no step can remove, ``|(I - J J^+) G(x + z)|``. For a
+    genuine connection this is the corrected scheme's own error. For a broken
+    one it is the miss.
+
+    ``inconsistency_tolerance`` bounds the genuine part, with two terms:
+
+    * the leftover of the difference estimate, ``|D7 x / 840|`` over the
+      collocation rows, the next term of the expansion;
+    * the truncation of the interval. The exact orbit misses the linear
+      projection conditions by the quadratic part of the manifold. On the
+      departure side that miss is ``l_k N(e) / (2 mu - lambda_k)``, where
+      ``N(e) = f(p + e) - Df(p) e``, ``mu`` is the slowest unstable rate and
+      ``lambda_k`` a projected eigenvalue. The arrival side is the mirror image.
+
+    The sum is multiplied by ``_INCONSISTENCY_SAFETY``, and the Newton tolerance
+    is added as a floor. A path is a trajectory only if both tests pass.
+
+    Measured on a dissipative loop that is genuine, ``y' = x - x^2 + k y H``
+    with ``H`` the saddle's energy: the inconsistency fell from 7e-5 to 1e-10
+    between ``h = 0.5`` and ``h = 0.0625``, as ``h^6.5``. On solved and
+    exact-sampled paths it stayed within 0.16 of its bound for half-lengths of
+    6 or more, and within 0.75 down to half-length 3, where the interval's
+    truncation is most of it. The broken loop's
+    inconsistency is ``0.415 delta`` at ``h = 0.25``, ``0.295 delta`` at
+    ``0.125`` and ``0.209 delta`` at ``0.0625``. On a quarter-decade grid, at
+    half-length 10 (12 for ``h = 0.5``), it is refused from ``delta = 1e-3``
+    at ``h = 0.5``, ``3.2e-5`` at ``0.25``, ``5.6e-7`` at ``0.125`` and ``1.8e-8`` at
+    ``0.0625``. That is a fall of about ``h^5.5``, until the Newton-tolerance
+    floor stops it near ``1e-8``. The per-interval test alone refused it only
+    from ``9e-3`` at ``h = 0.25``. Below those values a broken loop and the
+    corrected scheme's own error cannot be told apart on that mesh: refine it.
+
+    A path with fewer than eight nodes is not checked for consistency, because
+    ``D7`` needs eight. Its ``inconsistency`` is 0.0. The homoclinic curve
+    solves a square system, which has no inconsistent direction, and it leaves
+    the test out the same way.
+
+    References:
+        V. Pereyra, "Iterated deferred corrections for nonlinear operator
+        equations", Numer. Math. 10, 316-323, 1967, DOI 10.1007/BF02162030:
+        deferred correction, which subtracts a truncation-error estimate read
+        from the computed solution. The text could not be fetched (paywalled).
+        The expansion and the ``D7/840`` leftover used here were derived and
+        checked in exact arithmetic. The leading term matches Atkinson (1989),
+        eq. (5.1.7), as quoted in the Wikipedia article "Trapezoidal rule",
+        section "Error analysis".
+        W.-J. Beyn, "The numerical computation of connecting orbits in
+        dynamical systems", IMA J. Numer. Anal. 10, 379-405, 1990, DOI
+        10.1093/imanum/10.3.379. These are the projection boundary conditions,
+        whose truncation error decays exponentially (abstract). The
+        quadratic-miss estimate above is this module's own leading-order
+        analysis.
+        See docs/references.md, ``Pereyra1967`` and ``Beyn1990``.
     """
 
-    __slots__ = ["largest", "tolerance", "worst"]
+    __slots__ = [
+        "inconsistency",
+        "inconsistency_tolerance",
+        "largest",
+        "tolerance",
+        "worst",
+    ]
 
-    def __init__(self, largest: float, tolerance: float, worst: float) -> None:
+    def __init__(
+        self,
+        largest: float,
+        tolerance: float,
+        worst: float,
+        inconsistency: float = 0.0,
+        inconsistency_tolerance: float = 0.0,
+    ) -> None:
         self.largest = largest
         self.tolerance = tolerance
         self.worst = worst
+        self.inconsistency = inconsistency
+        self.inconsistency_tolerance = inconsistency_tolerance
+
+    @property
+    def consistent(self) -> bool:
+        """Whether the corrected discrete system is consistent to within its error.
+
+        A bound that is not finite proves nothing, so it is not consistent.
+        """
+        return (
+            math.isfinite(self.inconsistency_tolerance)
+            and self.inconsistency <= self.inconsistency_tolerance
+        )
 
     @property
     def is_trajectory(self) -> bool:
-        """Whether every interval's residual is within its allowance."""
-        return self.worst <= 1.0
+        """Whether every interval's residual is within its allowance, and the
+        discrete system is consistent: no connection is broken under the mesh."""
+        return self.worst <= 1.0 and self.consistent
 
 
 class NotConvergedError(RuntimeError):
@@ -495,10 +600,107 @@ class ConnectingOrbit(ABC):
         where the path starts, ends and is pinned, not whether it is a trajectory.
         Any path with the solver's dimension can be measured, not only one this
         solver returned. See :class:`CollocationResidual`.
+
+        The consistency test does use the boundary and phase rows. A broken
+        connection is a trajectory that cannot also meet them, and the
+        inconsistency measures by how much. That costs the Jacobian at the path
+        and two least-squares solves.
         """
         states, times = solution.states, solution.times
         rows = [self._collocation(states, times, i) for i in range(len(times) - 1)]
-        return _measure_collocation(states, np.array(rows))
+        inconsistency, bound = self._inconsistency(states, times)
+        return _measure_collocation(states, np.array(rows), inconsistency, bound)
+
+    def _inconsistency(
+        self,
+        states: np.ndarray,
+        times: np.ndarray,
+    ) -> tuple[float, float]:
+        """The deferred-corrected system's irreducible residual, and its bound.
+
+        See :class:`CollocationResidual`. ``(0.0, 0.0)`` for a path too short to
+        difference; ``inf`` when the measurement itself overflows or produces
+        a non-finite value, which no trajectory does.
+        """
+        nodes = states.shape[0]
+        if nodes <= _CORRECTED_ORDER:
+            return 0.0, 0.0
+        shape = states.shape
+        unknowns = states.astype(float).flatten()
+        leftover = np.array(
+            [
+                _difference(states, i, _CORRECTED_ORDER) / 840.0
+                for i in range(nodes - 1)
+            ],
+        )
+        first = leftover.size
+        try:
+            with np.errstate(over="ignore", invalid="ignore"):
+                missed = self._boundary_truncation(states)
+                corrected = self._corrected_residual(unknowns, times, shape)
+                if not np.all(np.isfinite(corrected)):
+                    return math.inf, _DEFAULT_TOLERANCE
+                jacobian = self._jacobian(
+                    unknowns,
+                    times,
+                    shape,
+                    corrected,
+                    analytic=True,
+                )
+                if jacobian is None:
+                    jacobian = self._numerical_jacobian(
+                        unknowns,
+                        times,
+                        shape,
+                        corrected.size,
+                    )
+                # A boundary row's miss reaches the inconsistency only through
+                # that row's share of it, |(I - J J^+) e_row|, which is small at
+                # an end the orbit has nearly reached. By the triangle
+                # inequality, sum |miss_row| |P e_row| bounds the miss's part.
+                reached = 0.0
+                for offset, size in enumerate(missed):
+                    unit = np.zeros(corrected.size)
+                    unit[first + offset] = 1.0
+                    share = unit + jacobian @ self._least_squares(jacobian, unit)
+                    reached += size * float(np.linalg.norm(share))
+                bound = (
+                    _INCONSISTENCY_SAFETY * (float(np.linalg.norm(leftover)) + reached)
+                    + _DEFAULT_TOLERANCE
+                )
+                moved = unknowns + self._least_squares(jacobian, corrected)
+                remaining = self._corrected_residual(moved, times, shape)
+                irreducible = remaining + jacobian @ self._least_squares(
+                    jacobian,
+                    remaining,
+                )
+                inconsistency = float(np.linalg.norm(irreducible))
+        except (OverflowError, ValueError):
+            return math.inf, _DEFAULT_TOLERANCE
+        return inconsistency, bound
+
+    def _corrected_residual(
+        self,
+        unknowns: np.ndarray,
+        times: np.ndarray,
+        shape: tuple[int, int],
+    ) -> np.ndarray:
+        """The Newton residual less the path's own trapezoidal truncation error.
+
+        ``-D3/12 + D5/120`` on each collocation row: the trapezoidal rule's local
+        error ``-h^3 x'''/12 - h^5 x^(5)/480`` to ``O(h^7)``; see
+        :class:`CollocationResidual`. The boundary and phase rows are unchanged.
+        """
+        states = unknowns.reshape(shape)
+        residual = self._residual(unknowns, times, shape)
+        estimate = np.array(
+            [
+                -_difference(states, i, 3) / 12.0 + _difference(states, i, 5) / 120.0
+                for i in range(shape[0] - 1)
+            ],
+        )
+        residual[: estimate.size] -= estimate.ravel()
+        return residual
 
     def _shift(self, moved: np.ndarray, original: np.ndarray) -> float:
         """Largest component of the change between two paths at shared nodes.
@@ -802,6 +1004,74 @@ class ConnectingOrbit(ABC):
         """Projection boundary conditions at the two ends of the orbit."""
         raise NotImplementedError
 
+    @abstractmethod
+    def _boundary_truncation(self, states: np.ndarray) -> np.ndarray:
+        """By how much the exact orbit through the path's ends misses
+        :meth:`_boundary`, one magnitude per boundary row; see
+        :func:`_manifold_miss`."""
+        raise NotImplementedError
+
+
+def _difference(states: np.ndarray, interval: int, order: int) -> np.ndarray:
+    """The ``order``-th forward difference nearest centred on ``interval``.
+
+    Interval ``i`` runs from node ``i`` to ``i + 1``. The centred stencil of odd
+    order starts at node ``i - (order - 1)/2``. Near an end it slides inward to
+    stay on the mesh, where the orbit is close to its equilibrium and the
+    differences are small.
+    """
+    last = states.shape[0] - 1 - order
+    start = min(max(interval - (order - 1) // 2, 0), last)
+    weights = np.array(
+        [(-1.0) ** (order - k) * math.comb(order, k) for k in range(order + 1)],
+    )
+    return weights @ states[start : start + order + 1]
+
+
+def _manifold_miss(
+    function: Function,
+    end: "Terminus",
+    displacement: np.ndarray,
+    *,
+    departing: bool,
+) -> np.ndarray:
+    """Leading-order miss of the linear projection conditions by the exact orbit.
+
+    An orbit leaving the equilibrium ``p`` lies on its unstable manifold, which
+    is tangent to the unstable eigenspace and curves away from it quadratically.
+    Write ``e`` for the displacement from ``p`` and ``N(e) = f(p + e) - Df(p) e``
+    for the nonlinear part of the field. A projected (stable) component
+    ``c_k = l_k e`` then obeys ``c_k' = lambda_k c_k + l_k N(e)``, with ``N``
+    growing like ``exp(2 mu t)`` and ``mu`` the slowest unstable rate. Its
+    bounded solution is ``c_k = l_k N(e) / (2 mu - lambda_k)``. The arrival end
+    is the same in reverse time, ``|l_k N(e)| / (2 nu + Re lambda_k)``, with
+    ``nu`` the slowest stable rate. Each denominator is replaced by its real
+    part, which is smaller in modulus, so the estimate errs high. Returns one
+    magnitude per row that :func:`_projection_conditions` makes, in its order.
+    """
+    values, left, stable, unstable = _split_eigenspaces(end.jacobian)
+    projected, kept = (stable, unstable) if departing else (unstable, stable)
+    if not projected or not kept:
+        return np.zeros(
+            len(_projection_conditions(left, values, projected, displacement)),
+        )
+    slowest = min(abs(values[index].real) for index in kept)
+    field = np.array(
+        function.eval(point=list(end.equilibrium + displacement), time=None),
+        dtype=float,
+    )
+    nonlinear = field - end.jacobian @ displacement
+    misses: list[float] = []
+    for index in projected:
+        if values[index].imag < -_IMAGINARY:
+            continue
+        rate = 2.0 * slowest + abs(values[index].real)
+        size = abs(left[index] @ nonlinear) / rate
+        misses.append(size)
+        if values[index].imag > _IMAGINARY:
+            misses.append(size)
+    return np.array(misses)
+
 
 def _collocation_triplets(
     derivatives: np.ndarray,
@@ -829,11 +1099,17 @@ def _collocation_triplets(
     )
 
 
-def _measure_collocation(states: np.ndarray, rows: np.ndarray) -> CollocationResidual:
+def _measure_collocation(
+    states: np.ndarray,
+    rows: np.ndarray,
+    inconsistency: float = 0.0,
+    inconsistency_tolerance: float = 0.0,
+) -> CollocationResidual:
     """The :class:`CollocationResidual` of a path from its per-interval residuals.
 
     ``rows[i]`` is interval ``i``'s trapezoidal residual vector. Shared with the
-    homoclinic curve, whose field depends on the point's parameters.
+    homoclinic curve, whose field depends on the point's parameters and whose
+    square system has no inconsistency to measure.
     """
     residuals = np.max(np.abs(rows), axis=1)
     third = np.max(np.abs(np.diff(states, 3, axis=0)), axis=1, initial=0.0)
@@ -848,6 +1124,8 @@ def _measure_collocation(states: np.ndarray, rows: np.ndarray) -> CollocationRes
         float(np.max(residuals)),
         float(np.max(allowance)),
         float(np.max(residuals / allowance)),
+        inconsistency,
+        inconsistency_tolerance,
     )
 
 
@@ -860,18 +1138,34 @@ def _relative_correction(
     """Largest ``|step_i| / (1 + |x_i|)``, or ``inf`` if the step cannot be trusted.
 
     COLNEW's convergence test, ``|dz_i| <= tol (|z_i| + 1)``, in one number. A
-    small correction proves convergence only if it is the least-squares step,
-    so the step must also satisfy the normal equations ``J^T (J dx + r) = 0`` to
-    within ``_NORMAL_EQUATIONS`` of ``|J|_F |r|``. A solver that returned a zero
-    step at an iterate that is not stationary would otherwise certify it: there
-    the defect is ``|J^T r|``, a fair fraction of the scale. Measured on every
-    step taken on the problems in the tests, the defect is 1e-15 of it or less.
-    A step that is not finite makes the defect NaN, and fails the test too.
+    small correction proves convergence only if it is the least-squares step.
+    So the step must also satisfy the normal equations ``J^T (J dx + r) = 0``,
+    to within ``_NORMAL_EQUATIONS`` of ``|J|_F (|J|_F |dx| + |r|)``. Otherwise a
+    solver that returned a zero step at a non-stationary iterate would certify
+    it, because the defect there is ``|J^T r|``.
+
+    The dense fallback does exactly this along the directions it truncates.
+    ``lstsq`` with ``rcond = _RCOND`` zeroes every singular direction below
+    ``_RCOND sigma_max``, and a residual along such a direction leaves the
+    defect ``sigma |r|``. At the old tolerance of 1e-6, a step truncated at
+    ``sigma = 1e-10`` was certified with a correction of 1.6e-16, against a true
+    step of 1e10 (DEQ-156). At ``1e-11`` the test sees every truncated direction
+    with ``sigma > 1e-11 |J|_F``. A step truncated below that is invisible to
+    any normal-equation test: its defect is smaller than the rounding in
+    forming ``J dx``.
+
+    That rounding, about ``eps |J| |dx|``, is why ``|J|_F |dx|`` is in the
+    scale. Without it, a tolerance this tight refuses a correct but large step.
+    A truncated step is near zero, so the term costs it nothing. Measured over
+    every step the connecting-orbit tests certify, the defect is at most
+    ``DEFECT_MAX`` of this scale. A step that is not finite makes the defect
+    NaN, and fails the test too.
     """
-    scale = float(np.sqrt(jacobian.multiply(jacobian).sum())) * float(
-        np.linalg.norm(residual),
-    )
+    norm = float(np.sqrt(jacobian.multiply(jacobian).sum()))
     with np.errstate(over="ignore", invalid="ignore"):
+        scale = norm * (
+            norm * float(np.linalg.norm(step)) + float(np.linalg.norm(residual))
+        )
         remainder = jacobian @ step + residual
         gradient = float(np.linalg.norm(jacobian.T @ remainder))
     if not gradient <= _NORMAL_EQUATIONS * scale:
@@ -963,7 +1257,14 @@ def _projection_conditions(
 class HomoclinicOrbit(ConnectingOrbit):
     """A homoclinic orbit found by a truncated projection boundary-value problem."""
 
-    __slots__ = ["_equilibrium", "_left", "_stable", "_unstable", "_values"]
+    __slots__ = [
+        "_equilibrium",
+        "_left",
+        "_stable",
+        "_terminus",
+        "_unstable",
+        "_values",
+    ]
 
     def __init__(
         self,
@@ -974,6 +1275,7 @@ class HomoclinicOrbit(ConnectingOrbit):
     ) -> None:
         self._function = function
         self._equilibrium = equilibrium
+        self._terminus = Terminus(equilibrium, jacobian)
         self._mesh = mesh
         self._values, self._left, self._stable, self._unstable = _split_eigenspaces(
             jacobian,
@@ -990,6 +1292,24 @@ class HomoclinicOrbit(ConnectingOrbit):
             arrival,
         )
         return np.array(left + right)
+
+    def _boundary_truncation(self, states: np.ndarray) -> np.ndarray:
+        return np.concatenate(
+            [
+                _manifold_miss(
+                    self._function,
+                    self._terminus,
+                    states[0] - self._equilibrium,
+                    departing=True,
+                ),
+                _manifold_miss(
+                    self._function,
+                    self._terminus,
+                    states[-1] - self._equilibrium,
+                    departing=False,
+                ),
+            ],
+        )
 
 
 class Terminus:
@@ -1015,9 +1335,11 @@ class HeteroclinicOrbit(ConnectingOrbit):
         "_source",
         "_source_left",
         "_source_stable",
+        "_source_terminus",
         "_source_values",
         "_target",
         "_target_left",
+        "_target_terminus",
         "_target_unstable",
         "_target_values",
     ]
@@ -1033,6 +1355,8 @@ class HeteroclinicOrbit(ConnectingOrbit):
         self._mesh = mesh
         self._source = source.equilibrium
         self._target = target.equilibrium
+        self._source_terminus = source
+        self._target_terminus = target
         self._source_values, self._source_left, self._source_stable, _ = (
             _split_eigenspaces(source.jacobian)
         )
@@ -1056,3 +1380,21 @@ class HeteroclinicOrbit(ConnectingOrbit):
             arrival,
         )
         return np.array(left + right)
+
+    def _boundary_truncation(self, states: np.ndarray) -> np.ndarray:
+        return np.concatenate(
+            [
+                _manifold_miss(
+                    self._function,
+                    self._source_terminus,
+                    states[0] - self._source,
+                    departing=True,
+                ),
+                _manifold_miss(
+                    self._function,
+                    self._target_terminus,
+                    states[-1] - self._target,
+                    departing=False,
+                ),
+            ],
+        )
