@@ -1,3 +1,21 @@
+"""Euler-Maruyama, the stochastic Euler step.
+
+The simplest consistent scheme for ``dX = a dt + G dW``: freeze the drift and
+the diffusion at the start of the step and add one Wiener increment per driver,
+``X_next = X + a h + G dW``. It keeps only the first two terms of the Ito-Taylor
+expansion, so it has strong order 0.5 and weak order 1.0. It needs no
+derivative of ``G`` and no iterated integral, so it accepts any noise shape:
+diagonal, matrix, commuting or not.
+
+References:
+    Maruyama, G. Continuous Markov processes and stochastic equations.
+    Rendiconti del Circolo Matematico di Palermo 4, 48-90, 1955.
+    DOI 10.1007/BF02846028.
+
+    Kloeden, P. E. and Platen, E. Numerical Solution of Stochastic Differential
+    Equations. Springer, 1992. DOI 10.1007/978-3-662-12616-5.
+"""
+
 import numpy as np
 
 from discrecontinual_equations.curve import Curve
@@ -39,10 +57,13 @@ class EulerMaruyamaSolver(Solver):
     refuse a matrix. The vector form is stepped exactly as before.
 
     References:
-    - Maruyama, Gisiro. "Continuous Markov processes and stochastic equations"
-      Rendiconti del Circolo Matematico di Palermo, 1955
-    - Kloeden, Peter E. and Platen, Eckhard. "Numerical Solution of Stochastic
-      Differential Equations" Springer-Verlag, 1992
+        Maruyama, G. Continuous Markov processes and stochastic equations.
+        Rendiconti del Circolo Matematico di Palermo 4, 48-90, 1955.
+        DOI 10.1007/BF02846028.
+
+        Kloeden, P. E. and Platen, E. Numerical Solution of Stochastic
+        Differential Equations. Springer-Verlag, 1992.
+        DOI 10.1007/978-3-662-12616-5.
     """
 
     def __init__(
@@ -50,6 +71,15 @@ class EulerMaruyamaSolver(Solver):
         solver_config: EulerMaruyamaConfig,
         wiener: WienerSource | None = None,
     ):
+        """Set up the step and its generator.
+
+        Args:
+            solver_config: The time grid, the seed and the calculus.
+            wiener: Where the increments come from. ``None``, the default,
+                draws them from a generator seeded with ``random_seed``. A
+                :class:`~.wiener.BrownianPath` drives the solver along a path
+                fixed in advance, as a strong-convergence study needs.
+        """
         super().__init__(solver_config=solver_config)
 
         # A generator of this solver's own, never np.random.seed. Seeding the global
@@ -73,6 +103,16 @@ class EulerMaruyamaSolver(Solver):
         equation: DifferentialEquation,
         initial_values: list[float],
     ) -> Curve:
+        """Integrate the equation over the configured time grid.
+
+        Args:
+            equation: The SDE. Its ``diffusion`` may return a vector (diagonal
+                noise) or an ``n x m`` matrix (``m`` drivers).
+            initial_values: The state at ``start_time``.
+
+        Returns:
+            The solution curve, one point for each grid time.
+        """
         self.solution = self._new_solution(equation)
 
         coefficients = ItoCoefficients(equation, self.solver_config.calculus)

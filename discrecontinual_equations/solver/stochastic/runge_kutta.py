@@ -5,6 +5,17 @@ around that formula - owning a Wiener source seeded from the configuration,
 translating the equation into Ito coefficients, walking the time grid and
 recording the curve - is the same, and lives here so that the step formula is the
 whole of each solver file and can be read against its derivation.
+
+The schemes are derivative-free forms of Ito-Taylor schemes: each derivative of
+the drift ``a`` or the diffusion ``b`` that the Taylor scheme needs is replaced
+by a difference of ``a`` or ``b`` at supporting values near the current state.
+Their stage counts say nothing about their orders. The orders follow from which
+Wiener functionals they consume (see :mod:`.wiener`).
+
+References:
+    Kloeden, P. E. and Platen, E. Numerical Solution of Stochastic Differential
+    Equations. Springer, 1992. Chapters 11 and 15, the explicit strong and weak
+    schemes. DOI 10.1007/978-3-662-12616-5.
 """
 
 from abc import abstractmethod
@@ -24,7 +35,15 @@ from discrecontinual_equations.solver.stochastic.wiener import (
 
 
 class StochasticRungeKuttaSolver(Solver):
-    """Base of the ``srk*`` solvers: one step formula, one shared driver."""
+    """Base of the ``srk*`` solvers: one step formula, one shared driver.
+
+    A subclass supplies ``_step``, and may refuse dimensions it was not derived
+    for by overriding ``_check_dimension``.
+
+    References:
+        Kloeden, P. E. and Platen, E. Numerical Solution of Stochastic
+        Differential Equations. Springer, 1992. Chapters 11 and 15.
+    """
 
     __slots__ = ["_wiener"]
 
@@ -33,6 +52,14 @@ class StochasticRungeKuttaSolver(Solver):
         solver_config: StochasticConfig,
         wiener: WienerSource | None = None,
     ) -> None:
+        """Set up the solver and its Wiener source.
+
+        Args:
+            solver_config: The time grid, the seed and the calculus.
+            wiener: Where the increments come from. ``None``, the default,
+                draws them from a :class:`~.wiener.GaussianWienerSource`
+                seeded with ``random_seed``.
+        """
         super().__init__(solver_config=solver_config)
         # The increments come from a source this solver owns, seeded from the
         # configuration, so that no solver can alter another's stream and the same
@@ -45,6 +72,19 @@ class StochasticRungeKuttaSolver(Solver):
         equation: DifferentialEquation,
         initial_values: list[float],
     ) -> Curve:
+        """Integrate the equation over the configured time grid.
+
+        Args:
+            equation: The SDE, with a vector ``diffusion`` (diagonal noise).
+            initial_values: The state at ``start_time``.
+
+        Returns:
+            The solution curve, one point for each grid time.
+
+        Raises:
+            ValueError: When the diffusion is an ``n x m`` matrix, or when the
+                scheme refuses the dimension (srk4 takes one variable only).
+        """
         self.solution = self._new_solution(equation)
         config = self.solver_config
         coefficients = ItoCoefficients(equation, config.calculus)

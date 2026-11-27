@@ -1,3 +1,16 @@
+"""srk4: Platen's explicit weak order 2.0 scheme for scalar noise.
+
+Kloeden and Platen (15.1.4), the derivative-free form of the order 2.0 weak
+Taylor scheme. Expectations converge at order 2.0. Paths converge at order 1.0
+only: the scheme stands in ``h dW / 2`` for ``I_(1,0)``, which has the right
+mean and covariance but the wrong variance. One variable only.
+
+References:
+    Kloeden, P. E. and Platen, E. Numerical Solution of Stochastic Differential
+    Equations. Springer, 1992. DOI 10.1007/978-3-662-12616-5.
+    Eqs. (15.1.4) and (14.2.1).
+"""
+
 import numpy as np
 
 from discrecontinual_equations.solver.stochastic.coefficients import ItoCoefficients
@@ -88,6 +101,15 @@ class SRK4Solver(StochasticRungeKuttaSolver):
     """
 
     def __init__(self, solver_config: SRK4Config, wiener: WienerSource | None = None):
+        """Set up the step and its Wiener source.
+
+        Args:
+            solver_config: The time grid, the seed and the calculus.
+            wiener: Where the increments come from. ``None``, the default,
+                draws them from a :class:`~.wiener.GaussianWienerSource`
+                seeded with ``random_seed``. A :class:`~.wiener.BrownianPath`
+                drives the solver along a path fixed in advance.
+        """
         super().__init__(solver_config=solver_config, wiener=wiener)
 
     def _check_dimension(self, dimension: int) -> None:

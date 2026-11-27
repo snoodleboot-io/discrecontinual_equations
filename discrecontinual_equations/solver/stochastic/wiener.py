@@ -37,6 +37,10 @@ A third functional couples the channels: the Levy areas (DEQ-36),
   uncorrelated with every increment and with the area of every other pair, and
   given the increments has variance ``h^2 / 12 + h (dW_j^2 + dW_k^2) / 12``
   (Levy's formula); its law is not Gaussian and has no closed-form sampler.
+  The unconditional variance is ``h^2 / 4``; ``h^2 / 12`` is the conditional
+  variance at ``dW = 0`` only. The DEQ-36 ticket stated ``h^2 / 12`` as the
+  variance, which is wrong: averaging Levy's formula over ``E dW_j^2 = h``
+  gives ``h^2 / 12 + 2 h^2 / 12 = h^2 / 4``.
 
 :class:`LevyAreaSampler` draws it by the algorithm of Mrongowius and Rossler
 (arXiv:2101.09542): the truncated Fourier series of the Brownian bridge
@@ -67,7 +71,11 @@ References:
   multidimensional Brownian motion", arXiv:2101.09542 (2021).
 - Kastner, F. and Rossler, A. "An analysis of approximation algorithms for iterated
   stochastic integrals and a Julia and Matlab simulation toolbox",
-  arXiv:2201.08424 (2022).
+  arXiv:2201.08424 (2022); Numerical Algorithms (2022), DOI
+  10.1007/s11075-022-01401-z. Theorem 2 and (64)-(67).
+- Kloeden, P. E., Platen, E. and Wright, I. W. "The approximation of multiple
+  stochastic integrals", Stochastic Analysis and Applications 10(4), 431-441,
+  1992, DOI 10.1080/07362999208809281: the truncated Fourier series.
 - Levy's stochastic area and its characteristic functions, as quoted in
   https://en.wikipedia.org/wiki/L%C3%A9vy%27s_stochastic_area.
 """
@@ -86,7 +94,18 @@ _CHUNK_NORMALS = 2**18
 
 @dataclass(frozen=True)
 class WienerIncrements:
-    """What one step of Brownian motion gives a scheme, one entry per channel."""
+    """What one step of Brownian motion gives a scheme, one entry per channel.
+
+    References:
+        Kloeden, P. E. and Platen, E. Numerical Solution of Stochastic
+        Differential Equations. Springer, 1992. ``I_(1,0)``
+        is their notation.
+
+        Mrongowius, J. and Rossler, A. On the approximation and simulation of
+        iterated stochastic integrals and the corresponding Levy areas in terms
+        of a multidimensional Brownian motion. arXiv:2101.09542 (2021), eq. (7) (the
+        Levy area).
+    """
 
     delta_w: np.ndarray
     """``W(t + h) - W(t)``."""
@@ -104,6 +123,15 @@ class WienerIncrements:
         integrals, with the convention of Kloeden and Platen and of Mrongowius and
         Rossler (their (7)) that the first index is the inner integral. The
         Stratonovich ``J_(j,k)`` is this plus ``(1/2) delta_jk h``.
+
+        Args:
+            step: The step ``h`` the increments were drawn over.
+
+        Returns:
+            The ``m x m`` matrix ``I_(j,k)``.
+
+        Raises:
+            ValueError: When the increments carry no Levy area.
         """
         if self.levy_area is None:
             message = (
@@ -145,11 +173,38 @@ class LevyAreaSampler:
     The sampler is scale-free in the sense that ``A(h) = h A(1)`` given ``dW /
     sqrt(h)``; it takes ``dW`` with any leading batch axes, and
     :meth:`sample_cells` draws a fine path's every cell in bounded memory.
+
+    References:
+        Mrongowius, J. and Rossler, A. On the approximation and simulation of
+        iterated stochastic integrals and the corresponding Levy areas in terms
+        of a multidimensional Brownian motion. arXiv:2101.09542 (2021), Section 5.1 (the
+        algorithm), Theorem 4.4 and Corollary 4.5 (its
+        error), eq. (36) (the bound :meth:`terms` inverts).
+
+        Kastner, F. and Rossler, A. An analysis of approximation algorithms for
+        iterated stochastic integrals and a Julia and MATLAB simulation toolbox.
+        Numerical Algorithms, 2022; arXiv:2201.08424, eqs. (64)-(67) (the truncation for
+        strong order 1.0) and Theorem 2
+        (its comparison with Wiktorsson's algorithm).
+
+        Wiktorsson, M. Joint characteristic function and simultaneous
+        simulation of iterated Ito integrals for multiple independent Brownian
+        motions. Ann. Appl. Probab. 11(2), 470-487, 2001.
+        DOI 10.1214/aoap/1015345301. The algorithm this one refines.
     """
 
     __slots__ = ["_accuracy", "_generator"]
 
     def __init__(self, generator: np.random.Generator, accuracy: float = 1.0) -> None:
+        """Set up the sampler on a generator of the caller's.
+
+        Args:
+            generator: The stream every normal is drawn from.
+            accuracy: ``c1`` in the truncation rule of :meth:`terms`.
+
+        Raises:
+            ValueError: When ``accuracy`` is not positive.
+        """
         if not accuracy > 0.0:
             message = f"accuracy must be positive, got {accuracy}"
             raise ValueError(message)
@@ -174,6 +229,18 @@ class LevyAreaSampler:
         bound: at most ``0.4 h``).
         ``0.05`` measures 0.96 to 0.98 there, for 8 to 17 times the terms
         (DEQ-67).
+
+        Args:
+            step: The step ``h``.
+            dimension: The number ``m`` of channels.
+            accuracy: ``c1``.
+
+        Returns:
+            The number ``n >= 1`` of Fourier terms.
+
+        References:
+            Mrongowius and Rossler (2021), eq. (36); Kastner and Rossler
+            (2022), eqs. (64) and (67).
         """
         bound = np.sqrt(dimension / (12.0 * np.pi**2)) / (accuracy * np.sqrt(step))
         return max(1, int(np.ceil(bound)))
@@ -193,6 +260,20 @@ class LevyAreaSampler:
         is ``(..., m)``; ``psi2`` is ``(..., m, m)`` of which only the entries
         above the diagonal are read. Public so that a pathwise error can be
         measured against a reference coupled to the same normals.
+
+        Args:
+            delta_w: The increments, ``(..., m)``.
+            step: The step ``h``.
+            x: The cosine coefficients ``X_k``, ``(..., n, m)``.
+            y: The sine coefficients ``Y_k``, ``(..., n, m)``.
+            psi1: ``Psi_1``, ``(..., m)``.
+            psi2: ``Psi_2``, ``(..., m, m)``, upper triangle read.
+
+        Returns:
+            The antisymmetric areas ``A_(j,l)``, ``(..., m, m)``.
+
+        References:
+            Mrongowius and Rossler (2021), Section 5.1, steps 2-4.
         """
         count = x.shape[-2]
         k = np.arange(1, count + 1, dtype=float)
@@ -227,6 +308,14 @@ class LevyAreaSampler:
         ``terms`` defaults to :meth:`terms` for the step at this sampler's
         accuracy; the ``2 m n + m + m (m - 1) / 2`` normals are drawn in the order
         ``X``, ``Y``, ``Psi_1``, ``Psi_2``.
+
+        Args:
+            delta_w: The increments, ``(..., m)``.
+            step: The step ``h``.
+            terms: The number ``n`` of Fourier terms, or ``None`` for the rule.
+
+        Returns:
+            The areas, ``(..., m, m)``.
         """
         dimension = delta_w.shape[-1]
         count = self._count(step, dimension, terms)
@@ -255,6 +344,15 @@ class LevyAreaSampler:
         varying number of the generator's outputs and a block's end cannot be
         jumped to. ``chunk_normals`` (default ``_CHUNK_NORMALS``) bounds the
         normals of one kind a chunk draws.
+
+        Args:
+            delta_w: The cells' increments, ``(cells, m)``.
+            step: The cell width.
+            terms: The number ``n`` of Fourier terms, or ``None`` for the rule.
+            chunk_normals: The bound on one kind of normal per chunk.
+
+        Returns:
+            The cells' areas, ``(cells, m, m)``.
         """
         cells, dimension = delta_w.shape
         count = self._count(step, dimension, terms)
@@ -312,7 +410,13 @@ def _area_stream(sequence: np.random.SeedSequence) -> LevyAreaSampler:
 
 
 class WienerSource(ABC):
-    """Supplies the Wiener functionals for one step of a scheme."""
+    """Supplies the Wiener functionals for one step of a scheme.
+
+    References:
+        Kloeden, P. E. and Platen, E. Numerical Solution of Stochastic
+        Differential Equations. Springer, 1992. The multiple
+        Ito integrals a scheme consumes.
+    """
 
     @abstractmethod
     def increments(
@@ -326,6 +430,15 @@ class WienerSource(ABC):
         """The increments over ``[time, time + step]`` for ``dimension`` channels.
 
         With ``levy_area`` the result carries the Levy areas between channels too.
+
+        Args:
+            time: The start of the step.
+            step: The step ``h``.
+            dimension: The number of channels.
+            levy_area: Whether to draw the Levy areas too.
+
+        Returns:
+            The step's increments.
         """
         raise NotImplementedError
 
@@ -336,11 +449,29 @@ class GaussianWienerSource(WienerSource):
     ``seed=None`` means fresh entropy, as ``np.random.default_rng`` does. The
     Levy areas come from a second stream spawned from the same seed, so a seeded
     source gives the same increments whether or not areas are asked for.
+
+    The pair ``(dW, I_(1,0))`` is drawn exactly from two standard normals per
+    channel, as the module docstring sets out.
+
+    References:
+        Kloeden, P. E. and Platen, E. Numerical Solution of Stochastic
+        Differential Equations. Springer, 1992. ``dW`` and
+        ``I_(1,0)``.
+
+        Mrongowius, J. and Rossler, A. On the approximation and simulation of
+        iterated stochastic integrals and the corresponding Levy areas in terms
+        of a multidimensional Brownian motion. arXiv:2101.09542 (2021), Section 5.1 (the
+        areas).
     """
 
     __slots__ = ["_areas", "_generator"]
 
     def __init__(self, seed: int | None = None) -> None:
+        """Set up the two streams.
+
+        Args:
+            seed: The seed of both streams; ``None`` for fresh entropy.
+        """
         sequence = np.random.SeedSequence(seed)
         # default_rng(SeedSequence(seed)) is the stream default_rng(seed) gives.
         self._generator = np.random.default_rng(sequence)
@@ -387,6 +518,15 @@ class BrownianPath(WienerSource):
     cell areas unless given ``areas``; its reading then lacks variance ``h
     resolution / 4`` of the ``h^2 / 4`` and converges to the law as the grid is
     refined.
+
+    References:
+        Mrongowius, J. and Rossler, A. On the approximation and simulation of
+        iterated stochastic integrals and the corresponding Levy areas in terms
+        of a multidimensional Brownian motion. arXiv:2101.09542 (2021), Section 5.1 (the
+        cell areas).
+
+        Chen's relation for iterated integrals: Kloeden and Platen (1992),
+        Section 5.2, as the module :mod:`.iterated_integrals` uses it.
     """
 
     __slots__ = ["_area_sampler", "_areas", "_resolution", "_start", "_values"]
@@ -398,6 +538,19 @@ class BrownianPath(WienerSource):
         values: np.ndarray,
         areas: np.ndarray | None = None,
     ) -> None:
+        """Hold a path given on a grid.
+
+        Args:
+            start: The time of the first node.
+            resolution: The grid spacing.
+            values: ``W`` at the nodes, ``(nodes, channels)``.
+            areas: The Levy areas inside each cell, ``(cells, channels,
+                channels)``, or ``None``.
+
+        Raises:
+            ValueError: When ``values`` is not a matrix, or ``areas`` has the
+                wrong shape.
+        """
         if values.ndim != 2:  # noqa: PLR2004 (a matrix: grid nodes by channels)
             message = "values must have shape (nodes, channels)"
             raise ValueError(message)
@@ -420,7 +573,22 @@ class BrownianPath(WienerSource):
         dimension: int,
         seed: int | None = None,
     ) -> "BrownianPath":
-        """Draw a path on ``[start, end]`` with ``W(start) = 0`` on every channel."""
+        """Draw a path on ``[start, end]`` with ``W(start) = 0`` on every channel.
+
+        Args:
+            start: The start of the horizon.
+            end: The end of the horizon.
+            resolution: The grid spacing, which must divide the horizon.
+            dimension: The number of channels.
+            seed: The seed of the increments and, on first use, of the cell
+                areas.
+
+        Returns:
+            The path. Its cell areas are drawn when first asked for.
+
+        Raises:
+            ValueError: When the horizon is not a whole number of cells.
+        """
         sequence = np.random.SeedSequence(seed)
         generator = np.random.default_rng(sequence)
         cells = round((end - start) / resolution)
@@ -459,7 +627,17 @@ class BrownianPath(WienerSource):
         return node
 
     def value(self, time: float) -> np.ndarray:
-        """``W(time)`` on every channel; ``time`` must be a grid node."""
+        """``W(time)`` on every channel; ``time`` must be a grid node.
+
+        Args:
+            time: A grid node.
+
+        Returns:
+            ``W(time)``, one entry per channel.
+
+        Raises:
+            ValueError: When ``time`` is not a grid node.
+        """
         return self._values[self._node(time)]
 
     def _cell_areas(self) -> np.ndarray | None:

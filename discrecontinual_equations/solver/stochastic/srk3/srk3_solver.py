@@ -1,3 +1,23 @@
+"""srk3: Platen's explicit strong order 1.5 scheme, for one or several channels.
+
+For one variable driven by one Wiener process the step is Kloeden and Platen
+(11.2.1). It is the order 1.5 Ito-Taylor scheme with every derivative replaced
+by a difference of supporting values, and it consumes ``dW`` and ``I_(1,0)``.
+For several channels the same construction is applied to the several-channel
+Taylor scheme (Kuznetsov's (5)). That form also consumes the twofold and
+threefold iterated integrals, drawn jointly by
+:mod:`~discrecontinual_equations.solver.stochastic.iterated_integrals`.
+
+References:
+    Kloeden, P. E. and Platen, E. Numerical Solution of Stochastic Differential
+    Equations. Springer, 1992. DOI 10.1007/978-3-662-12616-5.
+    Eqs. (11.2.1) and (10.4.1).
+
+    Kuznetsov, D. F. To numerical modeling with strong orders 1.0, 1.5, and 2.0
+    of convergence for multidimensional dynamical systems with random
+    disturbances. arXiv:1802.00888v6 (2022), eq. (5).
+"""
+
 import numpy as np
 
 from discrecontinual_equations.curve import Curve
@@ -159,9 +179,30 @@ class SRK3Solver(StochasticRungeKuttaSolver):
     - Kloeden, P. E. and Platen, E. "Numerical Solution of Stochastic Differential
       Equations", Springer, 1992, Section 11.2, equation (11.2.1); the Taylor scheme
       it is derived from is Section 10.4, equation (10.4.1).
+    - Kuznetsov, D. F. "To numerical modeling with strong orders 1.0, 1.5, and
+      2.0 of convergence for multidimensional dynamical systems with random
+      disturbances", arXiv:1802.00888v6 (2022); Automation and Remote Control
+      79(7), 2018. Eq. (5), the several-channel Taylor scheme the
+      several-channel form is derived from.
+    - Rossler, A. "Runge-Kutta methods for the strong approximation of
+      solutions of stochastic differential equations", SIAM J. Numer. Anal.
+      48(3), 922-952, 2010, DOI 10.1137/09076636X: its order 1.5 methods are
+      for scalar, diagonal and additive noise only (its abstract), which is why
+      they are not used here.
     """
 
     def __init__(self, solver_config: SRK3Config, wiener: WienerSource | None = None):
+        """Set up the step and its Wiener source.
+
+        Args:
+            solver_config: The time grid, the seed and the calculus.
+            wiener: Where the increments and iterated integrals come from.
+                ``None``, the default, draws them from a
+                :class:`~.iterated_integrals.GaussianIteratedIntegralSource`
+                seeded with ``random_seed``. An
+                :class:`~.iterated_integrals.IteratedIntegralPath` drives the
+                solver along a path fixed in advance.
+        """
         # The default source gives the increments GaussianWienerSource gives for
         # the seed, so a scalar run is unchanged, and the triple integrals too.
         super().__init__(
@@ -175,6 +216,23 @@ class SRK3Solver(StochasticRungeKuttaSolver):
         equation: DifferentialEquation,
         initial_values: list[float],
     ) -> Curve:
+        """Integrate the equation over the configured time grid.
+
+        A single variable with scalar noise takes (11.2.1); everything else
+        takes the several-channel form of the class docstring.
+
+        Args:
+            equation: The SDE. Its ``diffusion`` may return a vector (diagonal
+                noise) or an ``n x m`` matrix (``m`` drivers).
+            initial_values: The state at ``start_time``.
+
+        Returns:
+            The solution curve, one point for each grid time.
+
+        Raises:
+            ValueError: For several channels, when the Wiener source supplies
+                no triple integrals (a plain :class:`~.wiener.BrownianPath`).
+        """
         config = self._config
         coefficients = ItoCoefficients(equation, config.calculus)
         y = np.array(initial_values, dtype=float)

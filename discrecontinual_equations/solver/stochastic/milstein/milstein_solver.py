@@ -1,3 +1,30 @@
+"""The Milstein scheme, strong order 1.0, for any noise shape.
+
+Milstein adds to Euler-Maruyama the next term of the Ito-Taylor expansion,
+``sum_{j,k} (dG_k/dx) G_j I_(j,k)``, with ``I_(j,k)`` the twofold Ito integrals
+of the drivers. When the noise commutes, the integrals enter only through
+``dW_j dW_k`` and the step needs nothing beyond the increments. When it does
+not commute, the step also needs the Levy areas. They are drawn by Mrongowius
+and Rossler's algorithm, truncated as Kastner and Rossler prescribe for order
+1.0.
+
+References:
+    Milstein, G. N. Numerical Integration of Stochastic Differential Equations.
+    Kluwer, 1995. DOI 10.1007/978-94-015-8455-5.
+
+    Kloeden, P. E. and Platen, E. Numerical Solution of Stochastic Differential
+    Equations. Springer, 1992. DOI 10.1007/978-3-662-12616-5.
+
+    Mrongowius, J. and Rossler, A. On the approximation and simulation of
+    iterated stochastic integrals and the corresponding Levy areas in terms of a
+    multidimensional Brownian motion. arXiv:2101.09542 (2021), Section 5.1,
+    Theorem 4.4 and Corollary 4.5.
+
+    Kastner, F. and Rossler, A. An analysis of approximation algorithms for
+    iterated stochastic integrals and a Julia and MATLAB simulation toolbox.
+    Numerical Algorithms, 2022; arXiv:2201.08424. Theorem 2 and eqs. (64)-(67).
+"""
+
 import warnings
 
 import numpy as np
@@ -125,6 +152,10 @@ class MilsteinSolver(Solver):
     - Mrongowius, J. and Rossler, A. "On the approximation and simulation of
       iterated stochastic integrals and the corresponding Levy areas in terms of a
       multidimensional Brownian motion", arXiv:2101.09542 (2021).
+    - Kastner, F. and Rossler, A. "An analysis of approximation algorithms for
+      iterated stochastic integrals and a Julia and MATLAB simulation toolbox",
+      Numerical Algorithms (2022), DOI 10.1007/s11075-022-01401-z;
+      arXiv:2201.08424, Theorem 2 and (64)-(67).
     """
 
     def __init__(
@@ -132,6 +163,17 @@ class MilsteinSolver(Solver):
         solver_config: MilsteinConfig,
         wiener: WienerSource | None = None,
     ):
+        """Set up the step, its generator and its Levy-area sampler.
+
+        Args:
+            solver_config: The time grid, the seed, the calculus and
+                ``levy_area_accuracy``.
+            wiener: Where the increments, and the Levy areas when the noise
+                does not commute, come from. ``None``, the default, draws them
+                from generators seeded with ``random_seed``. A
+                :class:`~.wiener.BrownianPath` drives the solver along a path
+                fixed in advance.
+        """
         super().__init__(solver_config=solver_config)
 
         # A generator of this solver's own, never np.random.seed. Seeding the global
@@ -163,6 +205,20 @@ class MilsteinSolver(Solver):
         equation: DifferentialEquation,
         initial_values: list[float],
     ) -> Curve:
+        """Integrate the equation over the configured time grid.
+
+        Args:
+            equation: The SDE. Its ``diffusion`` may return a vector (diagonal
+                noise) or an ``n x m`` matrix (``m`` drivers).
+            initial_values: The state at ``start_time``.
+
+        Returns:
+            The solution curve, one point for each grid time.
+
+        Warns:
+            UserWarning: Once a solve, when the noise does not commute and Levy
+                areas are drawn, with their cost.
+        """
         self.solution = self._new_solution(equation)
 
         coefficients = ItoCoefficients(equation, self.solver_config.calculus)
