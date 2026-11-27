@@ -29,6 +29,7 @@ from discrecontinual_equations.continuation.continuation_state import (
 )
 from discrecontinual_equations.continuation.detection import (
     DetectionContext,
+    _branch_coefficients,
     _branch_label,
     _branch_step,
     _null_pair,
@@ -63,6 +64,9 @@ PITCHFORKS = {
 LOCATION_TOLERANCE = 1.0e-6
 STEP_RATIO_TOLERANCE = 0.5
 OFFSET_TOLERANCE = 1.0e-3
+COEFFICIENT_TOLERANCE = 1.0e-3
+# Sympy center-manifold reduction of the DEQ-102 verifier (test_branch_label_scale).
+REFERENCE_CUBIC = 2.5714
 
 
 class _Field(DifferentiableResidual, JacobianProvider):
@@ -222,6 +226,31 @@ class TestRelativeValueStop(TestCase):
         for slope in (1.0e-18, 1.0e-9, 1.0, 1.0e9):
             assert abs(self._root(Secant, slope, True) - 0.3) < LOCATION_TOLERANCE
 
+    def test_a_root_near_one_end_is_measured_against_the_other(self):
+        # The larger end value sets the scale: measured against the small one
+        # the stop would wait for the bracket to close (about 40 halvings).
+        calls = []
+
+        def function(x: float) -> float:
+            calls.append(x)
+            return 1.0e-9 * (x - 1.0e-6)
+
+        settings = RootFinderSettings(1.0e-8, 1.0e-12, 60, relative=True)
+        located = Bisection(settings).locate(function, 0.0, 1.0)
+        assert located is not None
+        assert abs(located - 1.0e-6) < 1.0e-7
+        assert len(calls) <= 32
+
+    def test_secant_does_not_accept_a_slow_first_chord(self):
+        def function(x: float) -> float:
+            shift = x - 0.3
+            return 1.0e-12 * (shift + 5.0 * shift**3)
+
+        settings = RootFinderSettings(1.0e-8, 1.0e-12, 60, relative=True)
+        located = Secant(settings).locate(function, 0.0, 1.0)
+        assert located is not None
+        assert abs(located - 0.3) < LOCATION_TOLERANCE
+
     def test_the_default_stays_absolute(self):
         settings = RootFinderSettings(1.0e-8, 1.0e-12, 60)
         assert not settings.relative
@@ -298,6 +327,28 @@ class TestPitchforkUnderStateRescaling(TestCase):
             assert pair is not None
             ratio = _branch_step(context, pair) / (sigma * unit)
             assert abs(np.log10(ratio)) < STEP_RATIO_TOLERANCE, (sigma, ratio)
+
+    def test_the_step_of_a_quadratic_field_grows_with_the_state(self):
+        # No cubic: the Jacobian moves only through its odd part.
+        coefficients = (1.0, 0.0, 0.0, 0.0, 0.0)
+        steps = []
+        for sigma in (1.0, 1.0e6):
+            context = _context(coefficients, sigma)
+            pair = _null_pair(context)
+            assert pair is not None
+            steps.append(_branch_step(context, pair) / sigma)
+        assert abs(np.log10(steps[1] / steps[0])) < STEP_RATIO_TOLERANCE
+
+    def test_the_coefficients_follow_the_state_scale(self):
+        # x -> sigma x divides c by sigma^2.
+        coefficients = PITCHFORKS["through the curvature"]
+        for sigma in (1.0e-3, 1.0e3, 1.0e6):
+            result = _branch_coefficients(_context(coefficients, sigma))
+            assert result is not None
+            cubic = result[1] * sigma * sigma
+            assert abs(abs(cubic) - REFERENCE_CUBIC) <= COEFFICIENT_TOLERANCE * (
+                REFERENCE_CUBIC
+            ), (sigma, cubic)
 
     def test_a_jacobian_that_does_not_move_grows_the_step(self):
         context = _context(PITCHFORKS["reflection symmetric"], 1.0e6)
