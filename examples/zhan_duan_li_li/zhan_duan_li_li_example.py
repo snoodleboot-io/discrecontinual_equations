@@ -1,13 +1,13 @@
 """
 Zhan-Duan-Li-Li Method for Stochastic Differential Equations
 
-This example demonstrates the Zhan-Duan-Li-Li stochastic theta method for solving
-stochastic differential equations. The method uses a predictor-corrector approach
-with a theta parameter to balance stability and accuracy.
-
-The implementation is based on the paper:
-"A stochastic theta method based on the trapezoidal rule"
-by Zhan, Duan, Li, and Li (https://arxiv.org/pdf/2010.07691)
+This example runs the solver named Zhan-Duan-Li-Li: an explicit predictor-corrector
+step whose corrector weights the predicted point by theta (method_parameter). At
+theta = 1/2 it is the stochastic Heun step. The equations here are Ito equations
+(the config's default calculus), and the solver adjusts the drift so that the step
+converges to the Ito solution for every theta (DEQ-133). See the solver's docstring
+for the method and its sources; the arXiv paper the name comes from
+(arXiv:2010.07691) describes a different, symplectic Marcus scheme.
 """
 
 import os
@@ -16,6 +16,12 @@ from discrecontinual_equations.differential_equation import DifferentialEquation
 from discrecontinual_equations.function.stochastic import StochasticFunction
 from discrecontinual_equations.parameter import Parameter
 from discrecontinual_equations.plot.line_plot import LinePlot
+from discrecontinual_equations.solver.stochastic.euler_maruyama.euler_maruyama_config import (
+    EulerMaruyamaConfig,
+)
+from discrecontinual_equations.solver.stochastic.euler_maruyama.euler_maruyama_solver import (
+    EulerMaruyamaSolver,
+)
 from discrecontinual_equations.solver.stochastic.zhan_duan_li_li.zhan_duan_li_li_config import (
     ZhanDuanLiLiConfig,
 )
@@ -100,9 +106,9 @@ def run_zhan_duan_li_li_example():
     step_size = end_time / n_steps
 
     # Zhan-Duan-Li-Li solver configuration
-    # Theta parameter: 0.5 = trapezoidal rule (balanced accuracy/stability)
+    # Theta parameter: 0.5 = stochastic Heun, strong order 1.0 on this equation
     config = ZhanDuanLiLiConfig(
-        method_parameter=0.5,  # Trapezoidal rule
+        method_parameter=0.5,  # Stochastic Heun
         start_time=0.0,
         end_time=end_time,
         step_size=step_size,
@@ -206,10 +212,10 @@ def run_zhan_duan_li_li_example():
 
 def run_method_comparison():
     """
-    Compare Zhan-Duan-Li-Li with basic Euler-Maruyama.
+    Compare Zhan-Duan-Li-Li with Euler-Maruyama on the same Brownian path.
 
-    Note: Currently both use the same underlying method.
-    This will be meaningful once the actual Zhan-Duan-Li-Li algorithm is implemented.
+    Both solvers draw one normal per step from a generator seeded with the same
+    seed, so they see the same increments, and both converge to the Ito solution.
     """
     print("\nMethod Comparison")
     print("=" * 20)
@@ -250,24 +256,22 @@ def run_method_comparison():
             )
             solver = ZhanDuanLiLiSolver(config)
         else:
-            # For comparison, we'd use EulerMaruyamaSolver
-            # For now, just use the same solver
-            config = ZhanDuanLiLiConfig(
-                method_parameter=1.0,
-                start_time=0.0,
-                end_time=1.0,
-                step_size=0.01,
-                random_seed=123,
+            solver = EulerMaruyamaSolver(
+                EulerMaruyamaConfig(
+                    start_time=0.0,
+                    end_time=1.0,
+                    step_size=0.01,
+                    random_seed=123,
+                ),
             )
-            solver = ZhanDuanLiLiSolver(config)
 
         solver.solve(equation, [1.0])
         final_value = solver.solution.results[0].discretization[-1]
         final_values.append(final_value)
         print(f"Final value: {final_value:.4f}")
 
-    print("Note: Currently both methods use the same underlying algorithm.")
-    print("Results will differ once the actual Zhan-Duan-Li-Li method is implemented.")
+    print("Both are Ito schemes on the same increments; they differ by their")
+    print("discretisation error, which shrinks with the step size.")
 
     return final_values
 
@@ -279,10 +283,10 @@ def main():
     print("Zhan-Duan-Li-Li Method Examples")
     print("=" * 50)
     print(
-        "This example demonstrates the Zhan-Duan-Li-Li stochastic theta method for SDEs.",
+        "This example demonstrates the theta-weighted stochastic Heun step (Zhan-Duan-Li-Li).",
     )
     print(
-        "The method uses a predictor-corrector approach with adjustable theta parameter.",
+        "The corrector weights the predicted point by theta; the step stays explicit.",
     )
     print()
 
@@ -296,9 +300,9 @@ def main():
     print("Examples completed successfully!")
     print("Check the generated PNG and HTML files for visualizations.")
     print("\nImplementation Notes:")
-    print("• Theta parameter controls implicit/explicit balance")
-    print("• θ = 0.5 (trapezoidal) provides good stability/accuracy balance")
-    print("• Method includes predictor-corrector steps for improved convergence")
+    print("• Theta weights the predicted point in the corrector; the step is explicit")
+    print("• θ = 0.5 (stochastic Heun) has strong order 1.0 for scalar noise")
+    print("• Other θ converge to the same solution with strong order 0.5")
 
 
 if __name__ == "__main__":

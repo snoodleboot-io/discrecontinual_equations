@@ -23,7 +23,7 @@ This directory contains example scripts demonstrating the usage of the discrecon
 ### Zhan-Duan-Li-Li Method (`zhan_duan_li_li/zhan_duan_li_li_example.py`)
 - Demonstrates the Zhan-Duan-Li-Li method for stochastic differential equations
 - Shows geometric Brownian motion simulation
-- Placeholder implementation - needs to be updated with actual method from paper
+- A theta-weighted stochastic Heun step, in either calculus; compared with Euler-Maruyama on the same increments
 - Framework for comparing different SDE solution methods
 
 ### Complex ODE System (`complex_ode_system/complex_ode_example.py`)

@@ -154,12 +154,21 @@ class ItoCoefficients:
         drift = self.written_drift(point, time)
         if not self._stratonovich:
             return drift
+        return drift + 0.5 * self.noise_drift(point, time)
+
+    def noise_drift(self, point: np.ndarray, time: float) -> np.ndarray:
+        """``sum_k (dG_k/dx) G_k``, or ``b_i d b_i / d x_i`` per component.
+
+        Twice the Stratonovich-to-Ito drift correction: the mean of the
+        ``(dG/dx) G dW^2`` a step picks up when it evaluates the diffusion at a
+        point moved by ``G dW`` (DEQ-133).
+        """
         diffusion = self.diffusion(point, time)
         if self.is_matrix(diffusion):
-            # (1/2) sum_k (dG_k/dx) G_k: jacobians[k, i, j] = d G[i, k] / d x_j.
+            # jacobians[k, i, j] = d G[i, k] / d x_j.
             jacobians = self.column_jacobians(point, time)
-            return drift + 0.5 * np.einsum("kij,jk->i", jacobians, diffusion)
-        return drift + 0.5 * diffusion * self.diagonal_slopes(point, time)
+            return np.einsum("kij,jk->i", jacobians, diffusion)
+        return diffusion * self.diagonal_slopes(point, time)
 
     def column_jacobians(self, point: np.ndarray, time: float) -> np.ndarray:
         """``dG_k / dx`` for every driver ``k``, as an ``(m, n, n)`` array.

@@ -15,7 +15,7 @@ Stochastic Solvers
 ├── SRK4Solver - Weak order 2.0, strong order 1.0, scalar noise (Kloeden-Platen 15.1.4, measured)
 ├── SRK5Solver - Refuses to run; no scheme of the claimed order exists (DEQ-25)
 ├── GottwaldMelbourneSolver - Deterministic homogenisation for α-stable SDEs
-└── ZhanDuanLiLiSolver - Zhan-Duan-Li-Li method for SDEs
+└── ZhanDuanLiLiSolver - theta-weighted stochastic Heun step (either calculus)
 ```
 
 ## Executive Summary

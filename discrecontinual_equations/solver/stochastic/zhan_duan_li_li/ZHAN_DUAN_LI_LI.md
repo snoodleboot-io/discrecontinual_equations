@@ -2,120 +2,44 @@
 
 ## Overview
 
-The Zhan-Duan-Li-Li method is a stochastic theta method based on the trapezoidal rule for solving stochastic differential equations, proposed by Zhan, Duan, Li, and Li in their paper.
+`ZhanDuanLiLiSolver` takes an explicit, theta-weighted stochastic Heun step. It
+converges to the solution in the calculus the config names, `"ito"` (the default)
+or `"stratonovich"`, for every theta (DEQ-133). The name is historical. The paper
+it came from, arXiv:2010.07691, describes a different, symplectic Marcus scheme.
 
-The method combines implicit and explicit approaches using a theta parameter to balance stability and accuracy in stochastic systems.
+## The step
 
-## Architecture
-
-```
-ZhanDuanLiLiSolver
-├── Config: method_parameter (theta), start_time, end_time, step_size, random_seed
-├── Method: Stochastic theta method with trapezoidal rule
-├── Order: Improved convergence through predictor-corrector approach
-└── Range: General SDEs with smooth coefficients
-```
-
-## Executive Summary
-
-**Purpose**: Solve stochastic differential equations using a theta method approach
-**Key Features**: Predictor-corrector scheme, theta parameter control, improved stability
-**Performance**: Moderate computational cost with better accuracy than Euler-Maruyama
-**Use Cases**: General stochastic differential equations requiring higher accuracy
-
-## Core Classes
-
-### ZhanDuanLiLiConfig
-
-```python
-class ZhanDuanLiLiConfig(StochasticConfig):
-    """Configuration for Zhan-Duan-Li-Li stochastic theta method."""
-
-    method_parameter: float = 0.5  # Theta parameter (0=explicit, 1=implicit, 0.5=trapezoidal)
-```
-
-### ZhanDuanLiLiSolver
-
-```python
-class ZhanDuanLiLiSolver(Solver):
-    """Zhan-Duan-Li-Li stochastic theta method."""
-
-    def __init__(self, solver_config: ZhanDuanLiLiConfig)
-
-    def solve(self, equation: DifferentialEquation, initial_values: list[float]):
-        """Solve SDE using stochastic theta method."""
-
-    def _stochastic_theta_step(self, y, t_current, t_next, dt, dW, equation):
-        """Perform predictor-corrector step with theta weighting."""
-```
-
-## Mathematical Foundation
-
-The Zhan-Duan-Li-Li method implements a stochastic theta method:
+With `theta = method_parameter`, `a` the drift as written, and `G` the diffusion:
 
 ```
-y_{n+1} = y_n + θ * f(t_{n+1}, y^*) * dt + θ * g(t_{n+1}, y^*) * dW
+F       = a + (kappa - theta) c,   c = sum_k (dG_k/dx) G_k   (b_i b_i' for diagonal noise)
+Y~      = Y + F(Y, t) h + G(Y, t) dW
+Y_{n+1} = Y + [(1 - theta) F(Y, t) + theta F(Y~, t + h)] h
+            + [(1 - theta) G(Y, t) + theta G(Y~, t + h)] dW
 ```
 
-where `y^*` is a predictor step, and `θ` controls the implicit/explicit balance.
+`kappa` is 0 for an Ito equation and 1/2 for a Stratonovich one. Without the
+`(kappa - theta) c` term the step converges to the Ito equation with drift
+`a + theta c` (Rumelin's theorem, Saito and Mitsui 1991, Theorem 1). That is the
+Stratonovich solution at theta = 1/2, and matches neither calculus for other
+theta. The term moves the limit to `a + kappa c`. For a Stratonovich equation at
+theta = 1/2 the term is zero, so no derivative is taken. Additive noise has
+`c = 0`.
 
-### Theta Parameter
-- **θ = 0**: Fully explicit (Euler-Maruyama)
-- **θ = 1**: Fully implicit (potentially unstable)
-- **θ = 0.5**: Trapezoidal rule (Crank-Nicolson for SDEs)
+## Order
 
-### Predictor-Corrector Scheme
+| theta | strong | weak |
+|-------|--------|------|
+| 1/2 (stochastic Heun) | 1.0 for scalar or diagonal noise, 0.5 for non-commuting matrix noise | 1.0 |
+| other | 0.5 | 1.0 |
 
-1. **Predictor**: `y^* = y_n + f(t_n, y_n) dt + g(t_n, y_n) dW`
-2. **Corrector**: `y_{n+1} = y_n + θ[f(t_{n+1}, y^*) dt + g(t_{n+1}, y^*) dW] + (1-θ)[f(t_n, y_n) dt + g(t_n, y_n) dW]`
-
-## Algorithm Details
-
-### Single Time Step
-
-```python
-def _stochastic_theta_step(self, y, t_current, t_next, dt, dW, equation):
-    theta = self.theta
-
-    # Current point evaluation
-    drift_current = equation.eval(y, t_current)
-    diffusion_current = equation.diffusion(y, t_current)
-
-    # Predictor step (explicit)
-    y_predictor = y + drift_current * dt + diffusion_current * dW
-
-    # Predicted point evaluation
-    drift_predictor = equation.eval(y_predictor, t_next)
-    diffusion_predictor = equation.diffusion(y_predictor, t_next)
-
-    # Theta-weighted combination
-    drift_combined = theta * drift_predictor + (1 - theta) * drift_current
-    diffusion_combined = theta * diffusion_predictor + (1 - theta) * diffusion_current
-
-    # Final update
-    y_new = y + drift_combined * dt + diffusion_combined * dW
-
-    return y_new
-```
-
-## Performance Characteristics
-
-| Theta Value | Stability | Accuracy | Computational Cost |
-|-------------|-----------|----------|-------------------|
-| θ = 0.0 | Good | Low | Low |
-| θ = 0.5 | Better | Higher | Medium |
-| θ = 1.0 | Best | Highest | High (may need iteration) |
-
-## Implementation Notes
-
-- **Convergence**: The method provides better convergence properties than basic Euler-Maruyama
-- **Stability**: Theta parameter allows tuning for stability vs accuracy trade-offs
-- **Applicability**: Works for SDEs with sufficiently smooth coefficients
-- **Extensions**: Can be combined with adaptive time stepping for improved efficiency
+The measurements are in the solver's docstring.
 
 ## References
 
-- Zhan, Duan, Li, Li. "A stochastic theta method based on the trapezoidal rule" (https://arxiv.org/pdf/2010.07691)
+- Saito, Mitsui. "Discrete approximations for stochastic differential equations", RIMS Kokyuroku 746 (1991), Theorem 1, (15), (16).
+- Rumelin. "Numerical treatment of stochastic differential equations", SIAM J. Numer. Anal. 19 (1982), 604-613 (via Saito-Mitsui).
+- Higham. "Mean-square and asymptotic stability of the stochastic theta method", SIAM J. Numer. Anal. 38 (2000), eq. (1.2): a different, drift-implicit method.
 
 ---
 
