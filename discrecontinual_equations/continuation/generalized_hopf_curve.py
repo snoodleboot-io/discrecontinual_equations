@@ -75,11 +75,11 @@ from discrecontinual_equations.continuation.residual import DifferentiableResidu
 from discrecontinual_equations.continuation.two_parameter_problem import (
     TwoParameterProblem,
 )
+from discrecontinual_equations.finite_difference import central_column
 from discrecontinual_equations.parameter import Parameter
 
 _BORDER = 2
 _UNKNOWNS_AFTER_STATE = 3
-_CENTRAL_DIFFERENCE_POINTS = 2.0
 _SELECTION_EPSILON = 1.0e-6
 _ENTRIES = [(0, 0), (0, 1), (1, 0), (1, 1)]
 
@@ -279,19 +279,12 @@ class GeneralizedHopfCurveResidual(DifferentiableResidual):
         epsilon: float,
         entries: list[tuple[int, int]],
     ) -> np.ndarray:
-        size = state.size
-        if column < size:
-            step = np.zeros(size)
-            step[column] = epsilon
-            forward = self._linearize(state + step, parameter)
-            upper = self._rows(forward, entries)
-            backward = self._linearize(state - step, parameter)
-            lower = self._rows(backward, entries)
-        else:
-            upper = self._rows(self._linearize(state, parameter + epsilon), entries)
-            lower = self._rows(self._linearize(state, parameter - epsilon), entries)
+        def rows(point: np.ndarray, coordinate: float) -> np.ndarray:
+            return self._rows(self._linearize(point, coordinate), entries)
+
+        difference = central_column(rows, state, parameter, column, epsilon)
         self._third.value = float(parameter)
-        return (upper - lower) / (_CENTRAL_DIFFERENCE_POINTS * epsilon)
+        return difference
 
     def adapt(self, state: np.ndarray, parameter: float) -> None:
         """Move the borders to the null spaces, then pick the best pair of ``G``.

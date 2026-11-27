@@ -33,10 +33,10 @@ from discrecontinual_equations.continuation.residual import DifferentiableResidu
 from discrecontinual_equations.continuation.two_parameter_problem import (
     TwoParameterProblem,
 )
+from discrecontinual_equations.finite_difference import central_column
 from discrecontinual_equations.parameter import Parameter
 
 _HALF = 0.5
-_CENTRAL_DIFFERENCE_POINTS = 2.0
 _PARAMETER_COUNT = 2
 
 
@@ -191,17 +191,9 @@ class CuspCurveResidual(DifferentiableResidual):
         column: int,
         epsilon: float,
     ) -> np.ndarray:
-        size = state.size
-        if column < size:
-            step = np.zeros(size)
-            step[column] = epsilon
-            forward = self.evaluate(state + step, parameter)
-            backward = self.evaluate(state - step, parameter)
-        else:
-            forward = self.evaluate(state, parameter + epsilon)
-            backward = self.evaluate(state, parameter - epsilon)
+        difference = central_column(self.evaluate, state, parameter, column, epsilon)
         self._third.value = float(parameter)
-        return (forward - backward) / (_CENTRAL_DIFFERENCE_POINTS * epsilon)
+        return difference
 
     def adapt(self, state: np.ndarray, parameter: float) -> None:
         """Move the borders to the normalised null vectors at an accepted point."""
