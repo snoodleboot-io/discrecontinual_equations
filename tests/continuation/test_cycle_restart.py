@@ -8,15 +8,17 @@ Gauss-Legendre with 40 intervals at ``c = 2.85`` the restart came back 1.44
 off. The target scheme's own Newton from the seed stays at the seed's crossing.
 """
 
+import math
 import time
 import warnings
 from typing import ClassVar
-from unittest import TestCase
+from unittest import TestCase, mock
 
 import numpy as np
 import pytest
 from scipy.integrate import solve_ivp
 
+from discrecontinual_equations.continuation import cycle_continuation
 from discrecontinual_equations.continuation.cycle_continuation import (
     CycleContinuation,
     CycleSeed,
@@ -26,6 +28,7 @@ from discrecontinual_equations.continuation.period_doubling import (
     CascadeLevel,
     PeriodDoublingCascade,
 )
+from tests.continuation.cycle_fields import circle, fold_equation
 from tests.continuation.test_period_doubling import _attractor_seed, _rossler
 
 _ROSSLER = 0.2
@@ -181,6 +184,63 @@ class TestFailingSeed(TestCase):
         seed = _attractor_seed(2.7, 30)
         with pytest.raises(ValueError, match="31 states"):
             _continuation(2.7, 20, "gauss_legendre").trace(seed, 0.01, 0)
+
+
+class TestRestartGuards(TestCase):
+    """The restart takes only a seed that is nearly a solution.
+
+    The fold of cycles at ``mu = -0.24`` has cycles of radius 0.632 and 0.775.
+    From circles of radius 0.64 and 0.78 the restart lands on the nearer in
+    three or four solves; from 0.70, between them, the first step does not
+    halve the residual and it stops; from 0.9 Newton reaches the outer cycle,
+    but 14% of the seed's extent away, and the staged solve is left to decide.
+    Radii are pinned to 2e-6: the 40-interval Hermite-Simpson cycles sit
+    6.7e-7 and 8.2e-7 off the exact ones.
+    """
+
+    def _restart(self, radius: float) -> tuple[np.ndarray | None, int]:
+        continuation = CycleContinuation(fold_equation(-0.24), 0, 40, 1, 0.0)
+        continuation._dimension = 2  # noqa: SLF001 (trace sets it)
+        continuation._mesh = np.linspace(0.0, 1.0, 41)  # noqa: SLF001
+        seed = CycleSeed(circle(radius, 40), 2.0 * math.pi, -0.24)
+        solve = CycleContinuation._solve_bordered  # noqa: SLF001
+        with mock.patch.object(
+            CycleContinuation,
+            "_solve_bordered",
+            autospec=True,
+            side_effect=solve,
+        ) as spy:
+            unknowns = continuation._restarted(seed, seed.states, 41)  # noqa: SLF001
+        return unknowns, spy.call_count
+
+    def _radius(self, unknowns: np.ndarray) -> float:
+        states = unknowns[:82].reshape(41, 2)
+        return float(np.max(np.hypot(states[:, 0], states[:, 1])))
+
+    def test_a_near_seed_lands_on_the_nearer_cycle(self):
+        inner, _ = self._restart(0.64)
+        outer, _ = self._restart(0.78)
+        assert inner is not None
+        assert outer is not None
+        assert abs(self._radius(inner) - math.sqrt(0.4)) < 2e-6
+        assert abs(self._radius(outer) - math.sqrt(0.6)) < 2e-6
+
+    def test_a_step_that_does_not_halve_the_residual_stops_it(self):
+        unknowns, solves = self._restart(0.70)
+        assert unknowns is None
+        assert solves == 1
+
+    def test_a_cycle_too_far_from_the_seed_is_left_to_the_staged_solve(self):
+        unknowns, _ = self._restart(0.9)
+        assert unknowns is None
+        with mock.patch.object(
+            cycle_continuation,
+            "_RESTART_MOVE",
+            1.0e9,
+        ):
+            reached, _ = self._restart(0.9)
+        assert reached is not None
+        assert abs(self._radius(reached) - math.sqrt(0.6)) < 2e-6
 
 
 @pytest.mark.slow  # the whole four-level cascade: about 7 s, then 45 restarts
