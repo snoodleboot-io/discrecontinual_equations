@@ -89,7 +89,7 @@ class FiniteDifferenceJacobian(JacobianProvider):
         "_typical",
     ]
 
-    def __init__(  # noqa: PLR0913 (each is a documented, independent knob)
+    def __init__(
         self,
         residual: ResidualFunction,
         epsilon: float,

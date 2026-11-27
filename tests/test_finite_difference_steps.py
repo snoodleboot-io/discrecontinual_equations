@@ -17,6 +17,7 @@ checked against the code under test.
 """
 
 from fractions import Fraction
+from typing import ClassVar
 
 import numpy as np
 import pytest
@@ -603,7 +604,7 @@ class _SeparableField(_Field):
 class TestGroupedColumns:
     """Curtis-Powell-Reid groups move each column by its own step."""
 
-    _ROWS = [[0], [1], [2]]
+    _ROWS: ClassVar[list[list[int]]] = [[0], [1], [2]]
 
     def test_continuation_jacobian(self, scales, typical):
         dense = FiniteDifferenceJacobian(
