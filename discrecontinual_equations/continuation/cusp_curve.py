@@ -43,7 +43,7 @@ _PARAMETER_COUNT = 2
 class Codim3Decoded:
     """Original-system quantities decoded from an augmented cusp-curve point."""
 
-    __slots__ = ["parameter_a", "parameter_b", "parameter_c", "state"]
+    __slots__ = ["null_vector", "parameter_a", "parameter_b", "parameter_c", "state"]
 
     def __init__(
         self,
@@ -51,11 +51,14 @@ class Codim3Decoded:
         parameter_a: float,
         parameter_b: float,
         parameter_c: float,
+        null_vector: np.ndarray | None = None,
     ) -> None:
         self.state = state
         self.parameter_a = parameter_a
         self.parameter_b = parameter_b
         self.parameter_c = parameter_c
+        # The curve's own null vector, continuous along it (a BT curve's q0).
+        self.null_vector = null_vector
 
 
 class _CuspLinearization:

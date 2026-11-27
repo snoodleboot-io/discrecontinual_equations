@@ -15,14 +15,68 @@ from discrecontinual_equations.continuation.critical_forms import bordered_solve
 from discrecontinual_equations.continuation.jacobian import JacobianProvider
 
 _BRANCH_STEP = 1.0e-4
-_QUADRATIC_FLOOR = 1.0e-3
-_CUBIC_FLOOR = 1.0e-6
+_RELATIVE_FLOOR = 1.0e-5
+_NOISE_FACTOR = 100.0
+_OFFSET_FACTOR = 30.0
 _NORMALIZATION_FLOOR = 1.0e-9
 
 
 def _unit_null(matrix: np.ndarray) -> np.ndarray:
     _left, _singular, right = np.linalg.svd(matrix)
     return right[-1].conj()
+
+
+def _null_pair(
+    context: "DetectionContext",
+) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
+    """Jacobian ``A``, unit ``A q = 0``, and ``A^T p = 0`` with ``<p, q> = 1``."""
+    jacobian = context.state_jacobian()
+    right = _unit_null(jacobian)
+    left = _unit_null(jacobian.T)
+    denominator = left @ right
+    if abs(denominator) < _NORMALIZATION_FLOOR:
+        return None
+    return jacobian, right, left / denominator
+
+
+def _branch_expansion(
+    context: "DetectionContext",
+    null_pair: tuple[np.ndarray, np.ndarray, np.ndarray],
+    step: float,
+) -> tuple[float, float, float, float]:
+    """``(a, c)`` by differences of step ``step``, and the sizes they are summed from.
+
+    ``a = <p, B(q, q)>`` is summed from ``B(q, q)``, so its size is
+    ``|p| |B(q, q)|``; ``c = <p, C(q, q, q) + 3 B(q, h2)>`` is summed from both
+    terms, so its size is ``|p| (|C(q, q, q)| + 3 |B(q, h2)|)``. Rescaling time
+    (``f -> s f``) or the state multiplies a coefficient and its size alike.
+    """
+    jacobian, right, left = null_pair
+    state = context.continuation_state.state
+    forward_jacobian = context.jacobian_at(state + step * right)
+    backward_jacobian = context.jacobian_at(state - step * right)
+    forward = forward_jacobian @ right
+    backward = backward_jacobian @ right
+    centre = jacobian @ right
+    quadratic = (forward - backward) / (2.0 * step)
+    quadratic_coefficient = left @ quadratic
+    correction = bordered_solve(
+        jacobian,
+        right,
+        left,
+        quadratic - quadratic_coefficient * right,
+    )
+    curvature = -correction
+    along = (forward_jacobian - backward_jacobian) @ curvature / (2.0 * step)
+    third = (forward - 2.0 * centre + backward) / (step * step)
+    cubic_coefficient = left @ (third + 3.0 * along)
+    left_size = float(np.linalg.norm(left))
+    return (
+        float(quadratic_coefficient.real),
+        float(cubic_coefficient.real),
+        left_size * float(np.linalg.norm(quadratic)),
+        left_size * (float(np.linalg.norm(third)) + 3.0 * float(np.linalg.norm(along))),
+    )
 
 
 def _branch_coefficients(
@@ -43,32 +97,71 @@ def _branch_coefficients(
     ``B(q, y) = d/de [J(x + e q) y]`` and ``C(q, q, q) = d^2/de^2 [J(x + e q) q]``,
     so only the Jacobian is needed. Both are even in the sign of ``q``.
     """
-    jacobian = context.state_jacobian()
-    right = _unit_null(jacobian)
-    left = _unit_null(jacobian.T)
-    denominator = left @ right
-    if abs(denominator) < _NORMALIZATION_FLOOR:
+    null_pair = _null_pair(context)
+    if null_pair is None:
         return None
-    left = left / denominator
-    state = context.continuation_state.state
-    step = _BRANCH_STEP
-    forward_jacobian = context.jacobian_at(state + step * right)
-    backward_jacobian = context.jacobian_at(state - step * right)
-    forward = forward_jacobian @ right
-    backward = backward_jacobian @ right
-    centre = jacobian @ right
-    quadratic = (forward - backward) / (2.0 * step)
-    quadratic_coefficient = left @ quadratic
-    correction = bordered_solve(
-        jacobian,
-        right,
-        left,
-        quadratic - quadratic_coefficient * right,
+    quadratic, cubic, _quadratic_size, _cubic_size = _branch_expansion(
+        context,
+        null_pair,
+        _BRANCH_STEP,
     )
-    curvature = -correction
-    along = (forward_jacobian - backward_jacobian) @ curvature / (2.0 * step)
-    cubic = (forward - 2.0 * centre + backward) / (step * step) + 3.0 * along
-    return float(quadratic_coefficient.real), float((left @ cubic).real)
+    return quadratic, cubic
+
+
+def _resolved(value: float, size: float, error: float) -> bool:
+    """Whether a coefficient is told apart from zero, relative to scale and noise."""
+    return abs(value) > max(_RELATIVE_FLOOR * size, _NOISE_FACTOR * error)
+
+
+def _branch_label(context: "DetectionContext") -> str:
+    """``transcritical``, ``pitchfork`` or ``branch_point`` from ``a`` and ``c``.
+
+    Neither coefficient is compared with an absolute floor, which would make the
+    label depend on the units of time and state. A coefficient counts as non-zero
+    when it exceeds both a fraction :data:`_RELATIVE_FLOOR` of the terms it is
+    summed from (a cancellation that leaves less than that is zero) and
+    :data:`_NOISE_FACTOR` times its finite-difference error, estimated by
+    repeating the differences with half and twice the step. Both tests are
+    unchanged when ``f`` is multiplied by a constant.
+
+    The point is located only to within the localizer's tolerance, and off the
+    bifurcation a pitchfork has a quadratic coefficient of its own. In the normal
+    form ``w' = mu w + (a/2) w^2 + (c/6) w^3`` with ``a = 0``, the nontrivial
+    branch at ``w0`` has critical eigenvalue ``lambda = (c/3) w0^2`` and quadratic
+    coefficient ``c w0``, so ``a^2 = 3 |c lambda|``; a transcritical point gives
+    ``a^2 / |c lambda| = 2 |a| / |c w0|``, which grows as the point is located
+    better. ``a`` therefore names a transcritical point only when also
+    ``a^2 > 30 |c lambda|`` (:data:`_OFFSET_FACTOR`), with ``lambda = <p, A q>``.
+    This test, too, is unchanged by rescaling time or the state.
+    """
+    null_pair = _null_pair(context)
+    if null_pair is None:
+        return "branch_point"
+    quadratic, cubic, quadratic_size, cubic_size = _branch_expansion(
+        context,
+        null_pair,
+        _BRANCH_STEP,
+    )
+    quadratic_error = 0.0
+    cubic_error = 0.0
+    for step in (0.5 * _BRANCH_STEP, 2.0 * _BRANCH_STEP):
+        other_quadratic, other_cubic, _q, _c = _branch_expansion(
+            context,
+            null_pair,
+            step,
+        )
+        quadratic_error = max(quadratic_error, abs(quadratic - other_quadratic))
+        cubic_error = max(cubic_error, abs(cubic - other_cubic))
+    jacobian, right, left = null_pair
+    eigenvalue = abs(float((left @ jacobian @ right).real))
+    offset = _OFFSET_FACTOR * abs(cubic) * eigenvalue
+    if _resolved(quadratic, quadratic_size, quadratic_error) and (
+        quadratic * quadratic > offset
+    ):
+        return "transcritical"
+    if _resolved(cubic, cubic_size, cubic_error):
+        return "pitchfork"
+    return "branch_point"
 
 
 class DetectionContext:
@@ -148,6 +241,23 @@ class BranchPoint(BifurcationDetector):
     *pitchfork* when that quadratic coefficient vanishes (as forced by a reflection
     symmetry) while the center-manifold cubic ``c = <p, C(q, q, q) + 3 B(q, h2)>``
     does not.
+
+    "Non-zero" is decided without units, so that rescaling time or the field does
+    not change the label. A coefficient must exceed ``1e-5`` times the size of the
+    terms it is summed from (``|p| |B(q, q)|`` for ``a``, ``|p| (|C(q, q, q)| +
+    3 |B(q, h2)|)`` for ``c``), and ``100`` times its finite-difference error,
+    estimated by repeating the differences with half and twice the step. A
+    coefficient that cannot be resolved is treated as zero, so a point whose ``c``
+    is lost in noise stays ``branch_point``. Since a located point sits a little
+    off the bifurcation, where a pitchfork's own ``a`` is ``c w0``, ``a`` must
+    also satisfy ``a^2 > 30 |c lambda|`` with ``lambda = <p, A q>`` (see
+    :func:`_branch_label`).
+
+    References:
+        The coefficients are Kuznetsov's center-manifold reduction (see
+        :func:`_branch_coefficients`). The thresholds are this library's own
+        numerical choice, not taken from a source; they are measured in the
+        "Telling bifurcation points apart" section of the continuation API page.
     """
 
     @property
@@ -160,15 +270,7 @@ class BranchPoint(BifurcationDetector):
         return float(np.linalg.det(np.vstack([extended, tangent])))
 
     def refine_kind(self, context: DetectionContext) -> str:
-        coefficients = _branch_coefficients(context)
-        if coefficients is None:
-            return "branch_point"
-        quadratic, cubic = coefficients
-        if abs(quadratic) >= _QUADRATIC_FLOOR:
-            return "transcritical"
-        if abs(cubic) >= _CUBIC_FLOOR:
-            return "pitchfork"
-        return "branch_point"
+        return _branch_label(context)
 
 
 class Hopf(BifurcationDetector):

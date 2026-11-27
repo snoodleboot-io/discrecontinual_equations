@@ -963,6 +963,171 @@ augmented systems whose Jacobians it shares are cited in the
 `discrecontinual_equations.continuation.cusp_curve` and
 `discrecontinual_equations.continuation.generalized_hopf_curve` module docstrings.
 
+## Telling bifurcation points apart
+
+Detectors find a point by a sign change of a test function along a curve, and then
+name it from normal-form coefficients. Two ways that goes wrong are guarded against
+here: a test function that changes sign because a vector flipped, not because a
+coefficient vanished, and a label that depends on the units of the model.
+
+### Degenerate Bogdanov-Takens points (DEQ-124)
+
+On a Bogdanov-Takens curve in three parameters, `degenerate_bogdanov_takens` marks
+where the quadratic coefficient `a = (1/2) <p1, B(q0, q0)>` vanishes and
+`degenerate_bogdanov_takens_b` where `b = <p1, B(q0, q1)> + <p0, B(q0, q0)>`
+vanishes ([BosschaertKuznetsov2021](../references.md), section 2.2.2). The Jordan
+chains `q0, q1, p1, p0` are fixed by their normalisation only "up to a plus or minus
+sign" (section 2.2.1), and both coefficients are odd in that sign. The test functions
+used to fix it by making the largest component of `q0` positive. On a curve where
+`q0` turns, so that its largest component changes index, that rule flips `q0`, and
+the scan reported a degenerate point that is not there.
+
+`q0` is now oriented by continuity: by the BT curve's own kernel vector, whose
+normalisation `c . q = 1` keeps it on one side all along the curve, or, when a decoded
+point carries none, towards the previous point's `q0`. This is what the cusp test
+does on a fold curve.
+
+```python
+from discrecontinual_equations.continuation.codim3_builder import Codim3Driver, Codim3Seed
+from discrecontinual_equations.continuation.codim3_config import Codim3Config
+
+config = Codim3Config(
+    continuation_parameter_index=0,
+    second_parameter_index=1,
+    third_parameter_index=2,
+    codim3_curve="bogdanov_takens",
+    codim3_detectors=["degenerate_bogdanov_takens", "degenerate_bogdanov_takens_b"],
+    initial_parameter=-0.5,
+    parameter_lower_bound=-0.6,
+    parameter_upper_bound=0.6,
+)
+# `equation`: three parameters, a Bogdanov-Takens point at x = 0, (b1, b2) = (0, 0),
+# e.g. the turned system of tests/continuation/test_bogdanov_takens_orientation.py.
+result = Codim3Driver.run(config, equation, Codim3Seed(state=[0.0, 0.0, 0.0], parameter_a=0.0, parameter_b=0.0))
+print([(point.kind, point.parameter_c) for point in result.points])
+```
+
+Checked on a three-dimensional BT curve whose `q0` turns through a change of largest
+component (`tests/continuation/test_bogdanov_takens_orientation.py`). In unmixed
+coordinates its chains are unit vectors, so `a` and `b` are known in closed form.
+Before the change, both tests reported a spurious point where the index changes, with
+LAPACK's signs and under random SVD sign flips. After it, there are no spurious
+points under either. A curve with `a = 0`, or with `b = 0`, at a known parameter
+reports that one point.
+
+Limits: with no curve vector, continuity holds only while `q0` turns by less than a
+right angle between neighbouring points.
+
+### Transcritical, pitchfork or neither (DEQ-126)
+
+A branch point is labelled (`BranchPoint.refine_kind`) from the center-manifold coefficients `a = <p, B(q, q)>`
+and `c = <p, C(q, q, q) + 3 B(q, h2)>`. It is `transcritical` when `a` is non-zero,
+`pitchfork` when `a` vanishes and `c` does not, and `branch_point` when both vanish.
+These coefficients were compared with fixed floors, `1e-3` and `1e-6`. Multiplying
+the field by a constant `s`, which only changes the unit of time, scales `a` and `c`
+by `s`, so the label depended on that unit. A transcritical point became a
+`pitchfork` for `s <= 1e-4`. A point whose `c` cancels became a `pitchfork` for
+`s >= 10`, because finite-difference noise in `c` passed `1e-6`.
+
+A coefficient now counts as non-zero only when it passes two tests, and neither
+depends on units:
+
+- **It is not a cancellation remnant.** It must exceed `1e-5` times the size of the
+  terms it is summed from: `|p| |B(q, q)|` for `a`, and
+  `|p| (|C(q, q, q)| + 3 |B(q, h2)|)` for `c`.
+- **It is not noise.** It must exceed `100` times its finite-difference error. The
+  error is estimated by repeating the differences with half and with twice the step.
+
+`a` must pass a third test before it names a transcritical point, because the point
+is only located to within the localizer's tolerance. Off its vertex, a pitchfork has
+a quadratic coefficient of its own. In the normal form
+`w' = mu w + (a/2) w^2 + (c/6) w^3` with `a = 0`, the nontrivial branch at `w0` has
+critical eigenvalue `lambda = (c/3) w0^2` and quadratic coefficient `c w0`, so
+`a^2 = 3 |c lambda|` there. At a transcritical point the same ratio is
+`2 |a| / |c w0|`, which grows as the location improves. So `a` must also satisfy
+`a^2 > 30 |c lambda|`, with `lambda = <p, A q>`. Like the other two tests, this one
+is unchanged by rescaling time or the state.
+
+```python
+from pathlib import Path
+
+from sweet_tea.registry import Registry
+
+import discrecontinual_equations
+from discrecontinual_equations.continuation.builder import ContinuerBuilder
+from discrecontinual_equations.continuation.continuation_config import ContinuationConfig
+from discrecontinual_equations.differential_equation import DifferentialEquation
+from discrecontinual_equations.function.deterministic import DeterministicFunction
+from discrecontinual_equations.parameter import Parameter
+from discrecontinual_equations.variable import Variable
+
+Registry.fill_registry(
+    path=str(Path(discrecontinual_equations.__file__).parent),
+    module="discrecontinual_equations",
+    exclude=["*.tests", "*.examples", "*.plot"],
+)
+
+
+class Rate(Parameter, name="Rate", abbreviation="mu"):
+    pass
+
+
+class Population(Variable, name="Population", abbreviation="x"):
+    pass
+
+
+class Time(Variable, name="Time", abbreviation="t"):
+    pass
+
+
+class SlowTranscritical(DeterministicFunction):
+    """x' = s (mu x - x^2), with time measured in units a hundred thousand times too small."""
+
+    def eval(self, point, time=None):
+        mu = self.parameters[0].value
+        x = point[0]
+        return [1.0e-5 * (mu * x - x * x)]
+
+
+parameters = [Rate(value=-0.5)]
+variables = [Population()]
+equation = DifferentialEquation(
+    variables=variables,
+    time=Time(),
+    parameters=parameters,
+    derivative=SlowTranscritical(
+        variables=variables, parameters=parameters, results=[Population()], time=None
+    ),
+)
+config = ContinuationConfig(
+    detectors=["branch_point"],
+    initial_parameter=-0.5,
+    initial_step=0.04,
+    maximum_step=0.12,
+    parameter_lower_bound=-0.5,
+    parameter_upper_bound=0.5,
+)
+branch = ContinuerBuilder.build(config, equation).solve(equation, initial_values=[0.0])
+print([point.kind for point in branch.special_points])  # ['transcritical']; was ['branch_point']
+```
+
+Checked against the four three-dimensional reference cases of the DEQ-102 verifier
+(`tests/continuation/test_branch_label_scale.py`): every label is now the same for
+every `s` in `1e-6 ... 1e6`, with exact and with finite-difference Jacobians, 0 of
+104 wrong against 17 before. In 2000 random mixings, offsets and time scales, plus a
+reflection-symmetric case where `B(q, q) = 0`, every label is right. A pitchfork evaluated up to `1e-2` off its vertex, on its
+nontrivial branch, stays a `pitchfork`, and a transcritical point stays
+`transcritical`. Structurally
+zero coefficients reach at most `2.6e-7` of their terms' size, and genuine ones at least `1.3e-2`. Noise in `c`
+stays within `7.3` times its error estimate, and genuine `c` exceeds it at least
+`5e4` times. Noise in `a` can exceed its estimate (by up to `1.8e4` with
+finite-difference Jacobians far from the origin); the first test is what catches it.
+
+Limits: the step `1e-4` is in the state's units, so rescaling the *state* still
+changes how much noise the differences pick up. A genuine coefficient smaller than
+`1e-5` of its terms is reported as zero. When the Jacobian is too noisy to resolve
+`c`, the point is honestly `branch_point`, not a guessed `pitchfork`.
+
 ## Continuation
 
 ::: discrecontinual_equations.continuation

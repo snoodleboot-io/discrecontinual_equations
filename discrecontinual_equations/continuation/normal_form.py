@@ -125,42 +125,67 @@ def _eigenvector(matrix: np.ndarray, eigenvalue: complex) -> np.ndarray:
     return vectors[:, index]
 
 
+def _bogdanov_takens_chain(
+    jacobian: np.ndarray,
+    orientation: np.ndarray | None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray] | None:
+    """Jordan chains ``(q0, q1, p1, p0)`` at a Bogdanov-Takens point, or ``None``.
+
+    ``A q0 = 0``, ``A q1 = q0``, ``A^T p1 = 0`` and ``A^T p0 = p1``, with
+    ``|q0| = 1``, ``<q0, q1> = 0`` and ``<p_i, q_j> = delta_ij`` (Bosschaert and
+    Kuznetsov 2021, section 2.2.1, eqs. (18)-(19)). These conditions fix all four
+    vectors up to one common sign: ``q1``, ``p1`` and ``p0`` turn with ``q0``. The
+    sign of ``q0`` follows ``orientation`` as in :func:`oriented_null_vector`.
+    ``None`` when ``<p1, q1>`` cannot be normalised (the zero eigenvalue is not a
+    Jordan block).
+    """
+    right = oriented_null_vector(jacobian, orientation)
+    chain, _residual, _rank, _singular = np.linalg.lstsq(jacobian, right, rcond=None)
+    chain = chain - (right @ chain) * right
+    left = _null_vector(jacobian.T).real
+    denominator = left @ chain
+    if abs(denominator) < _MINIMUM_DENOMINATOR:
+        return None
+    left = left / denominator
+    left_chain, _r2, _rk2, _s2 = np.linalg.lstsq(jacobian.T, left, rcond=None)
+    left_chain = left_chain - (left_chain @ chain) * left
+    return right, chain, left, left_chain
+
+
 def bogdanov_takens_second_coefficient(
     problem: TwoParameterProblem,
     state: np.ndarray,
     parameter_a: float,
     parameter_b: float,
+    orientation: np.ndarray | None = None,
 ) -> float:
     """Quadratic cross-coefficient ``b`` of a Bogdanov-Takens normal form.
 
     In the planar normal form ``x' = y``, ``y' = a x^2 + b x y + ...`` the second
     codimension-three degeneracy is ``b = 0`` (with ``a != 0``); it is the point at
     which the two topological types of the Bogdanov-Takens meet. The coordinate-free
-    value uses both Jordan chains,
+    value uses both Jordan chains of :func:`_bogdanov_takens_chain`,
 
-        ``b = <p1, B(q0, q1)> + <p0, B(q0, q0)>``,
+        ``b = <p1, B(q0, q1)> + <p0, B(q0, q0)>``.
 
-    with ``A q0 = 0``, ``A q1 = q0`` (``<q0, q1> = 0``), ``A^T p1 = 0``
-    (``<p1, q1> = 1``) and ``A^T p0 = p1`` (``<p0, q1> = 0``).
+    ``b`` is odd in the sign of ``q0`` (all four vectors turn with it), so its sign
+    along a curve is only meaningful once ``q0`` is oriented the same way from point
+    to point: pass the previous point's ``q0`` or the curve's own as
+    ``orientation``. ``nan`` when the zero eigenvalue is not a Jordan block.
+
+    References:
+        [BosschaertKuznetsov2021] section 2.2.2, the expression for ``b``
+        below eqs. (20)-(22), with the chains of section 2.2.1, eqs. (18)-(19).
     """
     jacobian = problem.state_jacobian(state, parameter_a, parameter_b)
-    right_null = _null_vector(jacobian)
-    dominant = int(np.argmax(np.abs(right_null)))
-    if right_null[dominant].real < 0.0:
-        right_null = -right_null
-    chain, _res, _rank, _sv = np.linalg.lstsq(jacobian, right_null, rcond=None)
-    chain = chain - (right_null @ chain) / (right_null @ right_null) * right_null
-    left_null = _null_vector(jacobian.T)
-    denominator = left_null @ chain
-    if abs(denominator) < _MINIMUM_DENOMINATOR:
+    vectors = _bogdanov_takens_chain(jacobian, orientation)
+    if vectors is None:
         return math.nan
-    left_null = left_null / denominator
-    left_chain, _r2, _rk2, _s2 = np.linalg.lstsq(jacobian.T, left_null, rcond=None)
-    left_chain = left_chain - (left_chain @ chain) * left_null
+    right, chain, left, left_chain = vectors
     forms = MultilinearForms(problem, state, parameter_a, parameter_b)
-    cross = forms.bilinear(right_null, chain)
-    square = forms.bilinear(right_null, right_null)
-    return float(((left_null @ cross) + (left_chain @ square)).real)
+    cross = forms.bilinear(right, chain)
+    square = forms.bilinear(right, right)
+    return float(((left @ cross) + (left_chain @ square)).real)
 
 
 def bogdanov_takens_coefficient(
@@ -168,6 +193,7 @@ def bogdanov_takens_coefficient(
     state: np.ndarray,
     parameter_a: float,
     parameter_b: float,
+    orientation: np.ndarray | None = None,
 ) -> float:
     """Quadratic normal-form coefficient ``a = (1/2) <p1, B(q0, q0)>`` of a BT.
 
@@ -176,26 +202,41 @@ def bogdanov_takens_coefficient(
     is singular. The correct normalization uses the Jordan chain: ``A q0 = 0``,
     ``A q1 = q0``, and ``<p1, q1> = 1``. The coefficient vanishes at a degenerate
     Bogdanov-Takens point.
+
+    ``a`` is odd in the sign of ``q0`` (``p1`` turns with it), so, as for ``b`` in
+    :func:`bogdanov_takens_second_coefficient`, its sign follows ``orientation``.
+    ``nan`` when the zero eigenvalue is not a Jordan block.
+
+    References:
+        [BosschaertKuznetsov2021] section 2.2.2, the expression for ``a``
+        below eqs. (20)-(22), with the chains of section 2.2.1, eqs. (18)-(19).
     """
     jacobian = problem.state_jacobian(state, parameter_a, parameter_b)
-    right_null = _null_vector(jacobian)
-    dominant = int(np.argmax(np.abs(right_null)))
-    if right_null[dominant].real < 0.0:
-        right_null = -right_null
-    chain, _residual, _rank, _singular = np.linalg.lstsq(
-        jacobian,
-        right_null,
-        rcond=None,
-    )
-    chain = chain - (right_null @ chain) / (right_null @ right_null) * right_null
-    left_null = _null_vector(jacobian.T)
-    denominator = left_null @ chain
-    if abs(denominator) < _MINIMUM_DENOMINATOR:
+    vectors = _bogdanov_takens_chain(jacobian, orientation)
+    if vectors is None:
         return math.nan
-    left_null = left_null / denominator
+    right, _chain, left, _left_chain = vectors
     forms = MultilinearForms(problem, state, parameter_a, parameter_b)
-    form = forms.bilinear(right_null, right_null)
-    return float((_HALF * (left_null @ form)).real)
+    form = forms.bilinear(right, right)
+    return float((_HALF * (left @ form)).real)
+
+
+def oriented_null_vector(
+    jacobian: np.ndarray,
+    orientation: np.ndarray | None = None,
+) -> np.ndarray:
+    """Unit right null vector ``q`` of ``jacobian``, with its sign chosen.
+
+    The SVD fixes ``q`` only up to sign, and any coefficient that is odd in ``q``
+    inherits whichever sign LAPACK returns. ``orientation . q > 0`` when an
+    orientation is given (the previous point's ``q``, or a curve's own null vector,
+    as MatCont's bordered ``v_bor^T v = 1`` does); otherwise the largest component
+    of ``q`` is positive, which is repeatable but not continuous along a curve.
+    """
+    right = unit_phase(right_null(jacobian).real.astype(complex)).real
+    if orientation is not None and float(np.real(orientation) @ right) < 0.0:
+        right = -right
+    return right
 
 
 def fold_null_vectors(
@@ -212,9 +253,7 @@ def fold_null_vectors(
     bordered ``v_bor^T v = 1`` does), and otherwise the largest component of ``q``
     positive, which is repeatable but not continuous along a curve.
     """
-    right = unit_phase(right_null(jacobian).real.astype(complex)).real
-    if orientation is not None and float(np.real(orientation) @ right) < 0.0:
-        right = -right
+    right = oriented_null_vector(jacobian, orientation)
     left = right_null(jacobian.T).real
     return right, left / (left @ right)
 
