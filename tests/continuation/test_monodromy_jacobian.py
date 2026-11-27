@@ -78,6 +78,24 @@ class OpaqueKnownCycle(KnownCycle):
         ]
 
 
+class HypotKnownCycle(KnownCycle):
+    """The same field with its radius through ``np.hypot``.
+
+    On jets ``np.hypot`` looks for a ``hypot`` method the jet does not have and
+    raises ``AttributeError``, not ``TypeError``: the fallback must catch both.
+    """
+
+    def eval(self, point, time=None):  # noqa: ARG002 (base signature)
+        x, y, z = point[0], point[1], point[2]
+        rate = self.parameters[0].value
+        radial = 1.0 - np.hypot(x, y) ** 2
+        return [
+            rate * x * radial - _SPEED * y,
+            rate * y * radial + _SPEED * x,
+            (_COUPLING * x - _DECAY) * z + _CURVATURE * z * z,
+        ]
+
+
 def _field(kind: type = KnownCycle) -> DeterministicFunction:
     return kind(
         variables=[State(), State(), State()],
@@ -141,6 +159,14 @@ class TestMonodromyBelowTheOldFloor(TestCase):
         coarse, fine = self._error(40, OpaqueKnownCycle), self._error(
             80,
             OpaqueKnownCycle,
+        )
+        assert fine < 2.2e-7, fine
+        assert 15.0 < coarse / fine < 17.0, coarse / fine
+
+    def test_a_field_through_numpy_hypot_is_differenced(self):
+        coarse, fine = self._error(40, HypotKnownCycle), self._error(
+            80,
+            HypotKnownCycle,
         )
         assert fine < 2.2e-7, fine
         assert 15.0 < coarse / fine < 17.0, coarse / fine

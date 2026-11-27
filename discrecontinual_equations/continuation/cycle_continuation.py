@@ -2138,12 +2138,16 @@ class CycleContinuation:
         fixed_parameter[-1] = 1.0
         arc = _Arc(unknowns, fixed_parameter, 0.0)
         previous = float("inf")
-        for _ in range(_RESTART_ITERATIONS + 1):
+        for iteration in range(_RESTART_ITERATIONS + 1):
             residual = self._augmented(unknowns, nodes, arc)
             norm = float(np.linalg.norm(residual))
             if norm < _TOLERANCE:
                 break
-            if not np.isfinite(norm) or norm > _RESTART_CONTRACTION * previous:
+            if (
+                iteration == _RESTART_ITERATIONS
+                or not np.isfinite(norm)
+                or norm > _RESTART_CONTRACTION * previous
+            ):
                 return None
             previous = norm
             try:
@@ -2157,8 +2161,6 @@ class CycleContinuation:
             except np.linalg.LinAlgError:
                 return None
             unknowns = unknowns + update
-        else:
-            return None
         size = _extent(start)
         moved = unknowns[: nodes * self._dimension].reshape(start.shape) - start
         if float(np.max(np.linalg.norm(moved, axis=1))) > _RESTART_MOVE * size:

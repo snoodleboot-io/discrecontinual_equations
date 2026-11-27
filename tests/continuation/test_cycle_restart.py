@@ -200,8 +200,8 @@ class TestRestartGuards(TestCase):
 
     The fold of cycles at ``mu = -0.24`` has cycles of radius 0.632 and 0.775.
     From circles of radius 0.64 and 0.78 the restart lands on the nearer in
-    three or four solves; from 0.70, between them, the first step does not
-    halve the residual and it stops; from 0.9 Newton reaches the outer cycle,
+    three or four solves; from 0.68 and 0.70, between them, the first step does
+    not halve the residual and it stops; from 0.9 Newton reaches the outer cycle,
     but 14% of the seed's extent away, and the staged solve is left to decide.
     Radii are pinned to 2e-6: the 40-interval Hermite-Simpson cycles sit
     6.7e-7 and 8.2e-7 off the exact ones.
@@ -235,9 +235,13 @@ class TestRestartGuards(TestCase):
         assert abs(self._radius(outer) - math.sqrt(0.6)) < 2e-6
 
     def test_a_step_that_does_not_halve_the_residual_stops_it(self):
-        unknowns, solves = self._restart(0.70)
-        assert unknowns is None
-        assert solves == 1
+        # From 0.68 the first step lowers the residual to 0.81 of itself:
+        # less than the half asked for, so the second solve is never made.
+        # From 0.70 the first step raises it 4.7 times.
+        for radius in (0.68, 0.70):
+            unknowns, solves = self._restart(radius)
+            assert unknowns is None
+            assert solves == 1, radius
 
     def test_a_cycle_too_far_from_the_seed_is_left_to_the_staged_solve(self):
         unknowns, _ = self._restart(0.9)

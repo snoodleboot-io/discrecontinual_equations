@@ -275,12 +275,27 @@ class TestJacobianMultipliers(TestCase):
             assert order > 3.5, gaps
 
     def test_trivial_multiplier_is_exact_on_the_equivariant_cycle(self):
-        # Exact for the exact discrete cycle; the solve stops at a residual
-        # of 1e-10, and the drift follows where it stopped: 1.7e-15 at m = 3
-        # on 8 intervals but 1.5e-11 on 16 before DEQ-106, 1.2e-12 and 1.2e-15
-        # after it, when the seed is corrected on Gauss-Legendre directly.
-        _, point = self._hopf_point(3, 8)
-        assert np.min(np.abs(point.multipliers - 1.0)) < 1.0e-10
+        # Exact for the exact discrete cycle, so what is left follows where
+        # the solve stopped (residual under 1e-10): 3 to 5 times the final
+        # collocation residual on every m and mesh measured, from 1e-16 to
+        # 3e-10, and under 5e-15 after three more Newton steps. A fixed pin
+        # reads that stopping point; this one scales with it. The 64 eps is
+        # the rounding the multiplier has when the residual is itself rounding.
+        floor = 64.0 * np.finfo(float).eps
+        for points in (2, 3, 4):
+            for intervals in (6, 8, 12, 16, 24, 32):
+                continuation, point = self._hopf_point(points, intervals)
+                states = point.solution.states
+                unknowns = np.concatenate(
+                    [states.ravel(), [point.solution.period, point.parameter]],
+                )
+                residual = continuation._cycle_residual(  # noqa: SLF001
+                    unknowns,
+                    states.shape[0],
+                )
+                drift = float(np.min(np.abs(point.multipliers - 1.0)))
+                bound = 10.0 * float(np.linalg.norm(residual)) + floor
+                assert drift < bound, (points, intervals, drift, bound)
 
     def _van_der_pol(self, points: int, intervals: int):
         mu = 1.0
