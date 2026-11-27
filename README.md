@@ -52,8 +52,11 @@ uv add discrecontinual-equations
 ### Solving ODEs
 
 ```python
-from discrecontinual_equations import *
-from discrecontinual_equations.solver.deterministic.euler import EulerConfig, EulerSolver
+from discrecontinual_equations.function.deterministic import DeterministicFunction
+from discrecontinual_equations.parameter import Parameter
+from discrecontinual_equations.solver.deterministic.euler.euler_config import EulerConfig
+from discrecontinual_equations.solver.deterministic.euler.euler_solver import EulerSolver
+from discrecontinual_equations.variable import Variable
 
 # Define variables and parameters
 x = Variable(name="Position", abbreviation="x")
@@ -75,7 +78,8 @@ solver = EulerSolver(config)
 ### Solving SDEs
 
 ```python
-from discrecontinual_equations.solver.stochastic.srk2 import SRK2Config, SRK2Solver
+from discrecontinual_equations.solver.stochastic.srk2.srk2_config import SRK2Config
+from discrecontinual_equations.solver.stochastic.srk2.srk2_solver import SRK2Solver
 
 # Geometric Brownian motion with Stratonovich calculus
 config = SRK2Config(
@@ -89,7 +93,8 @@ solver = SRK2Solver(config)
 ### Advanced Plotting
 
 ```python
-from discrecontinual_equations.plot import PhasePlot, SpectrumPlot
+from discrecontinual_equations.plot.phase_plot import PhasePlot
+from discrecontinual_equations.plot.spectrum_plot import SpectrumPlot
 
 # Phase space analysis
 phase_plot = PhasePlot(output_dir="./plots")
