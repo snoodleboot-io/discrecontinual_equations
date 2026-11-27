@@ -819,7 +819,7 @@ References: [Doedel2007](../references.md) (AUTO-07p manual, `EPSU`, `ITNW`);
 A homoclinic orbit to a saddle exists only on a curve in a two-parameter plane.
 `HomoclinicCurve` continues it: one parameter is swept, the other is solved for
 together with the orbit and the saddle, using the defining system of
-HomCont ([Champneys1996](../references.md)) with
+HomCont ([ChampneysKuznetsovSandstede1996](../references.md)) with
 projection boundary conditions ([Beyn1990](../references.md)).
 
 Those boundary conditions give one row per stable and one per unstable
@@ -1558,8 +1558,6 @@ The concepts, worked examples and limits are on the
 ::: discrecontinual_equations.continuation.homoclinic_curve
 
 ::: discrecontinual_equations.continuation.shilnikov
-
-::: discrecontinual_equations.continuation.homoclinic_curve
 
 ## Heteroclinic networks
 
