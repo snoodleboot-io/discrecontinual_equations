@@ -174,20 +174,58 @@ class MemoizedJacobian(JacobianProvider):
     The memory lives only for the scope (one :meth:`Continuer.solve`): the residual
     reads the equation's other parameters live, so a Jacobian remembered across
     solves could be stale after the caller changes one of them.
+
+    A provider that overrides :meth:`extended_jacobian` solves the whole extended
+    Jacobian at once (as :class:`AnalyticJacobian` does), so its state part and
+    parameter part are both slices of one solve. For such a provider the wrapper
+    remembers the extended Jacobian itself and slices the parts from it, so each
+    point costs one solve rather than one per part. Other providers keep their
+    parts separate, since differencing the state columns alone is cheaper than the
+    whole extended Jacobian. Outside a scope every request goes straight to the
+    provider, one call per request.
+
+    Args:
+        provider: The provider whose derivatives are remembered.
+
+    Attributes:
+        capacity: How many points a scope remembers; the least recently used
+            point is forgotten first.
+
+    References:
+        No published algorithm: this is a cache, and every value it returns is
+        bit-identical to the provider's own. The analytic extended Jacobians it
+        shares are those of the minimally augmented cusp and generalized-Hopf
+        systems, whose sources are cited in :mod:`~.cusp_curve` and
+        :mod:`~.generalized_hopf_curve`.
     """
 
-    __slots__ = ["_active", "_memory", "_provider"]
+    __slots__ = ["_active", "_joint", "_memory", "_provider"]
 
     capacity = 4
 
     def __init__(self, provider: JacobianProvider) -> None:
         self._provider = provider
+        self._joint = (
+            type(provider).extended_jacobian is not JacobianProvider.extended_jacobian
+        )
         self._active = False
         self._memory: OrderedDict[tuple[bytes, bytes], dict[str, np.ndarray]] = (
             OrderedDict()
         )
 
+    def extended_jacobian(self, state: np.ndarray, parameter: float) -> np.ndarray:
+        if not self._joint:
+            return super().extended_jacobian(state, parameter)
+        return self._remembered(
+            "extended",
+            state,
+            parameter,
+            self._provider.extended_jacobian,
+        )
+
     def state_jacobian(self, state: np.ndarray, parameter: float) -> np.ndarray:
+        if self._joint and self._active:
+            return self.extended_jacobian(state, parameter)[:, :-1]
         return self._remembered(
             "state",
             state,
@@ -196,6 +234,8 @@ class MemoizedJacobian(JacobianProvider):
         )
 
     def parameter_derivative(self, state: np.ndarray, parameter: float) -> np.ndarray:
+        if self._joint and self._active:
+            return self.extended_jacobian(state, parameter)[:, -1]
         return self._remembered(
             "parameter",
             state,

@@ -8,10 +8,16 @@ evaluations, and before the reuse the same stretch cost ``8n + 4``.
 """
 
 from unittest import TestCase
+from unittest.mock import patch
 
 import numpy as np
 
 from discrecontinual_equations.continuation.builder import ContinuerBuilder
+from discrecontinual_equations.continuation.codim3_builder import (
+    Codim3Driver,
+    Codim3Seed,
+)
+from discrecontinual_equations.continuation.codim3_config import Codim3Config
 from discrecontinual_equations.continuation.continuation_config import (
     ContinuationConfig,
 )
@@ -19,15 +25,22 @@ from discrecontinual_equations.continuation.corrector import (
     CorrectionResult,
     Corrector,
 )
+from discrecontinual_equations.continuation.cusp_curve import CuspCurveResidual
 from discrecontinual_equations.continuation.jacobian import (
+    AnalyticJacobian,
     FiniteDifferenceJacobian,
     MemoizedJacobian,
 )
-from discrecontinual_equations.continuation.residual import ResidualFunction
+from discrecontinual_equations.continuation.residual import (
+    DifferentiableResidual,
+    ResidualFunction,
+)
 from discrecontinual_equations.differential_equation import DifferentialEquation
 from discrecontinual_equations.parameter import Parameter
 from discrecontinual_equations.systems import FerroelectricRing
 from discrecontinual_equations.variable import Variable
+from tests.continuation.test_codim3 import SwallowtailNormalForm
+from tests.continuation.test_codim3 import _equation as _codim3_equation
 
 _CELLS = 6
 _EPSILON = 1.0e-7
@@ -88,6 +101,47 @@ class CountingResidual(ResidualFunction):
     def evaluate(self, state: np.ndarray, parameter: float) -> np.ndarray:
         self.calls += 1
         return np.array([parameter * state[0] - state[1] ** 3, state[0] * state[1]])
+
+
+class CountingDifferentiableResidual(DifferentiableResidual):
+    """A residual that solves its own extended Jacobian, counting the solves."""
+
+    def __init__(self) -> None:
+        self.solves = 0
+
+    def evaluate(self, state: np.ndarray, parameter: float) -> np.ndarray:
+        return np.array([parameter * state[0] - state[1] ** 3, state[0] * state[1]])
+
+    def extended_jacobian(
+        self,
+        state: np.ndarray,
+        parameter: float,
+        epsilon: float,
+    ) -> np.ndarray:
+        del epsilon
+        self.solves += 1
+        return np.array(
+            [
+                [parameter, -3.0 * state[1] ** 2, state[0]],
+                [state[1], state[0], 0.0],
+            ],
+        )
+
+
+class PartCountingJacobian(AnalyticJacobian):
+    """An analytic provider that also notes which part each request asked for."""
+
+    def __init__(self, residual: DifferentiableResidual, epsilon: float) -> None:
+        super().__init__(residual, epsilon)
+        self.parts: list[str] = []
+
+    def state_jacobian(self, state: np.ndarray, parameter: float) -> np.ndarray:
+        self.parts.append("state")
+        return super().state_jacobian(state, parameter)
+
+    def parameter_derivative(self, state: np.ndarray, parameter: float) -> np.ndarray:
+        self.parts.append("parameter")
+        return super().parameter_derivative(state, parameter)
 
 
 def _ring(cells: int) -> DifferentialEquation:
@@ -262,3 +316,119 @@ class TestMemoizedJacobian(TestCase):
                 self.memo.state_jacobian(self.state + shift, 0.5)
 
         assert self.residual.calls == calls
+
+
+class TestMemoizedAnalyticJacobian(TestCase):
+    """A provider that solves the extended Jacobian jointly is asked once (DEQ-122)."""
+
+    def setUp(self) -> None:
+        self.residual = CountingDifferentiableResidual()
+        self.inner = AnalyticJacobian(self.residual, _EPSILON)
+        self.memo = MemoizedJacobian(self.inner)
+        self.state = np.array([0.3, -0.7])
+
+    def test_outside_a_retained_scope_one_request_is_one_solve(self):
+        extended = self.memo.extended_jacobian(self.state, 0.5)
+
+        assert self.residual.solves == 1
+        np.testing.assert_array_equal(
+            extended,
+            self.residual.extended_jacobian(self.state, 0.5, _EPSILON),
+        )
+
+    def test_inside_a_retained_scope_every_part_shares_one_solve(self):
+        with self.memo.retained():
+            extended = self.memo.extended_jacobian(self.state, 0.5)
+            again = self.memo.extended_jacobian(self.state, 0.5)
+            state_part = self.memo.state_jacobian(self.state, 0.5)
+            parameter_part = self.memo.parameter_derivative(self.state, 0.5)
+
+        assert self.residual.solves == 1
+        np.testing.assert_array_equal(again, extended)
+        np.testing.assert_array_equal(state_part, extended[:, :-1])
+        np.testing.assert_array_equal(parameter_part, extended[:, -1])
+
+    def test_a_part_asked_first_still_costs_one_solve(self):
+        with self.memo.retained():
+            state_part = self.memo.state_jacobian(self.state, 0.5)
+            parameter_part = self.memo.parameter_derivative(self.state, 0.5)
+            extended = self.memo.extended_jacobian(self.state, 0.5)
+
+        assert self.residual.solves == 1
+        np.testing.assert_array_equal(
+            state_part, self.inner.state_jacobian(self.state, 0.5)
+        )
+        np.testing.assert_array_equal(
+            parameter_part,
+            self.inner.parameter_derivative(self.state, 0.5),
+        )
+        np.testing.assert_array_equal(
+            extended,
+            self.inner.extended_jacobian(self.state, 0.5),
+        )
+
+    def test_outside_a_retained_scope_each_part_goes_to_the_provider(self):
+        # Given a joint provider that may answer a single part more cheaply
+        inner = PartCountingJacobian(self.residual, _EPSILON)
+        memo = MemoizedJacobian(inner)
+
+        # When parts are asked for with nothing retained
+        memo.state_jacobian(self.state, 0.5)
+        memo.parameter_derivative(self.state, 0.5)
+
+        # Then the wrapper passes each request straight through
+        assert inner.parts == ["state", "parameter"]
+
+    def test_a_different_point_or_parameter_is_solved_afresh(self):
+        with self.memo.retained():
+            self.memo.extended_jacobian(self.state, 0.5)
+            self.memo.extended_jacobian(self.state, 0.25)
+            self.memo.extended_jacobian(self.state + 1.0e-12, 0.5)
+
+        assert self.residual.solves == 3
+
+    def test_a_caller_mutating_its_copy_does_not_corrupt_the_memory(self):
+        with self.memo.retained():
+            first = self.memo.extended_jacobian(self.state, 0.5)
+            expected = first.copy()
+            first[:] = 0.0
+            self.memo.state_jacobian(self.state, 0.5)[:] = 0.0
+            self.memo.parameter_derivative(self.state, 0.5)[:] = 0.0
+            again = self.memo.extended_jacobian(self.state, 0.5)
+
+        np.testing.assert_array_equal(again, expected)
+
+
+class TestCuspCurveSolves(TestCase):
+    def test_the_cusp_curve_solves_each_point_once(self):
+        # Given the swallowtail's cusp curve, whose rows are differentiated analytically
+        equation = _codim3_equation(SwallowtailNormalForm, 1, 0.1875, -1.0, 1.5)
+        seed = Codim3Seed(state=[0.5], parameter_a=0.1875, parameter_b=1.5)
+        config = Codim3Config(
+            continuation_parameter_index=0,
+            second_parameter_index=2,
+            third_parameter_index=1,
+            codim3_curve="cusp",
+            codim3_detectors=[],
+            initial_parameter=-1.0,
+            direction=1,
+            parameter_lower_bound=-1.2,
+            parameter_upper_bound=1.2,
+            initial_step=0.01,
+            maximum_step=0.02,
+            maximum_points=20,
+        )
+        solved: list[tuple[bytes, float]] = []
+        original = CuspCurveResidual.extended_jacobian
+
+        def recording(residual, state, parameter, epsilon):
+            solved.append((np.asarray(state, dtype=float).tobytes(), float(parameter)))
+            return original(residual, state, parameter, epsilon)
+
+        # When the curve is continued
+        with patch.object(CuspCurveResidual, "extended_jacobian", recording):
+            result = Codim3Driver.run(config, equation, seed)
+
+        # Then no point's analytic extended Jacobian is solved twice
+        assert len(result.curve.points) >= 10
+        assert len(solved) == len(set(solved))
