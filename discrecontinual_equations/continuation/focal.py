@@ -37,8 +37,9 @@ its own first terms ``eta_2 (x^2 + y^2) + eta_4 (x^2 + y^2)^2`` show the exponen
 ``k``, which is what is used here.
 
 Limits: planar systems only (reduce first, as :mod:`~.center_manifold` does); the
-field must be polynomial in the :class:`~.bivariate.Bivariate` arithmetic (no
-division); ``eta_6`` is meaningful only where ``eta_4 = 0`` (the source: ``eta_(2k)``
+field must be rational in the :class:`~.bivariate.Bivariate` arithmetic
+(``+ - * / **``, every denominator non-zero at the equilibrium; no ``sin``,
+``exp`` and the like); ``eta_6`` is meaningful only where ``eta_4 = 0`` (the source: ``eta_(2k)``
 is relevant only when the earlier ones vanish), i.e. at a Bautin point; and the
 eigen-decomposition assumes
 the Jacobian has a complex pair ``+-i omega`` with ``omega > 0``.

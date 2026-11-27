@@ -14,18 +14,29 @@ convolution of the two coefficient tables with every term above the total degree
 variables is ``C(order + d, d)``, and a product touches every pair, so the cost
 grows like ``C(order + d, d)^2``; this suits the low-dimensional, low-order
 expansions of a center manifold reduction, not large systems. As in
-:mod:`~.bivariate`, only ``+ - * **`` (non-negative integer powers) are
-implemented: a field that divides, even by a number, must be rewritten.
+:mod:`~.bivariate`, the arithmetic is ``+ - * /`` and ``**`` to non-negative
+integer powers. Division by a number scales the coefficients; division by a
+series with a non-zero constant term is the truncated quotient of
+:func:`~.bivariate.truncated_quotient` (Neidinger 2010, Sections 6 and 8), and a
+zero constant term raises ``ZeroDivisionError``, since the quotient then has no
+power series at the expansion point.
 
 References:
 - Griewank, A. and Walther, A. "Evaluating Derivatives: Principles and
   Techniques of Algorithmic Differentiation", 2nd ed., SIAM, 2008,
   doi:10.1137/1.9780898717761, Chapter 13 ("Taylor and Tensor Coefficients").
+- Neidinger, R. D. "Introduction to Automatic Differentiation and MATLAB
+  Object-Oriented Programming", SIAM Review 52(3), 545-563, 2010,
+  doi:10.1137/080743627, Sections 6 and 8 (division of series).
 """
 
 from numbers import Number
+from typing import cast
 
-from discrecontinual_equations.continuation.bivariate import Bivariate
+from discrecontinual_equations.continuation.bivariate import (
+    Bivariate,
+    truncated_quotient,
+)
 
 _Scalar = complex | float | int
 _LINEAR_DEGREE = 2
@@ -155,6 +166,36 @@ class Multivariate:
         return Multivariate(result, order, self._dimension)
 
     __rmul__ = __mul__
+
+    def __truediv__(self, other: object) -> "Multivariate":
+        """Divide by a number, or by a series with a non-zero constant term.
+
+        A series quotient is truncated at this series' ``order``; a zero
+        constant term in the denominator raises ``ZeroDivisionError`` (see
+        :func:`~.bivariate.truncated_quotient`).
+        """
+        if isinstance(other, Number):
+            scale = cast(_Scalar, other)
+            return Multivariate(
+                {key: value / scale for key, value in self._coefficients.items()},
+                self._order,
+                self._dimension,
+            )
+        if not isinstance(other, Multivariate):
+            return NotImplemented
+        quotient = truncated_quotient(
+            self._coefficients,
+            other._coefficients,
+            self._order,
+            self._dimension,
+        )
+        return Multivariate(quotient, self._order, self._dimension)
+
+    def __rtruediv__(self, other: object) -> "Multivariate":
+        right = self._combine(other)
+        if right is NotImplemented:
+            return NotImplemented
+        return right / self
 
     def __pow__(self, exponent: int) -> "Multivariate":
         if not isinstance(exponent, int) or exponent < 0:
