@@ -184,9 +184,10 @@ class TestQuasipotentialRenderer(TestCase):
 class TestNoisyHopfFilmQuasipotential(TestCase):
     """The film's own marches, on its own grid, against its own closed form.
 
-    This is the only test that imports an example. It does so because what it
-    checks is the film itself - its grid, box, cap and closed form, as the page
-    quotes them - and a copy of those here would let the page drift from them.
+    This imports an example, as only the ferroelectric ring film's test also
+    does, because what it checks is the film itself - its grid, box, cap and
+    closed form, as the page quotes them - and a copy of those here would let
+    the page drift from them.
 
     Measured on the built page, within ``U <= 4`` on the drawn box and beyond four
     cells of the origin: 0.031 to 0.054 on every frame, 0.032 at ``mu = 0.025``,

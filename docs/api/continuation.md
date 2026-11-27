@@ -1181,6 +1181,65 @@ that `D` does not depend on the parameter being scanned. Under Stratonovich the 
 shift still evaluates the columns and their Jacobians at the faces. See
 [References](../references.md) for the full entries.
 
+## Matching a detected branch point (DEQ-123)
+
+**The problem.** A branch point is asked for under one name, `"branch_point"`, but
+reported under the kind the detector classified. Code that filters
+`branch.special_points` by the name it asked for finds nothing whenever the
+classification succeeded. The atlas pages lost their symmetry-breaking line this way
+until DEQ-14, and the ferroelectric ring film lost its "symmetry breaking (λ = a)"
+label until DEQ-123.
+
+**The concept.** Where two equilibrium branches cross, the Jacobian has a simple zero
+eigenvalue, and the field on the center manifold reads
+`w' = (a / 2) w^2 + (c / 6) w^3 + ...`. A non-zero quadratic coefficient `a` makes the
+crossing *transcritical*: the branches exchange stability through each other
+(normal form `x' = r x - x^2`). When `a` vanishes, as a reflection symmetry forces,
+and the cubic `c` does not, one branch splits into three: a *pitchfork*
+(`x' = r x -+ x^3`). With both zero the detector leaves the label as
+`"branch_point"`. `BRANCH_POINT_KINDS` holds these three labels, and
+`is_branch_point(kind)` tests a kind against them.
+
+```python
+from discrecontinual_equations.continuation import (
+    ContinuationConfig,
+    ContinuerBuilder,
+    is_branch_point,
+)
+from examples.continuation.bifurcation_examples import (
+    Pitchfork,
+    State,
+    build_equation,
+    ensure_registry,
+)
+
+ensure_registry()
+equation = build_equation(Pitchfork, [State()])  # x' = mu x - x^3
+config = ContinuationConfig(
+    detectors=["branch_point"],
+    initial_parameter=-2.0,
+    measure="component",
+    parameter_lower_bound=-2.0,
+    parameter_upper_bound=2.0,
+)
+branch = ContinuerBuilder.build(config, equation).solve(equation, [0.0])
+
+print([p.kind for p in branch.special_points])  # ['pitchfork']
+asked = [p for p in branch.special_points if p.kind == "branch_point"]
+found = [p for p in branch.special_points if is_branch_point(p.kind)]
+print(len(asked), len(found))  # 0 1
+```
+
+**Limits.** The set covers equilibrium branch points only. Cycle bifurcations
+(`"fold_of_cycles"`, `"period_doubling"`, `"neimark_sacker"`) and folds are other
+kinds. The match is exact and case-sensitive. A test reads the labels
+`BranchPoint.refine_kind` returns and fails if they and `BRANCH_POINT_KINDS` part
+ways. A second test fails if any file under `examples/` compares a `.kind` against
+one of the three labels by name.
+
+The normal forms are from Strogatz2001. The coefficients `a` and `c` are the branch-point
+detector's, cited in its docstring. See the [references](../references.md).
+
 ## Continuation
 
 ::: discrecontinual_equations.continuation
